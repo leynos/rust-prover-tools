@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    env:
+      CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
+      CODESCENE_CLI_SHA256: ${{ vars.CODESCENE_CLI_SHA256 }}
+      
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      
+      - name: Install CLI tools
+        run: |
+          for tool in mbake; do uv tool install ${tool}; done
+          npm install -g markdownlint-cli2
+
+      - name: Validate Makefile
+        run: mbake validate Makefile
+
+      - name: Install code
+        run: make build
+
+      - name: Check formatting
+        run: make check-fmt
+
+      - name: Run ruff
+        run: make lint
+
+      - name: Run typechecker
+        run: make typecheck
+
+      - name: Test and Measure Coverage
+        uses: leynos/shared-actions/.github/actions/generate-coverage@d400b079fb6a8fa92f7e7b6c57f3d1c92a4b2d54
+        with:
+          output-path: coverage.xml
+          format: cobertura
+          artefact-name-suffix: rust-prover-tools
+          
+
+      - name: Install CodeScene Coverage CLI
+        if: env.CS_ACCESS_TOKEN != ''
+        run: |
+          curl -fsSL https://downloads.codescene.io/enterprise/cli/install-cs-coverage-tool.sh | bash -s -- -y
+          if [ -n "${CODESCENE_CLI_SHA256:-}" ]; then
+            echo "${CODESCENE_CLI_SHA256}  install-cs-coverage-tool.sh" | sha256sum -c -
+          fi
+
+      - name: Upload coverage to CodeScene
+        if: env.CS_ACCESS_TOKEN != ''
+        run: |
+          if [ ! -f coverage.xml ]; then
+            echo "coverage.xml not found!"
+            exit 1
+          fi
+          cs-coverage upload \
+            --format "cobertura" \
+            --metric "line-coverage" \
+            coverage.xml
