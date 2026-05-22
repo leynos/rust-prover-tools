@@ -1,11 +1,10 @@
 # Convert prover shell scripts into one Cyclopts CLI
 
-This ExecPlan (execution plan) is a living document. The sections
-`Constraints`, `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`,
-`Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work
-proceeds.
+This ExecPlan (execution plan) is a living document. The sections `Constraints`,
+ `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
-Status: DRAFT
+Status: COMPLETE
 
 ## Purpose / big picture
 
@@ -35,8 +34,9 @@ make lint 2>&1 | tee /tmp/lint-rust-prover-tools-initial-tool-import.out
 make test 2>&1 | tee /tmp/test-rust-prover-tools-initial-tool-import.out
 ```
 
-This plan is only a draft. Do not implement it until the user explicitly
-approves the plan.
+The user approved implementation on 2026-05-22. Keep this plan current as
+milestones complete, and run `coderabbit review --agent` after each major
+milestone before moving on.
 
 ## Constraints
 
@@ -125,8 +125,8 @@ gate with the log path.
 
 The original shell scripts rely on ambient shell behaviours. The script
 `check-kani-version.sh` splits `KANI` with shell word splitting, while Python
-should use `shlex.split` to preserve quoted command arguments without invoking a
-shell. Tests must cover quoted commands and empty commands.
+should use `shlex.split` to preserve quoted command arguments without invoking
+a shell. Tests must cover quoted commands and empty commands.
 
 The Verus installer downloads a release zip from GitHub, validates a SHA-256
 checksum, unzips into an install directory, and normalizes the extracted
@@ -172,12 +172,176 @@ test conventions.
 - [x] 2026-05-22: Read local scripting, documentation, user-guide, Makefile,
   and Python rules context.
 - [x] 2026-05-22: Drafted this plan.
-- [ ] Await explicit user approval before implementation.
-- [ ] Implement tests that describe the replacement CLI behaviour.
-- [ ] Implement the CLI and internal command modules.
-- [ ] Update user, developer, and design documentation.
-- [ ] Run and record all required gates.
-- [ ] Commit the approved, gated change.
+- [x] 2026-05-22: User approved implementation of this plan.
+- [x] 2026-05-22: Added runtime and test dependencies for the CLI
+  implementation.
+- [x] 2026-05-22: Implemented tests covering pure helpers, Kani and Verus
+  orchestration, behavioural CLI scenarios, end-to-end Verus CLI execution,
+  snapshots, and Hypothesis properties.
+- [x] 2026-05-22: Implemented the CLI and internal command modules.
+- [x] 2026-05-22: Ran a CodeRabbit review for the first implementation
+  milestone and addressed its actionable concerns around docstrings, stable
+  assertions, command help text, and over-broad lint suppressions.
+- [x] 2026-05-22: Split Verus implementation into package modules and added
+  behavioural scenarios for successful proof execution and missing Verus
+  toolchain reporting.
+- [x] 2026-05-22: Re-ran focused behavioural, snapshot, and Verus unit tests
+  after the CodeRabbit fixes:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    tests/steps/test_prover_tools_cli_steps.py \
+    tests/test_prover_tools_snapshots.py \
+    rust_prover_tools/unittests/test_verus.py
+  ```
+
+- [x] 2026-05-22: Ran a second CodeRabbit review for the revised
+  implementation milestone. It raised 12 actionable findings covering
+  timeout-bounded downloads, Verus module docstrings, CLI lint-suppression
+  rationale, structural pattern matching for error exits, idiomatic Syrupy
+  assertions, E2E proof-output checks, deterministic executable permissions,
+  and additional Kani unit coverage.
+- [x] 2026-05-22: Addressed the second CodeRabbit review findings and re-ran
+  the affected tests:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_kani.py \
+    rust_prover_tools/unittests/test_verus.py \
+    tests/test_prover_tools_cli_e2e.py \
+    tests/test_prover_tools_snapshots.py \
+    tests/steps/test_prover_tools_cli_steps.py
+  ```
+
+- [x] 2026-05-22: Ran a follow-up CodeRabbit review. It requested explicit
+  stdout handling for Verus wrapper output, richer module and public-function
+  docstrings, and clearer assertion messages in command tests.
+- [x] 2026-05-22: Addressed the follow-up review findings and re-ran focused
+  tests:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_commands.py \
+    rust_prover_tools/unittests/test_kani.py \
+    rust_prover_tools/unittests/test_verus.py \
+    tests/test_prover_tools_cli_e2e.py \
+    tests/test_prover_tools_snapshots.py \
+    tests/steps/test_prover_tools_cli_steps.py
+  ```
+
+- [x] 2026-05-22: Ran another CodeRabbit review and addressed its remaining
+  four findings: explicit snapshot assertion diagnostics, Kani override source
+  reporting, and a corrected `main()` docstring. Re-ran:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_kani.py \
+    tests/test_prover_tools_snapshots.py \
+    tests/steps/test_prover_tools_cli_steps.py
+  ```
+
+- [x] 2026-05-22: Ran a further CodeRabbit review and addressed its 21
+  findings: en-GB wording, expanded public Verus API docstrings, example proof
+  path naming, reduced duplicate default-binary resolution, archive
+  verification assertions, supported Verus binary layouts, and runner branch
+  coverage for toolchain install, proof failure, install fallback, invalid
+  override fallback, and missing proof files. Re-ran:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_verus.py
+  ```
+
+- [x] 2026-05-22: Ran another CodeRabbit review and addressed its final two
+  findings: consistent `_print_lines` usage in `check_version`, and
+  `read_required_file` failure documentation. Re-ran:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_versions.py \
+    tests/steps/test_prover_tools_cli_steps.py
+  ```
+
+- [x] 2026-05-22: CodeRabbit was temporarily rate-limited during the next
+  clearance attempt. After cooldown, another review completed with six findings
+  around Cuprum metadata rationale, list-based Kani message building,
+  parameterised Verus layout tests, `_print_lines` documentation, POSIX shell
+  fake Verus scripts, and BDD fixture deduplication. Addressed them and re-ran:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_commands.py \
+    rust_prover_tools/unittests/test_kani.py \
+    rust_prover_tools/unittests/test_verus.py \
+    tests/steps/test_prover_tools_cli_steps.py
+  ```
+
+- [x] 2026-05-22: Ran another CodeRabbit review and addressed its single
+  remaining en-GB spelling finding in `CommandFailedError`. Re-ran:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_commands.py
+  ```
+
+- [x] 2026-05-22: Attempted another CodeRabbit clearance review. The service
+  returned a recoverable rate-limit error before analysis with a 4 minute 20
+  second wait. Proceeding to the documentation milestone because the last
+  concrete CodeRabbit finding has been fixed and locally validated; retry
+  CodeRabbit after documentation updates.
+- [x] 2026-05-22: Updated `docs/users-guide.md` with `prover-tools`
+  commands, options, environment variables, output behaviour, and compatibility
+  notes.
+- [x] 2026-05-22: Added `docs/prover-tools-cli-design.md` to record the CLI
+  architecture, command invocation design, test strategy, decisions, and
+  operational notes.
+- [x] 2026-05-22: Added `docs/developers-guide.md` to document internal
+  command invocation, cmd-mox testing, and documentation maintenance
+  conventions.
+- [x] 2026-05-22: Ran CodeRabbit for the documentation milestone after a short
+  rate-limit cooldown. Addressed eight findings covering Kani success-message
+  source reporting, redundant stdout stripping, en-GB spelling in docs and test
+  names, the configurable example Verus proof path, and
+  `VerusProofFailedError.exit_code` documentation. Re-ran focused tests and
+  `make fmt`.
+- [x] 2026-05-22: Ran a final CodeRabbit clearance attempt and addressed four
+  findings: Oxford `normalization`, Kani source-string reuse, expanded
+  `errors.py` and Kani test module docstrings. Re-ran:
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_kani.py \
+    rust_prover_tools/unittests/test_commands.py \
+    tests/steps/test_prover_tools_cli_steps.py
+  make fmt 2>&1 | tee /tmp/fmt-rust-prover-tools-initial-tool-import.out
+  ```
+
+- [x] 2026-05-22: Ran another CodeRabbit clearance attempt and addressed three
+  findings: structured `KaniPaths.resolved_version_file` documentation, en-GB
+  spelling in `errors.py`, and shared fake Verus binary creation through a
+  pytest fixture. Re-ran focused Kani, command, BDD, and E2E tests plus
+  `make fmt`.
+- [x] 2026-05-22: Ran another CodeRabbit clearance attempt and addressed five
+  findings: developer guide imperative wording, Cyclopts app annotations, and
+  explicit `__all__` exports for `commands`, `errors`, and `versions`. Re-ran
+  focused commands, versions, and snapshot tests plus `make fmt`.
+
+- [x] 2026-05-22: Stopped further CodeRabbit nit-chasing at user direction
+  after the latest concrete findings were fixed. Any remaining polish can be
+  handled in code review.
+- [x] 2026-05-22: Ran and passed the required final gates:
+
+  ```bash
+  make check-fmt 2>&1 | tee /tmp/check-fmt-rust-prover-tools-initial-tool-import.out
+  make typecheck 2>&1 | tee /tmp/typecheck-rust-prover-tools-initial-tool-import.out
+  make lint 2>&1 | tee /tmp/lint-rust-prover-tools-initial-tool-import.out
+  make test 2>&1 | tee /tmp/test-rust-prover-tools-initial-tool-import.out
+  make markdownlint 2>&1 | tee /tmp/markdownlint-rust-prover-tools-initial-tool-import.out
+  make nixie 2>&1 | tee /tmp/nixie-rust-prover-tools-initial-tool-import.out
+  ```
+
+- [x] 2026-05-22: Committed the approved, gated change as
+  `77100fe Add prover tools CLI`.
 
 ## Surprises & discoveries
 
@@ -204,6 +368,38 @@ this plan. Treat the upstream scripts and the Cuprum and CmdMox guides as the
 source of truth during implementation if any generated summary conflicts with
 the primary material.
 
+Running `leta files | head -n 240` after earlier validation walked generated
+cache content and the Leta process aborted on a broken pipe when `head` exited.
+Use targeted Leta commands and avoid piping full workspace output through
+`head` while generated cache directories are present.
+
+CodeRabbit flagged the original single-file Verus implementation as too large
+after the first milestone. The implementation now keeps the public
+`rust_prover_tools.verus` import surface but moves installation helpers, run
+helpers, and shared models into `rust_prover_tools/verus/install.py`,
+`rust_prover_tools/verus/run.py`, and `rust_prover_tools/verus/models.py`.
+
+The Verus runner must stream the verifier's own output to standard output. The
+original shell script let the verifier write directly to the terminal, and the
+behavioural test now checks that a successful proof result remains visible to
+callers of `prover-tools verus run`. Any Python wrapper lines returned by
+`run_verus` are also printed to standard output so the command stream is
+consistent with the other CLI verbs.
+
+CodeRabbit identified the unbounded `curl` download as a reliability gap. The
+installer now calls `curl -sSfL --connect-timeout 15 --max-time 300 ...` so a
+stalled download fails within a bounded interval while preserving the original
+URL and output-file contract.
+
+Kani status and mismatch messages now distinguish version-file sources from
+explicit version overrides. This avoids misleading users when `--version` or
+`--expected-version` is used.
+
+The default proof path is now named `EXAMPLE_VERUS_PROOF_PATH` in code to make
+clear that it is a compatibility default derived from the source script, not a
+universal project convention. Callers should pass `--proof-file` or
+`VerusRunOptions.proof_file` for project-specific proof entry points.
+
 ## Decision Log
 
 2026-05-22: Use a package console script rather than a standalone `scripts/`
@@ -224,14 +420,47 @@ may depend on those names, while local scripting standards favour `INPUT_`
 variables.
 
 2026-05-22: Model external commands through small builder functions and a
-project-specific Cuprum catalogue. This centralizes allowlisted programs such
-as `cargo`, `rustup`, `curl`, `unzip`, `sha256sum`, and `shasum`, keeps command
+project-specific Cuprum catalogue. This centralizes allowlisted programs such as
+ `cargo`, `rustup`, `curl`, `unzip`, `sha256sum`, and `shasum`, keeps command
 assembly testable, and avoids accidental shell execution.
 
 2026-05-22: Keep real network downloads out of the default test suite. The
 Verus installer must be testable with local fixture archives and CmdMox
 responses. Any true network end-to-end test should be opt-in and clearly marked
 because normal `make test` must remain deterministic.
+
+2026-05-22: Run `coderabbit review --agent` after each major milestone and
+resolve all actionable concerns before continuing. Treat a completed CodeRabbit
+run with no actionable findings as milestone clearance.
+
+2026-05-22: Use Hypothesis, not CrossHair, for the default invariant tests in
+this milestone. The plan allows either Hypothesis or a bounded model checker;
+Hypothesis has direct pytest integration and keeps the default `make test` gate
+deterministic for the pure parsing helpers.
+
+2026-05-22: Commit `uv.lock` with this implementation. The project previously
+had no lockfile, but adding runtime and test dependencies makes the lock useful
+for deterministic local validation with `uv sync --group dev`.
+
+2026-05-22: Preserve `rust_prover_tools.verus` as a public import facade while
+implementing Verus internals as a package. This resolves the large-module
+review concern without forcing callers or CLI code to change imports.
+
+2026-05-22: Run Verus proof commands with command echoing enabled through
+Cuprum so proof output is streamed like the original shell workflow. Python
+wrapper lines returned by the run helper are printed to standard output for
+consistency with the other CLI commands.
+
+2026-05-22: Bound Verus archive downloads with `curl --connect-timeout 15` and
+`--max-time 300`. This preserves the shell script's `curl -sSfL` semantics but
+prevents normal CLI workflows and tests from hanging forever on a stalled
+network connection.
+
+2026-05-22: Rename the hardcoded Verus proof default to
+`EXAMPLE_VERUS_PROOF_PATH` and keep `VerusRunOptions.proof_file` as the
+preferred explicit proof entry point. This makes the source-script
+compatibility default visible without implying every caller should use that
+path.
 
 ## Current source-script contracts
 
@@ -258,9 +487,8 @@ Kani <version> matches <version_file>.
 ```
 
 The original `install-verus.sh` script reads `tools/verus/VERSION` and
-`tools/verus/SHA256SUMS`, uses `VERUS_TARGET` with default `x86-linux`, and
-uses `VERUS_INSTALL_DIR` with default `.verus/<version>` under the repository
-root.
+`tools/verus/SHA256SUMS`, uses `VERUS_TARGET` with default `x86-linux`, and uses
+ `VERUS_INSTALL_DIR` with default `.verus/<version>` under the repository root.
 It builds the archive name:
 
 ```plaintext
@@ -379,7 +607,11 @@ rust_prover_tools/
   commands.py
   errors.py
   kani.py
-  verus.py
+  verus/
+    __init__.py
+    install.py
+    models.py
+    run.py
   versions.py
 ```
 
@@ -401,8 +633,9 @@ reading checksum rows, and parsing Verus toolchain output.
 
 `kani.py` owns Kani install and version-check orchestration.
 
-`verus.py` owns Verus install, binary resolution, toolchain resolution, and
-proof-run orchestration.
+`verus/` owns Verus install, binary resolution, toolchain resolution, and
+proof-run orchestration. Its `__init__.py` file is a compatibility facade for
+the public functions and dataclasses used by the CLI and tests.
 
 Create unit tests next to the package code, following the local Python rule
 that unit tests for reusable code are colocated under an `unittests`
@@ -500,5 +733,10 @@ can be demonstrated with deterministic tests.
 
 ## Outcomes & Retrospective
 
-No implementation has started. The current outcome is a draft, self-contained
-plan for review and approval.
+The implementation is complete. The repository now provides the
+`prover-tools` CLI, Kani and Verus workflow modules, deterministic unit,
+behavioural, snapshot, property, and end-to-end tests, and the requested user,
+developer, design, and ExecPlan documentation. CodeRabbit findings raised
+during implementation were addressed until the user directed remaining polish
+to normal code review. The final local gates passed and the change was
+committed.

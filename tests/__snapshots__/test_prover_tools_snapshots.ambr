@@ -1,0 +1,14 @@
+# serializer version: 1
+# name: test_top_level_help_snapshot
+  '''
+  Usage: prover-tools COMMAND
+  
+  ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ kani         Manage Kani verifier installation and version checking          │
+  │ verus        Manage Verus verifier installation and proof execution          │
+  │ --help (-h)  Display this message and exit.                                  │
+  │ --version    Display application version.                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
