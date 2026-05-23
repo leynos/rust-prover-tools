@@ -79,6 +79,8 @@ Useful options are:
 - `--verus-bin TEXT`: executable, directory, or command name used to locate
   Verus.
 - `--install-dir PATH`: installation directory used for the default binary.
+- `--target TEXT`: release target used if the command needs to install a
+  missing default Verus binary. The default is `x86-linux`.
 - `--no-ensure-toolchain`: skip automatic `rustup` toolchain installation.
 - `--no-install-missing`: do not run the installer when the default binary is
   missing.

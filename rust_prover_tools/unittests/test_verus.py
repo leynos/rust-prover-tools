@@ -44,6 +44,22 @@ def write_verus_pins(repo_root: Path, version: str = "2025.01.01") -> None:
     )
 
 
+def write_verus_pins_for_target(
+    repo_root: Path,
+    *,
+    target: str,
+    version: str = "2025.01.01",
+) -> None:
+    """Write Verus version and checksum pins for a specific target."""
+    tools_dir = repo_root / "tools" / "verus"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "VERSION").write_text(f"{version}\n", encoding="utf-8")
+    (tools_dir / "SHA256SUMS").write_text(
+        f"abc123 verus-{version}-{target}.zip\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.parametrize(
     "layout",
     [
@@ -265,6 +281,53 @@ def test_run_verus_installs_missing_default_binary(
         "sha256sum",
         "unzip",
     ], "Missing default binary should trigger installer commands"
+
+
+def test_run_verus_forwards_target_to_missing_binary_installer(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+) -> None:
+    """Auto-install fallback fetches the requested Verus target archive."""
+    target = "aarch64-macos"
+    write_verus_pins_for_target(tmp_path, target=target)
+    proof_file = tmp_path / "proof.rs"
+    proof_file.write_text("proof", encoding="utf-8")
+    install_dir = tmp_path / ".verus" / "2025.01.01"
+    make_executable(
+        install_dir / f"verus-{target}" / "verus",
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then\n'
+        "  printf 'Verus\\nToolchain: nightly-target\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n",
+    )
+    cmd_mox.stub("curl").returns()
+    cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
+    cmd_mox.stub("unzip").returns()
+    cmd_mox.mock("rustup").with_args(
+        "which",
+        "--toolchain",
+        "nightly-target",
+        "rustc",
+    ).returns()
+
+    run_verus(
+        VerusRunOptions(
+            paths=VerusPaths(repo_root=tmp_path),
+            proof_file=proof_file,
+            target=target,
+        ),
+    )
+
+    assert (
+        cmd_mox
+        .journal[0]
+        .args[5]
+        .endswith(
+            "verus-2025.01.01-aarch64-macos.zip",
+        )
+    ), "Fallback installer should fetch the requested Verus target"
 
 
 def test_run_verus_warns_and_falls_back_from_invalid_override(

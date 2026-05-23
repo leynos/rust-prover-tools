@@ -291,6 +291,10 @@ def run(
         Path | None,
         Parameter(env_var=("VERUS_INSTALL_DIR", "INPUT_VERUS_INSTALL_DIR")),
     ] = None,
+    target: typ.Annotated[
+        str,
+        Parameter(env_var=("VERUS_TARGET", "INPUT_VERUS_TARGET")),
+    ] = DEFAULT_TARGET,
     verus_bin: typ.Annotated[
         str | None,
         Parameter(env_var=("VERUS_BIN", "INPUT_VERUS_BIN")),
@@ -322,6 +326,8 @@ def run(
         Optional checksum file override used if installation is needed.
     install_dir : Path | None
         Optional Verus installation directory.
+    target : str
+        Verus release target used if installation is needed.
     verus_bin : str | None
         Optional Verus binary, directory, or command name.
     ensure_toolchain : bool
@@ -346,6 +352,7 @@ def run(
                 ),
                 proof_file=proof_file,
                 install_dir=install_dir,
+                target=target,
                 verus_bin=verus_bin,
                 should_ensure_toolchain=ensure_toolchain,
                 should_install_missing=install_missing,

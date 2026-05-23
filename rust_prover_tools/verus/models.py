@@ -103,6 +103,8 @@ class VerusRunOptions:
         Optional proof file override.
     install_dir : Path | None
         Optional installation directory override.
+    target : str
+        Verus release target used if installation fallback is needed.
     verus_bin : str | None
         Optional binary, directory, or command override.
     should_ensure_toolchain : bool
@@ -116,6 +118,7 @@ class VerusRunOptions:
     paths: VerusPaths
     proof_file: Path | None = None
     install_dir: Path | None = None
+    target: str = DEFAULT_TARGET
     verus_bin: str | None = None
     should_ensure_toolchain: bool = True
     should_install_missing: bool = True

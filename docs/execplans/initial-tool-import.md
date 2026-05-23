@@ -342,6 +342,11 @@ test conventions.
 
 - [x] 2026-05-22: Committed the approved, gated change as
   `77100fe Add prover tools CLI`.
+- [x] 2026-05-23: Addressed review feedback that `verus run` did not forward
+  the selected Verus release target into auto-install fallback. Added
+  `VerusRunOptions.target`, exposed `--target` on `prover-tools verus run`,
+  forwarded it to `VerusInstallOptions`, and covered a non-default target in
+  `test_run_verus_forwards_target_to_missing_binary_installer`.
 
 ## Surprises & discoveries
 
@@ -399,6 +404,11 @@ The default proof path is now named `EXAMPLE_VERUS_PROOF_PATH` in code to make
 clear that it is a compatibility default derived from the source script, not a
 universal project convention. Callers should pass `--proof-file` or
 `VerusRunOptions.proof_file` for project-specific proof entry points.
+
+Review feedback identified that Verus auto-install fallback must preserve the
+selected release target. Without this, `verus run --target <target>` can
+download the default `x86-linux` release during fallback, even when the caller
+needs a different archive.
 
 ## Decision Log
 
@@ -461,6 +471,10 @@ network connection.
 preferred explicit proof entry point. This makes the source-script
 compatibility default visible without implying every caller should use that
 path.
+
+2026-05-23: Add `target` to `VerusRunOptions` and pass it through
+`resolve_default_verus` to `VerusInstallOptions`. This keeps explicit Verus run
+target selection consistent with installer fallback.
 
 ## Current source-script contracts
 
@@ -733,10 +747,9 @@ can be demonstrated with deterministic tests.
 
 ## Outcomes & Retrospective
 
-The implementation is complete. The repository now provides the
-`prover-tools` CLI, Kani and Verus workflow modules, deterministic unit,
-behavioural, snapshot, property, and end-to-end tests, and the requested user,
-developer, design, and ExecPlan documentation. CodeRabbit findings raised
-during implementation were addressed until the user directed remaining polish
-to normal code review. The final local gates passed and the change was
-committed.
+The implementation is complete. The repository now provides the `prover-tools`
+CLI, Kani and Verus workflow modules, deterministic unit, behavioural,
+snapshot, property, and end-to-end tests, and the requested user, developer,
+design, and ExecPlan documentation. CodeRabbit findings raised during
+implementation were addressed until the user directed remaining polish to
+normal code review. The final local gates passed and the change was committed.

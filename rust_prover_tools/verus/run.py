@@ -202,6 +202,7 @@ def resolve_default_verus(options: VerusRunOptions, default_bin: Path) -> Path |
         install_verus(
             VerusInstallOptions(
                 paths=options.paths,
+                target=options.target,
                 install_dir=options.install_dir,
             ),
         )

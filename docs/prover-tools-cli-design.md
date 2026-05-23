@@ -94,6 +94,11 @@ The Verus compatibility proof default is named `EXAMPLE_VERUS_PROOF_PATH` in
 code. Callers should provide `--proof-file` for project-specific proof entry
 points.
 
+The Verus run path carries the selected release target into installer fallback.
+This keeps `prover-tools verus run --target <target>` aligned with
+`prover-tools verus install --target <target>` when the default binary is
+missing.
+
 The Verus installer keeps the original checksum validation and extraction
 contract, but adds bounded `curl` timeouts to avoid indefinite network hangs.
 
