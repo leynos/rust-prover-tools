@@ -14,6 +14,13 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
+def sanitized_subprocess_env() -> dict[str, str]:
+    """Return subprocess environment without GitHub Actions input bindings."""
+    return {
+        key: value for key, value in os.environ.items() if not key.startswith("INPUT_")
+    }
+
+
 def test_verus_run_cli_uses_existing_binary(
     tmp_path: Path,
     fake_verus_binary_factory: cabc.Callable[..., None],
@@ -48,7 +55,7 @@ def test_verus_run_cli_uses_existing_binary(
         check=False,
         capture_output=True,
         text=True,
-        env=os.environ.copy(),
+        env=sanitized_subprocess_env(),
     )
 
     assert completed.returncode == 0, (

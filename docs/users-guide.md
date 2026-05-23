@@ -87,7 +87,7 @@ Useful options are:
 - `--extra-arg TEXT`: append an additional argument to the Verus invocation.
   This option may be repeated.
 
-The run command recognises Verus binaries in these directory layouts:
+The run command recognizes Verus binaries in these directory layouts:
 
 - `verus`
 - `verus/verus`

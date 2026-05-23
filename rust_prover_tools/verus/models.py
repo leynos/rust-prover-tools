@@ -62,11 +62,19 @@ class VerusPaths:
 
     def resolved_version_file(self) -> Path:
         """Return the configured or default version file."""
-        return self.version_file or self.repo_root / VERUS_VERSION_PATH
+        if self.version_file is None:
+            return self.repo_root / VERUS_VERSION_PATH
+        if self.version_file.is_absolute():
+            return self.version_file
+        return self.repo_root / self.version_file
 
     def resolved_checksum_file(self) -> Path:
         """Return the configured or default checksum file."""
-        return self.checksum_file or self.repo_root / VERUS_CHECKSUM_PATH
+        if self.checksum_file is None:
+            return self.repo_root / VERUS_CHECKSUM_PATH
+        if self.checksum_file.is_absolute():
+            return self.checksum_file
+        return self.repo_root / self.checksum_file
 
 
 @dc.dataclass(frozen=True, slots=True)

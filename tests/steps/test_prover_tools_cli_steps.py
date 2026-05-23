@@ -23,6 +23,13 @@ pytest_plugins = ("cmd_mox.pytest_plugin",)
 scenarios("../features/prover_tools_cli.feature")
 
 
+def sanitized_subprocess_env() -> dict[str, str]:
+    """Return subprocess environment without GitHub Actions input bindings."""
+    return {
+        key: value for key, value in os.environ.items() if not key.startswith("INPUT_")
+    }
+
+
 @dc.dataclass(slots=True, frozen=True)
 class CliRun:
     """Captured command-line run."""
@@ -113,7 +120,7 @@ def user_checks_kani_version(repo_root: Path) -> CliRun:
         check=False,
         capture_output=True,
         text=True,
-        env=os.environ.copy(),
+        env=sanitized_subprocess_env(),
     )
     return CliRun(
         stdout=completed.stdout,
@@ -148,7 +155,7 @@ def user_runs_verus_proof(repo_root: Path, verus_bin: Path, proof_name: str) -> 
         check=False,
         capture_output=True,
         text=True,
-        env=os.environ.copy(),
+        env=sanitized_subprocess_env(),
     )
     return CliRun(
         stdout=completed.stdout,

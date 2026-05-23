@@ -265,7 +265,7 @@ test conventions.
 - [x] 2026-05-22: CodeRabbit was temporarily rate-limited during the next
   clearance attempt. After cooldown, another review completed with six findings
   around Cuprum metadata rationale, list-based Kani message building,
-  parameterised Verus layout tests, `_print_lines` documentation, POSIX shell
+  parameterized Verus layout tests, `_print_lines` documentation, POSIX shell
   fake Verus scripts, and BDD fixture deduplication. Addressed them and re-ran:
 
   ```bash
@@ -352,6 +352,28 @@ test conventions.
   now installs the toolchain only after a failed version probe with a parseable
   toolchain, and the Verus run tests no longer mock `rustup` for successful
   probes.
+- [x] 2026-05-23: Addressed review feedback on repo-root-relative Kani and
+  Verus pin files, user-facing UTF-8 and read-error handling, subprocess
+  `INPUT_` environment isolation, and Oxford spelling in docs. Added regression
+  coverage for relative Kani and Verus pin overrides.
+- [x] 2026-05-23: Re-ran focused regression tests and all final gates after the
+  review fixes. `coderabbit review --agent` completed with zero findings.
+
+  ```bash
+  UV_CACHE_DIR=.uv-cache UV_TOOL_DIR=.uv-tools uv run pytest -q \
+    rust_prover_tools/unittests/test_kani.py \
+    rust_prover_tools/unittests/test_verus.py \
+    rust_prover_tools/unittests/test_versions.py \
+    tests/steps/test_prover_tools_cli_steps.py \
+    tests/test_prover_tools_cli_e2e.py
+  make check-fmt
+  make typecheck
+  make lint
+  make test
+  make markdownlint
+  make nixie
+  coderabbit review --agent
+  ```
 
 ## Surprises & discoveries
 

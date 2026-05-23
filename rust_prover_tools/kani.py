@@ -60,7 +60,11 @@ class KaniPaths:
             Configured `version_file`, or `repo_root / KANI_VERSION_PATH` when
             no override is set.
         """
-        return self.version_file or self.repo_root / KANI_VERSION_PATH
+        if self.version_file is None:
+            return self.repo_root / KANI_VERSION_PATH
+        if self.version_file.is_absolute():
+            return self.version_file
+        return self.repo_root / self.version_file
 
 
 @dc.dataclass(frozen=True, slots=True)

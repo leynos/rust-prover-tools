@@ -13,6 +13,7 @@ from rust_prover_tools.versions import (
     expected_sha256,
     parse_tool_version,
     parse_verus_toolchain,
+    read_required_file,
     read_version_pin,
     validate_semver,
 )
@@ -35,6 +36,32 @@ def test_read_version_pin_rejects_missing_file(tmp_path: Path) -> None:
     """Missing version files produce user-facing errors."""
     with pytest.raises(ProverToolError, match="does not exist"):
         read_version_pin(tmp_path / "VERSION")
+
+
+def test_read_required_file_rejects_invalid_utf8(tmp_path: Path) -> None:
+    """Invalid UTF-8 input is reported as a user-facing error."""
+    version_file = tmp_path / "VERSION"
+    version_file.write_bytes(b"\xff")
+
+    with pytest.raises(ProverToolError, match="is not valid UTF-8"):
+        read_required_file(version_file, description="version file")
+
+
+def test_read_required_file_wraps_os_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filesystem read failures are reported as user-facing errors."""
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("1.2.3\n", encoding="utf-8")
+
+    def fail_read_text(*_args: object, **_kwargs: object) -> str:
+        raise PermissionError
+
+    monkeypatch.setattr(type(version_file), "read_text", fail_read_text)
+
+    with pytest.raises(ProverToolError, match="failed to read version file"):
+        read_required_file(version_file, description="version file")
 
 
 def test_parse_tool_version_finds_first_semver() -> None:

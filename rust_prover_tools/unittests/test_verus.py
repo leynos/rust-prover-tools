@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import stat
 import typing as typ
 
@@ -137,6 +138,53 @@ def test_install_verus_downloads_checks_and_normalises_archive(
     assert (install_dir / "verus" / "verus").exists(), (
         "Install should normalise final binary path"
     )
+
+
+def test_install_verus_resolves_relative_pin_files_from_repo_root(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relative Verus pin overrides resolve below the configured repository."""
+    repo_root = tmp_path / "repo-root"
+    pins_dir = repo_root / "pins"
+    pins_dir.mkdir(parents=True)
+    (pins_dir / "verus-version").write_text("2025.01.01\n", encoding="utf-8")
+    (pins_dir / "verus-checksum").write_text(
+        "abc123 verus-2025.01.01-x86-linux.zip\n",
+        encoding="utf-8",
+    )
+    unrelated_cwd = tmp_path / "unrelated"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+    install_dir = repo_root / ".verus" / "2025.01.01"
+    extracted_binary = install_dir / "verus-x86-linux" / "verus"
+    make_executable(extracted_binary)
+    cmd_mox.stub("curl").returns()
+    cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
+    cmd_mox.stub("unzip").returns()
+
+    lines = install_verus(
+        VerusInstallOptions(
+            paths=VerusPaths(
+                repo_root=repo_root,
+                version_file=pathlib.Path("pins/verus-version"),
+                checksum_file=pathlib.Path("pins/verus-checksum"),
+            ),
+            install_dir=install_dir,
+            base_url="https://example.test",
+        ),
+    )
+
+    assert lines == (
+        f"Installed Verus 2025.01.01 in {install_dir / 'verus'}",
+        f"Export VERUS_BIN={install_dir / 'verus' / 'verus'}",
+    ), "Install should read relative pins from repo_root"
+    assert [call.command for call in cmd_mox.journal] == [
+        "curl",
+        "sha256sum",
+        "unzip",
+    ], "Relative pin overrides should still perform install commands"
 
 
 def test_run_verus_uses_existing_binary_when_version_probe_succeeds(

@@ -8,6 +8,7 @@ override handling, and error propagation without running real Cargo commands.
 
 from __future__ import annotations
 
+import pathlib
 import typing as typ
 
 import pytest
@@ -84,6 +85,37 @@ def test_check_kani_version_accepts_matching_override_command(
 
     assert message == f"Kani 0.61.0 matches from {version_file}.", (
         "Check should succeed when versions match"
+    )
+
+
+def test_check_kani_version_resolves_relative_version_file_from_repo_root(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relative Kani version pins resolve against the configured repository."""
+    repo_root = tmp_path / "repo-root"
+    version_file = repo_root / "tools" / "kani" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("0.61.0\n", encoding="utf-8")
+    unrelated_cwd = tmp_path / "unrelated"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+    cmd_mox.mock("cargo").with_args("kani", "--version").returns(
+        stdout="kani 0.61.0\n",
+    )
+
+    message = check_kani_version(
+        KaniCheckOptions(
+            paths=KaniPaths(
+                repo_root=repo_root,
+                version_file=pathlib.Path("tools/kani/VERSION"),
+            ),
+        ),
+    )
+
+    assert message == f"Kani 0.61.0 matches from {version_file}.", (
+        "Relative version_file should resolve below repo_root, not cwd"
     )
 
 

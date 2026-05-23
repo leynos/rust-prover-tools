@@ -57,12 +57,20 @@ def read_required_file(path: Path, *, description: str) -> str:
     Raises
     ------
     ProverToolError
-        Raised when the file does not exist or is empty after stripping.
+        Raised when the file does not exist, cannot be read, is not UTF-8, or
+        is empty after stripping.
     """
     if not path.is_file():
         msg = f"{description} '{path}' does not exist"
         raise ProverToolError(msg)
-    value = path.read_text(encoding="utf-8").strip()
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except UnicodeDecodeError as exc:
+        msg = f"{description} '{path}' is not valid UTF-8"
+        raise ProverToolError(msg) from exc
+    except OSError as exc:
+        msg = f"failed to read {description} '{path}': {exc}"
+        raise ProverToolError(msg) from exc
     if not value:
         msg = f"{description} '{path}' is empty"
         raise ProverToolError(msg)
