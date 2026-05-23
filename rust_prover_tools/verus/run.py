@@ -218,8 +218,8 @@ def ensure_verus_toolchain(verus_bin: Path, *, should_install: bool) -> str:
         Path to the Verus binary whose `--version` output declares the
         toolchain.
     should_install : bool
-        Whether to call `ensure_toolchain_installed` when the toolchain is
-        parsed.
+        Whether to call `ensure_toolchain_installed` when the version probe
+        fails after declaring a missing toolchain.
 
     Returns
     -------
@@ -235,24 +235,24 @@ def ensure_verus_toolchain(verus_bin: Path, *, should_install: bool) -> str:
     Notes
     -----
     The function always runs `verus_bin --version`; with `should_install` true
-    it may install the parsed toolchain before retrying a failed version probe.
+    it installs the parsed toolchain only when the initial version probe fails.
     """
     version_result = run_command(CommandSpec((str(verus_bin), "--version")))
     version_output = version_result.stdout + version_result.stderr
     toolchain = parse_verus_toolchain(version_output)
+    if version_result.exit_code == 0:
+        return toolchain
     if should_install:
         ensure_toolchain_installed(toolchain)
-        if version_result.exit_code != 0:
-            rerun = run_command(CommandSpec((str(verus_bin), "--version")))
-            if rerun.exit_code != 0:
-                msg = (
-                    f"Failed to run {verus_bin} --version after installing toolchain.\n"
-                    f"{rerun.stdout}{rerun.stderr}"
-                )
-                raise ProverToolError(msg)
-    elif version_result.exit_code != 0:
-        raise ProverToolError(version_output)
-    return toolchain
+        rerun = run_command(CommandSpec((str(verus_bin), "--version")))
+        if rerun.exit_code != 0:
+            msg = (
+                f"Failed to run {verus_bin} --version after installing toolchain.\n"
+                f"{rerun.stdout}{rerun.stderr}"
+            )
+            raise ProverToolError(msg)
+        return parse_verus_toolchain(rerun.stdout + rerun.stderr)
+    raise ProverToolError(version_output)
 
 
 def ensure_toolchain_installed(toolchain: str) -> None:

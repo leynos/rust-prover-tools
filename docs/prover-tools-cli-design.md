@@ -99,6 +99,11 @@ This keeps `prover-tools verus run --target <target>` aligned with
 `prover-tools verus install --target <target>` when the default binary is
 missing.
 
+The Verus toolchain check treats a successful `verus --version` probe as
+sufficient evidence that Verus is usable. `rustup` is only required when the
+version probe fails with a parseable missing-toolchain message and automatic
+toolchain installation is enabled.
+
 The Verus installer keeps the original checksum validation and extraction
 contract, but adds bounded `curl` timeouts to avoid indefinite network hangs.
 

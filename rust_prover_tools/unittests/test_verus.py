@@ -139,11 +139,10 @@ def test_install_verus_downloads_checks_and_normalises_archive(
     )
 
 
-def test_run_verus_uses_existing_binary_and_installed_toolchain(
+def test_run_verus_uses_existing_binary_when_version_probe_succeeds(
     tmp_path: Path,
-    cmd_mox: CmdMox,
 ) -> None:
-    """Verus proof runs preserve version, rustup, and proof command order."""
+    """Successful Verus version probes do not require rustup."""
     write_verus_pins(tmp_path)
     proof_file = tmp_path / "proof.rs"
     proof_file.write_text("proof", encoding="utf-8")
@@ -157,12 +156,6 @@ def test_run_verus_uses_existing_binary_and_installed_toolchain(
         "fi\n"
         "exit 0\n",
     )
-    cmd_mox.mock("rustup").with_args(
-        "which",
-        "--toolchain",
-        "nightly-2025-01-01",
-        "rustc",
-    ).returns()
     lines = run_verus(
         VerusRunOptions(
             paths=VerusPaths(repo_root=tmp_path),
@@ -182,12 +175,17 @@ def test_run_verus_installs_missing_toolchain(
     proof_file = tmp_path / "proof.rs"
     proof_file.write_text("proof", encoding="utf-8")
     binary = tmp_path / ".verus" / "2025.01.01" / "verus" / "verus"
+    toolchain_marker = tmp_path / "nightly-missing-installed"
     make_executable(
         binary,
         "#!/bin/sh\n"
         'if [ "$1" = "--version" ]; then\n'
-        "  printf 'Verus\\nToolchain: nightly-missing\\n'\n"
-        "  exit 0\n"
+        f"  if [ -f '{toolchain_marker}' ]; then\n"
+        "    printf 'Verus\\nToolchain: nightly-missing\\n'\n"
+        "    exit 0\n"
+        "  fi\n"
+        "  printf 'required rust toolchain nightly-missing\\n' >&2\n"
+        "  exit 1\n"
         "fi\n"
         "exit 0\n",
     )
@@ -196,6 +194,7 @@ def test_run_verus_installs_missing_toolchain(
         if invocation.args == ["which", "--toolchain", "nightly-missing", "rustc"]:
             return ("", "", 1)
         if invocation.args == ["toolchain", "install", "nightly-missing"]:
+            toolchain_marker.write_text("installed\n", encoding="utf-8")
             return ("", "", 0)
         return ("", f"unexpected rustup args: {invocation.args}\n", 2)
 
@@ -208,7 +207,7 @@ def test_run_verus_installs_missing_toolchain(
     assert [call.args for call in cmd_mox.journal] == [
         ["which", "--toolchain", "nightly-missing", "rustc"],
         ["toolchain", "install", "nightly-missing"],
-    ], "Missing toolchain should trigger rustup install"
+    ], "Failed version probe should trigger rustup install"
 
 
 def test_run_verus_raises_when_proof_fails(
@@ -229,12 +228,6 @@ def test_run_verus_raises_when_proof_fails(
         "fi\n"
         "exit 5\n",
     )
-    cmd_mox.mock("rustup").with_args(
-        "which",
-        "--toolchain",
-        "nightly-test",
-        "rustc",
-    ).returns()
 
     with pytest.raises(VerusProofFailedError, match="Verus proofs failed"):
         run_verus(
@@ -265,12 +258,6 @@ def test_run_verus_installs_missing_default_binary(
     cmd_mox.stub("curl").returns()
     cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
     cmd_mox.stub("unzip").returns()
-    cmd_mox.mock("rustup").with_args(
-        "which",
-        "--toolchain",
-        "nightly-installed",
-        "rustc",
-    ).returns()
 
     run_verus(
         VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_file=proof_file)
@@ -305,12 +292,6 @@ def test_run_verus_forwards_target_to_missing_binary_installer(
     cmd_mox.stub("curl").returns()
     cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
     cmd_mox.stub("unzip").returns()
-    cmd_mox.mock("rustup").with_args(
-        "which",
-        "--toolchain",
-        "nightly-target",
-        "rustc",
-    ).returns()
 
     run_verus(
         VerusRunOptions(
@@ -349,12 +330,6 @@ def test_run_verus_warns_and_falls_back_from_invalid_override(
         "exit 0\n",
     )
     invalid_binary = tmp_path / "missing-verus"
-    cmd_mox.mock("rustup").with_args(
-        "which",
-        "--toolchain",
-        "nightly-test",
-        "rustc",
-    ).returns()
 
     lines = run_verus(
         VerusRunOptions(

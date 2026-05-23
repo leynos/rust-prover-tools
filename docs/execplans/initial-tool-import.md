@@ -347,6 +347,11 @@ test conventions.
   `VerusRunOptions.target`, exposed `--target` on `prover-tools verus run`,
   forwarded it to `VerusInstallOptions`, and covered a non-default target in
   `test_run_verus_forwards_target_to_missing_binary_installer`.
+- [x] 2026-05-23: Addressed review feedback that `ensure_verus_toolchain`
+  required `rustup` even when `verus --version` already succeeded. The helper
+  now installs the toolchain only after a failed version probe with a parseable
+  toolchain, and the Verus run tests no longer mock `rustup` for successful
+  probes.
 
 ## Surprises & discoveries
 
@@ -409,6 +414,11 @@ Review feedback identified that Verus auto-install fallback must preserve the
 selected release target. Without this, `verus run --target <target>` can
 download the default `x86-linux` release during fallback, even when the caller
 needs a different archive.
+
+Review feedback also identified that a successful `verus --version` probe
+should not require `rustup` to be present. The runner now treats that success
+as sufficient and reserves `rustup` for failed version probes that indicate a
+missing toolchain.
 
 ## Decision Log
 
@@ -475,6 +485,10 @@ path.
 2026-05-23: Add `target` to `VerusRunOptions` and pass it through
 `resolve_default_verus` to `VerusInstallOptions`. This keeps explicit Verus run
 target selection consistent with installer fallback.
+
+2026-05-23: Gate `ensure_toolchain_installed` behind a failed `verus --version`
+probe. This avoids rejecting usable Verus installations on systems that
+intentionally do not provide `rustup`.
 
 ## Current source-script contracts
 
