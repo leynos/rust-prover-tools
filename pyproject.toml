@@ -25,6 +25,7 @@ dev = [
     "ty",
     "pytest-timeout",
     "pytest-xdist",
+    "pyyaml>=6.0.3",
 ]
 
 [tool.ruff]
@@ -306,6 +307,13 @@ enable = [
 [tool.pytest.ini_options]
 # Tests automatically killed after seconds elapsed
 timeout = 30
+
+[tool.mutmut]
+source_paths = ["rust_prover_tools/"]
+# Run both the integration suite and the in-package unit tests against
+# mutants, but never mutate the unit tests themselves.
+pytest_add_cli_args_test_selection = ["tests/", "rust_prover_tools/unittests/"]
+do_not_mutate = ["rust_prover_tools/unittests/*"]
 
 [tool.uv]
 package = true

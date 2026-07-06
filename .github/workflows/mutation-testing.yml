@@ -1,0 +1,27 @@
+name: Mutation testing
+
+# Thin caller of the shared mutation-testing reusable workflow; caller
+# guide: leynos/shared-actions docs/mutation-mutmut-workflow.md.
+on:
+  schedule:
+    - cron: "20 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: mutation-testing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    permissions:
+      contents: read
+      id-token: write # OIDC workflow-source resolution
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@47aea18960d24f33aedc4782ec6b73e365418313
+    with:
+      # Flat package layout: mutable source lives directly under
+      # rust_prover_tools/, so change detection watches that prefix and
+      # no path prefix is stripped for module-glob translation.
+      paths: "rust_prover_tools/"
+      module-prefix-strip: ""
