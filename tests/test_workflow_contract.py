@@ -14,6 +14,7 @@ from __future__ import annotations
 import typing as typ
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOW_PATH = (
@@ -21,6 +22,14 @@ WORKFLOW_PATH = (
     / ".github"
     / "workflows"
     / "mutation-testing.yml"
+)
+
+pytestmark = pytest.mark.skipif(
+    not WORKFLOW_PATH.exists(),
+    reason=(
+        "workflow file not present in this working copy (for example "
+        "inside mutmut's mutants/ sandbox, which does not copy .github/)"
+    ),
 )
 
 #: The pinned commit of leynos/shared-actions providing
