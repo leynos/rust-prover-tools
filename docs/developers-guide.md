@@ -2,9 +2,11 @@
 
 ## Spelling policy
 
-Run `make spelling` to enforce en-GB-oxendict prose spelling. The tracked
-`typos.toml` starts from the shared estate dictionary and applies the narrow
-repository policy in `typos.local.toml`. Edit the local policy, then run
+Run `make spelling` to enforce en-GB-oxendict spelling. Typos scans tracked
+Markdown, while the exact-phrase checker scans tracked UTF-8 text so prohibited
+forms are also caught in source comments and tests. The tracked `typos.toml`
+starts from the shared estate dictionary and applies the narrow repository
+policy in `typos.local.toml`. Edit the local policy, then run
 `make spelling-config` rather than changing generated entries by hand. The
 focused shared config builder refreshes its untracked dictionary cache only
 when the authoritative copy is newer.

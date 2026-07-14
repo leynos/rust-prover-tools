@@ -116,7 +116,7 @@ typecheck: build ## Run typechecking
 markdownlint: spelling $(MDLINT) ## Lint Markdown files and enforce spelling
 	env -u NO_COLOR $(MDLINT) '**/*.md'
 
-spelling: spelling-phrase-check ## Enforce en-GB-oxendict spelling in Markdown prose
+spelling: spelling-phrase-check ## Enforce en-GB-oxendict policy in tracked text
 	@git ls-files -z '*.md' | xargs -0 -r env $(UV_ENV) \
 		$(UV) tool run typos@$(TYPOS_VERSION) --config typos.toml --force-exclude
 

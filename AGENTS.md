@@ -140,6 +140,8 @@ When implementing changes, adhere to the following testing procedures:
 
 - Validate Markdown files using `make markdownlint`. This target also enforces
   en-GB-oxendict spelling with pinned `typos`.
+- The exact-phrase check scans tracked UTF-8 text so prohibited forms in source
+  comments and tests are enforced alongside the Markdown Typos scan.
 - The spelling configuration `typos.toml` is generated. Edit
   `typos.local.toml` for narrow repository terminology, then run
   `make spelling-config`; never edit generated entries by hand. The focused
