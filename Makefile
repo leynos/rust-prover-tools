@@ -33,7 +33,8 @@ PYLINT = $(UV_ENV) $(UV) tool run --python $(PYLINT_PYTHON) --from '$(PYLINT_PYP
 
 
 .PHONY: help all clean build build-release lint lint-python fmt check-fmt \
-        markdownlint nixie spelling spelling-config spelling-phrase-check \
+        markdownlint nixie spelling spelling-config spelling-config-write \
+        spelling-phrase-check \
         spelling-helper-test test typecheck $(TOOLS) $(VENV_TOOLS)
 
 .DEFAULT_GOAL := all
@@ -123,9 +124,12 @@ spelling: spelling-phrase-check ## Enforce en-GB-oxendict policy in tracked text
 spelling-phrase-check: spelling-config ## Reject prohibited spelling phrases
 	@PYTHONPATH=scripts $(UV_ENV) $(UV) run --no-project --python 3.14 scripts/typos_rollout_check.py --repository .
 
-spelling-config: spelling-helper-test ## Generate and verify the spelling configuration
+spelling-config: spelling-helper-test ## Verify the generated spelling configuration
 	@git ls-files --error-unmatch typos.toml >/dev/null
 	@$(TYPOS_CONFIG_BUILDER) --repository . --check
+
+spelling-config-write: spelling-helper-test ## Generate the spelling configuration
+	@$(TYPOS_CONFIG_BUILDER) --repository .
 
 spelling-helper-test: ## Validate the shared spelling-policy integration
 	@$(UV_ENV) $(UV) tool run ruff@$(RUFF_VERSION) format --isolated --target-version py314 --check $(SPELLING_PY_SRCS)

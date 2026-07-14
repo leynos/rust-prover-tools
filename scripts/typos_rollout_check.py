@@ -3,7 +3,15 @@
 # requires-python = ">=3.14"
 # dependencies = ["pathspec==1.1.1"]
 # ///
-"""Enforce exact phrase corrections alongside the Typos scanner."""
+"""Enforce exact phrase corrections alongside the Typos scanner.
+
+The checker loads shared and repository-local phrase policy, then scans eligible
+tracked UTF-8 text. It complements the Markdown-only Typos pass by catching
+prohibited forms in human-facing source comments and tests.
+
+Run it from the repository root with
+``uv run scripts/typos_rollout_check.py --repository .``.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +36,21 @@ POLICY_PATHS = frozenset(
 
 @dataclass(frozen=True)
 class PhraseFinding:
-    """Describe one prohibited phrase in tracked text."""
+    """Describe one prohibited phrase in tracked text.
+
+    Attributes
+    ----------
+    path
+        Repository-relative path containing the phrase.
+    line
+        One-based source line number.
+    column
+        One-based source column number.
+    phrase
+        Source phrase preserving its original case.
+    correction
+        Replacement prescribed by the spelling policy.
+    """
 
     path: Path
     line: int
@@ -39,7 +61,17 @@ class PhraseFinding:
 
 @dataclass(frozen=True)
 class PhrasePolicy:
-    """Hold the effective policy needed by the consumer phrase scanner."""
+    """Hold the effective policy needed by the consumer phrase scanner.
+
+    Attributes
+    ----------
+    phrase_corrections
+        Ordered prohibited phrase and replacement pairs.
+    ignore_patterns
+        Regular expressions that mask ignored spans.
+    excluded_files
+        Gitignore-style patterns for excluded paths.
+    """
 
     phrase_corrections: tuple[tuple[str, str], ...]
     ignore_patterns: tuple[str, ...]
@@ -77,7 +109,27 @@ def _phrases(document: dict[str, object]) -> dict[str, str]:
 
 
 def load_policy(repository: Path) -> PhrasePolicy:
-    """Load generated scan policy and shared phrase corrections."""
+    """Load generated scan policy and shared phrase corrections.
+
+    Parameters
+    ----------
+    repository
+        Git repository containing the generated, shared, and local policies.
+
+    Returns
+    -------
+    PhrasePolicy
+        Effective phrase corrections, ignored spans, and path exclusions.
+
+    Raises
+    ------
+    FileNotFoundError
+        A required generated or shared policy file is missing.
+    OSError
+        A policy file cannot be read.
+    tomllib.TOMLDecodeError
+        A policy file contains invalid TOML.
+    """
     generated = _document(repository / "typos.toml")
     shared_cache = repository / ".typos-oxendict-base.toml"
     if not shared_cache.is_file():
@@ -155,7 +207,25 @@ def _phrase_findings(
 def check_phrase_corrections(
     repository: Path, policy: PhrasePolicy
 ) -> tuple[PhraseFinding, ...]:
-    """Find prohibited exact phrases in tracked UTF-8 text."""
+    """Find prohibited exact phrases in tracked UTF-8 text.
+
+    Parameters
+    ----------
+    repository
+        Git repository whose tracked files should be scanned.
+    policy
+        Effective corrections, ignored spans, and path exclusions.
+
+    Returns
+    -------
+    tuple[PhraseFinding, ...]
+        Findings in deterministic path, phrase, and source order.
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        Git cannot enumerate the repository's tracked files.
+    """
     found = []
     exclusion_spec = _exclusion_spec(policy)
     for relative in _tracked(repository):
@@ -173,7 +243,30 @@ def check_phrase_corrections(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Report prohibited phrases and return the spelling-gate status."""
+    """Report prohibited phrases and return the spelling-gate status.
+
+    Parameters
+    ----------
+    argv
+        Arguments excluding the executable name, or ``None`` to read the
+        process command line.
+
+    Returns
+    -------
+    int
+        Two when prohibited phrases are found, otherwise zero.
+
+    Raises
+    ------
+    FileNotFoundError
+        A required generated or shared policy file is missing.
+    OSError
+        A policy file cannot be read.
+    subprocess.CalledProcessError
+        Git cannot enumerate the repository's tracked files.
+    tomllib.TOMLDecodeError
+        A policy file contains invalid TOML.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     repository = parser.parse_args(argv).repository

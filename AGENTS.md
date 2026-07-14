@@ -144,9 +144,9 @@ When implementing changes, adhere to the following testing procedures:
   comments and tests are enforced alongside the Markdown Typos scan.
 - The spelling configuration `typos.toml` is generated. Edit
   `typos.local.toml` for narrow repository terminology, then run
-  `make spelling-config`; never edit generated entries by hand. The focused
-  shared builder refreshes its untracked dictionary cache when the authoritative
-  copy is newer.
+  `make spelling-config-write`; never edit generated entries by hand. Reserve
+  `make spelling-config` for drift validation. The focused shared builder
+  refreshes its untracked dictionary cache when the authoritative copy is newer.
 - Quoted APIs and identifiers retain upstream spelling. Put them in backticks
   or fenced code blocks, which the spelling gate ignores, rather than adding
   word-level exceptions.
