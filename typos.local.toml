@@ -1,0 +1,25 @@
+# Repository-specific identifiers, quotations and machine interfaces.
+
+schema = 1
+
+[oxford]
+stems = []
+
+[words]
+accepted = []
+
+[words.corrections]
+
+[patterns]
+ignore = [
+  # Official name: GitHub Flavored Markdown.
+  'GitHub\s+Flavored\s+Markdown',
+  # Composite-action input names and expressions are machine interfaces.
+  '(?m)^          artifact-name: wheels-\$\{\{ matrix\.os \}\}-\$\{\{ matrix\.arch \}\}$',
+  '(?m)^          artifact-name: wheels-pure$',
+  '(?m)^        name: \$\{\{ inputs\.artifact-name \}\}$',
+  '(?m)^  artifact-name:$',
+]
+
+[files]
+exclude = []

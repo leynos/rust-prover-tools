@@ -1,6 +1,6 @@
 # Scripting standards
 
-Project scripts must prioritise clarity, reproducibility, and testability. The
+Project scripts must prioritize clarity, reproducibility, and testability. The
 baseline tooling is Python and the [`uv`](https://github.com/astral-sh/uv)
 launcher so that scripts remain dependency‑self‑contained and easy to execute
 in Continuous Integration (CI) or locally.
@@ -240,7 +240,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DIST = PROJECT_ROOT / "dist"
 (DIST / "artifacts").mkdir(parents=True, exist_ok=True)
 
-# Portable joins and normalisation
+# Portable joins and normalization
 cfg = PROJECT_ROOT.joinpath("config", "release.toml").resolve()
 ```
 
