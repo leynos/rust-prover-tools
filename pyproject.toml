@@ -17,6 +17,7 @@ prover-tools = "rust_prover_tools.cli:main"
 dev = [
     "cmd-mox",
     "hypothesis",
+    "pathspec==1.1.1",
     "pytest",
     "pytest-bdd",
     "ruff",

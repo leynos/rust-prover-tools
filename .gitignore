@@ -101,6 +101,8 @@ ipython_config.py
 #uv.lock
 .uv-cache/
 .uv-tools/
+.typos-oxendict-base.json
+.typos-oxendict-base.toml
 
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
