@@ -7,8 +7,8 @@ Markdown, while the exact-phrase checker scans tracked UTF-8 text so prohibited
 forms are also caught in source comments and tests. The tracked `typos.toml`
 starts from the shared estate dictionary and applies the narrow repository
 policy in `typos.local.toml`. Edit the local policy, then run
-`make spelling-config-write` rather than changing generated entries by hand.
-Use `make spelling-config` to validate that the generated file has not drifted.
+`make spelling-config-write` rather than changing generated entries by hand. Use
+`make spelling-config` to validate that the generated file has not drifted.
 The focused shared config builder refreshes its untracked dictionary cache only
 when the authoritative copy is newer.
 
@@ -81,15 +81,15 @@ need a durable comparison.
 
 ## Workflow pins and Dependabot
 
-Dependabot owns the upgrade of GitHub Actions and reusable workflows,
-including calls into `leynos/shared-actions`. Contract tests that assert a
-caller's exact commit SHA create a lockstep dependency: every time Dependabot
-opens a bump PR, the test fails until a human edits the pinned constant to
-match. That defeats the purpose of automated dependency updates and turns a
-routine bump into a manual chore.
+Dependabot owns the upgrade of GitHub Actions and reusable workflows, including
+calls into `leynos/shared-actions`. Contract tests that assert a caller's exact
+commit SHA create a lockstep dependency: every time Dependabot opens a bump PR,
+the test fails until a human edits the pinned constant to match. That defeats
+the purpose of automated dependency updates and turns a routine bump into a
+manual chore.
 
-Contract tests may still verify the *shape* of a reusable-workflow caller.
-They must not verify the specific SHA value.
+Contract tests may still verify the *shape* of a reusable-workflow caller. They
+must not verify the specific SHA value.
 
 - Do assert the workflow references the correct reusable workflow path.
 - Do assert the ref is pinned to a full 40-character commit SHA, not a

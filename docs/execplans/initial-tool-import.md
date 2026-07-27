@@ -1,7 +1,7 @@
 # Convert prover shell scripts into one Cyclopts CLI
 
 This ExecPlan (execution plan) is a living document. The sections `Constraints`,
- `Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
+`Tolerances`, `Risks`, `Progress`, `Surprises & Discoveries`, `Decision Log`,
 and `Outcomes & Retrospective` must be kept up to date as work proceeds.
 
 Status: COMPLETE
@@ -463,7 +463,7 @@ variables.
 
 2026-05-22: Model external commands through small builder functions and a
 project-specific Cuprum catalogue. This centralizes allowlisted programs such as
- `cargo`, `rustup`, `curl`, `unzip`, `sha256sum`, and `shasum`, keeps command
+`cargo`, `rustup`, `curl`, `unzip`, `sha256sum`, and `shasum`, keeps command
 assembly testable, and avoids accidental shell execution.
 
 2026-05-22: Keep real network downloads out of the default test suite. The
@@ -538,7 +538,7 @@ Kani <version> matches <version_file>.
 
 The original `install-verus.sh` script reads `tools/verus/VERSION` and
 `tools/verus/SHA256SUMS`, uses `VERUS_TARGET` with default `x86-linux`, and uses
- `VERUS_INSTALL_DIR` with default `.verus/<version>` under the repository root.
+`VERUS_INSTALL_DIR` with default `.verus/<version>` under the repository root.
 It builds the archive name:
 
 ```plaintext
