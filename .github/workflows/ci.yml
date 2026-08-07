@@ -62,7 +62,7 @@ jobs:
         run: make typecheck
 
       - name: Test and Measure Coverage
-        uses: leynos/shared-actions/.github/actions/generate-coverage@19a7f5d1b8d5c1b2236c39720a5744492b3fc129
+        uses: leynos/shared-actions/.github/actions/generate-coverage@8add2d99854a5b77548eae98cca59202e68fefc8
         with:
           output-path: coverage.xml
           format: cobertura
