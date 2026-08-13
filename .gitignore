@@ -206,3 +206,10 @@ target/
 **/mutants.out*/
 
 .crush/
+.vtcode/
+.claude/
+.memdb/
+.grepai/
+*.swp
+*.swo
+*~
