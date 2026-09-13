@@ -44,9 +44,10 @@ Check that the command is on the path:
 prover-tools --help
 ```
 
-Wheels are attached to each
-[GitHub release](https://github.com/leynos/rust-prover-tools/releases) for
-offline installs or for pinning a specific build.
+Each [GitHub release](https://github.com/leynos/rust-prover-tools/releases)
+carries the project's own wheel, which suits pinned builds. That wheel does not
+bundle the `cuprum` and `cyclopts` dependencies, so an offline install also
+needs those wheels available from a local index or wheelhouse.
 
 ### Basic usage
 
@@ -61,17 +62,35 @@ prover-tools kani install
 prover-tools kani check-version
 ```
 
-Install Verus, then verify a proof file:
+Verus reads two pins: `tools/verus/VERSION`, and `tools/verus/SHA256SUMS`,
+which records the digest of the matching release archive beside its file name in
+`sha256sum` format. Verus publishes archives without checksums, so after
+downloading the archive for the pinned version from the
+[Verus releases](https://github.com/verus-lang/verus/releases) page, record its
+digest:
+
+```bash
+echo 0.2026.09.06.8dea4a2 > tools/verus/VERSION
+
+# Download verus-<version>-x86-linux.zip from the Verus releases page, then
+# record its digest under the archive name the installer expects.
+sha256sum verus-0.2026.09.06.8dea4a2-x86-linux.zip > tools/verus/SHA256SUMS
+```
+
+With both pins in place, install Verus, then verify a proof file from your
+repository:
 
 ```bash
 prover-tools verus install
-prover-tools verus run --proof-file verus/edge_harvest_proofs.rs
+prover-tools verus run --proof-file verus/my_proof.rs
 ```
 
-When the default Verus binary is missing, `verus run` installs it first, and it
-installs the required Rust toolchain with `rustup` if `verus --version` reports
-that one is needed. Verifier output is streamed to standard output, and a
-failed proof exits with the verifier's own status.
+The `--proof-file` flag is optional and defaults to
+`verus/edge_harvest_proofs.rs`, a compatibility path inherited from the
+original shell scripts. When the default Verus binary is missing, `verus run`
+installs it first, and it installs the required Rust toolchain with `rustup` if
+`verus --version` reports that one is needed. Verifier output is streamed to
+standard output, and a failed proof exits with the verifier's own status.
 
 ______________________________________________________________________
 
