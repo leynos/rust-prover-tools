@@ -70,7 +70,7 @@ downloading the archive for the pinned version from the
 digest:
 
 ```bash
-echo 0.2026.09.06.8dea4a2 > tools/verus/VERSION
+mkdir -p tools/verus && echo 0.2026.09.06.8dea4a2 > tools/verus/VERSION
 
 # Download verus-<version>-x86-linux.zip from the Verus releases page, then
 # record its digest under the archive name the installer expects.
