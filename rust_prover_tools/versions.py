@@ -24,7 +24,7 @@ if typ.TYPE_CHECKING:
 MIN_CHECKSUM_FIELDS = 2
 SEMVER_PATTERN = re.compile(r"^[0-9]+[.][0-9]+[.][0-9]+$")
 SEMVER_SEARCH = re.compile(r"([0-9]+[.][0-9]+[.][0-9]+)")
-TOOLCHAIN_LINE = re.compile(r"^Toolchain:[ \t]*(?P<toolchain>\S+)", re.MULTILINE)
+TOOLCHAIN_LINE = re.compile(r"^[ \t]*Toolchain:[ \t]*(?P<toolchain>\S+)", re.MULTILINE)
 REQUIRED_TOOLCHAIN = re.compile(
     r"required rust toolchain[ \t]+(?P<toolchain>\S+)",
 )

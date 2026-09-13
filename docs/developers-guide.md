@@ -32,6 +32,11 @@ Public helpers exported from `rust_prover_tools.verus` should keep structured
 NumPy-style docstrings. That package is the stable import facade for tests and
 future callers.
 
+`parse_verus_toolchain` accepts `Toolchain: <name>` lines at column zero or
+with leading spaces or tabs. It extracts `<name>` before the trailing
+`RUSTUP_TOOLCHAIN` override message emitted by official Verus releases, so
+callers receive the toolchain identifier.
+
 ## External commands
 
 Do not call `subprocess`, shell strings, or Plumbum from new prover workflows.

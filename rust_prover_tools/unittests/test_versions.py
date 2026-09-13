@@ -92,6 +92,13 @@ def test_expected_sha256_uses_archive_column(tmp_path: Path) -> None:
             "nightly-2025-01-01-x86_64-unknown-linux-gnu",
         ),
         (
+            (
+                "Verus\n  Toolchain: 1.82.0-x86_64-unknown-linux-gnu "
+                "(overridden by environment variable RUSTUP_TOOLCHAIN)\n"
+            ),
+            "1.82.0-x86_64-unknown-linux-gnu",
+        ),
+        (
             "error: required rust toolchain 1.88.0-x86_64-unknown-linux-gnu is missing",
             "1.88.0-x86_64-unknown-linux-gnu",
         ),

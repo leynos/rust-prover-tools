@@ -72,6 +72,10 @@ by `verus --version`, optionally installs that Rust toolchain with `rustup`,
 and then runs Verus against the proof file. Verus output is streamed to
 standard output.
 
+Official Verus releases may indent the `Toolchain:` line and append an
+`RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
+output and continues to install or use the reported Rust toolchain.
+
 Useful options are:
 
 - `--proof-file PATH`: proof entry point to verify. When omitted, the command

@@ -21,11 +21,11 @@ def sanitized_subprocess_env() -> dict[str, str]:
     }
 
 
-def test_verus_run_cli_uses_existing_binary(
+def test_verus_run_cli_accepts_indented_toolchain_output(
     tmp_path: Path,
     fake_verus_binary_factory: cabc.Callable[..., None],
 ) -> None:
-    """The public CLI runs an existing Verus binary against a proof file."""
+    """The public CLI accepts official indented Verus toolchain output."""
     version_file = tmp_path / "tools" / "verus" / "VERSION"
     version_file.parent.mkdir(parents=True)
     version_file.write_text("2025.01.01\n", encoding="utf-8")
@@ -34,7 +34,14 @@ def test_verus_run_cli_uses_existing_binary(
     verus_bin = tmp_path / "bin" / "verus"
     fake_verus_binary_factory(
         verus_bin,
-        spec=FakeVerusBinarySpec(proof_command="printf 'verified %s\\n' \"$1\""),
+        spec=FakeVerusBinarySpec(
+            version_stdout=(
+                "Verus 0.2025.01.01\\n"
+                "  Toolchain: nightly-2025-01-01-x86_64-unknown-linux-gnu "
+                "(overridden by environment variable RUSTUP_TOOLCHAIN)\\n"
+            ),
+            proof_command="printf 'verified %s\\n' \"$1\"",
+        ),
     )
 
     completed = subprocess.run(
