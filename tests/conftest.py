@@ -17,6 +17,7 @@ class FakeVerusBinarySpec:
     """Configuration for a deterministic fake Verus binary."""
 
     toolchain: str = "nightly-test"
+    version_stdout: str | None = None
     version_exit_code: int = 0
     version_stderr: str = ""
     proof_command: str = "printf 'proof verified\\n'"
@@ -33,8 +34,11 @@ def fake_verus_binary_factory() -> cabc.Callable[..., None]:
     ) -> None:
         spec = spec or FakeVerusBinarySpec()
         path.parent.mkdir(parents=True, exist_ok=True)
+        version_stdout = spec.version_stdout or (
+            f"Verus 0.1.0\\nToolchain: {spec.toolchain}\\n"
+        )
         version_output = (
-            f"printf 'Verus 0.1.0\\nToolchain: {spec.toolchain}\\n'"
+            f"printf '{version_stdout}'"
             if spec.version_exit_code == 0
             else f"printf '{spec.version_stderr}\\n' >&2"
         )
