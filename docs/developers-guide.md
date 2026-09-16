@@ -123,7 +123,8 @@ as a test assertion on the SHA string.
 ## Mutation-testing workflow contract tests
 
 This repository runs scheduled, informational mutation testing through a thin
-caller workflow, [`.github/workflows/mutation-testing.yml`](../.github/workflows/mutation-testing.yml),
+caller workflow,
+[`.github/workflows/mutation-testing.yml`](../.github/workflows/mutation-testing.yml),
 which delegates to the shared reusable workflow
 `leynos/shared-actions/.github/workflows/mutation-mutmut.yml`. The heavy
 lifting — running `mutmut`, and summarizing survivors — lives in
@@ -131,21 +132,20 @@ lifting — running `mutmut`, and summarizing survivors — lives in
 run is **informational only**: it never gates a pull request. Survivors are
 reported through the job summary and downloadable artefacts so they can be
 triaged into tests, not enforced as a blocking check. The mutation targets and
-test selection themselves are configured in `[tool.mutmut]` in
-`pyproject.toml` (`source_paths`, `pytest_add_cli_args_test_selection`,
-`do_not_mutate`).
+test selection themselves are configured in `[tool.mutmut]` in `pyproject.toml`
+(`source_paths`, `pytest_add_cli_args_test_selection`, `do_not_mutate`).
 
 The workflow runs in two modes. A **daily schedule** fires a change-scoped run
 that mutates only the source files touched within the detection window, so
 quiet days are cheap no-ops. A **manual dispatch** (the Actions "Run workflow"
-control) mutates the whole package; select a branch in that control to
-exercise a feature branch.
+control) mutates the whole package; select a branch in that control to exercise
+a feature branch.
 
 The caller passes a small set of configuration inputs, each carrying intent:
 
 - `paths` — the change-detection glob (`rust_prover_tools/`) that decides
-  whether a scheduled run has anything to mutate, bounding the scheduled run
-  to real source changes.
+  whether a scheduled run has anything to mutate, bounding the scheduled run to
+  real source changes.
 - `module-prefix-strip` — set empty because the package uses a flat layout,
   so no path prefix needs stripping when translating a changed file into a
   mutation module glob.
@@ -156,13 +156,13 @@ change what runs here. The contract test asserts only that the pin is a full
 commit SHA, not a particular value, so Dependabot bumps it automatically
 without any accompanying test edit.
 
-Because the caller is configuration rather than code, `tests/test_workflow_contract.py`
-pins the shape it must uphold, failing the pull request when the caller
-drifts — repointing the pin at a branch, widening the token scope, or
-dropping a configuration input — rather than letting the breakage surface
-only in a scheduled run. The test module self-skips when the workflow file is
-absent (mutmut copies the sources into a sandbox that omits `.github/`, so
-the contract test does not run there). Run it locally with
+Because the caller is configuration rather than code,
+`tests/test_workflow_contract.py` pins the shape it must uphold, failing the
+pull request when the caller drifts — repointing the pin at a branch, widening
+the token scope, or dropping a configuration input — rather than letting the
+breakage surface only in a scheduled run. The test module self-skips when the
+workflow file is absent (mutmut copies the sources into a sandbox that omits
+`.github/`, so the contract test does not run there). Run it locally with
 `uv run pytest tests/test_workflow_contract.py -v`. The test validates:
 
 - the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
