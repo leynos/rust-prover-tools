@@ -1,5 +1,13 @@
 # Developers' guide
 
+## Coverage publication
+
+Pull-request CI measures `rust_prover_tools` serially and compares the result
+with the ratcheted baseline written by `main`. It does not invoke CodeScene or
+expose `CS_ACCESS_TOKEN`. After each merge, `coverage-main.yml` regenerates the
+same source-scoped measurement, advances the ratchet, and publishes it to
+CodeScene in explicit upload mode.
+
 ## Spelling policy
 
 Run `make spelling` to enforce en-GB-oxendict spelling. Typos scans tracked
