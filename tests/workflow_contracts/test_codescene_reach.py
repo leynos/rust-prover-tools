@@ -177,6 +177,7 @@ def test_every_trigger_form_seeds_the_closure(form: str) -> None:
 @pytest.mark.parametrize(
     "trigger",
     [
+        "issue_comment",
         "merge_group",
         "pull_request",
         "pull_request_review",
@@ -189,6 +190,35 @@ def test_every_pull_request_event_seeds_the_closure(trigger: str) -> None:
     probe = f"on: {trigger}\n" + CURL_JOB
     findings = _findings(tree(extra={"probe.yml": probe}))
     assert any(item.startswith("probe.yml") for item in findings), findings
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "on: push\n",
+        "on:\n  push:\n    branches: ['**']\n",
+        "on:\n  push:\n    branches-ignore: [main]\n",
+        "on:\n  push:\n    branches: [main, release]\n",
+        "on:\n  push:\n    paths: ['src/**']\n",
+    ],
+)
+def test_a_push_beyond_main_is_inside_the_closure(form: str) -> None:
+    """A push that can run for a pull request's branch seeds the closure."""
+    findings = _findings(tree(extra={"probe.yml": form + CURL_JOB}))
+    assert any(item.startswith("probe.yml") for item in findings), findings
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        "on:\n  push:\n    branches: [main]\n",
+        "on:\n  push:\n    tags: ['v*']\n",
+    ],
+)
+def test_a_push_to_main_or_tags_is_outside_the_closure(form: str) -> None:
+    """A push confined to the trunk or to tags does not seed the closure."""
+    findings = _findings(tree(extra={"probe.yml": form + CURL_JOB}))
+    assert not any(item.startswith("probe.yml") for item in findings), findings
 
 
 def test_a_workflow_run_chain_is_inside_the_closure() -> None:

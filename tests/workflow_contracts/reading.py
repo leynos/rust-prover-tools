@@ -17,9 +17,10 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 #: Triggers that run a workflow for a pull request: its head, its queued
-#: merge, or a review of it. The review events and `merge_group` run with
-#: the repository's secrets for a same-repository pull request.
+#: merge, a review of it, or a comment on it. The review, comment and
+#: `merge_group` events run with the repository's secrets.
 PULL_REQUEST_TRIGGERS: typ.Final[frozenset[str]] = frozenset({
+    "issue_comment",
     "merge_group",
     "pull_request",
     "pull_request_review",

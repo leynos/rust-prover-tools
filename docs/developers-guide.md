@@ -28,18 +28,20 @@ and verifies the `cs-coverage` archive from its own manifest.
 through a loader that refuses duplicate keys, and `reading.py` reads the `on:`
 triggers in scalar, sequence, and mapping form under either key.
 `codescene_reach.py` follows local reusable-workflow calls (`./` and `$/`) from
-every pull-request-started workflow and refuses any key or value in that
-closure naming the CodeScene host, the credential, the client, or the uploader.
-`codescene_publisher.py` and `coverage_lanes.py` hold the publisher and the
-lanes to the rules above. Each rule returns its findings as text, so the rule
-tests beside them can drive it over a constructed tree; every refusal case
-changes one thing in the compliant tree in `fixtures.py`. Keep a new rule to
-that pattern: a pure reading, a repository assertion, and a refusal case that
-fails when the rule's clause is deleted. `test_bounded_properties.py` checks
-the pure readings exhaustively over small domains instead of sampling: the
-closure against Warshall reachability for every call graph over three
-workflows, the condition reader over every conjunction of up to three terms,
-and the document walk with a key or value planted at every depth up to three.
+every workflow a pull request can start (its own events, reviews, comments, the
+merge queue, `workflow_run` chains, and pushes not confined to `main` or to
+tags) and refuses any key or value in that closure naming the CodeScene host,
+the credential, the client, or the uploader. `codescene_publisher.py` and
+`coverage_lanes.py` hold the publisher and the lanes to the rules above. Each
+rule returns its findings as text, so the rule tests beside them can drive it
+over a constructed tree; every refusal case changes one thing in the compliant
+tree in `fixtures.py`. Keep a new rule to that pattern: a pure reading, a
+repository assertion, and a refusal case that fails when the rule's clause is
+deleted. `test_bounded_properties.py` checks the pure readings exhaustively
+over small domains instead of sampling: the closure against Warshall
+reachability for every call graph over three workflows, the condition reader
+over every conjunction of up to three terms, and the document walk with a key
+or value planted at every depth up to three.
 
 ## Spelling policy
 

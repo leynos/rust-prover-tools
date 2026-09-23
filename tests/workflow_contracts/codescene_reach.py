@@ -12,7 +12,7 @@ import re
 import typing as typ
 
 from .loading import Document, WorkflowReadingError
-from .reading import PULL_REQUEST_TRIGGERS, jobs, texts, triggers
+from .reading import PULL_REQUEST_TRIGGERS, jobs, texts, trigger_filters, triggers
 
 #: Where a same-repository reusable workflow lives.
 WORKFLOW_DIRECTORY: typ.Final[str] = ".github/workflows/"
@@ -41,10 +41,33 @@ def _is_chained_on_a_run(document: Document) -> bool:
     return "workflow_run" in triggers(document)
 
 
+#: Push filters that confine a push trigger to the trunk or to tags.
+TRUNK_OR_TAG_FILTERS: typ.Final[tuple[dict[str, object], ...]] = (
+    {"branches": ["main"]},
+    {"branches": "main"},
+)
+
+
+def _pushes_other_branches(document: Document) -> bool:
+    """Return whether a push trigger can run for a branch other than main.
+
+    A push to a pull request's branch runs the branch's own workflows
+    with secrets, so a push not confined to `branches: [main]` or to tags
+    alone is pull-request surface. An unrecognised filter fails closed.
+    """
+    if "push" not in triggers(document):
+        return False
+    filters = trigger_filters(document, "push")
+    is_tags_only = bool(filters) and set(filters) <= {"tags", "tags-ignore"}
+    return not is_tags_only and filters not in TRUNK_OR_TAG_FILTERS
+
+
 def is_pull_request_seed(document: Document) -> bool:
     """Return whether a workflow is started directly by a pull request."""
-    return bool(triggers(document) & PULL_REQUEST_TRIGGERS) or (
-        _is_chained_on_a_run(document)
+    return (
+        bool(triggers(document) & PULL_REQUEST_TRIGGERS)
+        or _is_chained_on_a_run(document)
+        or _pushes_other_branches(document)
     )
 
 
