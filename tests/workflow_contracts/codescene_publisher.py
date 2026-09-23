@@ -22,10 +22,7 @@ COVERAGE_ACTION: typ.Final[str] = (
     "leynos/shared-actions/.github/actions/generate-coverage"
 )
 PINNED_COMMIT: typ.Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
-REF_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(r"\$\{\{\s*github\.ref\s*\}\}")
-EVENT_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(
-    r"\$\{\{\s*github\.event_name\s*\}\}"
-)
+PUBLISHER_GROUP: typ.Final[str] = "coverage-main-${{ github.ref }}"
 PERMITTED_TRIGGERS: typ.Final[frozenset[str]] = frozenset({"push", "workflow_dispatch"})
 
 
@@ -115,30 +112,22 @@ def _group(concurrency: object) -> str:
     return str(group)
 
 
-def _is_keyed(group: str) -> bool:
-    """Return whether a group evaluates both the ref and the event name."""
-    return bool(REF_EXPRESSION.search(group) and EVENT_EXPRESSION.search(group))
+def _ref_keyed_violations(governing: list[object]) -> list[str]:
+    """Require every governing group to be keyed on the ref alone.
 
-
-def _ref_keyed_violations(document: Document, governing: list[object]) -> list[str]:
-    """Require a dispatchable publisher to key its group on the ref.
-
-    GitHub keeps one pending run per group, so with a constant group a
-    dispatch from a branch replaces a pending push to main; the dispatch
-    then skips the guarded upload and that merge is never published.
-    The event name is part of the key too: a dispatch on main does not
-    advance the ratchet baseline, so it must not replace a pending push to
-    main either. Every governing group must evaluate both, since a
-    constant workflow group still collides whatever the job's group says,
-    and the text `github.ref` outside an expression evaluates nothing.
+    With one group per ref, runs on main never overlap, and a replaced
+    pending run is always replaced by a newer trigger whose commit is the
+    newest main, so uploads land in commit order. A constant group would
+    let a branch dispatch replace a pending push to main, and a group
+    keyed on the event too would let a dispatch and a push on main run at
+    once and upload out of order. The accepted cost: a dispatch replacing
+    a pending push leaves the ratchet baseline one commit behind until
+    the next push.
     """
-    present = [value for value in governing if value is not None]
-    if "workflow_dispatch" not in triggers(document):
-        return []
     return [
-        f"concurrency group {_group(value)!r} is not keyed on the ref and event"
-        for value in present
-        if not _is_keyed(_group(value))
+        f"concurrency group {_group(value)!r} is not {PUBLISHER_GROUP!r}"
+        for value in governing
+        if value is not None and _group(value) != PUBLISHER_GROUP
     ]
 
 
@@ -156,7 +145,7 @@ def concurrency_violations(document: Document) -> list[str]:
         if any(value is not None for value in governing)
         else ["neither the publisher nor its upload job declares a concurrency group"]
     )
-    found += _ref_keyed_violations(document, governing)
+    found += _ref_keyed_violations(governing)
     declared = [document.get("concurrency")] + [
         job.get("concurrency") for job in jobs(document).values()
     ]

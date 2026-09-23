@@ -20,14 +20,14 @@ on:
 permissions: {}
 
 # One publisher generation per ref at a time, never cancelled. GitHub
-# keeps at most one pending run per group, so a newer push replaces an
-# older pending run and the newest baseline wins; a cancelled run would
-# abandon both its upload and its baseline write. The group carries the
-# ref and the event so that no dispatch, from a branch or from main, can
-# replace a pending push to main: a dispatch does not advance the
-# baseline, so the push it displaced would leave that merge unpublished.
+# keeps at most one pending run per group, so runs on main never overlap,
+# and a replaced pending run is always replaced by a newer trigger whose
+# commit is the newest main: uploads land in commit order. The group is
+# keyed on the ref alone, so a branch dispatch cannot replace a pending
+# push to main; a dispatch on main that replaces one leaves the ratchet
+# baseline a commit behind until the next push, which is accepted.
 concurrency:
-  group: coverage-main-${{ github.ref }}-${{ github.event_name }}
+  group: coverage-main-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:

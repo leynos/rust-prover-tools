@@ -59,7 +59,7 @@ def test_the_publisher_never_cancels(value: str) -> None:
     assert found, found
 
 
-KEY = "${{ github.ref }}-${{ github.event_name }}"
+KEY = "${{ github.ref }}"
 GROUP = f"group: coverage-main-{KEY}"
 WORKFLOW_GROUP = f"concurrency:\n  {GROUP}\n  cancel-in-progress: false\n"
 UPLOAD_JOB = "  coverage-upload:\n    runs-on: ubuntu-latest\n"
@@ -72,33 +72,22 @@ def test_the_publisher_needs_a_concurrency_group() -> None:
     assert found, found
 
 
-def test_a_dispatchable_publisher_keys_its_group_on_the_ref() -> None:
-    """A constant group lets a branch dispatch replace a pending main run."""
-    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main")
-    found = concurrency_violations(_publisher(texts))
-    assert found, found
-
-
-def test_a_ref_key_without_the_event_is_refused() -> None:
-    """A dispatch on main must not replace a pending push to main either."""
-    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main-${{ github.ref }}")
-    found = concurrency_violations(_publisher(texts))
-    assert found, found
-
-
 @pytest.mark.parametrize(
-    "job_group",
-    ["", f"    concurrency: upload-{KEY}\n"],
+    "group",
+    [
+        # A constant group lets a branch dispatch replace a pending main run.
+        "group: coverage-main",
+        # An event key lets a dispatch and a push on main upload out of order.
+        "group: coverage-main-${{ github.ref }}-${{ github.event_name }}",
+        # Text naming the ref outside an expression evaluates nothing.
+        "group: coverage-main-github.ref",
+    ],
 )
-def test_a_literal_ref_is_not_a_ref_key(job_group: str) -> None:
-    """Text naming `github.ref` outside an expression evaluates nothing."""
-    texts = mutate(
-        "coverage-main.yml", GROUP, "group: coverage-main-github.ref-github.event_name"
+def test_the_group_is_keyed_on_the_ref_alone(group: str) -> None:
+    """Only the exact ref-keyed group keeps uploads on main in commit order."""
+    found = concurrency_violations(
+        _publisher(mutate("coverage-main.yml", GROUP, group))
     )
-    text = texts["coverage-main.yml"]
-    if job_group:
-        text = replaced(text, UPLOAD_JOB, UPLOAD_JOB + job_group)
-    found = concurrency_violations(load_workflow(text))
     assert found, found
 
 
@@ -107,25 +96,17 @@ def test_a_constant_workflow_group_is_refused_beside_a_keyed_job_group() -> None
     text = replaced(
         replaced(PUBLISHER, GROUP, "group: coverage-main"),
         UPLOAD_JOB,
-        UPLOAD_JOB + f"    concurrency: upload-{KEY}\n",
+        UPLOAD_JOB + f"    concurrency: coverage-main-{KEY}\n",
     )
     found = concurrency_violations(load_workflow(text))
     assert found, found
 
 
-def test_a_push_only_publisher_may_use_a_constant_group() -> None:
-    """Without a dispatch every run is a push to main, so one group suffices."""
-    text = replaced(
-        replaced(PUBLISHER, "  workflow_dispatch:\n", ""), GROUP, "group: coverage-main"
-    )
-    found = concurrency_violations(load_workflow(text))
-    assert not found, found
-
-
 def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
     """A group on an unrelated job leaves concurrent uploads possible."""
     helper = (
-        f"  helper:\n    runs-on: x\n    concurrency: helper-{KEY}\n    steps: []\n"
+        f"  helper:\n    runs-on: x\n    concurrency: coverage-main-{KEY}\n"
+        "    steps: []\n"
     )
     text = replaced(
         replaced(PUBLISHER, WORKFLOW_GROUP, ""), UPLOAD_JOB, helper + UPLOAD_JOB

@@ -72,7 +72,7 @@ PUBLISHER: typ.Final[str] = textwrap.dedent(f"""\
         branches: [main]
       workflow_dispatch:
     concurrency:
-      group: coverage-main-${{{{ github.ref }}}}-${{{{ github.event_name }}}}
+      group: coverage-main-${{{{ github.ref }}}}
       cancel-in-progress: false
     jobs:
       coverage-upload:
