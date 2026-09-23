@@ -29,6 +29,9 @@ MAIN_REF_GUARD: typ.Final[str] = "github.ref == 'refs/heads/main'"
 CS_GUARD: typ.Final[str] = "env.CS_ACCESS_TOKEN != ''"
 UPLOAD_GUARD: typ.Final[frozenset[str]] = frozenset({MAIN_REF_GUARD, CS_GUARD})
 REF_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(r"\$\{\{\s*github\.ref\s*\}\}")
+EVENT_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(
+    r"\$\{\{\s*github\.event_name\s*\}\}"
+)
 PERMITTED_TRIGGERS: typ.Final[frozenset[str]] = frozenset({"push", "workflow_dispatch"})
 
 
@@ -118,23 +121,30 @@ def _group(concurrency: object) -> str:
     return str(group)
 
 
+def _is_keyed(group: str) -> bool:
+    """Return whether a group evaluates both the ref and the event name."""
+    return bool(REF_EXPRESSION.search(group) and EVENT_EXPRESSION.search(group))
+
+
 def _ref_keyed_violations(document: Document, governing: list[object]) -> list[str]:
     """Require a dispatchable publisher to key its group on the ref.
 
     GitHub keeps one pending run per group, so with a constant group a
     dispatch from a branch replaces a pending push to main; the dispatch
     then skips the guarded upload and that merge is never published.
-    Every governing group must evaluate the ref, since a constant
-    workflow group still collides whatever the job's group says, and the
-    text `github.ref` outside an expression evaluates nothing.
+    The event name is part of the key too: a dispatch on main does not
+    advance the ratchet baseline, so it must not replace a pending push to
+    main either. Every governing group must evaluate both, since a
+    constant workflow group still collides whatever the job's group says,
+    and the text `github.ref` outside an expression evaluates nothing.
     """
     present = [value for value in governing if value is not None]
     if "workflow_dispatch" not in triggers(document):
         return []
     return [
-        f"concurrency group {_group(value)!r} does not evaluate github.ref"
+        f"concurrency group {_group(value)!r} is not keyed on the ref and event"
         for value in present
-        if not REF_EXPRESSION.search(_group(value))
+        if not _is_keyed(_group(value))
     ]
 
 

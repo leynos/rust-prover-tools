@@ -111,7 +111,8 @@ def test_the_publisher_never_cancels(value: str) -> None:
     assert found, found
 
 
-GROUP = "group: coverage-main-${{ github.ref }}"
+KEY = "${{ github.ref }}-${{ github.event_name }}"
+GROUP = f"group: coverage-main-{KEY}"
 WORKFLOW_GROUP = f"concurrency:\n  {GROUP}\n  cancel-in-progress: false\n"
 UPLOAD_JOB = "  coverage-upload:\n    runs-on: ubuntu-latest\n"
 
@@ -130,13 +131,22 @@ def test_a_dispatchable_publisher_keys_its_group_on_the_ref() -> None:
     assert found, found
 
 
+def test_a_ref_key_without_the_event_is_refused() -> None:
+    """A dispatch on main must not replace a pending push to main either."""
+    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main-${{ github.ref }}")
+    found = concurrency_violations(_publisher(texts))
+    assert found, found
+
+
 @pytest.mark.parametrize(
     "job_group",
-    ["", "    concurrency: upload-${{ github.ref }}\n"],
+    ["", f"    concurrency: upload-{KEY}\n"],
 )
 def test_a_literal_ref_is_not_a_ref_key(job_group: str) -> None:
     """Text naming `github.ref` outside an expression evaluates nothing."""
-    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main-github.ref")
+    texts = mutate(
+        "coverage-main.yml", GROUP, "group: coverage-main-github.ref-github.event_name"
+    )
     text = texts["coverage-main.yml"].replace(UPLOAD_JOB, UPLOAD_JOB + job_group)
     found = concurrency_violations(load_workflow(text))
     assert found, found
@@ -145,7 +155,7 @@ def test_a_literal_ref_is_not_a_ref_key(job_group: str) -> None:
 def test_a_constant_workflow_group_is_refused_beside_a_keyed_job_group() -> None:
     """A ref-keyed job group does not stop a constant workflow group colliding."""
     text = PUBLISHER.replace(GROUP, "group: coverage-main").replace(
-        UPLOAD_JOB, UPLOAD_JOB + "    concurrency: upload-${{ github.ref }}\n"
+        UPLOAD_JOB, UPLOAD_JOB + f"    concurrency: upload-{KEY}\n"
     )
     found = concurrency_violations(load_workflow(text))
     assert found, found
@@ -163,8 +173,7 @@ def test_a_push_only_publisher_may_use_a_constant_group() -> None:
 def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
     """A group on an unrelated job leaves concurrent uploads possible."""
     helper = (
-        "  helper:\n    runs-on: x\n    concurrency: helper-${{ github.ref }}\n"
-        "    steps: []\n"
+        f"  helper:\n    runs-on: x\n    concurrency: helper-{KEY}\n    steps: []\n"
     )
     text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
         UPLOAD_JOB, helper + UPLOAD_JOB
@@ -176,7 +185,7 @@ def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
 def test_a_group_on_the_upload_job_is_accepted() -> None:
     """The upload job's own group governs the upload as well as a workflow one."""
     text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
-        UPLOAD_JOB, UPLOAD_JOB + "    concurrency: coverage-main-${{ github.ref }}\n"
+        UPLOAD_JOB, UPLOAD_JOB + f"    concurrency: coverage-main-{KEY}\n"
     )
     found = concurrency_violations(load_workflow(text))
     assert not found, found

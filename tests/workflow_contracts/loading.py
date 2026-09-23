@@ -130,7 +130,7 @@ def _load_file(path: Path) -> Document:
     """Read and parse one workflow file, naming it in any failure."""
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as error:
+    except (OSError, UnicodeDecodeError) as error:
         message = f"{path.name} could not be read: {error}"
         raise WorkflowReadingError(message) from error
     try:

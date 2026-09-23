@@ -28,11 +28,13 @@ from .coverage_lanes import (
     second_writer_violations,
 )
 from .loading import Document, read_workflows
+from .reading import triggers
 
 REPOSITORY: typ.Final[str] = "leynos/rust-prover-tools"
 ROOT: typ.Final[Path] = Path(__file__).resolve().parents[2]
 WORKFLOWS: typ.Final[Path] = ROOT / ".github" / "workflows"
 PUBLISHER: typ.Final[str] = "coverage-main.yml"
+PUBLISHER_TRIGGERS: typ.Final[frozenset[str]] = frozenset({"push", "workflow_dispatch"})
 
 # mutmut copies the tests into a `mutants/` sandbox without `.github/`.
 # Anywhere else a missing directory is the reader failing, and
@@ -69,6 +71,12 @@ def test_the_publisher_runs_only_on_a_push_to_main(publisher: Document) -> None:
     """The publisher answers a push to main and an optional dispatch only."""
     found = trigger_violations(publisher)
     assert not found, found
+
+
+def test_the_publisher_answers_exactly_its_triggers(publisher: Document) -> None:
+    """Losing the dispatch or gaining a trigger is a change to review."""
+    found = triggers(publisher)
+    assert found == PUBLISHER_TRIGGERS, found
 
 
 def test_the_publisher_never_cancels(publisher: Document) -> None:

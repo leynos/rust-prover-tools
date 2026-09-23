@@ -81,6 +81,13 @@ def test_an_unreadable_workflow_is_named(tmp_path: Path) -> None:
         read_workflows(tmp_path)
 
 
+def test_a_workflow_that_is_not_utf8_is_named(tmp_path: Path) -> None:
+    """Bytes that do not decode are refused with the file named."""
+    (tmp_path / "latin.yml").write_bytes(b"on: push\njobs: {}\n# \xff\n")
+    with pytest.raises(WorkflowReadingError, match=r"latin\.yml could not be read"):
+        read_workflows(tmp_path)
+
+
 def test_an_uppercase_suffix_is_read(tmp_path: Path) -> None:
     """GitHub runs `.YML` and `.yaml` files, so both are read."""
     (tmp_path / "a.YML").write_text("on: push\njobs: {}\n", encoding="utf-8")

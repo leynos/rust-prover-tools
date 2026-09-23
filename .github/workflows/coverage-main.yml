@@ -23,10 +23,11 @@ permissions: {}
 # keeps at most one pending run per group, so a newer push replaces an
 # older pending run and the newest baseline wins; a cancelled run would
 # abandon both its upload and its baseline write. The group carries the
-# ref so that a dispatch from a branch cannot replace a pending push to
-# main and leave that merge unpublished.
+# ref and the event so that no dispatch, from a branch or from main, can
+# replace a pending push to main: a dispatch does not advance the
+# baseline, so the push it displaced would leave that merge unpublished.
 concurrency:
-  group: coverage-main-${{ github.ref }}
+  group: coverage-main-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
