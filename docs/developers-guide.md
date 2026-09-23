@@ -23,12 +23,12 @@ The retired `installer-checksum` input, the `CODESCENE_CLI_SHA256` variable and
 the `get-codescene-sha.yml` refresher are gone. The shared uploader selects and
 verifies the `cs-coverage` archive from its own manifest.
 
-`tests/workflow_contracts/` holds this shape. `reading.py` parses workflows
-through a loader that refuses duplicate keys and reads the `on:` triggers in
-scalar, sequence and mapping form under either key. `codescene_reach.py`
-follows local reusable-workflow calls (`./` and `$/`) from every
-pull-request-started workflow and refuses any key or value in that closure
-naming the CodeScene host, the credential, the client or the uploader.
+`tests/workflow_contracts/` holds this shape. `loading.py` parses workflows
+through a loader that refuses duplicate keys, and `reading.py` reads the `on:`
+triggers in scalar, sequence and mapping form under either key.
+`codescene_reach.py` follows local reusable-workflow calls (`./` and `$/`) from
+every pull-request-started workflow and refuses any key or value in that
+closure naming the CodeScene host, the credential, the client or the uploader.
 `codescene_publisher.py` and `coverage_lanes.py` hold the publisher and the
 lanes to the rules above. Each rule returns its findings as text, so the rule
 tests beside them can drive it over a constructed tree; every refusal case

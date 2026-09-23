@@ -70,6 +70,7 @@ def conjuncts(condition: object) -> list[str]:
     --------
     >>> conjuncts("${{ a == 'x&&y' &&  b }}")
     ["a == 'x&&y'", 'b']
+
     """
     if not isinstance(condition, str):
         message = f"condition {condition!r} is not an expression"
@@ -90,6 +91,7 @@ def missing_terms(condition: object, required: frozenset[str]) -> list[str]:
     ------
     ConditionError
         If the condition cannot be read as a conjunction.
+
     """
     present = set(conjuncts(condition))
     return sorted(term for term in required if term not in present)

@@ -13,13 +13,8 @@ import pytest
 import yaml
 
 from .expressions import ConditionError, conjuncts
-from .reading import (
-    WorkflowReadingError,
-    load_workflow,
-    read_workflows,
-    trigger_declaration,
-    triggers,
-)
+from .loading import WorkflowReadingError, load_workflow, read_workflows
+from .reading import trigger_declaration, triggers
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -51,7 +46,7 @@ def test_every_trigger_form_is_read(text: str, expected: set[str]) -> None:
 def test_a_workflow_declaring_both_trigger_keys_is_refused() -> None:
     """GitHub merges `on` and `true`; a reader choosing one is blind to the other."""
     document = yaml.safe_load("on: push\n'on': pull_request\n")
-    with pytest.raises(WorkflowReadingError, match="both"):
+    with pytest.raises(WorkflowReadingError, match="exactly once"):
         trigger_declaration(document)
 
 

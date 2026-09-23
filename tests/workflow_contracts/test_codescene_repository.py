@@ -27,7 +27,7 @@ from .coverage_lanes import (
     pull_request_lane_violations,
     second_writer_violations,
 )
-from .reading import Document, read_workflows
+from .loading import Document, read_workflows
 
 REPOSITORY: typ.Final[str] = "leynos/rust-prover-tools"
 ROOT: typ.Final[Path] = Path(__file__).resolve().parents[2]
@@ -108,7 +108,7 @@ def test_only_the_publisher_writes_the_baseline(
     documents: dict[str, Document],
 ) -> None:
     """Coverage elsewhere is guarded to pull requests, so main has one writer."""
-    found = second_writer_violations(documents, PUBLISHER)
+    found = second_writer_violations(documents, PUBLISHER, REPOSITORY)
     assert not found, found
 
 

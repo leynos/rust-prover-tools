@@ -24,7 +24,7 @@ from .coverage_lanes import (
     pull_request_lane_violations,
     second_writer_violations,
 )
-from .reading import Document, WorkflowReadingError, load_workflow
+from .loading import Document, WorkflowReadingError, load_workflow
 
 REPOSITORY: typ.Final[str] = "leynos/example"
 PIN: typ.Final[str] = "a" * 40
@@ -107,6 +107,7 @@ def mutate(name: str, old: str, new: str) -> dict[str, str]:
     ValueError
         If the text to replace is absent, since a mutation that changes
         nothing would pass for a reason that proves nothing.
+
     """
     text = TREE[name]
     if old not in text:
@@ -123,6 +124,7 @@ def violations(texts: dict[str, str]) -> list[str]:
     WorkflowReadingError
         If a workflow cannot be read, or the tree's shape defeats a
         reading, such as a second publisher.
+
     """
     documents: dict[str, Document] = {
         name: load_workflow(text) for name, text in texts.items()
@@ -137,7 +139,7 @@ def violations(texts: dict[str, str]) -> list[str]:
         *token_scope_violations(publisher),
         *retired_checksum_violations(documents),
         *pull_request_lane_violations(closure),
-        *second_writer_violations(documents, name),
+        *second_writer_violations(documents, name, REPOSITORY),
         *publisher_lane_violations(publisher, closure),
     ]
 

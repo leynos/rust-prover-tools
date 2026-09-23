@@ -11,14 +11,8 @@ from __future__ import annotations
 import re
 import typing as typ
 
-from .reading import (
-    PULL_REQUEST_TRIGGERS,
-    Document,
-    WorkflowReadingError,
-    jobs,
-    texts,
-    triggers,
-)
+from .loading import Document, WorkflowReadingError
+from .reading import PULL_REQUEST_TRIGGERS, jobs, texts, triggers
 
 #: Where a same-repository reusable workflow lives.
 WORKFLOW_DIRECTORY: typ.Final[str] = ".github/workflows/"
@@ -73,6 +67,7 @@ def local_callee(reference: str, repository: str) -> str | None:
     >>> local_callee("$/.github/workflows/x.yml", "leynos/example")
     'x.yml'
     >>> local_callee("leynos/other/.github/workflows/x.yml@main", "leynos/example")
+
     """
     qualified_self = f"{repository}/{WORKFLOW_DIRECTORY}".casefold()
     if reference.casefold().startswith(qualified_self):
@@ -109,18 +104,38 @@ def pull_request_closure(
         If no workflow serves a pull request, which is the reader failing
         rather than the repository complying, or a call names a workflow
         this tree does not hold.
+
     """
-    pending = [name for name, doc in documents.items() if is_pull_request_seed(doc)]
-    if not pending:
+    seeds = [name for name, doc in documents.items() if is_pull_request_seed(doc)]
+    if not seeds:
         message = "no workflow serves a pull request; the trigger reader is broken"
         raise WorkflowReadingError(message)
+    return reachable(documents, seeds, repository)
+
+
+def reachable(
+    documents: dict[str, Document], seeds: list[str], repository: str
+) -> dict[str, Document]:
+    """Return the seed workflows and every local workflow they call, transitively.
+
+    A called workflow runs in its caller's event context, so whatever a
+    rule asks of the caller it must also ask of everything the caller
+    reaches.
+
+    Raises
+    ------
+    WorkflowReadingError
+        If a call names a workflow this tree does not hold.
+
+    """
+    pending = list(seeds)
     found: dict[str, Document] = {}
     while pending:
         name = pending.pop()
         if name in found:
             continue
         if name not in documents:
-            message = f"a pull-request workflow calls {name}, which does not exist"
+            message = f"a workflow calls {name}, which does not exist"
             raise WorkflowReadingError(message)
         found[name] = documents[name]
         pending.extend(called_workflows(documents[name], repository))
@@ -138,6 +153,7 @@ def codescene_contacts(document: Document) -> list[str]:
     --------
     >>> codescene_contacts({"jobs": {"a": {"env": {"U": "https://API.CodeScene.io"}}}})
     ['https://API.CodeScene.io']
+
     """
     return [
         text

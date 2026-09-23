@@ -22,8 +22,8 @@ from .coverage_lanes import (
     pull_request_lane_violations,
     second_writer_violations,
 )
-from .fixtures import PUBLISHER, mutate, tree
-from .reading import Document, WorkflowReadingError, load_workflow
+from .fixtures import PUBLISHER, PULL_REQUEST_LANE, REPOSITORY, mutate, tree
+from .loading import Document, WorkflowReadingError, load_workflow
 
 GUARD = "if: env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'"
 
@@ -103,14 +103,31 @@ def test_the_publisher_never_cancels(value: str) -> None:
     assert concurrency_violations(_publisher(texts))
 
 
+WORKFLOW_GROUP = "concurrency:\n  group: coverage-main\n  cancel-in-progress: false\n"
+UPLOAD_JOB = "  coverage-upload:\n    runs-on: ubuntu-latest\n"
+
+
 def test_the_publisher_needs_a_concurrency_group() -> None:
     """A publisher without any concurrency declaration is refused."""
-    texts = mutate(
-        "coverage-main.yml",
-        "concurrency:\n  group: coverage-main\n  cancel-in-progress: false\n",
-        "",
-    )
+    texts = mutate("coverage-main.yml", WORKFLOW_GROUP, "")
     assert concurrency_violations(_publisher(texts))
+
+
+def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
+    """A group on an unrelated job leaves concurrent uploads possible."""
+    helper = "  helper:\n    runs-on: x\n    concurrency: helper\n    steps: []\n"
+    text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
+        UPLOAD_JOB, helper + UPLOAD_JOB
+    )
+    assert concurrency_violations(load_workflow(text))
+
+
+def test_a_group_on_the_upload_job_is_accepted() -> None:
+    """The upload job's own group governs the upload as well as a workflow one."""
+    text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
+        UPLOAD_JOB, UPLOAD_JOB + "    concurrency: coverage-main\n"
+    )
+    assert not concurrency_violations(load_workflow(text))
 
 
 @pytest.mark.parametrize(
@@ -185,7 +202,22 @@ def test_a_pull_request_lane_ratchets_and_publishes_nothing(old: str, new: str) 
 def test_a_push_lane_cannot_write_a_second_baseline(guard: str) -> None:
     """Coverage on a push outside the publisher is refused."""
     texts = mutate("ci.yml", "        if: github.event_name == 'pull_request'\n", guard)
-    assert second_writer_violations(_documents(texts), "coverage-main.yml")
+    assert second_writer_violations(_documents(texts), "coverage-main.yml", REPOSITORY)
+
+
+def test_a_push_lane_cannot_write_a_baseline_through_a_callee() -> None:
+    """A push workflow's local callee runs on the push, so its coverage counts."""
+    caller = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/cov.yml\n"
+    callee = PULL_REQUEST_LANE.replace(
+        "on:\n  push:\n    branches: [main]\n  pull_request:\n",
+        "on:\n  workflow_call:\n",
+    ).replace("        if: github.event_name == 'pull_request'\n", "")
+    documents = _documents(tree(extra={"caller.yml": caller, "cov.yml": callee}))
+    found = second_writer_violations(documents, "coverage-main.yml", REPOSITORY)
+    assert (
+        "cov.yml: generate-coverage can run on a push; guard it to pull requests"
+        in found
+    )
 
 
 @pytest.mark.parametrize(

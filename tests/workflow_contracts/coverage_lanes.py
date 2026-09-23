@@ -19,8 +19,12 @@ from .codescene_publisher import (
     pin_of,
     upload_step,
 )
+from .codescene_reach import reachable
 from .expressions import ConditionError, missing_terms
-from .reading import Document, triggers
+from .reading import triggers
+
+if typ.TYPE_CHECKING:
+    from .loading import Document
 
 #: Inputs that may differ between a pull-request lane and the publisher,
 #: because they name or ship the report rather than select what runs.
@@ -78,18 +82,25 @@ def _guarded_to_pull_requests(step: dict[str, object]) -> bool:
 
 
 def second_writer_violations(
-    documents: dict[str, Document], publisher: str
+    documents: dict[str, Document], publisher: str, repository: str
 ) -> list[str]:
     """Refuse coverage on a push anywhere but the publisher.
 
     A lane running on both events would write a second baseline on every
-    push to main, so each generate-coverage step in another workflow with
-    a push trigger must run for pull requests only.
+    push to main, so each generate-coverage step that another push-started
+    workflow reaches, itself or through a local reusable workflow it
+    calls, must run for pull requests only.
     """
+    seeds = [
+        name
+        for name, document in documents.items()
+        if name != publisher and "push" in triggers(document)
+    ]
+    closure = reachable(documents, seeds, repository)
     return [
         f"{name}: generate-coverage can run on a push; guard it to pull requests"
-        for name, document in sorted(documents.items())
-        if name != publisher and "push" in triggers(document)
+        for name, document in sorted(closure.items())
+        if name != publisher
         for step in action_steps(document, COVERAGE_ACTION)
         if not _guarded_to_pull_requests(step)
     ]

@@ -12,7 +12,7 @@ import pytest
 
 from .codescene_reach import local_callee, pull_request_violations
 from .fixtures import REPOSITORY, is_refused, mutate, tree
-from .reading import Document, WorkflowReadingError, load_workflow
+from .loading import Document, WorkflowReadingError, load_workflow
 
 #: A reusable workflow declaring only `workflow_call`, curling the
 #: CodeScene project API with the credential it inherits.
