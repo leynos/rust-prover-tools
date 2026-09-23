@@ -11,7 +11,7 @@ import textwrap
 import pytest
 
 from .codescene_reach import local_callee, pull_request_violations
-from .fixtures import REPOSITORY, mutate, tree, violations
+from .fixtures import REPOSITORY, mutate, replaced, tree, violations
 from .loading import Document, WorkflowReadingError, load_workflow
 
 #: A reusable workflow declaring only `workflow_call`, curling the
@@ -85,8 +85,10 @@ def test_the_closure_follows_a_chain_of_calls() -> None:
         """)
     texts = tree(
         extra={
-            "probe.yml": CALLER.format(spelling="./", callee="middle.yml").replace(
-                "    secrets: inherit\n", ""
+            "probe.yml": replaced(
+                CALLER.format(spelling="./", callee="middle.yml"),
+                "    secrets: inherit\n",
+                "",
             ),
             "middle.yml": middle,
             "callee.yml": CALLEE,
@@ -122,6 +124,39 @@ def test_a_pull_request_step_cannot_reach_codescene(where: str, text: str) -> No
     assert _findings(texts), where
 
 
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "${{ toJSON(secrets) }}",
+        "${{ tojson( secrets ) }}",
+        "${{ secrets[format('CS_{0}', 'ACCESS_TOKEN')] }}",
+        "${{ join(secrets.*, ',') }}",
+        "${{ fromJSON(toJSON(secrets)).CS_ACCESS_TOKEN }}",
+        "${{ contains(secrets, 'x') }}",
+    ],
+)
+def test_an_unnamed_secret_read_is_refused(expression: str) -> None:
+    """Reading every secret, or one by a computed name, names nothing to sweep for."""
+    step = f"      - run: echo '{expression}'\n"
+    findings = _findings(mutate("ci.yml", "      - uses: actions/checkout@v4\n", step))
+    assert any("reads" in item for item in findings), findings
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "join(secrets.*, ',') != ''",
+        "toJSON(secrets) != ''",
+        "secrets[format('CS_{0}', 'ACCESS_TOKEN')] != ''",
+    ],
+)
+def test_an_unnamed_secret_read_in_a_bare_condition_is_refused(condition: str) -> None:
+    """An `if:` condition needs no `${{ }}`, so the forms are read anywhere."""
+    step = f'      - if: "{condition}"\n        run: echo x\n'
+    findings = _findings(mutate("ci.yml", "      - uses: actions/checkout@v4\n", step))
+    assert any("reads" in item for item in findings), findings
+
+
 def test_named_secret_forwarding_is_refused() -> None:
     """A reusable call forwarding the credential by name is refused."""
     caller = textwrap.dedent("""\
@@ -139,14 +174,18 @@ def test_named_secret_forwarding_is_refused() -> None:
 def test_workflow_defaults_and_secret_declarations_are_read() -> None:
     """`defaults.run.shell` and a `workflow_call` secret key are both scanned."""
     shell = "defaults:\n  run:\n    shell: bash -c 'curl codescene.io; bash {0}'\njobs:"
-    declared = (
-        CALLEE
-        .replace(
-            "  workflow_call:\n",
-            "  workflow_call:\n    secrets:\n      CS_ACCESS_TOKEN:\n",
-        )
-        .replace("https://api.codescene.io/v2/projects", "example.org")
-        .replace("${{ secrets.CS_ACCESS_TOKEN }}", "x")
+    declared = replaced(
+        replaced(
+            replaced(
+                CALLEE,
+                "  workflow_call:\n",
+                "  workflow_call:\n    secrets:\n      CS_ACCESS_TOKEN:\n",
+            ),
+            "https://api.codescene.io/v2/projects",
+            "example.org",
+        ),
+        "${{ secrets.CS_ACCESS_TOKEN }}",
+        "x",
     )
     texts = mutate("ci.yml", "jobs:", shell) | {
         "probe.yml": CALLER.format(spelling="./", callee="callee.yml"),

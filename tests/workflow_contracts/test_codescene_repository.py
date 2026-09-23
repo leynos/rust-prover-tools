@@ -17,11 +17,16 @@ from .codescene_publisher import (
     concurrency_violations,
     find_publisher,
     retired_checksum_violations,
-    token_scope_violations,
     trigger_violations,
     upload_step_violations,
 )
 from .codescene_reach import pull_request_closure, pull_request_violations
+from .codescene_token import (
+    check_step_violations,
+    token_scope_violations,
+    upload_guard_violations,
+    upload_token_violations,
+)
 from .coverage_lanes import (
     publisher_lane_violations,
     pull_request_lane_violations,
@@ -85,14 +90,32 @@ def test_the_publisher_never_cancels(publisher: Document) -> None:
     assert not found, found
 
 
-def test_the_upload_is_guarded_and_bound(publisher: Document) -> None:
-    """The upload step carries the ref guard and binds the token positively."""
+def test_the_upload_names_its_mode_and_pin(publisher: Document) -> None:
+    """The upload step asks for upload mode from a commit-pinned action."""
     found = upload_step_violations(publisher)
     assert not found, found
 
 
-def test_the_token_reaches_only_the_upload_step(publisher: Document) -> None:
-    """No wider scope or other step of the publisher holds the credential."""
+def test_the_check_runs_first_and_binds_nothing(publisher: Document) -> None:
+    """One unconditional, binding-free check learns whether the token exists."""
+    found = check_step_violations(publisher)
+    assert not found, found
+
+
+def test_the_upload_is_guarded_on_the_check_and_the_ref(publisher: Document) -> None:
+    """The upload runs only on main, and only when the check found the token."""
+    found = upload_guard_violations(publisher)
+    assert not found, found
+
+
+def test_the_uploader_reads_the_secret_directly(publisher: Document) -> None:
+    """The token reaches the composite uploader only as its input."""
+    found = upload_token_violations(publisher)
+    assert not found, found
+
+
+def test_the_token_appears_nowhere_else(publisher: Document) -> None:
+    """No env, other step or other input of the publisher names the credential."""
     found = token_scope_violations(publisher)
     assert not found, found
 

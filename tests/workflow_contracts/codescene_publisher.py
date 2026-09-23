@@ -12,7 +12,6 @@ import re
 import typing as typ
 
 from .codescene_reach import codescene_contacts
-from .expressions import ConditionError, missing_terms
 from .loading import Document, WorkflowReadingError
 from .reading import jobs, steps, texts, trigger_filters, triggers
 
@@ -23,11 +22,6 @@ COVERAGE_ACTION: typ.Final[str] = (
     "leynos/shared-actions/.github/actions/generate-coverage"
 )
 PINNED_COMMIT: typ.Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
-CS_BINDING: typ.Final[str] = "${{ secrets.CS_ACCESS_TOKEN }}"
-CS_INPUT: typ.Final[str] = "${{ env.CS_ACCESS_TOKEN }}"
-MAIN_REF_GUARD: typ.Final[str] = "github.ref == 'refs/heads/main'"
-CS_GUARD: typ.Final[str] = "env.CS_ACCESS_TOKEN != ''"
-UPLOAD_GUARD: typ.Final[frozenset[str]] = frozenset({MAIN_REF_GUARD, CS_GUARD})
 REF_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(r"\$\{\{\s*github\.ref\s*\}\}")
 EVENT_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(
     r"\$\{\{\s*github\.event_name\s*\}\}"
@@ -174,65 +168,24 @@ def concurrency_violations(document: Document) -> list[str]:
     ]
 
 
-def _guard_violations(step: dict[str, object]) -> list[str]:
-    """Require the ref and token guard as whole `&&` terms."""
-    try:
-        missing = missing_terms(step.get("if"), UPLOAD_GUARD)
-    except ConditionError as error:
-        return [str(error)]
-    return [f"the upload guard lacks {term!r}" for term in missing]
-
-
 def upload_step_violations(document: Document) -> list[str]:
-    """Require the upload step's mode, pin, guard and positive token binding.
+    """Require the upload step's explicit mode and commit pin.
 
-    A guard on `env.CS_ACCESS_TOKEN != ''` alone passes with the binding
-    deleted, because the missing variable reads as empty and the upload
-    then skips for ever; so the binding and the input are asserted.
+    The token, the guard and the availability check are the token module's
+    rules; this one holds what the step asks the action to do.
     """
     step = upload_step(document)
     inputs = step.get("with") or {}
-    environment = step.get("env") or {}
-    if not isinstance(inputs, dict) or not isinstance(environment, dict):
-        return ["the upload step's `with` and `env` must be mappings"]
-    expected = {
-        "mode": ("upload", inputs.get("mode")),
-        "access-token": (CS_INPUT, inputs.get("access-token")),
-        "env CS_ACCESS_TOKEN": (CS_BINDING, environment.get("CS_ACCESS_TOKEN")),
-    }
-    found = [
-        f"{name} is {actual!r}, not {wanted!r}"
-        for name, (wanted, actual) in expected.items()
-        if actual != wanted
-    ]
+    if not isinstance(inputs, dict):
+        return ["the upload step's `with` must be a mapping"]
+    found = (
+        []
+        if inputs.get("mode") == "upload"
+        else [f"mode is {inputs.get('mode')!r}, not 'upload'"]
+    )
     if not PINNED_COMMIT.match(pin_of(step)):
         found.append(f"the uploader is not pinned to a commit: {step.get('uses')!r}")
-    return found + _guard_violations(step)
-
-
-def token_scope_violations(document: Document) -> list[str]:
-    """Refuse the credential anywhere in the publisher but the upload step."""
-    step = upload_step(document)
-    elsewhere = {key: value for key, value in document.items() if key != "jobs"}
-    rest = (
-        [elsewhere]
-        + [
-            {key: value for key, value in job.items() if key != "steps"}
-            for job in jobs(document).values()
-        ]
-        + [
-            other
-            for job in jobs(document).values()
-            for other in steps(job)
-            if other is not step
-        ]
-    )
-    return [
-        f"the credential appears outside the upload step: {text!r}"
-        for part in rest
-        for text in texts(part)
-        if "cs_access_token" in text.casefold()
-    ]
+    return found
 
 
 def retired_checksum_violations(documents: dict[str, Document]) -> list[str]:
