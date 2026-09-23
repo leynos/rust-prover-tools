@@ -51,7 +51,8 @@ def _documents(texts: dict[str, str]) -> dict[str, Document]:
 def test_the_upload_guard_needs_both_terms_and_no_disjunction(guard: str) -> None:
     """The ref and token guard must hold as whole terms of a conjunction."""
     texts = mutate("coverage-main.yml", GUARD, guard)
-    assert upload_step_violations(_publisher(texts))
+    found = upload_step_violations(_publisher(texts))
+    assert found, found
 
 
 @pytest.mark.parametrize(
@@ -65,7 +66,8 @@ def test_the_upload_guard_needs_both_terms_and_no_disjunction(guard: str) -> Non
 def test_a_narrower_upload_guard_is_accepted(guard: str) -> None:
     """Extra terms, a wrapper and a quoted `||` do not trip the guard rule."""
     texts = mutate("coverage-main.yml", GUARD, guard)
-    assert not upload_step_violations(_publisher(texts))
+    found = upload_step_violations(_publisher(texts))
+    assert not found, found
 
 
 @pytest.mark.parametrize(
@@ -83,7 +85,8 @@ def test_a_narrower_upload_guard_is_accepted(guard: str) -> None:
 def test_the_upload_step_binds_the_token_positively(old: str, new: str) -> None:
     """A deleted binding, a missing input, check mode or a branch pin is refused."""
     texts = mutate("coverage-main.yml", old, new)
-    assert upload_step_violations(_publisher(texts))
+    found = upload_step_violations(_publisher(texts))
+    assert found, found
 
 
 def test_the_token_is_refused_in_any_wider_scope() -> None:
@@ -91,7 +94,8 @@ def test_the_token_is_refused_in_any_wider_scope() -> None:
     job = "    runs-on: ubuntu-latest\n"
     wider = job + "    env:\n      T: ${{ secrets.CS_ACCESS_TOKEN }}\n"
     texts = mutate("coverage-main.yml", job, wider)
-    assert token_scope_violations(_publisher(texts))
+    found = token_scope_violations(_publisher(texts))
+    assert found, found
 
 
 @pytest.mark.parametrize("value", ["true", "${{ github.ref != 'refs/heads/main' }}"])
@@ -100,7 +104,8 @@ def test_the_publisher_never_cancels(value: str) -> None:
     texts = mutate(
         "coverage-main.yml", "cancel-in-progress: false", f"cancel-in-progress: {value}"
     )
-    assert concurrency_violations(_publisher(texts))
+    found = concurrency_violations(_publisher(texts))
+    assert found, found
 
 
 WORKFLOW_GROUP = "concurrency:\n  group: coverage-main\n  cancel-in-progress: false\n"
@@ -110,7 +115,8 @@ UPLOAD_JOB = "  coverage-upload:\n    runs-on: ubuntu-latest\n"
 def test_the_publisher_needs_a_concurrency_group() -> None:
     """A publisher without any concurrency declaration is refused."""
     texts = mutate("coverage-main.yml", WORKFLOW_GROUP, "")
-    assert concurrency_violations(_publisher(texts))
+    found = concurrency_violations(_publisher(texts))
+    assert found, found
 
 
 def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
@@ -119,7 +125,8 @@ def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
     text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
         UPLOAD_JOB, helper + UPLOAD_JOB
     )
-    assert concurrency_violations(load_workflow(text))
+    found = concurrency_violations(load_workflow(text))
+    assert found, found
 
 
 def test_a_group_on_the_upload_job_is_accepted() -> None:
@@ -127,7 +134,8 @@ def test_a_group_on_the_upload_job_is_accepted() -> None:
     text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
         UPLOAD_JOB, UPLOAD_JOB + "    concurrency: coverage-main\n"
     )
-    assert not concurrency_violations(load_workflow(text))
+    found = concurrency_violations(load_workflow(text))
+    assert not found, found
 
 
 @pytest.mark.parametrize(
@@ -144,7 +152,8 @@ def test_a_group_on_the_upload_job_is_accepted() -> None:
 def test_the_publisher_runs_only_on_a_push_to_main(old: str, new: str) -> None:
     """Any branch, a tag push or another trigger is refused."""
     texts = mutate("coverage-main.yml", old, new)
-    assert trigger_violations(_publisher(texts))
+    found = trigger_violations(_publisher(texts))
+    assert found, found
 
 
 def test_a_second_uploader_is_refused() -> None:
@@ -168,14 +177,16 @@ def test_the_retired_checksum_is_refused(addition: str) -> None:
         "          mode: upload\n",
         "          mode: upload\n" + addition,
     )
-    assert retired_checksum_violations(_documents(texts))
+    found = retired_checksum_violations(_documents(texts))
+    assert found, found
 
 
 def test_the_checksum_refresher_is_refused() -> None:
     """The workflow that refreshed the retired checksum must not return."""
     refresher = "on: workflow_dispatch\njobs:\n  a:\n    runs-on: x\n    steps: []\n"
     texts = tree(extra={"get-codescene-sha.yml": refresher})
-    assert retired_checksum_violations(_documents(texts))
+    found = retired_checksum_violations(_documents(texts))
+    assert found, found
 
 
 @pytest.mark.parametrize(
@@ -188,7 +199,8 @@ def test_the_checksum_refresher_is_refused() -> None:
 def test_a_pull_request_lane_ratchets_and_publishes_nothing(old: str, new: str) -> None:
     """A lane without the ratchet, or publishing its report, is refused."""
     documents = _documents(mutate("ci.yml", old, new))
-    assert pull_request_lane_violations({"ci.yml": documents["ci.yml"]})
+    found = pull_request_lane_violations({"ci.yml": documents["ci.yml"]})
+    assert found, found
 
 
 @pytest.mark.parametrize(
@@ -202,7 +214,8 @@ def test_a_pull_request_lane_ratchets_and_publishes_nothing(old: str, new: str) 
 def test_a_push_lane_cannot_write_a_second_baseline(guard: str) -> None:
     """Coverage on a push outside the publisher is refused."""
     texts = mutate("ci.yml", "        if: github.event_name == 'pull_request'\n", guard)
-    assert second_writer_violations(_documents(texts), "coverage-main.yml", REPOSITORY)
+    found = second_writer_violations(_documents(texts), "coverage-main.yml", REPOSITORY)
+    assert found, found
 
 
 def test_a_push_lane_cannot_write_a_baseline_through_a_callee() -> None:
@@ -217,7 +230,7 @@ def test_a_push_lane_cannot_write_a_baseline_through_a_callee() -> None:
     assert (
         "cov.yml: generate-coverage can run on a push; guard it to pull requests"
         in found
-    )
+    ), found
 
 
 @pytest.mark.parametrize(
@@ -238,4 +251,5 @@ def test_the_publisher_measures_what_each_lane_measures(
     """A selection or pin differing from the publisher's is refused."""
     documents = _documents(mutate(name, old, new))
     closure = {"ci.yml": documents["ci.yml"]}
-    assert publisher_lane_violations(documents["coverage-main.yml"], closure)
+    found = publisher_lane_violations(documents["coverage-main.yml"], closure)
+    assert found, found

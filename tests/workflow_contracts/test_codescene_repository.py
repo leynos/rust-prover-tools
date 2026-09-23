@@ -53,7 +53,7 @@ def documents() -> dict[str, Document]:
 def publisher(documents: dict[str, Document]) -> Document:
     """Return the one workflow that contacts CodeScene."""
     name, document = find_publisher(documents)
-    assert name == PUBLISHER
+    assert name == PUBLISHER, name
     return document
 
 

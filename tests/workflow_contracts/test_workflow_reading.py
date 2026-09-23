@@ -40,7 +40,8 @@ def test_a_duplicate_key_is_refused() -> None:
 )
 def test_every_trigger_form_is_read(text: str, expected: set[str]) -> None:
     """Scalar, sequence and mapping forms, under either key, are read."""
-    assert triggers(yaml.safe_load(text)) == expected
+    read = triggers(yaml.safe_load(text))
+    assert read == expected, read
 
 
 def test_a_workflow_declaring_both_trigger_keys_is_refused() -> None:
@@ -67,7 +68,8 @@ def test_an_uppercase_suffix_is_read(tmp_path: Path) -> None:
     """GitHub runs `.YML` and `.yaml` files, so both are read."""
     (tmp_path / "a.YML").write_text("on: push\njobs: {}\n", encoding="utf-8")
     (tmp_path / "b.yaml").write_text("on: push\njobs: {}\n", encoding="utf-8")
-    assert sorted(read_workflows(tmp_path)) == ["a.YML", "b.yaml"]
+    read = sorted(read_workflows(tmp_path))
+    assert read == ["a.YML", "b.yaml"], read
 
 
 def test_an_unparseable_workflow_names_its_file(tmp_path: Path) -> None:
@@ -89,4 +91,5 @@ def test_an_unquoted_disjunction_is_refused(condition: str) -> None:
 
 def test_a_quoted_operator_is_part_of_its_term() -> None:
     """Operators inside a quoted literal neither split nor refuse."""
-    assert conjuncts("a == 'x || y && z' && b") == ["a == 'x || y && z'", "b"]
+    terms = conjuncts("a == 'x || y && z' && b")
+    assert terms == ["a == 'x || y && z'", "b"], terms

@@ -17,6 +17,8 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions: {}
+
 # One publisher generation at a time, never cancelled. GitHub keeps at
 # most one pending run per group, so a newer push replaces an older
 # pending run and the newest baseline wins; a cancelled run would abandon

@@ -11,7 +11,7 @@ import textwrap
 import pytest
 
 from .codescene_reach import local_callee, pull_request_violations
-from .fixtures import REPOSITORY, is_refused, mutate, tree
+from .fixtures import REPOSITORY, mutate, tree, violations
 from .loading import Document, WorkflowReadingError, load_workflow
 
 #: A reusable workflow declaring only `workflow_call`, curling the
@@ -56,7 +56,8 @@ def _findings(texts: dict[str, str]) -> list[str]:
 
 def test_the_compliant_tree_passes_every_rule() -> None:
     """The fixture the refusal cases start from is itself compliant."""
-    assert not is_refused(tree())
+    found = violations(tree())
+    assert not found, found
 
 
 @pytest.mark.parametrize("spelling", ["./", "$/"])
@@ -69,8 +70,8 @@ def test_a_called_workflow_is_inside_the_closure(spelling: str) -> None:
         }
     )
     findings = _findings(texts)
-    assert any(item.startswith("callee.yml: names") for item in findings)
-    assert "probe.yml: job call uses secrets: inherit" in findings
+    assert any(item.startswith("callee.yml: names") for item in findings), findings
+    assert "probe.yml: job call uses secrets: inherit" in findings, findings
 
 
 def test_the_closure_follows_a_chain_of_calls() -> None:
@@ -91,7 +92,8 @@ def test_the_closure_follows_a_chain_of_calls() -> None:
             "callee.yml": CALLEE,
         }
     )
-    assert any(item.startswith("callee.yml: names") for item in _findings(texts))
+    findings = _findings(texts)
+    assert any(item.startswith("callee.yml: names") for item in findings), findings
 
 
 @pytest.mark.parametrize(
@@ -130,7 +132,8 @@ def test_named_secret_forwarding_is_refused() -> None:
             secrets:
               token: ${{ secrets.CS_ACCESS_TOKEN }}
         """)
-    assert _findings(tree(extra={"probe.yml": caller}))
+    findings = _findings(tree(extra={"probe.yml": caller}))
+    assert findings, findings
 
 
 def test_workflow_defaults_and_secret_declarations_are_read() -> None:
@@ -150,10 +153,10 @@ def test_workflow_defaults_and_secret_declarations_are_read() -> None:
         "callee.yml": declared,
     }
     findings = _findings(texts)
-    assert any(item.startswith("ci.yml: names") for item in findings)
+    assert any(item.startswith("ci.yml: names") for item in findings), findings
     assert any(
         item.startswith("callee.yml: names 'CS_ACCESS_TOKEN'") for item in findings
-    )
+    ), findings
 
 
 @pytest.mark.parametrize(
@@ -167,19 +170,32 @@ def test_workflow_defaults_and_secret_declarations_are_read() -> None:
 def test_every_trigger_form_seeds_the_closure(form: str) -> None:
     """Scalar, sequence and mapping trigger forms all start the closure."""
     probe = form + CURL_JOB
-    assert any(
-        item.startswith("probe.yml")
-        for item in _findings(tree(extra={"probe.yml": probe}))
-    )
+    findings = _findings(tree(extra={"probe.yml": probe}))
+    assert any(item.startswith("probe.yml") for item in findings), findings
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        "merge_group",
+        "pull_request",
+        "pull_request_review",
+        "pull_request_review_comment",
+        "pull_request_target",
+    ],
+)
+def test_every_pull_request_event_seeds_the_closure(trigger: str) -> None:
+    """Each event that runs for a pull request starts the closure."""
+    probe = f"on: {trigger}\n" + CURL_JOB
+    findings = _findings(tree(extra={"probe.yml": probe}))
+    assert any(item.startswith("probe.yml") for item in findings), findings
 
 
 def test_a_workflow_run_chain_is_inside_the_closure() -> None:
     """A workflow chained onto another's run is treated as reachable."""
     probe = "on:\n  workflow_run:\n    workflows: [CI]\n" + CURL_JOB
-    assert any(
-        item.startswith("probe.yml")
-        for item in _findings(tree(extra={"probe.yml": probe}))
-    )
+    findings = _findings(tree(extra={"probe.yml": probe}))
+    assert any(item.startswith("probe.yml") for item in findings), findings
 
 
 @pytest.mark.parametrize(
@@ -205,4 +221,5 @@ def test_a_call_to_a_missing_local_workflow_is_refused() -> None:
 
 def test_another_repository_is_not_followed() -> None:
     """A cross-repository call is out of this tree and is not a local callee."""
-    assert local_callee("leynos/other/.github/workflows/x.yml@main", REPOSITORY) is None
+    callee = local_callee("leynos/other/.github/workflows/x.yml@main", REPOSITORY)
+    assert callee is None, callee

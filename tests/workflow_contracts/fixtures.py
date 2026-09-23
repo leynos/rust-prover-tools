@@ -24,7 +24,7 @@ from .coverage_lanes import (
     pull_request_lane_violations,
     second_writer_violations,
 )
-from .loading import Document, WorkflowReadingError, load_workflow
+from .loading import Document, load_workflow
 
 REPOSITORY: typ.Final[str] = "leynos/example"
 PIN: typ.Final[str] = "a" * 40
@@ -142,11 +142,3 @@ def violations(texts: dict[str, str]) -> list[str]:
         *second_writer_violations(documents, name, REPOSITORY),
         *publisher_lane_violations(publisher, closure),
     ]
-
-
-def is_refused(texts: dict[str, str]) -> bool:
-    """Return whether the rules refuse a tree, by finding or by raising."""
-    try:
-        return bool(violations(texts))
-    except WorkflowReadingError:
-        return True
