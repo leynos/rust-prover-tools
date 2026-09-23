@@ -117,7 +117,9 @@ def _ref_keyed_violations(governing: list[object]) -> list[str]:
 
     With one group per ref, runs on main never overlap, and a replaced
     pending run is always replaced by a newer trigger whose commit is the
-    newest main, so uploads land in commit order. A constant group would
+    newest main, so triggered runs upload in commit order; a manual
+    re-run of an older run is an operator action that republishes that
+    commit until the next push. A constant group would
     let a branch dispatch replace a pending push to main, and a group
     keyed on the event too would let a dispatch and a push on main run at
     once and upload out of order. The accepted cost: a dispatch replacing

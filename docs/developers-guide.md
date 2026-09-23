@@ -22,14 +22,17 @@ its `access-token` input, because the uploader is a composite action and a step
 `workflow_dispatch` aimed at a branch cannot publish that branch as `main`. Its
 concurrency group never cancels: a newer push replaces an older pending run,
 and the newest baseline wins. The group is keyed on `github.ref` alone, so runs
-on `main` never overlap and uploads land in commit order, and a branch dispatch
-cannot displace a pending push to `main`. A dispatch on `main` that replaces a
-pending push still uploads the same or a newer commit, but leaves the ratchet
-baseline one commit behind until the next push; that is accepted. Merges made
-by the Dependabot automerge workflow's `GITHUB_TOKEN` fire no push, so they are
-published only by a manual dispatch; this is a known exception until the shared
-automerge workflow dispatches the publisher itself. With no `CS_ACCESS_TOKEN`
-repository secret the upload skips; the ratchet baseline is still written.
+on `main` never overlap and triggered runs (push and dispatch) upload in commit
+order, and a branch dispatch cannot displace a pending push to `main`. A
+dispatch on `main` that replaces a pending push still uploads the same or a
+newer commit, but leaves the ratchet baseline one commit behind until the next
+push; that is accepted. A manual re-run of an older run is an operator action:
+it republishes that commit's coverage and baseline until the next push
+supersedes it. Merges made by the Dependabot automerge workflow's
+`GITHUB_TOKEN` fire no push, so they are published only by a manual dispatch;
+this is a known exception until the shared automerge workflow dispatches the
+publisher itself. With no `CS_ACCESS_TOKEN` repository secret the upload skips;
+the ratchet baseline is still written.
 
 The retired `installer-checksum` input, the `CODESCENE_CLI_SHA256` variable,
 and the `get-codescene-sha.yml` refresher are gone. The shared uploader selects

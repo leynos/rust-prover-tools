@@ -101,36 +101,52 @@ def upload_token_violations(document: Document) -> list[str]:
     return [f"access-token is {actual!r}, not {CREDENTIAL_INPUT!r}"]
 
 
+def _scopes(document: Document) -> list[object]:
+    """Return the workflow's and every job's keys other than their children."""
+    return [
+        {key: value for key, value in document.items() if key != "jobs"},
+        *(
+            {key: value for key, value in job.items() if key != "steps"}
+            for job in jobs(document).values()
+        ),
+    ]
+
+
+def _other_steps(document: Document, allowed: set[int]) -> list[object]:
+    """Return every step but the ones allowed to name the credential."""
+    return [
+        step
+        for job in jobs(document).values()
+        for step in steps(job)
+        if id(step) not in allowed
+    ]
+
+
+def _without(mapping: object, key: str) -> object:
+    """Return a mapping with one key removed; anything else unchanged."""
+    if not isinstance(mapping, dict):
+        return mapping
+    return {name: value for name, value in mapping.items() if name != key}
+
+
+def _upload_remainder(upload: dict[str, object]) -> list[object]:
+    """Return the upload step without its `access-token` input."""
+    return [_without(upload, "with"), _without(upload.get("with"), "access-token")]
+
+
 def token_scope_violations(document: Document) -> list[str]:
     """Refuse the credential anywhere but the check command and the input.
 
     Every other key or value naming it is refused, the upload step's own
     `env` and every other step's included.
     """
-    allowed = {id(check_step(document)), id(upload_step(document))}
+    check = check_step(document)
     upload = upload_step(document)
-    kept = {key: value for key, value in upload.items() if key != "with"}
-    upload_inputs = upload.get("with") or {}
-    other_inputs = (
-        {k: v for k, v in upload_inputs.items() if k != "access-token"}
-        if isinstance(upload_inputs, dict)
-        else upload_inputs
-    )
-    rest: list[object] = [
-        {key: value for key, value in document.items() if key != "jobs"},
-        *(
-            {key: value for key, value in job.items() if key != "steps"}
-            for job in jobs(document).values()
-        ),
-        *(
-            other
-            for job in jobs(document).values()
-            for other in steps(job)
-            if id(other) not in allowed
-        ),
-        kept,
-        other_inputs,
-        {k: v for k, v in check_step(document).items() if k != "run"},
+    rest = [
+        *_scopes(document),
+        *_other_steps(document, {id(check), id(upload)}),
+        *_upload_remainder(upload),
+        _without(check, "run"),
     ]
     return [
         f"the credential appears outside the check and the input: {text!r}"

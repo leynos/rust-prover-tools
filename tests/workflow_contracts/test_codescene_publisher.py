@@ -84,7 +84,7 @@ def test_the_publisher_needs_a_concurrency_group() -> None:
     ],
 )
 def test_the_group_is_keyed_on_the_ref_alone(group: str) -> None:
-    """Only the exact ref-keyed group keeps uploads on main in commit order."""
+    """Only the exact ref-keyed group keeps triggered uploads in commit order."""
     found = concurrency_violations(
         _publisher(mutate("coverage-main.yml", GROUP, group))
     )

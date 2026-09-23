@@ -22,7 +22,10 @@ permissions: {}
 # One publisher generation per ref at a time, never cancelled. GitHub
 # keeps at most one pending run per group, so runs on main never overlap,
 # and a replaced pending run is always replaced by a newer trigger whose
-# commit is the newest main: uploads land in commit order. The group is
+# commit is the newest main, so triggered runs (push and dispatch) upload
+# in commit order. A manual re-run of an older run is an operator action:
+# it republishes that commit's coverage and baseline until the next push
+# supersedes it. The group is
 # keyed on the ref alone, so a branch dispatch cannot replace a pending
 # push to main; a dispatch on main that replaces one leaves the ratchet
 # baseline a commit behind until the next push, which is accepted.
