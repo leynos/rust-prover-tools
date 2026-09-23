@@ -73,9 +73,14 @@ jobs:
       - name: Run typechecker
         run: make typecheck
 
+      # Pull requests measure coverage and ratchet it against the baseline
+      # coverage-main.yml writes on main; nothing here talks to CodeScene.
+      # A push to main skips this step so that the publisher is the one
+      # writer of the baseline, and publish-artefact is off because the
+      # report is compared, not published.
       - name: Test and Measure Coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@152d9c4784d0ae5877938a984fe6d1f04d718fd8
+        uses: leynos/shared-actions/.github/actions/generate-coverage@dbe2e22ceaf498d85512679ccded38be9dbe7777
         with:
           language: python
           python-source: ./rust_prover_tools
@@ -84,3 +89,4 @@ jobs:
           artefact-name-suffix: rust-prover-tools
           pytest-workers: ''
           with-ratchet: 'true'
+          publish-artefact: 'false'
