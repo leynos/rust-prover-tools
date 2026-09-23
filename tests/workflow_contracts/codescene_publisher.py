@@ -28,6 +28,7 @@ CS_INPUT: typ.Final[str] = "${{ env.CS_ACCESS_TOKEN }}"
 MAIN_REF_GUARD: typ.Final[str] = "github.ref == 'refs/heads/main'"
 CS_GUARD: typ.Final[str] = "env.CS_ACCESS_TOKEN != ''"
 UPLOAD_GUARD: typ.Final[frozenset[str]] = frozenset({MAIN_REF_GUARD, CS_GUARD})
+REF_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(r"\$\{\{\s*github\.ref\s*\}\}")
 PERMITTED_TRIGGERS: typ.Final[frozenset[str]] = frozenset({"push", "workflow_dispatch"})
 
 
@@ -123,13 +124,18 @@ def _ref_keyed_violations(document: Document, governing: list[object]) -> list[s
     GitHub keeps one pending run per group, so with a constant group a
     dispatch from a branch replaces a pending push to main; the dispatch
     then skips the guarded upload and that merge is never published.
+    Every governing group must evaluate the ref, since a constant
+    workflow group still collides whatever the job's group says, and the
+    text `github.ref` outside an expression evaluates nothing.
     """
     present = [value for value in governing if value is not None]
-    if "workflow_dispatch" not in triggers(document) or not present:
+    if "workflow_dispatch" not in triggers(document):
         return []
-    if any("github.ref" in _group(value) for value in present):
-        return []
-    return ["a dispatchable publisher must key its concurrency group on github.ref"]
+    return [
+        f"concurrency group {_group(value)!r} does not evaluate github.ref"
+        for value in present
+        if not REF_EXPRESSION.search(_group(value))
+    ]
 
 
 def concurrency_violations(document: Document) -> list[str]:
