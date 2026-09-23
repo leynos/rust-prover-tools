@@ -106,6 +106,19 @@ def test_an_unquoted_disjunction_is_refused(condition: str) -> None:
         conjuncts(condition)
 
 
+@pytest.mark.parametrize("condition", ["(a && b", "a) && (b", "a == 'x && b"])
+def test_an_unbalanced_condition_is_refused(condition: str) -> None:
+    """An unclosed group or literal cannot be split into trustworthy terms."""
+    with pytest.raises(ConditionError, match="unbalanced"):
+        conjuncts(condition)
+
+
+def test_a_group_is_one_term() -> None:
+    """Operators inside parentheses neither split nor refuse the condition."""
+    terms = conjuncts("!(a && b) && (c || d)")
+    assert terms == ["!(a && b)", "(c || d)"], terms
+
+
 def test_a_quoted_operator_is_part_of_its_term() -> None:
     """Operators inside a quoted literal neither split nor refuse."""
     terms = conjuncts("a == 'x || y && z' && b")

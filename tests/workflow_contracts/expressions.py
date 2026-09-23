@@ -4,7 +4,9 @@ A guard is asserted term by term rather than as a substring. A substring
 check on `github.ref == 'refs/heads/main'` accepts
 `... && github.ref == 'refs/heads/main' || github.event_name == ...`,
 which makes every term optional, so a condition carrying an unquoted
-`||` is refused outright and the rest is split on `&&`.
+`||` is refused outright and the rest is split on `&&`. Both are read
+only at parenthesis depth zero: `!(a && b)` is one term, not two, and
+`a && (b || c)` is a conjunction whose second term narrows the first.
 """
 
 from __future__ import annotations
@@ -29,27 +31,44 @@ def _unwrap(condition: str) -> str:
     return match.group("body").strip() if match else stripped
 
 
-def _split_unquoted(text: str, separator: str) -> list[str]:
-    """Split on a separator wherever it falls outside a quoted literal.
+def _levels(text: str) -> list[int | None]:
+    """Return each character's parenthesis depth, or None inside a literal.
 
     GitHub expressions quote strings with single quotes and escape one by
     doubling it, so toggling on every quote tracks the state correctly.
+
+    Raises
+    ------
+    ConditionError
+        If a quote or a parenthesis is left unbalanced.
+
     """
-    parts: list[str] = []
-    start = 0
+    levels: list[int | None] = []
+    depth = 0
     quoted = False
-    index = 0
-    while index < len(text):
-        if text[index] == "'":
-            quoted = not quoted
-        elif not quoted and text.startswith(separator, index):
-            parts.append(text[start:index])
-            start = index + len(separator)
-            index = start
-            continue
-        index += 1
-    parts.append(text[start:])
-    return parts
+    for char in text:
+        quoted = quoted != (char == "'")
+        depth += 0 if quoted else {"(": 1, ")": -1}.get(char, 0)
+        if depth < 0:
+            break
+        levels.append(None if quoted or char == "'" else depth)
+    if quoted or depth:
+        message = f"unbalanced quotes or parentheses in {text!r}"
+        raise ConditionError(message)
+    return levels
+
+
+def _split_top_level(text: str, separator: str) -> list[str]:
+    """Split on a separator wherever it falls outside literals and groups."""
+    levels = _levels(text)
+    cuts = [
+        index
+        for index, level in enumerate(levels)
+        if level == 0 and text.startswith(separator, index)
+    ]
+    starts = [0, *(cut + len(separator) for cut in cuts)]
+    ends = [*cuts, len(text)]
+    return [text[start:end] for start, end in zip(starts, ends, strict=True)]
 
 
 def _normalise(term: str) -> str:
@@ -63,8 +82,8 @@ def conjuncts(condition: object) -> list[str]:
     Raises
     ------
     ConditionError
-        If the condition is not text, or carries an unquoted `||`, which
-        would make every term optional.
+        If the condition is not text, is unbalanced, or carries an
+        ungrouped, unquoted `||`, which would make every term optional.
 
     Examples
     --------
@@ -76,10 +95,10 @@ def conjuncts(condition: object) -> list[str]:
         message = f"condition {condition!r} is not an expression"
         raise ConditionError(message)
     body = _unwrap(condition)
-    if len(_split_unquoted(body, "||")) > 1:
+    if len(_split_top_level(body, "||")) > 1:
         message = f"condition {condition!r} carries an unquoted `||`"
         raise ConditionError(message)
-    return [_normalise(term) for term in _split_unquoted(body, "&&")]
+    return [_normalise(term) for term in _split_top_level(body, "&&")]
 
 
 def missing_terms(condition: object, required: frozenset[str]) -> list[str]:

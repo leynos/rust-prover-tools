@@ -45,6 +45,8 @@ def _documents(texts: dict[str, str]) -> dict[str, Document]:
         f"{GUARD} && github.actor != 'x' || github.event_name == 'workflow_dispatch'",
         "if: env.CS_ACCESS_TOKEN != ''",
         "if: github.ref == 'refs/heads/main'",
+        "if: ${{ !(env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main') }}",
+        "if: (env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'",
         "if: env.CS_ACCESS_TOKEN != '' && github.ref != 'refs/heads/main'",
     ],
 )
@@ -59,6 +61,7 @@ def test_the_upload_guard_needs_both_terms_and_no_disjunction(guard: str) -> Non
     "guard",
     [
         f"{GUARD} && github.actor != 'x'",
+        f"{GUARD} && (github.actor != 'x' || github.run_attempt == '1')",
         "if: ${{ github.ref == 'refs/heads/main' && env.CS_ACCESS_TOKEN != '' }}",
         f"{GUARD} && 'a||b' != ''",
     ],
@@ -108,7 +111,8 @@ def test_the_publisher_never_cancels(value: str) -> None:
     assert found, found
 
 
-WORKFLOW_GROUP = "concurrency:\n  group: coverage-main\n  cancel-in-progress: false\n"
+GROUP = "group: coverage-main-${{ github.ref }}"
+WORKFLOW_GROUP = f"concurrency:\n  {GROUP}\n  cancel-in-progress: false\n"
 UPLOAD_JOB = "  coverage-upload:\n    runs-on: ubuntu-latest\n"
 
 
@@ -119,9 +123,28 @@ def test_the_publisher_needs_a_concurrency_group() -> None:
     assert found, found
 
 
+def test_a_dispatchable_publisher_keys_its_group_on_the_ref() -> None:
+    """A constant group lets a branch dispatch replace a pending main run."""
+    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main")
+    found = concurrency_violations(_publisher(texts))
+    assert found, found
+
+
+def test_a_push_only_publisher_may_use_a_constant_group() -> None:
+    """Without a dispatch every run is a push to main, so one group suffices."""
+    text = PUBLISHER.replace("  workflow_dispatch:\n", "").replace(
+        GROUP, "group: coverage-main"
+    )
+    found = concurrency_violations(load_workflow(text))
+    assert not found, found
+
+
 def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
     """A group on an unrelated job leaves concurrent uploads possible."""
-    helper = "  helper:\n    runs-on: x\n    concurrency: helper\n    steps: []\n"
+    helper = (
+        "  helper:\n    runs-on: x\n    concurrency: helper-${{ github.ref }}\n"
+        "    steps: []\n"
+    )
     text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
         UPLOAD_JOB, helper + UPLOAD_JOB
     )
@@ -132,7 +155,7 @@ def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
 def test_a_group_on_the_upload_job_is_accepted() -> None:
     """The upload job's own group governs the upload as well as a workflow one."""
     text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
-        UPLOAD_JOB, UPLOAD_JOB + "    concurrency: coverage-main\n"
+        UPLOAD_JOB, UPLOAD_JOB + "    concurrency: coverage-main-${{ github.ref }}\n"
     )
     found = concurrency_violations(load_workflow(text))
     assert not found, found
@@ -209,6 +232,7 @@ def test_a_pull_request_lane_ratchets_and_publishes_nothing(old: str, new: str) 
         "",
         "        if: always()\n",
         "        if: github.event_name == 'pull_request' || always()\n",
+        "        if: ${{ !(github.event_name == 'pull_request') }}\n",
     ],
 )
 def test_a_push_lane_cannot_write_a_second_baseline(guard: str) -> None:

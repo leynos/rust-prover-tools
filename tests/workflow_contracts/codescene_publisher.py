@@ -111,6 +111,27 @@ def upload_job(document: Document) -> dict[str, object]:
     )
 
 
+def _group(concurrency: object) -> str:
+    """Return a concurrency declaration's group, in either spelling."""
+    group = concurrency.get("group") if isinstance(concurrency, dict) else concurrency
+    return str(group)
+
+
+def _ref_keyed_violations(document: Document, governing: list[object]) -> list[str]:
+    """Require a dispatchable publisher to key its group on the ref.
+
+    GitHub keeps one pending run per group, so with a constant group a
+    dispatch from a branch replaces a pending push to main; the dispatch
+    then skips the guarded upload and that merge is never published.
+    """
+    present = [value for value in governing if value is not None]
+    if "workflow_dispatch" not in triggers(document) or not present:
+        return []
+    if any("github.ref" in _group(value) for value in present):
+        return []
+    return ["a dispatchable publisher must key its concurrency group on github.ref"]
+
+
 def concurrency_violations(document: Document) -> list[str]:
     """Require a concurrency group over the upload that never cancels.
 
@@ -125,6 +146,7 @@ def concurrency_violations(document: Document) -> list[str]:
         if any(value is not None for value in governing)
         else ["neither the publisher nor its upload job declares a concurrency group"]
     )
+    found += _ref_keyed_violations(document, governing)
     declared = [document.get("concurrency")] + [
         job.get("concurrency") for job in jobs(document).values()
     ]
