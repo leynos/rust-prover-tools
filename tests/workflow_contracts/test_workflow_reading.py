@@ -64,6 +64,23 @@ def test_an_empty_workflow_directory_is_refused(tmp_path: Path) -> None:
         read_workflows(tmp_path)
 
 
+def test_a_missing_workflow_directory_is_named(tmp_path: Path) -> None:
+    """A directory that cannot be listed is refused with its name."""
+    missing = tmp_path / "absent"
+    with pytest.raises(WorkflowReadingError, match="absent could not be listed"):
+        read_workflows(missing)
+
+
+def test_an_unreadable_workflow_is_named(tmp_path: Path) -> None:
+    """A workflow that cannot be read is refused with its name, not a bare OSError."""
+    (tmp_path / "ok.yml").write_text("on: push\njobs: {}\n", encoding="utf-8")
+    (tmp_path / "unreadable.yml").mkdir()
+    with pytest.raises(
+        WorkflowReadingError, match=r"unreadable\.yml could not be read"
+    ):
+        read_workflows(tmp_path)
+
+
 def test_an_uppercase_suffix_is_read(tmp_path: Path) -> None:
     """GitHub runs `.YML` and `.yaml` files, so both are read."""
     (tmp_path / "a.YML").write_text("on: push\njobs: {}\n", encoding="utf-8")

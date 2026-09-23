@@ -101,25 +101,40 @@ def read_workflows(directory: Path) -> dict[str, Document]:
     Raises
     ------
     WorkflowReadingError
-        If the directory holds no workflow, or one does not parse; the
-        message names the file.
+        If the directory cannot be listed or holds no workflow, or a
+        workflow cannot be read or does not parse. The message names the
+        directory or the file, and the I/O error, if any, is the cause.
 
     """
-    paths = sorted(
+    paths = [
         path
-        for path in directory.iterdir()
+        for path in _entries(directory)
         if path.suffix.casefold() in WORKFLOW_SUFFIXES
-    )
+    ]
     if not paths:
         message = f"no workflow was read from {directory}; the reader is broken"
         raise WorkflowReadingError(message)
     return {path.name: _load_file(path) for path in paths}
 
 
-def _load_file(path: Path) -> Document:
-    """Parse one workflow file, naming it in any failure."""
+def _entries(directory: Path) -> list[Path]:
+    """List one directory in name order, naming it in any I/O failure."""
     try:
-        return load_workflow(path.read_text(encoding="utf-8"))
+        return sorted(directory.iterdir())
+    except OSError as error:
+        message = f"{directory} could not be listed: {error}"
+        raise WorkflowReadingError(message) from error
+
+
+def _load_file(path: Path) -> Document:
+    """Read and parse one workflow file, naming it in any failure."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as error:
+        message = f"{path.name} could not be read: {error}"
+        raise WorkflowReadingError(message) from error
+    try:
+        return load_workflow(text)
     except WorkflowReadingError as error:
         message = f"{path.name}: {error}"
         raise WorkflowReadingError(message) from error

@@ -34,7 +34,11 @@ lanes to the rules above. Each rule returns its findings as text, so the rule
 tests beside them can drive it over a constructed tree; every refusal case
 changes one thing in the compliant tree in `fixtures.py`. Keep a new rule to
 that pattern: a pure reading, a repository assertion, and a refusal case that
-fails when the rule's clause is deleted.
+fails when the rule's clause is deleted. `test_bounded_properties.py` checks
+the pure readings exhaustively over small domains instead of sampling: the
+closure against Warshall reachability for every call graph over three
+workflows, the condition reader over every conjunction of up to three terms,
+and the document walk with a key or value planted at every depth up to three.
 
 ## Spelling policy
 
