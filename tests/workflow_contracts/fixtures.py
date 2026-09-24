@@ -13,6 +13,7 @@ import typing as typ
 from .codescene_publisher import (
     concurrency_violations,
     find_publisher,
+    permission_violations,
     retired_checksum_violations,
     trigger_violations,
     upload_step_violations,
@@ -27,6 +28,7 @@ from .codescene_token import (
 from .coverage_lanes import (
     publisher_lane_violations,
     pull_request_lane_violations,
+    report_violations,
     second_writer_violations,
 )
 from .loading import Document, load_workflow
@@ -51,6 +53,7 @@ PULL_REQUEST_LANE: typ.Final[str] = textwrap.dedent(f"""\
             uses: {SHARED}/generate-coverage@{PIN}
             with:
               output-path: coverage.xml
+              format: cobertura
               artefact-name-suffix: example
               with-ratchet: 'true'
               publish-artefact: 'false'
@@ -71,18 +74,22 @@ PUBLISHER: typ.Final[str] = textwrap.dedent(f"""\
       push:
         branches: [main]
       workflow_dispatch:
+    permissions: {{}}
     concurrency:
       group: coverage-main-${{{{ github.ref }}}}
       cancel-in-progress: false
     jobs:
       coverage-upload:
         runs-on: ubuntu-latest
+        permissions:
+          contents: read
         steps:
           - uses: actions/checkout@v4
           - name: Generate coverage
             uses: {SHARED}/generate-coverage@{PIN}
             with:
               output-path: coverage.xml
+              format: cobertura
               artefact-name-suffix: example
               with-ratchet: 'true'
           - name: Check for the CodeScene token
@@ -93,6 +100,7 @@ PUBLISHER: typ.Final[str] = textwrap.dedent(f"""\
             uses: {SHARED}/upload-codescene-coverage@{PIN}
             with:
               path: coverage.xml
+              format: cobertura
               mode: upload
               access-token: ${{{{ secrets.CS_ACCESS_TOKEN }}}}
     """)
@@ -164,6 +172,8 @@ def violations(texts: dict[str, str]) -> list[str]:
         *trigger_violations(publisher),
         *concurrency_violations(publisher),
         *upload_step_violations(publisher),
+        *permission_violations(publisher),
+        *report_violations(publisher),
         *check_step_violations(publisher),
         *upload_guard_violations(publisher),
         *upload_token_violations(publisher),

@@ -20,19 +20,23 @@ and `github.ref == 'refs/heads/main'`. The token reaches the uploader only as
 its `access-token` input, because the uploader is a composite action and a step
 `env` would reach every action nested in it. The ref guard means that a
 `workflow_dispatch` aimed at a branch cannot publish that branch as `main`. Its
-concurrency group never cancels: a newer push replaces an older pending run,
-and the newest baseline wins. The group is keyed on `github.ref` alone, so runs
-on `main` never overlap and triggered runs (push and dispatch) upload in commit
-order, and a branch dispatch cannot displace a pending push to `main`. A
-dispatch on `main` that replaces a pending push still uploads the same or a
-newer commit, but leaves the ratchet baseline one commit behind until the next
-push; that is accepted. A manual re-run of an older run is an operator action:
-it republishes that commit's coverage and baseline until the next push
-supersedes it. Merges made by the Dependabot automerge workflow's
-`GITHUB_TOKEN` fire no push, so they are published only by a manual dispatch;
-this is a known exception until the shared automerge workflow dispatches the
-publisher itself. With no `CS_ACCESS_TOKEN` repository secret the upload skips;
-the ratchet baseline is still written.
+concurrency group never cancels, so no upload or baseline write is abandoned.
+The group is keyed on `github.ref` alone, so runs on `main` never overlap, a
+newer trigger replaces an older pending run rather than queueing behind it, and
+a branch dispatch cannot displace a pending push to `main`. GitHub does not
+promise to start runs in trigger order, so this is not a guarantee of commit
+order: an older run can still publish last, and its coverage and baseline then
+stand until a later successful run supersedes them; that is accepted. A
+dispatch on `main` that replaces a pending push leaves the ratchet baseline one
+commit behind until the next push, because the baseline is saved only on a
+push. A manual re-run of an older run keeps its SHA and its run id: it
+republishes that commit's coverage to CodeScene, but its baseline cache key
+already exists, so it replaces no baseline unless the original run saved none.
+Merges made by the Dependabot automerge workflow's `GITHUB_TOKEN` fire no push,
+so they are published only by a manual dispatch; this is a known exception
+until the shared automerge workflow dispatches the publisher itself. With no
+`CS_ACCESS_TOKEN` repository secret the upload skips; the ratchet baseline is
+still written.
 
 The retired `installer-checksum` input, the `CODESCENE_CLI_SHA256` variable,
 and the `get-codescene-sha.yml` refresher are gone. The shared uploader selects

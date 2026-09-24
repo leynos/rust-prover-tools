@@ -16,6 +16,7 @@ import pytest
 from .codescene_publisher import (
     concurrency_violations,
     find_publisher,
+    permission_violations,
     retired_checksum_violations,
     trigger_violations,
     upload_step_violations,
@@ -30,10 +31,11 @@ from .codescene_token import (
 from .coverage_lanes import (
     publisher_lane_violations,
     pull_request_lane_violations,
+    report_violations,
     second_writer_violations,
 )
 from .loading import Document, read_workflows
-from .reading import triggers
+from .reading import jobs, triggers
 
 REPOSITORY: typ.Final[str] = "leynos/rust-prover-tools"
 ROOT: typ.Final[Path] = Path(__file__).resolve().parents[2]
@@ -149,4 +151,24 @@ def test_the_publisher_measures_what_each_lane_measures(
     """The baseline is taken over the selection and pin the lanes use."""
     closure = pull_request_closure(documents, REPOSITORY)
     found = publisher_lane_violations(publisher, closure)
+    assert not found, found
+
+
+def test_the_publisher_grants_only_read_access(publisher: Document) -> None:
+    """The workflow grants nothing and the upload job only reads contents."""
+    found = permission_violations(publisher)
+    assert not found, found
+
+
+def test_the_pull_request_lane_only_reads_contents(
+    documents: dict[str, Document],
+) -> None:
+    """The lint-test job measures coverage with a read-only token."""
+    granted = jobs(documents["ci.yml"])["lint-test"].get("permissions")
+    assert granted == {"contents": "read"}, granted
+
+
+def test_the_uploader_reads_the_generated_report(publisher: Document) -> None:
+    """The upload names the path and format the generator writes."""
+    found = report_violations(publisher)
     assert not found, found

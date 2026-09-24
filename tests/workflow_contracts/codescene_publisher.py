@@ -24,6 +24,7 @@ COVERAGE_ACTION: typ.Final[str] = (
 PINNED_COMMIT: typ.Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
 PUBLISHER_GROUP: typ.Final[str] = "coverage-main-${{ github.ref }}"
 PERMITTED_TRIGGERS: typ.Final[frozenset[str]] = frozenset({"push", "workflow_dispatch"})
+LEAST_PRIVILEGE: typ.Final[dict[str, str]] = {"contents": "read"}
 
 
 def find_publisher(documents: dict[str, Document]) -> tuple[str, Document]:
@@ -115,16 +116,15 @@ def _group(concurrency: object) -> str:
 def _ref_keyed_violations(governing: list[object]) -> list[str]:
     """Require every governing group to be keyed on the ref alone.
 
-    With one group per ref, runs on main never overlap, and a replaced
-    pending run is always replaced by a newer trigger whose commit is the
-    newest main, so triggered runs upload in commit order; a manual
-    re-run of an older run is an operator action that republishes that
-    commit until the next push. A constant group would
-    let a branch dispatch replace a pending push to main, and a group
-    keyed on the event too would let a dispatch and a push on main run at
-    once and upload out of order. The accepted cost: a dispatch replacing
-    a pending push leaves the ratchet baseline one commit behind until
-    the next push.
+    With one group per ref, runs on main never overlap and a newer
+    trigger replaces an older pending run. GitHub does not promise to
+    start runs in trigger order, so this bounds the ordering hazard
+    rather than removing it: an older run can still publish last until a
+    later successful run supersedes it. A constant group would let a
+    branch dispatch replace a pending push to main, and a group keyed on
+    the event too would let a dispatch and a push on main run at once.
+    The accepted cost: a dispatch replacing a pending push leaves the
+    ratchet baseline one commit behind until the next push.
     """
     return [
         f"concurrency group {_group(value)!r} is not {PUBLISHER_GROUP!r}"
@@ -137,9 +137,9 @@ def concurrency_violations(document: Document) -> list[str]:
     """Require a concurrency group over the upload that never cancels.
 
     The group must sit on the workflow or on the job that uploads: one on
-    an unrelated job leaves concurrent uploads possible. A newer push then
-    replaces an older pending run rather than killing a running one, so
-    the newest baseline wins and no upload is abandoned.
+    an unrelated job leaves concurrent uploads possible. A newer trigger
+    then replaces an older pending run rather than killing a running one,
+    so no upload is abandoned.
     """
     governing = [document.get("concurrency"), upload_job(document).get("concurrency")]
     found = (
@@ -192,3 +192,23 @@ def retired_checksum_violations(documents: dict[str, Document]) -> list[str]:
         for name in documents
         if name.startswith("get-codescene-sha.")
     ]
+
+
+def permission_violations(document: Document) -> list[str]:
+    """Require the publisher to grant nothing beyond reading its checkout.
+
+    The upload authenticates with the CodeScene secret, not with
+    `GITHUB_TOKEN`, so the workflow grants nothing and the upload job only
+    `contents: read` for its checkout. Any wider grant is authority that
+    no step uses.
+    """
+    workflow = document.get("permissions")
+    found = (
+        []
+        if workflow == {}
+        else [f"the publisher grants {workflow!r} at workflow scope, not {{}}"]
+    )
+    granted = upload_job(document).get("permissions")
+    if granted != LEAST_PRIVILEGE:
+        found.append(f"the upload job grants {granted!r}, not {LEAST_PRIVILEGE!r}")
+    return found

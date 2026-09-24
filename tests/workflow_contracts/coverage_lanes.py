@@ -145,3 +145,22 @@ def publisher_lane_violations(
             f"{sorted(pins)}"
         )
     return found
+
+
+def report_violations(document: Document) -> list[str]:
+    """Require the uploader to read the report the generator writes.
+
+    An uploader naming another path or format finds no report, or the
+    wrong one, and CodeScene keeps showing older coverage while every
+    other rule passes.
+    """
+    generators = action_steps(document, COVERAGE_ACTION)
+    if len(generators) != 1:
+        return [f"the publisher must generate coverage once; found {len(generators)}"]
+    written, read = _inputs(generators[0]), _inputs(upload_step(document))
+    return [
+        f"the uploader's {reads!r} is {read.get(reads)!r}, "
+        f"but the generator's {writes!r} is {written.get(writes)!r}"
+        for writes, reads in (("output-path", "path"), ("format", "format"))
+        if read.get(reads) != written.get(writes)
+    ]
