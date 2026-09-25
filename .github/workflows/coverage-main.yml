@@ -19,15 +19,21 @@ on:
 
 permissions: {}
 
-# One publisher generation per ref at a time, never cancelled. GitHub
-# keeps at most one pending run per group, so a newer push replaces an
-# older pending run and the newest baseline wins; a cancelled run would
-# abandon both its upload and its baseline write. The group carries the
-# ref and the event so that no dispatch, from a branch or from main, can
-# replace a pending push to main: a dispatch does not advance the
-# baseline, so the push it displaced would leave that merge unpublished.
+# One group per ref, never cancelled. Runs for main never overlap, and
+# GitHub keeps at most one pending run per group, so a newer trigger
+# replaces an older pending run rather than queueing behind it. The group
+# is keyed on the ref alone, so a branch dispatch cannot replace a pending
+# push to main. GitHub does not promise to start runs in trigger order, so
+# this is not a guarantee of commit order: an older run can still publish
+# last, and its coverage and baseline then stand until a later successful
+# run supersedes them, which is accepted. A manual re-run of an older run
+# keeps its SHA and its run id: it republishes that commit's coverage to
+# CodeScene, but its baseline cache key already exists, so it replaces no
+# baseline unless the original run saved none. A dispatch on main that
+# replaces a pending push leaves the ratchet baseline a commit behind until
+# the next push, which is accepted.
 concurrency:
-  group: coverage-main-${{ github.ref }}-${{ github.event_name }}
+  group: coverage-main-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -38,6 +44,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -58,16 +66,21 @@ jobs:
           pytest-workers: ''
           with-ratchet: 'true'
 
+      # Whether the token exists, learnt without binding it: the expression
+      # is evaluated before the shell runs, so no step holds the secret.
+      - name: Check for the CodeScene token
+        id: codescene-token
+        run: echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+
       - name: Upload coverage data to CodeScene
-        env:
-          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}
         # The ref as well as the token: a dispatch can name any branch, and
-        # without this guard it would upload that branch's coverage as
-        # main's. With no CS_ACCESS_TOKEN secret the upload skips.
-        if: env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'
+        # without this guard it would upload that branch's coverage as main's.
+        # The token goes in only as the input: the uploader is a composite
+        # action, and a step `env` would reach every action nested in it.
+        if: steps.codescene-token.outputs.available == 'true' && github.ref == 'refs/heads/main'
         uses: leynos/shared-actions/.github/actions/upload-codescene-coverage@438ad8a99a3580e753189c47391a1652c5f46ed4
         with:
           path: coverage.xml
           format: cobertura
           mode: upload
-          access-token: ${{ env.CS_ACCESS_TOKEN }}
+          access-token: ${{ secrets.CS_ACCESS_TOKEN }}

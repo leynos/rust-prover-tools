@@ -12,7 +12,6 @@ import re
 import typing as typ
 
 from .codescene_reach import codescene_contacts
-from .expressions import ConditionError, missing_terms
 from .loading import Document, WorkflowReadingError
 from .reading import jobs, steps, texts, trigger_filters, triggers
 
@@ -23,16 +22,9 @@ COVERAGE_ACTION: typ.Final[str] = (
     "leynos/shared-actions/.github/actions/generate-coverage"
 )
 PINNED_COMMIT: typ.Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
-CS_BINDING: typ.Final[str] = "${{ secrets.CS_ACCESS_TOKEN }}"
-CS_INPUT: typ.Final[str] = "${{ env.CS_ACCESS_TOKEN }}"
-MAIN_REF_GUARD: typ.Final[str] = "github.ref == 'refs/heads/main'"
-CS_GUARD: typ.Final[str] = "env.CS_ACCESS_TOKEN != ''"
-UPLOAD_GUARD: typ.Final[frozenset[str]] = frozenset({MAIN_REF_GUARD, CS_GUARD})
-REF_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(r"\$\{\{\s*github\.ref\s*\}\}")
-EVENT_EXPRESSION: typ.Final[re.Pattern[str]] = re.compile(
-    r"\$\{\{\s*github\.event_name\s*\}\}"
-)
+PUBLISHER_GROUP: typ.Final[str] = "coverage-main-${{ github.ref }}"
 PERMITTED_TRIGGERS: typ.Final[frozenset[str]] = frozenset({"push", "workflow_dispatch"})
+LEAST_PRIVILEGE: typ.Final[dict[str, str]] = {"contents": "read"}
 
 
 def find_publisher(documents: dict[str, Document]) -> tuple[str, Document]:
@@ -121,30 +113,23 @@ def _group(concurrency: object) -> str:
     return str(group)
 
 
-def _is_keyed(group: str) -> bool:
-    """Return whether a group evaluates both the ref and the event name."""
-    return bool(REF_EXPRESSION.search(group) and EVENT_EXPRESSION.search(group))
+def _ref_keyed_violations(governing: list[object]) -> list[str]:
+    """Require every governing group to be keyed on the ref alone.
 
-
-def _ref_keyed_violations(document: Document, governing: list[object]) -> list[str]:
-    """Require a dispatchable publisher to key its group on the ref.
-
-    GitHub keeps one pending run per group, so with a constant group a
-    dispatch from a branch replaces a pending push to main; the dispatch
-    then skips the guarded upload and that merge is never published.
-    The event name is part of the key too: a dispatch on main does not
-    advance the ratchet baseline, so it must not replace a pending push to
-    main either. Every governing group must evaluate both, since a
-    constant workflow group still collides whatever the job's group says,
-    and the text `github.ref` outside an expression evaluates nothing.
+    With one group per ref, runs on main never overlap and a newer
+    trigger replaces an older pending run. GitHub does not promise to
+    start runs in trigger order, so this bounds the ordering hazard
+    rather than removing it: an older run can still publish last until a
+    later successful run supersedes it. A constant group would let a
+    branch dispatch replace a pending push to main, and a group keyed on
+    the event too would let a dispatch and a push on main run at once.
+    The accepted cost: a dispatch replacing a pending push leaves the
+    ratchet baseline one commit behind until the next push.
     """
-    present = [value for value in governing if value is not None]
-    if "workflow_dispatch" not in triggers(document):
-        return []
     return [
-        f"concurrency group {_group(value)!r} is not keyed on the ref and event"
-        for value in present
-        if not _is_keyed(_group(value))
+        f"concurrency group {_group(value)!r} is not {PUBLISHER_GROUP!r}"
+        for value in governing
+        if value is not None and _group(value) != PUBLISHER_GROUP
     ]
 
 
@@ -152,9 +137,9 @@ def concurrency_violations(document: Document) -> list[str]:
     """Require a concurrency group over the upload that never cancels.
 
     The group must sit on the workflow or on the job that uploads: one on
-    an unrelated job leaves concurrent uploads possible. A newer push then
-    replaces an older pending run rather than killing a running one, so
-    the newest baseline wins and no upload is abandoned.
+    an unrelated job leaves concurrent uploads possible. A newer trigger
+    then replaces an older pending run rather than killing a running one,
+    so no upload is abandoned.
     """
     governing = [document.get("concurrency"), upload_job(document).get("concurrency")]
     found = (
@@ -162,7 +147,7 @@ def concurrency_violations(document: Document) -> list[str]:
         if any(value is not None for value in governing)
         else ["neither the publisher nor its upload job declares a concurrency group"]
     )
-    found += _ref_keyed_violations(document, governing)
+    found += _ref_keyed_violations(governing)
     declared = [document.get("concurrency")] + [
         job.get("concurrency") for job in jobs(document).values()
     ]
@@ -174,65 +159,24 @@ def concurrency_violations(document: Document) -> list[str]:
     ]
 
 
-def _guard_violations(step: dict[str, object]) -> list[str]:
-    """Require the ref and token guard as whole `&&` terms."""
-    try:
-        missing = missing_terms(step.get("if"), UPLOAD_GUARD)
-    except ConditionError as error:
-        return [str(error)]
-    return [f"the upload guard lacks {term!r}" for term in missing]
-
-
 def upload_step_violations(document: Document) -> list[str]:
-    """Require the upload step's mode, pin, guard and positive token binding.
+    """Require the upload step's explicit mode and commit pin.
 
-    A guard on `env.CS_ACCESS_TOKEN != ''` alone passes with the binding
-    deleted, because the missing variable reads as empty and the upload
-    then skips for ever; so the binding and the input are asserted.
+    The token, the guard and the availability check are the token module's
+    rules; this one holds what the step asks the action to do.
     """
     step = upload_step(document)
     inputs = step.get("with") or {}
-    environment = step.get("env") or {}
-    if not isinstance(inputs, dict) or not isinstance(environment, dict):
-        return ["the upload step's `with` and `env` must be mappings"]
-    expected = {
-        "mode": ("upload", inputs.get("mode")),
-        "access-token": (CS_INPUT, inputs.get("access-token")),
-        "env CS_ACCESS_TOKEN": (CS_BINDING, environment.get("CS_ACCESS_TOKEN")),
-    }
-    found = [
-        f"{name} is {actual!r}, not {wanted!r}"
-        for name, (wanted, actual) in expected.items()
-        if actual != wanted
-    ]
+    if not isinstance(inputs, dict):
+        return ["the upload step's `with` must be a mapping"]
+    found = (
+        []
+        if inputs.get("mode") == "upload"
+        else [f"mode is {inputs.get('mode')!r}, not 'upload'"]
+    )
     if not PINNED_COMMIT.match(pin_of(step)):
         found.append(f"the uploader is not pinned to a commit: {step.get('uses')!r}")
-    return found + _guard_violations(step)
-
-
-def token_scope_violations(document: Document) -> list[str]:
-    """Refuse the credential anywhere in the publisher but the upload step."""
-    step = upload_step(document)
-    elsewhere = {key: value for key, value in document.items() if key != "jobs"}
-    rest = (
-        [elsewhere]
-        + [
-            {key: value for key, value in job.items() if key != "steps"}
-            for job in jobs(document).values()
-        ]
-        + [
-            other
-            for job in jobs(document).values()
-            for other in steps(job)
-            if other is not step
-        ]
-    )
-    return [
-        f"the credential appears outside the upload step: {text!r}"
-        for part in rest
-        for text in texts(part)
-        if "cs_access_token" in text.casefold()
-    ]
+    return found
 
 
 def retired_checksum_violations(documents: dict[str, Document]) -> list[str]:
@@ -248,3 +192,23 @@ def retired_checksum_violations(documents: dict[str, Document]) -> list[str]:
         for name in documents
         if name.startswith("get-codescene-sha.")
     ]
+
+
+def permission_violations(document: Document) -> list[str]:
+    """Require the publisher to grant nothing beyond reading its checkout.
+
+    The upload authenticates with the CodeScene secret, not with
+    `GITHUB_TOKEN`, so the workflow grants nothing and the upload job only
+    `contents: read` for its checkout. Any wider grant is authority that
+    no step uses.
+    """
+    workflow = document.get("permissions")
+    found = (
+        []
+        if workflow == {}
+        else [f"the publisher grants {workflow!r} at workflow scope, not {{}}"]
+    )
+    granted = upload_job(document).get("permissions")
+    if granted != LEAST_PRIVILEGE:
+        found.append(f"the upload job grants {granted!r}, not {LEAST_PRIVILEGE!r}")
+    return found

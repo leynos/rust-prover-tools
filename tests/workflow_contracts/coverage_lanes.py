@@ -122,7 +122,10 @@ def publisher_lane_violations(
 
     The publisher's generator, its uploader and every pull-request
     generator share one commit pin, so the lanes measure with the same
-    action that writes their baseline.
+    action that writes their baseline. Every generator also carries the
+    publisher's step `env`: the action builds its coverage environment
+    with whatever interpreter uv finds, so an interpreter pinned on one
+    side only measures the same selection on a different Python.
     """
     generators = action_steps(publisher, COVERAGE_ACTION)
     if len(generators) != 1:
@@ -139,9 +142,30 @@ def publisher_lane_violations(
             pins.add(pin_of(step))
             if _selection(step) != _selection(baseline):
                 found.append(f"{name}: coverage selection differs from the publisher's")
+            if step.get("env") != baseline.get("env"):
+                found.append(f"{name}: coverage step env differs from the publisher's")
     if len(pins) != 1 or not all(PINNED_COMMIT.match(pin) for pin in pins):
         found.append(
             f"{COVERAGE_ACTION} and {UPLOAD_ACTION} must share one commit pin: "
             f"{sorted(pins)}"
         )
     return found
+
+
+def report_violations(document: Document) -> list[str]:
+    """Require the uploader to read the report the generator writes.
+
+    An uploader naming another path or format finds no report, or the
+    wrong one, and CodeScene keeps showing older coverage while every
+    other rule passes.
+    """
+    generators = action_steps(document, COVERAGE_ACTION)
+    if len(generators) != 1:
+        return [f"the publisher must generate coverage once; found {len(generators)}"]
+    written, read = _inputs(generators[0]), _inputs(upload_step(document))
+    return [
+        f"the uploader's {reads!r} is {read.get(reads)!r}, "
+        f"but the generator's {writes!r} is {written.get(writes)!r}"
+        for writes, reads in (("output-path", "path"), ("format", "format"))
+        if read.get(reads) != written.get(writes)
+    ]

@@ -12,15 +12,31 @@ event, because `generate-coverage` saves its baseline on a push to `main` and
 
 After each merge, `coverage-main.yml` regenerates the same measurement,
 advances the ratchet, and uploads it with `upload-codescene-coverage` in
-explicit `mode: upload`. The upload step binds the secret itself and runs only
-when `github.ref == 'refs/heads/main'` and the token is non-empty, so a
+explicit `mode: upload`. A check step learns whether the token exists with the
+one command
+`echo "available=${{ secrets.CS_ACCESS_TOKEN != '' }}" >> "$GITHUB_OUTPUT"`,
+which binds nothing, and the upload step runs only when that output is `true`
+and `github.ref == 'refs/heads/main'`. The token reaches the uploader only as
+its `access-token` input, because the uploader is a composite action and a step
+`env` would reach every action nested in it. The ref guard means that a
 `workflow_dispatch` aimed at a branch cannot publish that branch as `main`. Its
-concurrency group never cancels: a newer push replaces an older pending run,
-and the newest baseline wins. The group is keyed on `github.ref` and
-`github.event_name`, so no dispatch, from a branch or from `main`, can displace
-a pending push to `main`; a dispatch does not advance the ratchet baseline.
-With no `CS_ACCESS_TOKEN` repository secret the upload skips; the ratchet
-baseline is still written.
+concurrency group never cancels, so no upload or baseline write is abandoned.
+The group is keyed on `github.ref` alone, so runs on `main` never overlap, a
+newer trigger replaces an older pending run rather than queueing behind it, and
+a branch dispatch cannot displace a pending push to `main`. GitHub does not
+promise to start runs in trigger order, so this is not a guarantee of commit
+order: an older run can still publish last, and its coverage and baseline then
+stand until a later successful run supersedes them; that is accepted. A
+dispatch on `main` that replaces a pending push leaves the ratchet baseline one
+commit behind until the next push, because the baseline is saved only on a
+push. A manual re-run of an older run keeps its SHA and its run id: it
+republishes that commit's coverage to CodeScene, but its baseline cache key
+already exists, so it replaces no baseline unless the original run saved none.
+Merges made by the Dependabot automerge workflow's `GITHUB_TOKEN` fire no push,
+so they are published only by a manual dispatch; this is a known exception
+until the shared automerge workflow dispatches the publisher itself. With no
+`CS_ACCESS_TOKEN` repository secret the upload skips; the ratchet baseline is
+still written.
 
 The retired `installer-checksum` input, the `CODESCENE_CLI_SHA256` variable,
 and the `get-codescene-sha.yml` refresher are gone. The shared uploader selects
@@ -33,17 +49,18 @@ triggers in scalar, sequence, and mapping form under either key.
 every workflow a pull request can start (its own events, reviews, comments, the
 merge queue, `workflow_run` chains, and pushes not confined to `main` or to
 tags) and refuses any key or value in that closure naming the CodeScene host,
-the credential, the client, or the uploader. `codescene_publisher.py` and
-`coverage_lanes.py` hold the publisher and the lanes to the rules above. Each
-rule returns its findings as text, so the rule tests beside them can drive it
-over a constructed tree; every refusal case changes one thing in the compliant
-tree in `fixtures.py`. Keep a new rule to that pattern: a pure reading, a
-repository assertion, and a refusal case that fails when the rule's clause is
-deleted. `test_bounded_properties.py` checks the pure readings exhaustively
-over small domains instead of sampling: the closure against Warshall
-reachability for every call graph over three workflows, the condition reader
-over every conjunction of up to three terms, and the document walk with a key
-or value planted at every depth up to three.
+the credential, the client, or the uploader, and any read of the whole
+`secrets` context or of a computed secret name. `codescene_publisher.py`,
+`codescene_token.py`, and `coverage_lanes.py` hold the publisher and the lanes
+to the rules above. Each rule returns its findings as text, so the rule tests
+beside them can drive it over a constructed tree; every refusal case changes
+one thing in the compliant tree in `fixtures.py`. Keep a new rule to that
+pattern: a pure reading, a repository assertion, and a refusal case that fails
+when the rule's clause is deleted. `test_bounded_properties.py` checks the pure
+readings exhaustively over small domains instead of sampling: the closure
+against Warshall reachability for every call graph over three workflows, the
+condition reader over every conjunction of up to three terms, and the document
+walk with a key or value planted at every depth up to three.
 
 ## Spelling policy
 

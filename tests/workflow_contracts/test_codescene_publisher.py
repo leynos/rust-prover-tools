@@ -12,20 +12,19 @@ import pytest
 from .codescene_publisher import (
     concurrency_violations,
     find_publisher,
+    permission_violations,
     retired_checksum_violations,
-    token_scope_violations,
     trigger_violations,
     upload_step_violations,
 )
 from .coverage_lanes import (
     publisher_lane_violations,
     pull_request_lane_violations,
+    report_violations,
     second_writer_violations,
 )
-from .fixtures import PUBLISHER, PULL_REQUEST_LANE, REPOSITORY, mutate, tree
+from .fixtures import PUBLISHER, PULL_REQUEST_LANE, REPOSITORY, mutate, replaced, tree
 from .loading import Document, WorkflowReadingError, load_workflow
-
-GUARD = "if: env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'"
 
 
 def _publisher(texts: dict[str, str]) -> Document:
@@ -39,65 +38,16 @@ def _documents(texts: dict[str, str]) -> dict[str, Document]:
 
 
 @pytest.mark.parametrize(
-    "guard",
-    [
-        # Every required term stays whole; only the `||` refusal catches it.
-        f"{GUARD} && github.actor != 'x' || github.event_name == 'workflow_dispatch'",
-        "if: env.CS_ACCESS_TOKEN != ''",
-        "if: github.ref == 'refs/heads/main'",
-        "if: ${{ !(env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main') }}",
-        "if: (env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'",
-        "if: env.CS_ACCESS_TOKEN != '' && github.ref != 'refs/heads/main'",
-    ],
-)
-def test_the_upload_guard_needs_both_terms_and_no_disjunction(guard: str) -> None:
-    """The ref and token guard must hold as whole terms of a conjunction."""
-    texts = mutate("coverage-main.yml", GUARD, guard)
-    found = upload_step_violations(_publisher(texts))
-    assert found, found
-
-
-@pytest.mark.parametrize(
-    "guard",
-    [
-        f"{GUARD} && github.actor != 'x'",
-        f"{GUARD} && (github.actor != 'x' || github.run_attempt == '1')",
-        "if: ${{ github.ref == 'refs/heads/main' && env.CS_ACCESS_TOKEN != '' }}",
-        f"{GUARD} && 'a||b' != ''",
-    ],
-)
-def test_a_narrower_upload_guard_is_accepted(guard: str) -> None:
-    """Extra terms, a wrapper and a quoted `||` do not trip the guard rule."""
-    texts = mutate("coverage-main.yml", GUARD, guard)
-    found = upload_step_violations(_publisher(texts))
-    assert not found, found
-
-
-@pytest.mark.parametrize(
     ("old", "new"),
     [
-        (
-            "          CS_ACCESS_TOKEN: ${{ secrets.CS_ACCESS_TOKEN }}\n",
-            "          OTHER: x\n",
-        ),
-        ("          access-token: ${{ env.CS_ACCESS_TOKEN }}\n", ""),
         ("          mode: upload\n", "          mode: check\n"),
         ("upload-codescene-coverage@" + "a" * 40, "upload-codescene-coverage@main"),
     ],
 )
-def test_the_upload_step_binds_the_token_positively(old: str, new: str) -> None:
-    """A deleted binding, a missing input, check mode or a branch pin is refused."""
+def test_the_upload_step_names_its_mode_and_pin(old: str, new: str) -> None:
+    """Check mode or a branch pin on the uploader is refused."""
     texts = mutate("coverage-main.yml", old, new)
     found = upload_step_violations(_publisher(texts))
-    assert found, found
-
-
-def test_the_token_is_refused_in_any_wider_scope() -> None:
-    """The credential bound at job level reaches every step, so it is refused."""
-    job = "    runs-on: ubuntu-latest\n"
-    wider = job + "    env:\n      T: ${{ secrets.CS_ACCESS_TOKEN }}\n"
-    texts = mutate("coverage-main.yml", job, wider)
-    found = token_scope_violations(_publisher(texts))
     assert found, found
 
 
@@ -111,7 +61,7 @@ def test_the_publisher_never_cancels(value: str) -> None:
     assert found, found
 
 
-KEY = "${{ github.ref }}-${{ github.event_name }}"
+KEY = "${{ github.ref }}"
 GROUP = f"group: coverage-main-{KEY}"
 WORKFLOW_GROUP = f"concurrency:\n  {GROUP}\n  cancel-in-progress: false\n"
 UPLOAD_JOB = "  coverage-upload:\n    runs-on: ubuntu-latest\n"
@@ -124,59 +74,44 @@ def test_the_publisher_needs_a_concurrency_group() -> None:
     assert found, found
 
 
-def test_a_dispatchable_publisher_keys_its_group_on_the_ref() -> None:
-    """A constant group lets a branch dispatch replace a pending main run."""
-    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main")
-    found = concurrency_violations(_publisher(texts))
-    assert found, found
-
-
-def test_a_ref_key_without_the_event_is_refused() -> None:
-    """A dispatch on main must not replace a pending push to main either."""
-    texts = mutate("coverage-main.yml", GROUP, "group: coverage-main-${{ github.ref }}")
-    found = concurrency_violations(_publisher(texts))
-    assert found, found
-
-
 @pytest.mark.parametrize(
-    "job_group",
-    ["", f"    concurrency: upload-{KEY}\n"],
+    "group",
+    [
+        # A constant group lets a branch dispatch replace a pending main run.
+        "group: coverage-main",
+        # An event key lets a dispatch and a push on main run at once.
+        "group: coverage-main-${{ github.ref }}-${{ github.event_name }}",
+        # Text naming the ref outside an expression evaluates nothing.
+        "group: coverage-main-github.ref",
+    ],
 )
-def test_a_literal_ref_is_not_a_ref_key(job_group: str) -> None:
-    """Text naming `github.ref` outside an expression evaluates nothing."""
-    texts = mutate(
-        "coverage-main.yml", GROUP, "group: coverage-main-github.ref-github.event_name"
+def test_the_group_is_keyed_on_the_ref_alone(group: str) -> None:
+    """Only the exact ref-keyed group keeps runs on main from overlapping."""
+    found = concurrency_violations(
+        _publisher(mutate("coverage-main.yml", GROUP, group))
     )
-    text = texts["coverage-main.yml"].replace(UPLOAD_JOB, UPLOAD_JOB + job_group)
-    found = concurrency_violations(load_workflow(text))
     assert found, found
 
 
 def test_a_constant_workflow_group_is_refused_beside_a_keyed_job_group() -> None:
     """A ref-keyed job group does not stop a constant workflow group colliding."""
-    text = PUBLISHER.replace(GROUP, "group: coverage-main").replace(
-        UPLOAD_JOB, UPLOAD_JOB + f"    concurrency: upload-{KEY}\n"
+    text = replaced(
+        replaced(PUBLISHER, GROUP, "group: coverage-main"),
+        UPLOAD_JOB,
+        UPLOAD_JOB + f"    concurrency: coverage-main-{KEY}\n",
     )
     found = concurrency_violations(load_workflow(text))
     assert found, found
 
 
-def test_a_push_only_publisher_may_use_a_constant_group() -> None:
-    """Without a dispatch every run is a push to main, so one group suffices."""
-    text = PUBLISHER.replace("  workflow_dispatch:\n", "").replace(
-        GROUP, "group: coverage-main"
-    )
-    found = concurrency_violations(load_workflow(text))
-    assert not found, found
-
-
 def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
     """A group on an unrelated job leaves concurrent uploads possible."""
     helper = (
-        f"  helper:\n    runs-on: x\n    concurrency: helper-{KEY}\n    steps: []\n"
+        f"  helper:\n    runs-on: x\n    concurrency: coverage-main-{KEY}\n"
+        "    steps: []\n"
     )
-    text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
-        UPLOAD_JOB, helper + UPLOAD_JOB
+    text = replaced(
+        replaced(PUBLISHER, WORKFLOW_GROUP, ""), UPLOAD_JOB, helper + UPLOAD_JOB
     )
     found = concurrency_violations(load_workflow(text))
     assert found, found
@@ -184,8 +119,10 @@ def test_a_group_on_another_job_does_not_cover_the_upload() -> None:
 
 def test_a_group_on_the_upload_job_is_accepted() -> None:
     """The upload job's own group governs the upload as well as a workflow one."""
-    text = PUBLISHER.replace(WORKFLOW_GROUP, "").replace(
-        UPLOAD_JOB, UPLOAD_JOB + f"    concurrency: coverage-main-{KEY}\n"
+    text = replaced(
+        replaced(PUBLISHER, WORKFLOW_GROUP, ""),
+        UPLOAD_JOB,
+        UPLOAD_JOB + f"    concurrency: coverage-main-{KEY}\n",
     )
     found = concurrency_violations(load_workflow(text))
     assert not found, found
@@ -275,10 +212,15 @@ def test_a_push_lane_cannot_write_a_second_baseline(guard: str) -> None:
 def test_a_push_lane_cannot_write_a_baseline_through_a_callee() -> None:
     """A push workflow's local callee runs on the push, so its coverage counts."""
     caller = "on: push\njobs:\n  call:\n    uses: ./.github/workflows/cov.yml\n"
-    callee = PULL_REQUEST_LANE.replace(
-        "on:\n  push:\n    branches: [main]\n  pull_request:\n",
-        "on:\n  workflow_call:\n",
-    ).replace("        if: github.event_name == 'pull_request'\n", "")
+    callee = replaced(
+        replaced(
+            PULL_REQUEST_LANE,
+            "on:\n  push:\n    branches: [main]\n  pull_request:\n",
+            "on:\n  workflow_call:\n",
+        ),
+        "        if: github.event_name == 'pull_request'\n",
+        "",
+    )
     documents = _documents(tree(extra={"caller.yml": caller, "cov.yml": callee}))
     found = second_writer_violations(documents, "coverage-main.yml", REPOSITORY)
     assert (
@@ -297,13 +239,79 @@ def test_a_push_lane_cannot_write_a_baseline_through_a_callee() -> None:
         ),
         ("coverage-main.yml", "          with-ratchet: 'true'\n", ""),
         ("ci.yml", "generate-coverage@" + "a" * 40, "generate-coverage@" + "b" * 40),
+        # An interpreter pinned on one side only measures on another Python.
+        (
+            "ci.yml",
+            "        if: github.event_name == 'pull_request'\n",
+            (
+                "        if: github.event_name == 'pull_request'\n"
+                "        env:\n          UV_PYTHON: '3.14'\n"
+            ),
+        ),
+        (
+            "coverage-main.yml",
+            "      - name: Generate coverage\n",
+            (
+                "      - name: Generate coverage\n"
+                "        env:\n          UV_PYTHON: '3.14'\n"
+            ),
+        ),
     ],
 )
 def test_the_publisher_measures_what_each_lane_measures(
     name: str, old: str, new: str
 ) -> None:
-    """A selection or pin differing from the publisher's is refused."""
+    """A selection, pin or step env differing from the publisher's is refused."""
     documents = _documents(mutate(name, old, new))
     closure = {"ci.yml": documents["ci.yml"]}
     found = publisher_lane_violations(documents["coverage-main.yml"], closure)
+    assert found, found
+
+
+def test_a_substitution_that_changes_nothing_is_refused() -> None:
+    """Every fixture edit goes through a helper that refuses a no-op."""
+    with pytest.raises(ValueError, match="would change nothing"):
+        replaced(PUBLISHER, "absent text", "anything")
+    with pytest.raises(ValueError, match="would change nothing"):
+        replaced(PUBLISHER, "mode: upload", "mode: upload")
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        # A workflow-scope grant reaches every job that declares none.
+        ("permissions: {}\n", ""),
+        ("permissions: {}\n", "permissions: write-all\n"),
+        # The upload job needs its checkout and nothing else.
+        ("    permissions:\n      contents: read\n", ""),
+        ("      contents: read\n", "      contents: write\n"),
+        ("      contents: read\n", "      contents: read\n      id-token: write\n"),
+    ],
+)
+def test_the_publisher_grants_only_read_access(old: str, new: str) -> None:
+    """A wider or missing grant at either scope is refused."""
+    found = permission_violations(_publisher(mutate("coverage-main.yml", old, new)))
+    assert found, found
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (
+            "          path: coverage.xml\n",
+            "          path: lcov.info\n",
+        ),
+        (
+            "          format: cobertura\n          mode: upload\n",
+            "          format: lcov\n          mode: upload\n",
+        ),
+        (
+            "          format: cobertura\n          mode: upload\n",
+            "          mode: upload\n",
+        ),
+    ],
+)
+def test_the_uploader_reads_the_generated_report(old: str, new: str) -> None:
+    """An uploader naming another path or format than the generator's is refused."""
+    found = report_violations(_publisher(mutate("coverage-main.yml", old, new)))
     assert found, found
