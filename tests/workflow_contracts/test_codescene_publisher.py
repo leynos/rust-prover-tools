@@ -239,12 +239,29 @@ def test_a_push_lane_cannot_write_a_baseline_through_a_callee() -> None:
         ),
         ("coverage-main.yml", "          with-ratchet: 'true'\n", ""),
         ("ci.yml", "generate-coverage@" + "a" * 40, "generate-coverage@" + "b" * 40),
+        # An interpreter pinned on one side only measures on another Python.
+        (
+            "ci.yml",
+            "        if: github.event_name == 'pull_request'\n",
+            (
+                "        if: github.event_name == 'pull_request'\n"
+                "        env:\n          UV_PYTHON: '3.14'\n"
+            ),
+        ),
+        (
+            "coverage-main.yml",
+            "      - name: Generate coverage\n",
+            (
+                "      - name: Generate coverage\n"
+                "        env:\n          UV_PYTHON: '3.14'\n"
+            ),
+        ),
     ],
 )
 def test_the_publisher_measures_what_each_lane_measures(
     name: str, old: str, new: str
 ) -> None:
-    """A selection or pin differing from the publisher's is refused."""
+    """A selection, pin or step env differing from the publisher's is refused."""
     documents = _documents(mutate(name, old, new))
     closure = {"ci.yml": documents["ci.yml"]}
     found = publisher_lane_violations(documents["coverage-main.yml"], closure)

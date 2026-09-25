@@ -122,7 +122,10 @@ def publisher_lane_violations(
 
     The publisher's generator, its uploader and every pull-request
     generator share one commit pin, so the lanes measure with the same
-    action that writes their baseline.
+    action that writes their baseline. Every generator also carries the
+    publisher's step `env`: the action builds its coverage environment
+    with whatever interpreter uv finds, so an interpreter pinned on one
+    side only measures the same selection on a different Python.
     """
     generators = action_steps(publisher, COVERAGE_ACTION)
     if len(generators) != 1:
@@ -139,6 +142,8 @@ def publisher_lane_violations(
             pins.add(pin_of(step))
             if _selection(step) != _selection(baseline):
                 found.append(f"{name}: coverage selection differs from the publisher's")
+            if step.get("env") != baseline.get("env"):
+                found.append(f"{name}: coverage step env differs from the publisher's")
     if len(pins) != 1 or not all(PINNED_COMMIT.match(pin) for pin in pins):
         found.append(
             f"{COVERAGE_ACTION} and {UPLOAD_ACTION} must share one commit pin: "
