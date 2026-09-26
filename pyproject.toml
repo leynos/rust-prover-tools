@@ -185,9 +185,6 @@ max-positional-arguments = 4
 [tool.pylint."messages control"]
 disable = [
     "all",
-    # Managed PyPy can lag the requested CPython syntax; keep the PyPy-backed
-    # pass useful on files it can parse.
-    "syntax-error",
 ]
 enable = [
     # Logging format safety.

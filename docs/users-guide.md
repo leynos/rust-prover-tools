@@ -136,9 +136,10 @@ these targets in order:
 - `typecheck`: run `ty check`.
 - `test`: run pytest and, when Rust is enabled, Rust tests.
 
-The `lint-python` target runs Ruff followed by Pylint via a PyPy-backed runner.
-The Pylint runner is installed through `uv tool run` from the pinned
-`pylint-pypy-shim` repository.
+The `lint-python` target runs Ruff followed by a pinned Pylint
+(`PYLINT_VERSION`) on uv-managed PyPy 3.12 (`PYLINT_PYTHON`), installed through
+`uv tool run`. `syntax-error` stays enabled, so a module that PyPy cannot parse
+fails the lint rather than being skipped.
 
 When the Rust extension is enabled, `lint-rust` runs:
 
