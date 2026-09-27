@@ -30,14 +30,25 @@ extend-exclude = [
 [default]
 locale = "en-gb"
 extend-ignore-re = [
-    "(?m)^          artifact-name: wheels-\\$\\{\\{ matrix\\.os \\}\\}-\\$\\{\\{ matrix\\.arch \\}\\}$",
-    "(?m)^          artifact-name: wheels-pure$",
-    "(?m)^        name: \\$\\{\\{ inputs\\.artifact-name \\}\\}$",
-    "(?m)^  artifact-name:$",
     "(?s)```.*?```",
-    "GitHub\\s+Flavored\\s+Markdown",
+    "--[a-zA-Z0-9-]*color[a-zA-Z0-9*-]*",
+    "Azure\\s+Architecture\\s+Center\\s*\\|\\s*Microsoft\\s+Learn\\b",
+    "GitHub\\s+Flavored\\s+Markdown\\b(?:\\s\\(GFM\\))?",
+    "HashiCorp",
+    "How to organise your Rust tests",
+    "\\b(?:background|theme)_color\\b",
+    "\\b(?:carousel|dropdown|footer|indicator|items|navbar|toast)-center\\b",
+    "\\bAppFactory<Ser\\b",
+    "\\bartifact-(?:name|server-path)\\b",
+    "\\bcolor-(?:mix|contrast)\\b",
+    "\\bflavor = ",
     "\\brust-analyzer\\b",
+    "\\{COLOR\\}",
+    "\\{color\\}",
     "`[^`\\n]+`",
+    "`color`",
+    "`var\\.iamge_id` instead of `var\\.image_id`",
+    "currentColor",
 ]
 
 [default.extend-words]
@@ -764,6 +775,10 @@ extend-ignore-re = [
 "equalizers" = "equalizers"
 "equalizes" = "equalizes"
 "equalizing" = "equalizing"
+"exercize" = "exercise"
+"exercized" = "exercised"
+"exercizes" = "exercises"
+"exercizing" = "exercising"
 "externalisable" = "externalizable"
 "externalisably" = "externalizably"
 "externalisation" = "externalization"
@@ -1707,6 +1722,7 @@ extend-ignore-re = [
 "organizers" = "organizers"
 "organizes" = "organizes"
 "organizing" = "organizing"
+"otherwize" = "otherwise"
 "oxendict" = "oxendict"
 "oxidisable" = "oxidizable"
 "oxidisably" = "oxidizably"
@@ -1888,6 +1904,26 @@ extend-ignore-re = [
 "pluralizers" = "pluralizers"
 "pluralizes" = "pluralizes"
 "pluralizing" = "pluralizing"
+"polymerisable" = "polymerizable"
+"polymerisably" = "polymerizably"
+"polymerisation" = "polymerization"
+"polymerisations" = "polymerizations"
+"polymerise" = "polymerize"
+"polymerised" = "polymerized"
+"polymeriser" = "polymerizer"
+"polymerisers" = "polymerizers"
+"polymerises" = "polymerizes"
+"polymerising" = "polymerizing"
+"polymerizable" = "polymerizable"
+"polymerizably" = "polymerizably"
+"polymerization" = "polymerization"
+"polymerizations" = "polymerizations"
+"polymerize" = "polymerize"
+"polymerized" = "polymerized"
+"polymerizer" = "polymerizer"
+"polymerizers" = "polymerizers"
+"polymerizes" = "polymerizes"
+"polymerizing" = "polymerizing"
 "popularisable" = "popularizable"
 "popularisably" = "popularizably"
 "popularisation" = "popularization"
@@ -2008,6 +2044,10 @@ extend-ignore-re = [
 "quantizers" = "quantizers"
 "quantizes" = "quantizes"
 "quantizing" = "quantizing"
+"raize" = "raise"
+"raized" = "raised"
+"raizes" = "raises"
+"raizing" = "raising"
 "randomisable" = "randomizable"
 "randomisably" = "randomizably"
 "randomisation" = "randomization"
