@@ -315,3 +315,63 @@ def test_the_uploader_reads_the_generated_report(old: str, new: str) -> None:
     """An uploader naming another path or format than the generator's is refused."""
     found = report_violations(_publisher(mutate("coverage-main.yml", old, new)))
     assert found, found
+
+
+@pytest.mark.parametrize(
+    ("name", "old", "new"),
+    [
+        # A job-level value reaches the action as surely as a step's own.
+        (
+            "ci.yml",
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    env:\n      UV_PYTHON: '3.14'\n",
+        ),
+        # So does a workflow-level one.
+        ("ci.yml", "jobs:\n", "env:\n  UV_PYTHON: '3.14'\njobs:\n"),
+    ],
+)
+def test_an_inherited_env_difference_is_refused(name: str, old: str, new: str) -> None:
+    """A lane whose job or workflow env differs from the publisher's is refused."""
+    documents = _documents(mutate(name, old, new))
+    closure = {"ci.yml": documents["ci.yml"]}
+    found = publisher_lane_violations(documents["coverage-main.yml"], closure)
+    assert found, found
+
+
+def test_a_step_env_overrides_an_inherited_one() -> None:
+    """A step value equal to the publisher's wins over a differing job value."""
+    texts = mutate(
+        "ci.yml",
+        "    runs-on: ubuntu-latest\n",
+        "    runs-on: ubuntu-latest\n    env:\n      UV_PYTHON: '3.14'\n",
+    )
+    texts |= {
+        "ci.yml": texts["ci.yml"].replace(
+            "        if: github.event_name == 'pull_request'\n",
+            "        if: github.event_name == 'pull_request'\n"
+            "        env:\n          UV_PYTHON: '3.13'\n",
+        ),
+        "coverage-main.yml": texts["coverage-main.yml"].replace(
+            "      - name: Generate coverage\n",
+            "      - name: Generate coverage\n"
+            "        env:\n          UV_PYTHON: '3.13'\n",
+        ),
+    }
+    documents = _documents(texts)
+    closure = {"ci.yml": documents["ci.yml"]}
+    found = publisher_lane_violations(documents["coverage-main.yml"], closure)
+    assert not found, found
+
+
+def test_a_generator_without_an_output_path_is_refused() -> None:
+    """Both paths absent compare equal, so the omission is refused outright."""
+    texts = mutate("coverage-main.yml", "          output-path: coverage.xml\n", "")
+    texts |= {
+        "coverage-main.yml": texts["coverage-main.yml"].replace(
+            "          path: coverage.xml\n", ""
+        )
+    }
+    found = report_violations(_publisher(texts))
+    assert found == ["the publisher's generate-coverage must name its output-path"], (
+        found
+    )

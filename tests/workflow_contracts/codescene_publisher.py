@@ -123,8 +123,9 @@ def _ref_keyed_violations(governing: list[object]) -> list[str]:
     later successful run supersedes it. A constant group would let a
     branch dispatch replace a pending push to main, and a group keyed on
     the event too would let a dispatch and a push on main run at once.
-    The accepted cost: a dispatch replacing a pending push leaves the
-    ratchet baseline one commit behind until the next push.
+    The accepted cost: a dispatch saves no baseline, so one that
+    replaces pending pushes leaves the ratchet baseline behind until the
+    next push.
     """
     return [
         f"concurrency group {_group(value)!r} is not {PUBLISHER_GROUP!r}"

@@ -29,9 +29,9 @@ permissions: {}
 # run supersedes them, which is accepted. A manual re-run of an older run
 # keeps its SHA and its run id: it republishes that commit's coverage to
 # CodeScene, but its baseline cache key already exists, so it replaces no
-# baseline unless the original run saved none. A dispatch on main that
-# replaces a pending push leaves the ratchet baseline a commit behind until
-# the next push, which is accepted.
+# baseline unless the original run saved none. A dispatch saves no
+# baseline, so one that replaces pending pushes leaves the ratchet
+# baseline behind until the next push, which is accepted.
 concurrency:
   group: coverage-main-${{ github.ref }}
   cancel-in-progress: false

@@ -27,16 +27,16 @@ a branch dispatch cannot displace a pending push to `main`. GitHub does not
 promise to start runs in trigger order, so this is not a guarantee of commit
 order: an older run can still publish last, and its coverage and baseline then
 stand until a later successful run supersedes them; that is accepted. A
-dispatch on `main` that replaces a pending push leaves the ratchet baseline one
-commit behind until the next push, because the baseline is saved only on a
-push. A manual re-run of an older run keeps its SHA and its run id: it
-republishes that commit's coverage to CodeScene, but its baseline cache key
-already exists, so it replaces no baseline unless the original run saved none.
-Merges made by the Dependabot automerge workflow's `GITHUB_TOKEN` fire no push,
-so they are published only by a manual dispatch; this is a known exception
-until the shared automerge workflow dispatches the publisher itself. With no
-`CS_ACCESS_TOKEN` repository secret the upload skips; the ratchet baseline is
-still written.
+dispatch on `main` saves no baseline, because the baseline is saved only on a
+push, so one that replaces pending pushes leaves the ratchet baseline behind
+until the next push. A manual re-run of an older run keeps its SHA and its run
+id: it republishes that commit's coverage to CodeScene, but its baseline cache
+key already exists, so it replaces no baseline unless the original run saved
+none. Merges made by the Dependabot automerge workflow's `GITHUB_TOKEN` fire no
+push, so they are published only by a manual dispatch; this is a known
+exception until the shared automerge workflow dispatches the publisher itself.
+With no `CS_ACCESS_TOKEN` repository secret the upload skips; the ratchet
+baseline is still written.
 
 The retired `installer-checksum` input, the `CODESCENE_CLI_SHA256` variable,
 and the `get-codescene-sha.yml` refresher are gone. The shared uploader selects
