@@ -186,13 +186,14 @@ Planning validation passed `make fmt`, `make markdownlint` (including spelling
 and three spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
-changed; Python, Makefile and workflow implementation gates are deferred until
-those surfaces change. The associated draft PR records the commit, branch,
-upstream tracking and delivery link. Add red/green, smoke and conformance
-evidence only after approval. Only mark implementation roadmap entries complete
-when their actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1
-open for operational work. Before status `COMPLETE`, reconcile discoveries with
-the approved design, requirements and every evidence link; do not conceal an
+changed during initial planning. The later requested rebase validation ran the
+full gate stack, as recorded below; implementation gates still apply to each
+future milestone. The associated draft PR records the commit, branch, upstream
+tracking and delivery link. Add red/green, smoke and conformance evidence only
+after approval. Only mark implementation roadmap entries complete when their
+actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
+operational work. Before status `COMPLETE`, reconcile discoveries with the
+approved design, requirements and every evidence link; do not conceal an
 unresolved deviation.
 
 ## Context and orientation
@@ -203,13 +204,29 @@ with a clean worktree. No associated issue was supplied and no prior PR for the
 original branch was found. No existing roadmap item number is reused;
 `docs/roadmap.md` introduces 1.1.1–1.1.5 and separate 1.2.1.
 
-The local `origin/main` has advanced to
-`07cc5214284841a8113464aff16873a14e1eae74` beyond this preserved starting
-branch. Its release action version changed, but publish-before-upload ordering
-remains. Before implementation, integrate the approved main baseline and reuse
-its newer `tests/workflow_contracts/` parsing helpers where applicable.
-Preserve intervening coverage-publication and mutation-testing contracts;
-recheck guides and gates after integration.
+The planning branch was rebased without conflicts onto `origin/main` at
+`07cc5214284841a8113464aff16873a14e1eae74` on 2026-09-27. Only the original
+planning commit was replayed; `git range-diff` confirmed an unchanged patch.
+Main's dependency manifest and lockfile were retained without conflict or
+regeneration. Its release action version changed, but publish-before-upload
+ordering remains.
+
+Reuse main's `tests/workflow_contracts/loading.py::load_workflow` and
+`reading.py` trigger/job readers for snapshot workflow tests. They reject
+duplicate keys, handle both YAML spellings of `on`, and refuse malformed or
+empty subjects rather than allowing vacuous success. Follow the existing pure
+rule, repository assertion and mutated-refusal-fixture pattern. Preserve
+coverage publication exclusively through main's CodeScene environment and
+existing mutation-testing contracts; snapshot workflows must not acquire those
+credentials or become another coverage publisher.
+
+Main now runs `mdtablefix --check --git --include-untracked` inside
+`make check-fmt`; `make fmt` applies the same tracked/unignored-file selection.
+Use those targets rather than the former `mdformat-all` helper. Pylint runs
+through uv-managed PyPy 3.12 with pinned Pylint 4.0.9 and `syntax-error`
+enabled, not the retired shim. Keep new Python syntax parseable by that gate
+without suppressions; the package runtime remains Python 3.14. Recheck current
+pins through the Makefile when implementation starts.
 
 `rust_prover_tools/cli.py` constructs the Cyclopts apps. `install` and
 `check_version` build `KaniInstallOptions` and `KaniCheckOptions` and map
@@ -953,3 +970,16 @@ review. Clarifies trusted-main sequencing for EP-M5, shared feasibility build
 budget, upstream setup re-extraction and newer main-branch integration. The
 compiler floor is supported by upstream build logs but remains unproven by the
 required repository-owned harness. Implementation approval remains pending.
+
+2026-09-27: rebase integration preserves main's dependency and release changes
+and records reuse of strict workflow readers, coverage trust boundaries,
+tracked Markdown checks and the managed PyPy lint tier. This remains a
+planning-only branch; rebase authorization does not approve implementation.
+
+Rebase validation on 2026-09-27 passed `make check-fmt`, `make test` (227 tests
+and one snapshot passed; 24 pytest-bdd deprecation warnings), `make typecheck`,
+`make lint` (Ruff clean and Pylint 10/10), `make markdownlint` (including three
+spelling-helper tests), `make nixie` and `git diff --check`. No source,
+dependency, workflow or gate configuration was changed to obtain these results.
+The follow-up documentation commit records main's integration requirements; PR
+131 remains a draft awaiting explicit implementation approval.
