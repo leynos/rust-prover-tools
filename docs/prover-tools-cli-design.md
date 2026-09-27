@@ -466,3 +466,12 @@ normalization. The default cargo-llvm-cov wrapper mode therefore remains
 unqualified for nested Kani. Selecting ambient mode also changes coverage
 selection semantics, so consumers must validate their measured report scope and
 ratchet rather than assuming numeric equivalence.
+
+## Proposed Kani snapshot distribution
+
+The [Kani snapshot distribution design](kani-snapshot-distribution-design.md)
+proposes opt-in immutable binary snapshots, independent of the existing
+semantic-version release path. Its commands and pipeline await explicit plan
+approval and implementation; they are not part of the current CLI. The
+[execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
+implementation acceptance from a separately authorized first publication.
