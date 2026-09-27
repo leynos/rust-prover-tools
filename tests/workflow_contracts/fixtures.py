@@ -13,15 +13,22 @@ import typing as typ
 from .codescene_publisher import (
     concurrency_violations,
     find_publisher,
+    permission_violations,
     retired_checksum_violations,
-    token_scope_violations,
     trigger_violations,
     upload_step_violations,
 )
 from .codescene_reach import pull_request_closure, pull_request_violations
+from .codescene_token import (
+    check_step_violations,
+    token_scope_violations,
+    upload_guard_violations,
+    upload_token_violations,
+)
 from .coverage_lanes import (
     publisher_lane_violations,
     pull_request_lane_violations,
+    report_violations,
     second_writer_violations,
 )
 from .loading import Document, load_workflow
@@ -46,10 +53,20 @@ PULL_REQUEST_LANE: typ.Final[str] = textwrap.dedent(f"""\
             uses: {SHARED}/generate-coverage@{PIN}
             with:
               output-path: coverage.xml
+              format: cobertura
               artefact-name-suffix: example
               with-ratchet: 'true'
               publish-artefact: 'false'
     """)
+
+#: The availability check's one command, and the upload guard reading it.
+CHECK_RUN: typ.Final[str] = (
+    'echo "available=${{ secrets.CS_ACCESS_TOKEN != \'\' }}" >> "$GITHUB_OUTPUT"'
+)
+UPLOAD_IF: typ.Final[str] = (
+    "steps.codescene-token.outputs.available == 'true'"
+    " && github.ref == 'refs/heads/main'"
+)
 
 PUBLISHER: typ.Final[str] = textwrap.dedent(f"""\
     name: Coverage (main)
@@ -57,29 +74,35 @@ PUBLISHER: typ.Final[str] = textwrap.dedent(f"""\
       push:
         branches: [main]
       workflow_dispatch:
+    permissions: {{}}
     concurrency:
-      group: coverage-main-${{{{ github.ref }}}}-${{{{ github.event_name }}}}
+      group: coverage-main-${{{{ github.ref }}}}
       cancel-in-progress: false
     jobs:
       coverage-upload:
         runs-on: ubuntu-latest
+        permissions:
+          contents: read
         steps:
           - uses: actions/checkout@v4
           - name: Generate coverage
             uses: {SHARED}/generate-coverage@{PIN}
             with:
               output-path: coverage.xml
+              format: cobertura
               artefact-name-suffix: example
               with-ratchet: 'true'
+          - name: Check for the CodeScene token
+            id: codescene-token
+            run: {CHECK_RUN}
           - name: Upload coverage data to CodeScene
-            env:
-              CS_ACCESS_TOKEN: ${{{{ secrets.CS_ACCESS_TOKEN }}}}
-            if: env.CS_ACCESS_TOKEN != '' && github.ref == 'refs/heads/main'
+            if: {UPLOAD_IF}
             uses: {SHARED}/upload-codescene-coverage@{PIN}
             with:
               path: coverage.xml
+              format: cobertura
               mode: upload
-              access-token: ${{{{ env.CS_ACCESS_TOKEN }}}}
+              access-token: ${{{{ secrets.CS_ACCESS_TOKEN }}}}
     """)
 
 TREE: typ.Final[dict[str, str]] = {
@@ -99,6 +122,23 @@ def tree(*, extra: dict[str, str] | None = None, **replaced: str) -> dict[str, s
     return texts | (extra or {})
 
 
+def replaced(text: str, old: str, new: str) -> str:
+    """Return a text with one substitution applied, refusing a no-op.
+
+    Raises
+    ------
+    ValueError
+        If the text to replace is absent, since a mutation that changes
+        nothing would pass for a reason that proves nothing.
+
+    """
+    result = text.replace(old, new)
+    if result == text:
+        message = f"replacing {old!r} with {new!r} would change nothing"
+        raise ValueError(message)
+    return result
+
+
 def mutate(name: str, old: str, new: str) -> dict[str, str]:
     """Return the compliant tree with one exact substitution in one file.
 
@@ -109,11 +149,7 @@ def mutate(name: str, old: str, new: str) -> dict[str, str]:
         nothing would pass for a reason that proves nothing.
 
     """
-    text = TREE[name]
-    if old not in text:
-        message = f"{old!r} is not in {name}; the mutation would change nothing"
-        raise ValueError(message)
-    return tree() | {name: text.replace(old, new)}
+    return tree() | {name: replaced(TREE[name], old, new)}
 
 
 def violations(texts: dict[str, str]) -> list[str]:
@@ -136,6 +172,11 @@ def violations(texts: dict[str, str]) -> list[str]:
         *trigger_violations(publisher),
         *concurrency_violations(publisher),
         *upload_step_violations(publisher),
+        *permission_violations(publisher),
+        *report_violations(publisher),
+        *check_step_violations(publisher),
+        *upload_guard_violations(publisher),
+        *upload_token_violations(publisher),
         *token_scope_violations(publisher),
         *retired_checksum_violations(documents),
         *pull_request_lane_violations(closure),

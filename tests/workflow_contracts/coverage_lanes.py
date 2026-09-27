@@ -21,7 +21,7 @@ from .codescene_publisher import (
 )
 from .codescene_reach import reachable
 from .expressions import ConditionError, missing_terms
-from .reading import triggers
+from .reading import jobs, steps, triggers
 
 if typ.TYPE_CHECKING:
     from .loading import Document
@@ -41,6 +41,27 @@ def _inputs(step: dict[str, object]) -> dict[str, object]:
     """Return a step's `with` mapping, empty when it declares none."""
     inputs = step.get("with") or {}
     return typ.cast("dict[str, object]", inputs) if isinstance(inputs, dict) else {}
+
+
+def _mapping(value: object) -> dict[str, object]:
+    """Return a mapping value, empty when it is absent or not a mapping."""
+    return typ.cast("dict[str, object]", value) if isinstance(value, dict) else {}
+
+
+def generator_envs(document: Document) -> list[dict[str, object]]:
+    """Return each generator's effective `env`: workflow, then job, then step.
+
+    A job- or workflow-level value reaches the action as surely as a step's
+    own, and a step value overrides the job's, which overrides the
+    workflow's, so only the merged mapping says what the action sees.
+    """
+    workflow = _mapping(document.get("env"))
+    return [
+        {**workflow, **_mapping(job.get("env")), **_mapping(step.get("env"))}
+        for job in jobs(document).values()
+        for step in steps(job)
+        if str(step.get("uses", "")).split("@", 1)[0] == COVERAGE_ACTION
+    ]
 
 
 def _is_true(value: object) -> bool:
@@ -122,12 +143,16 @@ def publisher_lane_violations(
 
     The publisher's generator, its uploader and every pull-request
     generator share one commit pin, so the lanes measure with the same
-    action that writes their baseline.
+    action that writes their baseline. Every generator also sees the
+    publisher's effective `env`: the action builds its coverage environment
+    with whatever interpreter uv finds, so an interpreter pinned on one
+    side only measures the same selection on a different Python.
     """
     generators = action_steps(publisher, COVERAGE_ACTION)
     if len(generators) != 1:
         return [f"the publisher must generate coverage once; found {len(generators)}"]
     baseline = generators[0]
+    baseline_env = generator_envs(publisher)[0]
     found = (
         []
         if _is_true(_inputs(baseline).get("with-ratchet"))
@@ -135,13 +160,39 @@ def publisher_lane_violations(
     )
     pins = {pin_of(baseline), pin_of(upload_step(publisher))}
     for name, document in sorted(closure.items()):
-        for step in action_steps(document, COVERAGE_ACTION):
+        envs = generator_envs(document)
+        for step, env in zip(
+            action_steps(document, COVERAGE_ACTION), envs, strict=True
+        ):
             pins.add(pin_of(step))
             if _selection(step) != _selection(baseline):
                 found.append(f"{name}: coverage selection differs from the publisher's")
+            if env != baseline_env:
+                found.append(f"{name}: coverage step env differs from the publisher's")
     if len(pins) != 1 or not all(PINNED_COMMIT.match(pin) for pin in pins):
         found.append(
             f"{COVERAGE_ACTION} and {UPLOAD_ACTION} must share one commit pin: "
             f"{sorted(pins)}"
         )
     return found
+
+
+def report_violations(document: Document) -> list[str]:
+    """Require the uploader to read the report the generator writes.
+
+    An uploader naming another path or format finds no report, or the
+    wrong one, and CodeScene keeps showing older coverage while every
+    other rule passes.
+    """
+    generators = action_steps(document, COVERAGE_ACTION)
+    if len(generators) != 1:
+        return [f"the publisher must generate coverage once; found {len(generators)}"]
+    written, read = _inputs(generators[0]), _inputs(upload_step(document))
+    if not written.get("output-path"):
+        return ["the publisher's generate-coverage must name its output-path"]
+    return [
+        f"the uploader's {reads!r} is {read.get(reads)!r}, "
+        f"but the generator's {writes!r} is {written.get(writes)!r}"
+        for writes, reads in (("output-path", "path"), ("format", "format"))
+        if read.get(reads) != written.get(writes)
+    ]
