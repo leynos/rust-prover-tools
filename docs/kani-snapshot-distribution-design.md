@@ -347,6 +347,12 @@ artefacts by exact same-run IDs, never by an arbitrary name in another run. Do
 not unpack payload archives in the privileged job or import Python modules from
 artefact directories.
 
+Reuse the strict loader and trigger/job readers in `tests/workflow_contracts/`
+for new workflow contracts; reject duplicate keys and malformed or empty
+subjects. Follow main's pure-rule and refusal-fixture pattern. Preserve its
+CodeScene environment and main-only coverage publisher; snapshot jobs neither
+receive those credentials nor publish coverage.
+
 Use full 40-hex Action/reusable-workflow pins; contract tests assert paths and
 pin shape rather than today's values. Proposed runner is the existing hosted
 Ubuntu x86-64 class, with an explicit image version selected during
