@@ -452,6 +452,7 @@ dependencies = [
 dev = [
     { name = "cmd-mox" },
     { name = "hypothesis" },
+    { name = "packaging" },
     { name = "pathspec" },
     { name = "pyright" },
     { name = "pytest" },
@@ -474,6 +475,7 @@ requires-dist = [
 dev = [
     { name = "cmd-mox" },
     { name = "hypothesis" },
+    { name = "packaging", specifier = ">=26.2,<27" },
     { name = "pathspec", specifier = "==1.1.1" },
     { name = "pyright" },
     { name = "pytest" },
