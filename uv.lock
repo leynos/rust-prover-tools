@@ -475,7 +475,7 @@ requires-dist = [
 dev = [
     { name = "cmd-mox" },
     { name = "hypothesis" },
-    { name = "packaging", specifier = ">=26.2" },
+    { name = "packaging", specifier = ">=26.2,<27" },
     { name = "pathspec", specifier = "==1.1.1" },
     { name = "pyright" },
     { name = "pytest" },
