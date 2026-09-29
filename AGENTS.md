@@ -138,18 +138,7 @@ When implementing changes, adhere to the following testing procedures:
 
 ## Markdown Guidance
 
-- Validate Markdown files using `make markdownlint`. This target also enforces
-  en-GB-oxendict spelling with pinned `typos`.
-- The exact-phrase check scans tracked UTF-8 text so prohibited forms in source
-  comments and tests are enforced alongside the Markdown Typos scan.
-- The spelling configuration `typos.toml` is generated. Edit
-  `typos.local.toml` for narrow repository terminology, then run
-  `make spelling-config-write`; never edit generated entries by hand. Reserve
-  `make spelling-config` for drift validation. The focused shared builder
-  refreshes its untracked dictionary cache when the authoritative copy is newer.
-- Quoted APIs and identifiers retain upstream spelling. Put them in backticks
-  or fenced code blocks, which the spelling gate ignores, rather than adding
-  word-level exceptions.
+- Validate Markdown files using `make markdownlint`.
 - Run `make fmt` after any documentation changes to format all Markdown
   files and fix table markup.
 - Validate Mermaid diagrams in Markdown files by running `make nixie`.
@@ -159,6 +148,22 @@ When implementing changes, adhere to the following testing procedures:
 - Use dashes (`-`) for list bullets.
 - Use GitHub-flavoured Markdown footnotes (`[^1]`) for references and
   footnotes.
+
+<!-- typos-config-builder:agents-md:start -->
+
+## Spelling
+
+- `make spelling` runs the pinned `typos-config-builder gate`, which
+  regenerates `typos.toml` from the shared en-GB-oxendict dictionary and
+  `typos.local.toml`, then checks spelling and the shared phrase corrections.
+- `typos.toml` is generated: never edit it by hand. Put narrow
+  repository-specific exceptions in `typos.local.toml`, as exact or full-line
+  patterns rather than bare accepted words.
+- When `make spelling` changes `typos.toml`, commit the regenerated file. If
+  the change is unrelated to your work, commit it in a separate base pull
+  request and stack your branch on it, so each review diff stays focused.
+
+<!-- typos-config-builder:agents-md:end -->
 
 ## Additional tooling
 
