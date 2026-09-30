@@ -1,1 +1,2 @@
 repository = "leynos/rust-prover-tools"
+environment = true
