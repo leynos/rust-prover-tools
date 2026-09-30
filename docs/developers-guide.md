@@ -42,25 +42,22 @@ The retired `installer-checksum` input, the `CODESCENE_CLI_SHA256` variable,
 and the `get-codescene-sha.yml` refresher are gone. The shared uploader selects
 and verifies the `cs-coverage` archive from its own manifest.
 
-`tests/workflow_contracts/` holds this shape. `loading.py` parses workflows
-through a loader that refuses duplicate keys, and `reading.py` reads the `on:`
-triggers in scalar, sequence, and mapping form under either key.
-`codescene_reach.py` follows local reusable-workflow calls (`./` and `$/`) from
-every workflow a pull request can start (its own events, reviews, comments, the
-merge queue, `workflow_run` chains, and pushes not confined to `main` or to
-tags) and refuses any key or value in that closure naming the CodeScene host,
+`make test-workflow-contracts` holds this shape by running
+`cv005-contracts check`, the shared contract library in `leynos/shared-actions`
+(`packages/cv005-contracts`), from a full commit named by `CV005_CONTRACTS_REF`
+in the Makefile, and CI runs it as its own step. A fix to the rules is
+therefore a pin bump. The target needs `uv`, which fetches the Python 3.13 the
+library runs under. The repository's one parameter is its `repository` name in
+`.github/cv005.toml`. The library reads every workflow a pull request can start
+(its own events, reviews, comments, the merge queue, `workflow_run` chains, and
+pushes not confined to `main` or to tags), following local reusable-workflow
+calls, and refuses any key or value in that closure naming the CodeScene host,
 the credential, the client, or the uploader, and any read of the whole
-`secrets` context or of a computed secret name. `codescene_publisher.py`,
-`codescene_token.py`, and `coverage_lanes.py` hold the publisher and the lanes
-to the rules above. Each rule returns its findings as text, so the rule tests
-beside them can drive it over a constructed tree; every refusal case changes
-one thing in the compliant tree in `fixtures.py`. Keep a new rule to that
-pattern: a pure reading, a repository assertion, and a refusal case that fails
-when the rule's clause is deleted. `test_bounded_properties.py` checks the pure
-readings exhaustively over small domains instead of sampling: the closure
-against Warshall reachability for every call graph over three workflows, the
-condition reader over every conjunction of up to three terms, and the document
-walk with a key or value planted at every depth up to three.
+`secrets` context or of a computed secret name. It holds the publisher and the
+lanes to the rules above, and it reads workflows strictly, so a duplicate key
+is refused rather than silently resolved. Its own suite proves each rule
+refuses the shape it exists to refuse, so this repository keeps no copy of the
+readers or the refusal cases.
 
 Both coverage lanes set up Python 3.14 with `actions/setup-python`, inside the
 project's `requires-python` (`>=3.14`). generate-coverage chooses its
