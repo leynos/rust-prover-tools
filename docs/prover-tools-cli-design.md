@@ -116,3 +116,12 @@ install directories across processes must serialize access externally.
 Default tests must remain deterministic. Real network downloads, real prover
 installations, and long-running proof suites belong in opt-in integration jobs,
 not the default `make test` gate.
+
+## Proposed Kani snapshot distribution
+
+The [Kani snapshot distribution design](kani-snapshot-distribution-design.md)
+proposes opt-in immutable binary snapshots, independent of the existing
+semantic-version release path. Its commands and pipeline await explicit plan
+approval and implementation; they are not part of the current CLI. The
+[execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
+implementation acceptance from a separately authorized first publication.
