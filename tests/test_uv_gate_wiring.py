@@ -48,12 +48,14 @@ PREPARE_TARGETS: tuple[str, ...] = ("prepare",)
 ALLOWED_UV_LINES: tuple[str, ...] = (
     "$(error UV=$(UV) is not an executable file)",
     "$(error UV=$(UV) must be named uv)",
+    "$(error UV=$(UV) must be uv or a path to an executable file named uv)",
     '@command -v $(UV) >/dev/null 2>&1 || { printf "Error: uv is required, but \'%s\' was not found or is not executable\\n" "$(UV)" >&2; exit 1; }',  # ruff: ignore[line-too-long]
     'TYPOS_CONFIG_BUILDER = $(UV) tool run --python 3.14 --from "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" typos-config-builder',  # ruff: ignore[line-too-long]
     "UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' \"$$HOME\")",
     "export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)",
+    "ifeq ($(findstring /,$(UV)),)",
     "ifeq ($(shell test -f '$(UV)' -a -x '$(UV)' && printf y),)",
-    "ifneq ($(findstring /,$(UV)),)",
+    "ifneq ($(UV),uv)",
     "ifneq ($(notdir $(UV)),uv)",
 )
 MAKE = shutil.which("make")
@@ -354,11 +356,13 @@ def test_a_selected_uv_leads_the_exported_path(tmp_path: Path) -> None:
 
 
 @NEEDS_MAKE
-@pytest.mark.parametrize("kind", ["absent", "not-executable", "misnamed"])
+@pytest.mark.parametrize("kind", ["absent", "not-executable", "misnamed", "slashless"])
 def test_an_unusable_selected_uv_is_refused(tmp_path: Path, kind: str) -> None:
     """A UV that is absent, not executable or not named uv must not be used."""
     chosen = tmp_path / ("uv-0.11" if kind == "misnamed" else "uv")
-    if kind != "absent":
+    if kind == "slashless":
+        chosen = Path("uv-custom")
+    elif kind != "absent":
         chosen.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         chosen.chmod(0o755 if kind == "misnamed" else 0o644)
     probe = ".PHONY: __uv_path\n__uv_path:\n\t@true"
