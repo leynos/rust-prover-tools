@@ -19,6 +19,15 @@ UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' "$$HOME")
 # The helper finds uv on PATH, so a caller's UV=/path/to/uv is honoured by putting
 # that uv's directory first on PATH for every recipe.
 export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)
+# A UV given on the command line or in the environment must exist: the helper would
+# otherwise fall back to whichever uv is found next on PATH.
+ifneq ($(filter command line environment,$(origin UV)),)
+ifneq ($(findstring /,$(UV)),)
+ifeq ($(wildcard $(UV)),)
+$(error UV=$(UV) does not exist)
+endif
+endif
+endif
 USER_CARGO := $(HOME)/.cargo/bin/cargo
 USER_WHITAKER := $(HOME)/.local/bin/whitaker
 USER_BIN_PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(HOME)/.bun/bin
@@ -64,7 +73,7 @@ define ensure_uv
 	}
 endef
 
-.venv: pyproject.toml
+.venv: pyproject.toml prepare
 	$(call ensure_uv)
 
 build: .venv prepare ## Build virtual-env and install deps

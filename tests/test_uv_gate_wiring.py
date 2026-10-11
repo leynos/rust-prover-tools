@@ -10,6 +10,7 @@ the helper) instead of pattern-matching recipe text.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -44,10 +45,13 @@ PREPARE_TARGETS: tuple[str, ...] = ("prepare",)
 # Every Makefile line that mentions uv without going through the helper. A new
 # mention fails the test until it is reviewed and added here.
 ALLOWED_UV_LINES: tuple[str, ...] = (
+    "$(error UV=$(UV) does not exist)",
     '@command -v $(UV) >/dev/null 2>&1 || { printf "Error: uv is required, but \'%s\' was not found or is not executable\\n" "$(UV)" >&2; exit 1; }',  # ruff: ignore[line-too-long]
     'TYPOS_CONFIG_BUILDER = $(UV) tool run --python 3.14 --from "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" typos-config-builder',  # ruff: ignore[line-too-long]
     "UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' \"$$HOME\")",
     "export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)",
+    "ifeq ($(wildcard $(UV)),)",
+    "ifneq ($(findstring /,$(UV)),)",
 )
 MAKE = shutil.which("make")
 MARKER = "UV-GATE-MARKER"
@@ -71,38 +75,58 @@ def uv_mentions(makefile: str) -> list[str]:
     return [" ".join(line.split()) for line in lines if UV_WORD.search(line)]
 
 
+def is_prefix(word: str) -> bool:
+    """Say whether ``word`` only prefixes the command that follows it."""
+    bare = word.lstrip("@+-")
+    return not bare or bare in LEADING_WORDS or bool(re.fullmatch(r"\w+=\S*", word))
+
+
+def skip_xargs(words: list[str]) -> list[str]:
+    """Drop a leading ``xargs`` and its flags, leaving the command it runs."""
+    if words[:1] != ["xargs"]:
+        return words
+    rest = words[1:]
+    while rest and rest[0].startswith("-"):
+        flag = rest.pop(0)
+        if flag in XARGS_VALUED and rest:
+            rest.pop(0)
+    return rest
+
+
+def command_words(segment: str) -> list[str]:
+    """Return the words of one shell segment from its command word onwards."""
+    words = segment.replace("(", " ").replace("{", " ").split()
+    while words and is_prefix(words[0]):
+        words = words[1:]
+    return skip_xargs(words)
+
+
 def helper_calls(printed: str) -> list[str]:
     """Return the commands in make's printed recipes that run the marker."""
-    calls = []
-    for line in printed.splitlines():
-        for segment in SEGMENT_SPLIT.split(COMMENT.sub("", line)):
-            words = segment.replace("(", " ").replace("{", " ").split()
-            while words and (
-                words[0].lstrip("@+-") in LEADING_WORDS
-                or re.fullmatch(r"\w+=\S*", words[0])
-                or not words[0].lstrip("@+-")
-            ):
-                words = words[1:]
-            if words[:1] == ["xargs"]:
-                words = words[1:]
-                while words and words[0].startswith("-"):
-                    flag = words.pop(0)
-                    if flag in XARGS_VALUED and words:
-                        words.pop(0)
-            if words and words[0].lstrip("@+-") == MARKER:
-                calls.append(" ".join(words).lstrip("@+-"))
-    return calls
+    segments = (
+        segment
+        for line in printed.splitlines()
+        for segment in SEGMENT_SPLIT.split(COMMENT.sub("", line))
+    )
+    commands = (command_words(segment) for segment in segments)
+    return [
+        " ".join(words).lstrip("@+-")
+        for words in commands
+        if words and words[0].lstrip("@+-") == MARKER
+    ]
+
+
+def tool_word(call: str) -> str:
+    """Return the first word after `--` in a helper run or tool call, if any."""
+    subcommand = call.split()[1]
+    _, separator, rest = call.partition(" -- ")
+    words = rest.split()
+    return words[0] if subcommand in {"run", "tool"} and separator and words else ""
 
 
 def tools_run(calls: list[str]) -> set[str]:
-    """Return the first word after `--` in each helper run or tool call."""
-    return {
-        call.split(" -- ", 1)[1].split()[0]
-        for call in calls
-        if call.split()[1] in {"run", "tool"}
-        and " -- " in call
-        and call.split(" -- ", 1)[1].strip()
-    }
+    """Return the tools the helper runs in ``calls``."""
+    return {word for word in map(tool_word, calls) if word}
 
 
 def database_prerequisites() -> dict[str, set[str]]:
@@ -132,9 +156,11 @@ def make(
     *arguments: str, ok: tuple[int, ...] = (0,)
 ) -> subprocess.CompletedProcess[str]:
     """Run GNU make in the repository root; fail on an unexpected exit status."""
+    environment = {k: v for k, v in os.environ.items() if k != "UV_GATE"}
     done = subprocess.run(
         [MAKE or "make", "--no-print-directory", "-f", "Makefile", *arguments],
         cwd=ROOT,
+        env=environment,
         capture_output=True,
         text=True,
         check=False,
@@ -263,6 +289,7 @@ def test_a_gate_runs_its_tools_prepared_and_separated(
         f"make {target} must run {tools} through the helper, ran {tools_run(calls)}"
     )
     if runs_project:
+        assert "run" in subcommands, f"make {target} no longer runs the project"
         first_run = subcommands.index("run")
         assert prepare in calls[:first_run], (
             f"make {target} must prepare before it runs the project: {calls}"
@@ -307,11 +334,25 @@ def test_the_default_goal_is_unchanged() -> None:
 
 
 @NEEDS_MAKE
-def test_a_selected_uv_leads_the_exported_path() -> None:
+@NEEDS_MAKE
+def test_a_selected_uv_leads_the_exported_path(tmp_path: Path) -> None:
     """`make UV=/dir/uv` hands recipes a PATH that starts with that directory."""
+    fake = tmp_path / "bin" / "uv"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
     probe = ".PHONY: __uv_path\n__uv_path:\n\t@printf '%s' \"$$PATH\""
-    done = make("UV=/opt/selected-uv/uv", f"--eval={probe}", "__uv_path")
+    done = make(f"UV={fake}", f"--eval={probe}", "__uv_path")
 
-    assert done.stdout.startswith("/opt/selected-uv:"), (
+    assert done.stdout.startswith(f"{fake.parent}:"), (
         f"recipes must see the selected uv first on PATH, got {done.stdout!r}"
     )
+
+
+@NEEDS_MAKE
+def test_a_missing_selected_uv_is_refused(tmp_path: Path) -> None:
+    """A UV that does not exist must not fall back to another uv on PATH."""
+    probe = ".PHONY: __uv_path\n__uv_path:\n\t@true"
+    done = make(f"UV={tmp_path}/absent/uv", f"--eval={probe}", "__uv_path", ok=(2,))
+
+    assert "does not exist" in done.stderr, done.stderr
