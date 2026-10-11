@@ -253,3 +253,22 @@ workflow file is absent (mutmut copies the sources into a sandbox that omits
   and
 - the triggers keep the daily schedule and a plain `workflow_dispatch` with
   no legacy branch input.
+
+## Running uv through the helper
+
+Every `uv` call in the Makefile goes through `scripts/uv_gate.py`, a copy of
+the helper in
+[shared-actions](https://github.com/leynos/shared-actions/tree/main/uv_gate),
+with one exception: the spelling baseline requires typos-config-builder at a
+release tag to be called directly, so that call does not use the helper. It
+cleans the environment, uses the global uv cache, runs offline first, and goes
+online at most once, only when uv proves a cache entry, a managed Python or a
+Git source is missing. The copy is vendored byte for byte and is never edited
+in place: the concordat `uv-gate-baseline` rule audits its digest, so the
+repository's file-length and scripting-stack conventions do not apply to it,
+and Ruff excludes it. `make prepare` installs the locked environment, and every
+gate that runs the project depends on it. A caller's `UV=/path/to/uv` is
+honoured by putting that uv's directory on `PATH`, so the executable must be
+named `uv`. A Git-sourced tool that is not cached yet needs uv 0.11.28 or
+newer; with an older uv, running the tool once with `uvx` warms the cache.
+`uv.lock` changes only through a manual `uv lock`; the gates never change it.
