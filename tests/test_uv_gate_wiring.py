@@ -19,7 +19,8 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
+MAKEFILE_PATH = ROOT / "Makefile"
+MAKEFILE = MAKEFILE_PATH.read_text(encoding="utf-8") if MAKEFILE_PATH.exists() else ""
 # The reviewed helper release (uv_gate 0.2.1). Update the digest when moving to a
 # newer release, never to accept an edited copy.
 HELPER_DIGEST = "fe7671d8663ec89ce1076ebb857847802e46c8d6607ab1e012daa443e335e66e"
@@ -45,17 +46,20 @@ PREPARE_TARGETS: tuple[str, ...] = ("prepare",)
 # Every Makefile line that mentions uv without going through the helper. A new
 # mention fails the test until it is reviewed and added here.
 ALLOWED_UV_LINES: tuple[str, ...] = (
-    "$(error UV=$(UV) does not exist)",
+    "$(error UV=$(UV) is not an executable file)",
+    "$(error UV=$(UV) must be named uv)",
     '@command -v $(UV) >/dev/null 2>&1 || { printf "Error: uv is required, but \'%s\' was not found or is not executable\\n" "$(UV)" >&2; exit 1; }',  # ruff: ignore[line-too-long]
     'TYPOS_CONFIG_BUILDER = $(UV) tool run --python 3.14 --from "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" typos-config-builder',  # ruff: ignore[line-too-long]
     "UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' \"$$HOME\")",
     "export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)",
-    "ifeq ($(wildcard $(UV)),)",
+    "ifeq ($(shell test -f '$(UV)' -a -x '$(UV)' && printf y),)",
     "ifneq ($(findstring /,$(UV)),)",
+    "ifneq ($(notdir $(UV)),uv)",
 )
 MAKE = shutil.which("make")
 MARKER = "UV-GATE-MARKER"
 NEEDS_MAKE = pytest.mark.skipif(MAKE is None, reason="make is not installed")
+pytestmark = pytest.mark.skipif(not MAKEFILE, reason="no Makefile in this workspace")
 UV_WORD = re.compile(r"(?<![A-Za-z0-9_-])uvx?(?![A-Za-z0-9_-])|\$[({]UV[)}]")
 COMMENT = re.compile(r"(?<!\\)(?:^|\s)#.*$")
 SEGMENT_SPLIT = re.compile(r"&&|\|\||[;|]")
@@ -350,9 +354,14 @@ def test_a_selected_uv_leads_the_exported_path(tmp_path: Path) -> None:
 
 
 @NEEDS_MAKE
-def test_a_missing_selected_uv_is_refused(tmp_path: Path) -> None:
-    """A UV that does not exist must not fall back to another uv on PATH."""
+@pytest.mark.parametrize("kind", ["absent", "not-executable", "misnamed"])
+def test_an_unusable_selected_uv_is_refused(tmp_path: Path, kind: str) -> None:
+    """A UV that is absent, not executable or not named uv must not be used."""
+    chosen = tmp_path / ("uv-0.11" if kind == "misnamed" else "uv")
+    if kind != "absent":
+        chosen.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        chosen.chmod(0o755 if kind == "misnamed" else 0o644)
     probe = ".PHONY: __uv_path\n__uv_path:\n\t@true"
-    done = make(f"UV={tmp_path}/absent/uv", f"--eval={probe}", "__uv_path", ok=(2,))
+    done = make(f"UV={chosen}", f"--eval={probe}", "__uv_path", ok=(2,))
 
-    assert "does not exist" in done.stderr, done.stderr
+    assert "UV=" in done.stderr, done.stderr

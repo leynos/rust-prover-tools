@@ -19,12 +19,15 @@ UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' "$$HOME")
 # The helper finds uv on PATH, so a caller's UV=/path/to/uv is honoured by putting
 # that uv's directory first on PATH for every recipe.
 export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)
-# A UV given on the command line or in the environment must exist: the helper would
-# otherwise fall back to whichever uv is found next on PATH.
+# A UV given on the command line or in the environment must be an executable file named
+# uv: the helper finds uv on PATH by that name and would otherwise use another one.
 ifneq ($(filter command line environment,$(origin UV)),)
 ifneq ($(findstring /,$(UV)),)
-ifeq ($(wildcard $(UV)),)
-$(error UV=$(UV) does not exist)
+ifeq ($(shell test -f '$(UV)' -a -x '$(UV)' && printf y),)
+$(error UV=$(UV) is not an executable file)
+endif
+ifneq ($(notdir $(UV)),uv)
+$(error UV=$(UV) must be named uv)
 endif
 endif
 endif
