@@ -66,8 +66,8 @@ def test_pylint_tier_runs_the_pinned_release_on_managed_python() -> None:
     )
     command = _makefile_variable("PYLINT")
     for fragment in (
-        "tool run --managed-python --python $(PYLINT_PYTHON)",
-        "--from 'pylint==$(PYLINT_VERSION)' pylint",
+        "$(UV_GATE) tool --managed-python --python $(PYLINT_PYTHON)",
+        "--from 'pylint==$(PYLINT_VERSION)' -- pylint",
     ):
         assert fragment in command, f"PYLINT must contain {fragment!r}: {command}"
 
