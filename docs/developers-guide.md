@@ -272,3 +272,51 @@ honoured by putting that uv's directory on `PATH`, so the executable must be
 named `uv`. A Git-sourced tool that is not cached yet needs uv 0.11.28 or
 newer; with an older uv, running the tool once with `uvx` warms the cache.
 `uv.lock` changes only through a manual `uv lock`; the gates never change it.
+
+## Legacy Kani release boundary
+
+`kani_release` owns explicit legacy execution, `kani_release_flags` normalizes
+injected flags, and `kani_release_config` validates discovered Cargo inputs.
+`kani_exec_cli` binds the public command without expanding the existing CLI
+module. Keep installation and snapshot lifecycle code separate.
+
+Cuprum applies an environment overlay. The child therefore receives equivalent
+normalized plain and encoded flags; neither key is claimed to be removed. Kani
+0.67 reads plain flags and synthesizes its own encoded target flags. Its target
+uses the verifier backend; host compilation uses the compiler from the selected
+release's matching toolchain. The child keeps Kani proxy hygiene: inherited
+`toolchains/*/lib` entries are removed because they can load an incompatible
+rustc driver; other inherited paths remain, after the selected matching runtime
+directory. Preserving those competing driver directories would invalidate the
+measured ABI boundary. The selected installation's `toolchain/bin` precedes
+inherited `PATH`, so the driver's `cargo locate-project` uses Cargo from the
+selected release's matching toolchain rather than an unrelated rustup shim. The
+supported toolchain path may be a symlink into rustup's shared toolchain store.
+Direct driver execution bypasses the release proxy's setup path. Kani 0.67
+explicitly assigns its selected compiler for actual compilation; inherited
+`RUSTC` does not override that assignment. Compiler identity queries retain
+each configured wrapper in its original order; genuinely absent wrappers
+require no substitute. Present empty or malformed tool selections fail before
+compiler execution, as do unproved Cargo build/environment fallbacks. The
+caller must keep the selected SDK assets and proof workspace manifests/Cargo
+configuration unchanged throughout the invocation and nested Cargo children.
+Cargo discovery requires non-empty `CARGO_HOME` or `HOME`; the implementation
+uses its injected mapping and never falls back to ambient `Path.home()`.
+Validation does not provide an atomic filesystem snapshot or protect against
+concurrent replacement of SDK binaries/libraries or configuration. Build
+scripts and procedural macros execute normally with caller permissions; this
+route is not a sandbox for untrusted projects and makes no cryptographic
+provenance claim. Never replace this boundary with global loader changes or
+removal of an existing admission wrapper.
+
+`kani_release` emits one bounded INFO event per completed stage when the host
+application enables logging. It installs no logger or handler and adds no CLI
+logging option. Events contain the stage, release, duration, status class and
+error category; they omit paths, arguments, environment, output and exception
+text.
+
+Qualification must include a genuine dependency/build-script fixture after
+shared gates. Controlled child tests establish invocation and failure
+contracts, not full verifier compatibility. Linux x86_64 Kani 0.67.0 is the
+bounded initial qualification target; an upstream release that drops wrappers
+is unsupported.

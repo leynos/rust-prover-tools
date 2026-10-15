@@ -1,7 +1,8 @@
 """Command-line interface for Rust prover tooling.
 
 This module exposes the `prover-tools` console script. Commands are grouped by
-tool noun: `kani` handles Kani installation and version checks, while `verus`
+tool noun: `kani` handles installation, version checks and explicit qualified
+release execution, while `verus`
 handles Verus installation and proof execution.
 
 Examples
@@ -39,6 +40,7 @@ from rust_prover_tools.kani import (
     check_kani_version,
     install_kani,
 )
+from rust_prover_tools.kani_exec_cli import kani_exec
 from rust_prover_tools.verus import (
     DEFAULT_TARGET,
     VERUS_BASE_URL,
@@ -365,6 +367,7 @@ def run(
     return 0
 
 
+kani_app.command(kani_exec, name="exec")
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")
 

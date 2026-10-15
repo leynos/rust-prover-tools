@@ -12,8 +12,9 @@ prover-tools verus install
 prover-tools verus run --proof-file verus/edge_harvest_proofs.rs
 ```
 
-All commands accept `--repo-root PATH`. When omitted, the current working
-directory is used.
+`kani install`, `kani check-version`, `verus install`, and `verus run` accept
+`--repo-root PATH`, which defaults to the current working directory.
+`kani exec` requires `--installation` and `--cwd`.
 
 ### Kani commands
 
@@ -46,6 +47,56 @@ For example:
 ```bash
 KANI='cargo kani --format=json' prover-tools kani check-version
 ```
+
+### Explicit legacy Kani execution
+
+`prover-tools kani exec` executes an already installed Kani 0.67.0 release on
+Linux x86_64. It does not install tooling or download assets. The selected
+installation must provide its matching `nightly-2025-11-21` toolchain through
+`toolchain/` and the release-matched LLVM runtime. The toolchain path may be a
+symlink into rustup's shared toolchain store. Cargo and rustc come from the
+selected release's matching toolchain; the command does not require Cargo to be
+physically stored inside the Kani archive. Compiler wrappers are optional: an
+environment without them queries the selected compilers directly. When
+configured, `RUSTC_WRAPPER` and `RUSTC_WORKSPACE_WRAPPER` retain their exact
+values in compiler identity queries and execution, as does `RUSTDOC`. Empty or
+malformed tool selections and unproved Cargo wrapper fallbacks fail before a
+compiler starts. Cargo permits empty wrapper values to disable wrapping; this
+command intentionally refuses that selection rather than remove a configured
+admission boundary. Absent `RUSTDOC` is supported. Other releases and platforms
+require separate qualification.
+
+```bash
+prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
+  --cwd "$PWD" --extra-arg=list
+```
+
+Pass each verifier argument literally through a repeated `--extra-arg` option,
+using `--extra-arg=--harness=name` for arguments beginning with a dash. The
+command preserves the proof working directory, output streams, and child exit
+status (a signal becomes shell status `128 + signal`). It retains admission
+wrappers and adds the matching runtime path only to the child environment.
+
+Effective encoded compiler flags take precedence over plain flags, including an
+explicitly empty encoded value. Development frontend threads, Cranelift, and the
+`mold` linker selection are removed; compatible flags remain in order and
+warnings are denied. Whitespace-containing encoded atoms cannot pass through
+Kani 0.67's literal-space reader and are rejected. Independent profile
+backends, unresolved Cargo configuration includes, conflicting wrappers,
+protected routing environment overrides, and unchecked `--config`, `--profile`,
+or `--manifest-path` arguments fail before execution. Run from the proof
+package instead of selecting another manifest through an argument.
+
+This legacy command is separate from the snapshot programme proposed in
+[PR #131](https://github.com/leynos/rust-prover-tools/pull/131).
+
+Cargo configuration discovery requires a non-empty `CARGO_HOME` or `HOME`. The
+command uses the invoking environment and fails rather than guessing a home
+directory when both are absent. Treat the selected SDK and proof workspace as
+trusted; keep their files and Cargo configuration unchanged until this command
+and its nested Cargo children finish. Cargo still runs build scripts and
+procedural macros with the caller's permissions, so this compatibility route is
+not a sandbox for untrusted projects.
 
 ### Verus commands
 
