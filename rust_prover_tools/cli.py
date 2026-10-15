@@ -39,6 +39,7 @@ from rust_prover_tools.kani import (
     check_kani_version,
     install_kani,
 )
+from rust_prover_tools.kani_exec_cli import kani_exec
 from rust_prover_tools.verus import (
     DEFAULT_TARGET,
     VERUS_BASE_URL,
@@ -365,6 +366,7 @@ def run(
     return 0
 
 
+kani_app.command(kani_exec, name="exec")
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")
 

@@ -116,3 +116,16 @@ install directories across processes must serialize access externally.
 Default tests must remain deterministic. Real network downloads, real prover
 installations, and long-running proof suites belong in opt-in integration jobs,
 not the default `make test` gate.
+
+## Explicit legacy release execution
+
+The separate `kani exec` verb executes a selected complete release without
+installing it, while leaving the proposed snapshot-only `kani run` programme in
+[PR #131](https://github.com/leynos/rust-prover-tools/pull/131)
+unchanged. The initial compatibility boundary is Linux Kani 0.67.0 and its
+exact bundled compiler metadata. Runtime lookup is child scoped; compiler
+identity queries and subsequent Cargo compilation retain every configured
+admission wrapper. Wrappers are optional when absent; the runtime does not
+create a substitute on hosted runners. Environment and Cargo configuration
+validation reject malformed selections and unproved backend or wrapper routes.
+No installed assets, global environment, or services change.

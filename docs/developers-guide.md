@@ -272,3 +272,33 @@ honoured by putting that uv's directory on `PATH`, so the executable must be
 named `uv`. A Git-sourced tool that is not cached yet needs uv 0.11.28 or
 newer; with an older uv, running the tool once with `uvx` warms the cache.
 `uv.lock` changes only through a manual `uv lock`; the gates never change it.
+
+## Legacy Kani release boundary
+
+`kani_release` owns explicit legacy execution, `kani_release_flags` normalizes
+injected flags, and `kani_release_config` validates discovered Cargo inputs.
+`kani_exec_cli` binds the public command without expanding the existing CLI
+module. Keep installation and snapshot lifecycle code separate.
+
+Cuprum applies an environment overlay. The child therefore receives equivalent
+normalized plain and encoded flags; neither key is claimed to be removed. Kani
+0.67 reads plain flags and synthesizes its own encoded target flags. Its target
+uses the verifier backend; host compilation uses its bundled compiler. The
+child keeps Kani proxy hygiene: inherited `toolchains/*/lib` entries are
+removed because they can load an incompatible rustc driver; other inherited
+paths remain, after the selected matching runtime directory. Preserving those
+competing driver directories would invalidate the measured ABI boundary. The
+selected installation `toolchain/bin` precedes inherited `PATH`, so the driver's
+`cargo locate-project` uses bundled Cargo rather than a rustup shim. Direct
+driver execution bypasses the release proxy's setup path. Kani 0.67 explicitly
+assigns its selected compiler for actual compilation; inherited `RUSTC` does
+not override that assignment. Compiler identity queries retain each configured
+wrapper in its original order; genuinely absent wrappers require no substitute.
+Present empty or malformed tool selections fail before compiler execution, as
+do unproved Cargo build/environment fallbacks. Never replace this boundary with
+global loader changes or removal of an existing admission wrapper.
+
+Qualification must include a genuine dependency/build-script fixture after
+shared gates. Controlled child tests establish invocation and failure
+contracts, not full verifier compatibility. Linux 0.67 is the bounded initial
+qualification target; an upstream release that drops wrappers is unsupported.
