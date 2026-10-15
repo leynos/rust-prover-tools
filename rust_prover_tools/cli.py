@@ -1,7 +1,8 @@
 """Command-line interface for Rust prover tooling.
 
 This module exposes the `prover-tools` console script. Commands are grouped by
-tool noun: `kani` handles Kani installation and version checks, while `verus`
+tool noun: `kani` handles installation, version checks and explicit qualified
+release execution, while `verus`
 handles Verus installation and proof execution.
 
 Examples

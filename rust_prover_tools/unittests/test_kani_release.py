@@ -31,8 +31,11 @@ def owned_config_discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.fixture
-def installed_release(tmp_path: Path) -> Path:
+def installed_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create an inert release tree with the exact qualified metadata."""
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_release.platform.machine", lambda: "x86_64"
+    )
     root = tmp_path / "kani-0.67.0"
     for directory in ("bin", "toolchain/bin", "toolchain/lib"):
         (root / directory).mkdir(parents=True)
@@ -153,7 +156,7 @@ def test_real_cuprum_child_retains_scope_and_nonzero_status(
     assert result.stderr == "child-stderr\n"
     assert "space ; $literal\n" in result.stdout
     assert "/test-admission\n/test-rustdoc\n" in result.stdout
-    assert str(tmp_path) in result.stdout
+    assert result.stdout.splitlines()[0] == str(tmp_path)
     assert os.environ == before
 
 
@@ -174,7 +177,8 @@ def test_identity_queries_use_admission_and_proof_failure_survives(
     )
     wrapper = tmp_path / "wrapper"
     wrapper.write_text(
-        f'#!/bin/sh\nprintf admitted > "{trace}"\nexec "$@"\n', encoding="utf-8"
+        f'#!/bin/sh\nprintf "%s\\n" "$1" >> "{trace}"\nexec "$@"\n',
+        encoding="utf-8",
     )
     wrapper.chmod(0o755)
     driver = installed_release / "bin/kani-driver"
@@ -195,7 +199,10 @@ def test_identity_queries_use_admission_and_proof_failure_survives(
         exec_kani(KaniExecOptions(installed_release, tmp_path, ("list",)), environment)
         == 23
     )
-    assert trace.read_text(encoding="utf-8") == "admitted"
+    assert trace.read_text(encoding="utf-8").splitlines() == [
+        str(compiler),
+        str(installed_release / "bin/kani-compiler"),
+    ]
 
 
 def test_public_cli_preserves_verifier_failure(

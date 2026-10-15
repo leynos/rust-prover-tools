@@ -1,4 +1,8 @@
-"""Pure flag normalization for Kani 0.67's literal-space input boundary."""
+"""Normalize inherited flags for Kani 0.67's literal-space input boundary.
+
+The release workflow removes only measured development acceleration settings
+and rejects ambiguous token encodings instead of weakening verification flags.
+"""
 
 from __future__ import annotations
 

@@ -19,3 +19,13 @@ def test_top_level_help_snapshot(
     app(["--help"], exit_on_error=False)
     captured = capsys.readouterr()
     assert captured.out == snapshot, "Top-level help output does not match snapshot"
+
+
+def test_kani_exec_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Explicit release execution exposes stable documented CLI options."""
+    app(["kani", "exec", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Kani exec help output does not match snapshot"

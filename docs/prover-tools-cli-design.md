@@ -9,9 +9,15 @@ command surface is intentionally small:
 ```plaintext
 prover-tools kani install
 prover-tools kani check-version
+prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
+  --cwd "$PWD" --extra-arg=list
 prover-tools verus install
 prover-tools verus run
 ```
+
+`kani exec` requires a selected, already installed release. Its supported
+platform, configuration, and trust constraints are documented in the
+[users' guide](users-guide.md#explicit-legacy-kani-execution).
 
 The implementation preserves the source scripts' externally observable
 behaviour while moving command construction, validation, and test doubles into
@@ -81,7 +87,8 @@ valid semantic-version acceptance and supported Verus toolchain output forms.
 
 The CLI is a package console script rather than a standalone file. This keeps
 imports, test coverage, type checking, and linting inside the normal Python
-package gates.
+package gates. The command inventory includes the additive `kani exec` route;
+it does not replace the existing install and version-check commands.
 
 The public interface is noun/verb based because it maps directly to the source
 scripts while leaving space for future prover tools.
@@ -122,10 +129,16 @@ not the default `make test` gate.
 The separate `kani exec` verb executes a selected complete release without
 installing it, while leaving the proposed snapshot-only `kani run` programme in
 [PR #131](https://github.com/leynos/rust-prover-tools/pull/131)
-unchanged. The initial compatibility boundary is Linux Kani 0.67.0 and its
-exact bundled compiler metadata. Runtime lookup is child scoped; compiler
+unchanged. The initial compatibility boundary is Linux x86_64 Kani 0.67.0 and
+its exact release compiler metadata. Runtime lookup is child scoped; compiler
 identity queries and subsequent Cargo compilation retain every configured
 admission wrapper. Wrappers are optional when absent; the runtime does not
 create a substitute on hosted runners. Environment and Cargo configuration
 validation reject malformed selections and unproved backend or wrapper routes.
-No installed assets, global environment, or services change.
+The caller must trust the selected SDK and proof workspace, and keep their
+files and Cargo configuration unchanged throughout the invocation, including
+nested Cargo processes. Validation does not snapshot or lock those inputs,
+authenticate SDK bytes, or make execution an untrusted-project sandbox. Cargo
+build scripts and procedural macros execute normally with the caller's
+permissions. The command itself does not install or copy assets or modify
+global environment or services.

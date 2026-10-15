@@ -1,7 +1,13 @@
-"""Fail-closed Cargo configuration checks for explicit legacy verification."""
+"""Validate Cargo inputs used by the explicit Kani release workflow.
+
+Configuration routing is checked separately from manifest profile policy so
+publication metadata cannot masquerade as Cargo configuration. Filesystem
+queries fail closed and report expected failures through ProverToolError.
+"""
 
 from __future__ import annotations
 
+import errno
 import tomllib
 import typing as typ
 from pathlib import Path
@@ -10,12 +16,36 @@ from rust_prover_tools.errors import ProverToolError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from os import stat_result
 
 _TOOL_ROUTES = (
     ("rustc-wrapper", "RUSTC_WRAPPER"),
     ("rustc-workspace-wrapper", "RUSTC_WORKSPACE_WRAPPER"),
     ("rustdoc", "RUSTDOC"),
 )
+
+
+def checked_stat(path: Path) -> stat_result | None:
+    """Treat only missing path components as absence, preserving other failures."""
+    try:
+        return path.stat()
+    except OSError as exc:
+        if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
+            return None
+        msg = f"Kani exec could not inspect filesystem input at {path}"
+        raise ProverToolError(msg) from exc
+    except (UnicodeError, ValueError) as exc:
+        msg = "Kani exec could not represent a filesystem input"
+        raise ProverToolError(msg) from exc
+
+
+def checked_resolve(path: Path) -> Path:
+    """Resolve an existing input without masking permission or symlink failures."""
+    try:
+        return path.resolve(strict=True)
+    except (OSError, UnicodeError, ValueError) as exc:
+        msg = f"Kani exec could not resolve filesystem input at {path}"
+        raise ProverToolError(msg) from exc
 
 
 def _has_selected_tool(environment: cabc.Mapping[str, str], variable: str) -> bool:
@@ -53,6 +83,8 @@ def _check_routing_overrides(
         "RUSTDOC",
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
     }
     protected.update("CARGO_BUILD_" + variable for _, variable in _TOOL_ROUTES)
     variables = document.get("env")
@@ -70,28 +102,50 @@ def _check_routing_overrides(
             raise ProverToolError(msg)
 
 
-def _check_document(document: object, environment: cabc.Mapping[str, str]) -> None:
-    """Reject configuration whose independent backend cannot be isolated."""
+def _check_backend(document: object) -> None:
+    """Reject independently selected backends within a Cargo control table."""
     if not isinstance(document, dict):
         return
-    _check_routing_overrides(document, environment)
     for key, value in document.items():
-        if key in {"codegen-backend", "include"}:
-            msg = (
-                "Kani exec cannot prove isolation of Cargo backend/include "
-                "configuration"
-            )
+        if key == "codegen-backend":
+            msg = "Kani exec cannot prove isolation of Cargo backend configuration"
             raise ProverToolError(msg)
         if isinstance(value, dict):
-            _check_document(value, environment)
+            _check_backend(value)
 
 
-def _check_file(path: Path, environment: cabc.Mapping[str, str]) -> None:
+def _check_document(
+    document: dict[str, object],
+    environment: cabc.Mapping[str, str],
+    *,
+    is_manifest: bool,
+) -> None:
+    """Keep manifest metadata distinct from Cargo's executable control tables."""
+    if is_manifest:
+        _check_backend(document.get("profile"))
+        return
+    if "include" in document:
+        msg = "Kani exec cannot prove isolation of Cargo include configuration"
+        raise ProverToolError(msg)
+    _check_routing_overrides(document, environment)
+    _check_backend(document)
+
+
+def _check_file(
+    path: Path,
+    environment: cabc.Mapping[str, str],
+    *,
+    is_manifest: bool = False,
+) -> None:
     """Validate one discovered file without resolving an absent file as safe."""
-    if not path.exists():
+    if checked_stat(path) is None:
         return
     try:
-        _check_document(tomllib.loads(path.read_text(encoding="utf-8")), environment)
+        _check_document(
+            tomllib.loads(path.read_text(encoding="utf-8")),
+            environment,
+            is_manifest=is_manifest,
+        )
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         msg = f"Kani exec could not validate Cargo configuration at {path}"
         raise ProverToolError(msg) from exc
@@ -102,7 +156,7 @@ def _check_config_directory(
 ) -> None:
     """Refuse ambiguous legacy/modern files before reading a Cargo directory."""
     paths = (directory / "config", directory / "config.toml")
-    if all(path.exists() for path in paths):
+    if all(checked_stat(path) is not None for path in paths):
         msg = "Kani exec refuses ambiguous config and config.toml files"
         raise ProverToolError(msg)
     for path in paths:
@@ -135,15 +189,17 @@ def check_verification_config(
     """
     _check_process_tool_selections(environment)
     home = environment.get("CARGO_HOME")
-    cargo_home = (
-        Path(home)
-        if home
-        else Path(environment.get("HOME", str(Path.home()))) / ".cargo"
-    )
+    if home:
+        cargo_home = Path(home)
+    elif environment.get("HOME"):
+        cargo_home = Path(environment["HOME"]) / ".cargo"
+    else:
+        msg = "Kani exec requires injected HOME or CARGO_HOME for Cargo discovery"
+        raise ProverToolError(msg)
     if not cargo_home.is_absolute():
         cargo_home = cwd / cargo_home
     directories = (cwd, *cwd.parents) if search_roots is None else search_roots
     for directory in directories:
         _check_config_directory(directory / ".cargo", environment)
-        _check_file(directory / "Cargo.toml", environment)
+        _check_file(directory / "Cargo.toml", environment, is_manifest=True)
     _check_config_directory(cargo_home, environment)

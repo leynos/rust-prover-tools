@@ -1,4 +1,8 @@
-"""Thin CLI adapter for explicit legacy Kani release execution."""
+"""Adapt public Kani execution options to the qualified release workflow.
+
+Literal path and verifier argument inputs become KaniExecOptions, while typed
+validation failures and child signals retain their documented CLI status.
+"""
 
 import os
 import sys

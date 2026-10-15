@@ -1,4 +1,23 @@
 # serializer version: 1
+# name: test_kani_exec_help_snapshot
+  '''
+  Usage: prover-tools kani exec --installation STR --cwd STR --extra-arg STR...
+  
+  Execute an already installed, qualified Kani 0.67 Linux release.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ *  --installation STR   Literal release-root path text, containing bin and   │
+  │                         toolchain directories. [env var: INPUT_INSTALLATION] │
+  │                         [required]                                           │
+  │ *  --cwd STR            Literal proof-directory path text; relative paths    │
+  │                         use the process cwd. [env var: INPUT_CWD] [required] │
+  │ *  --extra-arg STR...   Literal verifier arguments, provided with repeated   │
+  │      --empty-extra-arg  --extra-arg options. [env var: INPUT_EXTRA_ARG]      │
+  │                         [required]                                           │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
 # name: test_top_level_help_snapshot
   '''
   Usage: prover-tools COMMAND

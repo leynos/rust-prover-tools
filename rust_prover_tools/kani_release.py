@@ -2,22 +2,31 @@
 
 This route never downloads, installs, or changes the selected installation.
 Kani 0.67 on Linux is the sole qualification target; snapshot execution remains
-separate from this legacy boundary.
+separate from this legacy boundary. Cargo configuration and compiler flags are
+validated by the feature helpers before Cuprum runs the selected release.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import os
+import platform
+import stat
 import sys
+import time
 import typing as typ
+from functools import partial
 from pathlib import Path
 
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
-from rust_prover_tools.kani_release_config import check_verification_config
+from rust_prover_tools.kani_release_config import (
+    check_verification_config,
+    checked_resolve,
+    checked_stat,
+)
 from rust_prover_tools.kani_release_flags import verification_flags
-from rust_prover_tools.versions import parse_tool_version
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -25,6 +34,50 @@ if typ.TYPE_CHECKING:
 _RUSTC_IDENTITY = "rustc 1.93.0-nightly (53732d5e0 2025-11-20)"
 _TOOLCHAIN_IDENTITY = "nightly-2025-11-21-x86_64-unknown-linux-gnu"
 _RUSTUP_LIBRARY_SUFFIX_DEPTH = 3
+_LOGGER = logging.getLogger(__name__)
+
+
+def _status_class(status: int) -> str:
+    """Describe outcomes without including commands or captured user payload."""
+    if status == 0:
+        return "success"
+    return "signal" if status < 0 else "nonzero"
+
+
+def _observe_stage[T](
+    stage: str,
+    operation: cabc.Callable[[], T],
+    *,
+    status_of: cabc.Callable[[T], int] | None = None,
+) -> T:
+    """Emit one opt-in structured event for a boundary stage, without payloads."""
+    started = time.monotonic()
+    status, category = "failure", "unexpected"
+    try:
+        result = operation()
+    except CommandFailedError as exc:
+        status, category = _status_class(exc.exit_code), "command"
+        raise
+    except ProverToolError:
+        category = "validation"
+        raise
+    else:
+        status = _status_class(status_of(result) if status_of else 0)
+        category = "none" if status == "success" else "command"
+        return result
+    finally:
+        # INFO keeps the normal CLI output unchanged unless the application
+        # explicitly enables logging. Never attach exception text or traceback.
+        _LOGGER.info(
+            "Kani execution stage completed",
+            extra={
+                "stage": stage,
+                "release": "0.67.0",
+                "duration_seconds": time.monotonic() - started,
+                "status_class": status,
+                "error_category": category,
+            },
+        )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -36,11 +89,8 @@ class KaniExecOptions:
     arguments: tuple[str, ...]
 
 
-def _validate_installation(root: Path) -> None:
-    """Validate the measured ABI metadata and required runtime assets."""
-    if sys.platform != "linux":
-        msg = "Kani exec currently qualifies only the Linux 0.67.0 release"
-        raise ProverToolError(msg)
+def _check_release_metadata(root: Path) -> None:
+    """Require the declared compiler and toolchain to match the measured ABI."""
     try:
         identity = (root / "rustc-version").read_text(encoding="utf-8").strip()
         toolchain = (
@@ -55,6 +105,22 @@ def _validate_installation(root: Path) -> None:
             "0.67.0 installation"
         )
         raise ProverToolError(msg)
+
+
+def _is_executable(path: Path) -> bool:
+    """Distinguish missing/non-regular assets before checking execute access."""
+    metadata = checked_stat(path)
+    if metadata is None:
+        return False
+    return stat.S_ISREG(metadata.st_mode) and os.access(path, os.X_OK)
+
+
+def _validate_installation(root: Path) -> None:
+    """Validate the measured ABI metadata and required runtime assets."""
+    if sys.platform != "linux" or platform.machine() != "x86_64":
+        msg = "Kani exec currently qualifies only the Linux x86_64 0.67.0 release"
+        raise ProverToolError(msg)
+    _check_release_metadata(root)
     for relative in (
         "bin/kani-driver",
         "bin/kani-compiler",
@@ -62,15 +128,22 @@ def _validate_installation(root: Path) -> None:
         "toolchain/bin/cargo",
     ):
         path = root / relative
-        if not path.is_file() or not os.access(path, os.X_OK):
+        if not _is_executable(path):
             msg = f"Kani release executable is missing or not executable: {path}"
             raise ProverToolError(msg)
     driver = root / "bin/kani-driver"
-    if driver.resolve() != driver:
+    if checked_resolve(driver) != driver:
         msg = "Kani driver must reside in the selected installation bin directory"
         raise ProverToolError(msg)
+    toolchain = checked_resolve(root / "toolchain")
+    for executable in ("cargo", "rustc"):
+        resolved = checked_resolve(root / "toolchain/bin" / executable)
+        if resolved.parent != toolchain / "bin":
+            msg = "Kani executable must remain in the selected toolchain bin directory"
+            raise ProverToolError(msg)
     runtime = root / "toolchain/lib/libLLVM.so.21.1-rust-1.93.0-nightly"
-    if not runtime.is_file():
+    metadata = checked_stat(runtime)
+    if metadata is None or not stat.S_ISREG(metadata.st_mode):
         msg = "Kani release matching LLVM runtime is missing"
         raise ProverToolError(msg)
 
@@ -78,7 +151,7 @@ def _validate_installation(root: Path) -> None:
 def _validate_arguments(arguments: tuple[str, ...]) -> None:
     """Reject routes that could install or change the checked Cargo context."""
     forbidden = ("--config", "--profile", "--manifest-path")
-    has_forbidden_route = "setup" in arguments or any(
+    has_forbidden_route = arguments[:1] == ("setup",) or any(
         arg.split("=", 1)[0] in forbidden for arg in arguments
     )
     if not arguments or has_forbidden_route:
@@ -130,8 +203,12 @@ def prepare_kani_command(
     ProverToolError
         Installation, arguments, or configuration cannot be qualified safely.
     """
-    root = options.installation.resolve()
-    cwd = options.cwd.resolve()
+    root = checked_resolve(options.installation)
+    directory = checked_stat(options.cwd)
+    if directory is None or not stat.S_ISDIR(directory.st_mode):
+        msg = "Kani exec requires an existing proof working directory"
+        raise ProverToolError(msg)
+    cwd = checked_resolve(options.cwd)
     _validate_installation(root)
     _validate_arguments(options.arguments)
     check_verification_config(cwd, environment)
@@ -145,16 +222,17 @@ def prepare_kani_command(
     # carry equivalent sanitized flags; Kani 0.67 synthesizes encoded flags
     # from the plain spelling before launching its bundled Cargo.
     child["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(flags)
-    child["PATH"] = os.pathsep.join((
+    path_prefix = (
         str(root / "toolchain/bin"),
         str(root / "bin"),
         str(root / "pyroot/bin"),
-        child.get("PATH", ""),
-    ))
-    child["PYTHONPATH"] = os.pathsep.join((
-        str(root / "pyroot"),
-        child.get("PYTHONPATH", ""),
-    ))
+    )
+    for variable, prefix in (
+        ("PATH", path_prefix),
+        ("PYTHONPATH", (str(root / "pyroot"),)),
+    ):
+        inherited = child.get(variable)
+        child[variable] = os.pathsep.join((*prefix, inherited) if inherited else prefix)
     child["RUSTUP_TOOLCHAIN"] = _TOOLCHAIN_IDENTITY
     return CommandSpec(
         (str(root / "bin/kani-driver"), "kani", *options.arguments), cwd=cwd, env=child
@@ -171,6 +249,21 @@ def _checked_identity(spec: CommandSpec, argv: tuple[str, ...], expected: str) -
             "Kani selected binary identity does not match the qualified "
             "release metadata"
         )
+        raise ProverToolError(msg)
+
+
+def _checked_verifier(spec: CommandSpec) -> None:
+    """Accept only the qualified stable driver's complete version response."""
+    version = run_command(
+        CommandSpec((spec.argv[0], "kani", "--version"), cwd=spec.cwd, env=spec.env)
+    )
+    if version.exit_code != 0:
+        raise CommandFailedError(spec.argv[0], version.exit_code, version.stderr)
+    if (version.stdout + version.stderr).strip() not in {
+        "kani 0.67.0",
+        "cargo-kani 0.67.0",
+    }:
+        msg = "Kani selected verifier identity is outside the qualified 0.67.0 release"
         raise ProverToolError(msg)
 
 
@@ -196,26 +289,31 @@ def exec_kani(options: KaniExecOptions, environment: cabc.Mapping[str, str]) -> 
     CommandFailedError
         An identity query failed before proof execution.
     """
-    spec = prepare_kani_command(options, environment)
-    root = options.installation.resolve()
+    spec = _observe_stage(
+        "validation", partial(prepare_kani_command, options, environment)
+    )
+    root = checked_resolve(options.installation)
     chain = tuple(
         environment[variable]
         for variable in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")
         if variable in environment
     )
-    for relative in ("toolchain/bin/rustc", "bin/kani-compiler"):
-        _checked_identity(
-            spec, (*chain, str(root / relative), "--version"), _RUSTC_IDENTITY
-        )
-    version = run_command(
-        CommandSpec((spec.argv[0], "kani", "--version"), cwd=spec.cwd, env=spec.env)
-    )
-    if version.exit_code != 0:
-        raise CommandFailedError(spec.argv[0], version.exit_code, version.stderr)
-    if (
-        parse_tool_version(version.stdout + version.stderr, tool_name="Kani")
-        != "0.67.0"
+    for stage, relative in (
+        ("rustc_identity", "toolchain/bin/rustc"),
+        ("compiler_identity", "bin/kani-compiler"),
     ):
-        msg = "Kani selected verifier identity is outside the qualified 0.67.0 release"
-        raise ProverToolError(msg)
-    return run_command(dc.replace(spec, echo=True)).exit_code
+        _observe_stage(
+            stage,
+            partial(
+                _checked_identity,
+                spec,
+                (*chain, str(root / relative), "--version"),
+                _RUSTC_IDENTITY,
+            ),
+        )
+    _observe_stage("verifier_identity", partial(_checked_verifier, spec))
+    return _observe_stage(
+        "proof",
+        partial(run_command, dc.replace(spec, echo=True)),
+        status_of=lambda result: result.exit_code,
+    ).exit_code

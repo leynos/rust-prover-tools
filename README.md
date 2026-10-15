@@ -62,6 +62,16 @@ prover-tools kani install
 prover-tools kani check-version
 ```
 
+To execute an already installed, supported Kani release on Linux x86_64:
+
+```bash
+prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
+  --cwd "$PWD" --extra-arg=list
+```
+
+The [users' guide](docs/users-guide.md#explicit-legacy-kani-execution)
+describes the compatibility and trust constraints for this command.
+
 Verus reads two pins: `tools/verus/VERSION`, and `tools/verus/SHA256SUMS`,
 which records the digest of the matching release archive beside its file name in
 `sha256sum` format. Verus publishes archives without checksums, so after
@@ -96,9 +106,11 @@ ______________________________________________________________________
 
 ## Features
 
-- A small noun/verb surface: `kani install`, `kani check-version`,
+- A small noun/verb surface: `kani install`, `kani check-version`, `kani exec`,
   `verus install`, and `verus run`.
-- `--repo-root PATH` on every command, defaulting to the current directory.
+- `--repo-root PATH` on commands that resolve repository pins, defaulting to
+  the current directory. `kani exec` instead requires explicit `--installation`
+  and `--cwd` paths.
 - `INPUT_`-prefixed environment variables for GitHub Actions-style wrappers.
 - Legacy `KANI`, `VERUS_TARGET`, `VERUS_INSTALL_DIR`, `VERUS_BIN`, and
   `VERUS_PROOF_FILE` variables honoured for compatibility.

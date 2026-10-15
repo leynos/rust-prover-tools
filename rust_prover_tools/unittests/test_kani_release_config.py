@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import typing as typ
 
 import pytest
@@ -40,6 +39,37 @@ def test_unresolved_include_is_rejected(tmp_path: Path) -> None:
         check_verification_config(
             tmp_path,
             {"CARGO_HOME": str(tmp_path / "cargo-home")},
+            search_roots=(tmp_path,),
+        )
+
+
+def test_package_include_is_not_a_cargo_configuration_include(tmp_path: Path) -> None:
+    """A publication file list does not select another compiler configuration."""
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname="proof"\nversion="0.1.0"\ninclude=["src/**"]\n',
+        encoding="utf-8",
+    )
+    check_verification_config(
+        tmp_path,
+        {"CARGO_HOME": str(tmp_path / "cargo-home")},
+        search_roots=(tmp_path,),
+    )
+
+
+@pytest.mark.parametrize("variable", ["LD_LIBRARY_PATH", "LD_PRELOAD"])
+def test_forced_loader_configuration_cannot_replace_selected_runtime(
+    tmp_path: Path, variable: str
+) -> None:
+    """Cargo-launched compilers cannot receive a different forced loader route."""
+    config = tmp_path / ".cargo"
+    config.mkdir()
+    (config / "config.toml").write_text(
+        f'[env]\n{variable}={{value="/other",force=true}}\n', encoding="utf-8"
+    )
+    with pytest.raises(ProverToolError, match="Cargo env overrides"):
+        check_verification_config(
+            tmp_path,
+            {"LD_LIBRARY_PATH": "/selected", "CARGO_HOME": str(tmp_path / "home")},
             search_roots=(tmp_path,),
         )
 
@@ -137,15 +167,22 @@ def test_forced_config_env_route_remains_rejected(
 
 def test_production_discovery_accepts_matching_admission_config(tmp_path: Path) -> None:
     """Accept matching inherited routes during automatic configuration discovery."""
+    for ancestor in tmp_path.parents:
+        if any(
+            (ancestor / relative).exists()
+            for relative in (
+                "Cargo.toml",
+                ".cargo/config",
+                ".cargo/config.toml",
+            )
+        ):
+            pytest.skip("automatic discovery has a foreign ancestor Cargo input")
     routes = {
         "rustc-wrapper": "RUSTC_WRAPPER",
         "rustc-workspace-wrapper": "RUSTC_WORKSPACE_WRAPPER",
         "rustdoc": "RUSTDOC",
     }
-    environment = {
-        variable: os.environ.get(variable, "/selected-admission")
-        for variable in routes.values()
-    }
+    environment = dict.fromkeys(routes.values(), "/selected-admission")
     environment["CARGO_HOME"] = str(tmp_path / "cargo-home")
     environment["HOME"] = str(tmp_path)
     config = tmp_path / ".cargo"
