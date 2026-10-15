@@ -12,8 +12,9 @@ prover-tools verus install
 prover-tools verus run --proof-file verus/edge_harvest_proofs.rs
 ```
 
-All commands accept `--repo-root PATH`. When omitted, the current working
-directory is used.
+`kani install`, `kani check-version`, `verus install`, and `verus run` accept
+`--repo-root PATH`, which defaults to the current working directory.
+`kani exec` requires `--installation` and `--cwd`.
 
 ### Kani commands
 
