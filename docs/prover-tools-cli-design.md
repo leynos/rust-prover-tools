@@ -142,3 +142,19 @@ authenticate SDK bytes, or make execution an untrusted-project sandbox. Cargo
 build scripts and procedural macros execute normally with the caller's
 permissions. The command itself does not install or copy assets or modify
 global environment or services.
+
+The SDK-child flag boundary also removes the exact bare LLVM coverage
+instrumentation option and the bare `coverage` and `coverage_nightly` cfgs, in
+joined or paired form. Cargo-llvm-cov's documented `--no-rustc-wrapper` mode
+transports instrumentation through ambient flags, allowing this boundary to
+isolate the SDK child while preserving parent measurement and configured
+admission wrappers. The parent mapping remains unchanged. Similar cfg names,
+valued cfgs, `trybuild_no_target` and other codegen options remain intact;
+malformed paired cfg options fail explicitly. Parameterized instrumentation
+options and older aliases are not guessed or silently removed.
+
+This isolation cannot prevent a compiler wrapper from appending flags after
+normalization. The default cargo-llvm-cov wrapper mode therefore remains
+unqualified for nested Kani. Selecting ambient mode also changes coverage
+selection semantics, so consumers must validate their measured report scope and
+ratchet rather than assuming numeric equivalence.

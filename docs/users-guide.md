@@ -87,6 +87,21 @@ protected routing environment overrides, and unchecked `--config`, `--profile`,
 or `--manifest-path` arguments fail before execution. Run from the proof
 package instead of selecting another manifest through an argument.
 
+For an instrumented parent using cargo-llvm-cov's documented
+`--no-rustc-wrapper` mode, the SDK child additionally removes the exact bare
+`-C instrument-coverage` option and bare `coverage` and `coverage_nightly`
+cfgs. Joined and paired spellings are supported. Other codegen options,
+parameterized coverage options, custom cfgs and `trybuild_no_target` remain
+caller policy. The parent environment is unchanged; compiler admission wrappers
+remain configured. A missing paired `--cfg` value is rejected.
+
+This boundary does not prevent a coverage wrapper from adding instrumentation
+after flag normalization. Use the documented ambient-flag mode for this
+integration; the default cargo-llvm-cov wrapper route is not qualified for a
+nested Kani invocation. Removing these child flags does not disable parent
+measurement. Coverage report scope and the local ratchet still need validation
+when selecting that mode.
+
 This legacy command is separate from the snapshot programme proposed in
 [PR #131](https://github.com/leynos/rust-prover-tools/pull/131).
 
