@@ -1,7 +1,8 @@
 """Normalize inherited flags for Kani 0.67's literal-space input boundary.
 
 The release workflow removes only measured development acceleration settings
-and rejects ambiguous token encodings instead of weakening verification flags.
+and known incompatible coverage atoms. It rejects ambiguous token encodings
+instead of weakening verification flags.
 """
 
 from __future__ import annotations
@@ -17,13 +18,15 @@ if typ.TYPE_CHECKING:
 
 def _option(tokens: tuple[str, ...], index: int) -> tuple[str, int]:
     """Read joined or paired compiler options without losing token boundaries."""
-    token = tokens[index]
-    if token not in {"-C", "-Z"}:
-        return token, 1
+    argument = tokens[index]
+    if argument not in {"-C", "-Z", "--cfg"}:
+        return argument, 1
     if index + 1 >= len(tokens) or tokens[index + 1].startswith("-"):
-        msg = "Kani verification flags contain an incomplete -C/-Z option"
+        kind = "--cfg" if argument == "--cfg" else "-C/-Z"
+        msg = f"Kani verification flags contain an incomplete {kind} option"
         raise ProverToolError(msg)
-    return token + tokens[index + 1], 2
+    separator = "=" if argument == "--cfg" else ""
+    return argument + separator + tokens[index + 1], 2
 
 
 def _is_development_option(option: str) -> bool:
@@ -31,6 +34,15 @@ def _is_development_option(option: str) -> bool:
     return option.startswith("-Zthreads=") or option in {
         "-Clink-arg=-fuse-ld=mold",
         "-Zcodegen-backend=cranelift",
+    }
+
+
+def _is_coverage_option(option: str) -> bool:
+    """Identify only coverage atoms incompatible with the qualified SDK."""
+    return option in {
+        "-Cinstrument-coverage",
+        "--cfg=coverage",
+        "--cfg=coverage_nightly",
     }
 
 
@@ -70,8 +82,8 @@ def verification_flags(environment: cabc.Mapping[str, str]) -> tuple[str, ...]:
     Returns
     -------
     tuple[str, ...]
-        Compatible flags in order, with development options removed and
-        warning denial appended.
+        Compatible flags in order, with development options and known
+        incompatible coverage atoms removed and warning denial appended.
 
     Raises
     ------
@@ -96,7 +108,7 @@ def verification_flags(environment: cabc.Mapping[str, str]) -> tuple[str, ...]:
         if "codegen-backend" in option and option != "-Zcodegen-backend=cranelift":
             msg = "Kani exec does not support a competing compiler backend"
             raise ProverToolError(msg)
-        if not _is_development_option(option):
+        if not (_is_development_option(option) or _is_coverage_option(option)):
             result.extend(tokens[index : index + width])
         index += width
     return (
