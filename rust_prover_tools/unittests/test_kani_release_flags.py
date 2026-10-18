@@ -86,3 +86,61 @@ def test_custom_cfg_survives_both_effective_flag_sources(name: str) -> None:
         })
         == expected
     )
+
+
+@given(
+    groups=st.lists(
+        st.sampled_from([
+            (("-C", "instrument-coverage"), False),
+            (("-Cinstrument-coverage",), False),
+            (("--cfg", "coverage"), False),
+            (("--cfg=coverage",), False),
+            (("--cfg", "coverage_nightly"), False),
+            (("--cfg=coverage_nightly",), False),
+            (("--cfg=coverage_extra",), True),
+            (("--cfg", 'coverage="kept"'), True),
+            (('--cfg=coverage_nightly="kept"',), True),
+            (("--cfg=trybuild_no_target",), True),
+            (("-C", "debuginfo=2"), True),
+            (("-Copt-level=2",), True),
+            (("-Cinstrument-coverage=yes",), True),
+            (("-Z", "instrument-coverage"), True),
+        ]),
+        max_size=30,
+    ),
+    terminal_warning_denial=st.booleans(),
+)
+def test_coverage_group_removal_preserves_order_for_both_flag_sources(
+    *, groups: list[tuple[tuple[str, ...], bool]], terminal_warning_denial: bool
+) -> None:
+    """Independent option groups retain neighbours across order and repetition."""
+    tokens = tuple(token for group, _ in groups for token in group)
+    retained = tuple(token for group, keep in groups if keep for token in group)
+    warning_denial = ("-D", "warnings")
+    if terminal_warning_denial:
+        tokens += warning_denial
+    expected = (*retained, *warning_denial)
+    for source, separator in (("RUSTFLAGS", " "), ("CARGO_ENCODED_RUSTFLAGS", "\x1f")):
+        environment = {
+            "RUSTFLAGS": "--cfg=ignored_plain",
+            source: separator.join(tokens),
+        }
+        before = dict(environment)
+        assert verification_flags(environment) == expected
+        assert environment == before
+
+
+def test_existing_nonterminal_warning_policy_remains_in_order() -> None:
+    """Terminal denial is ensured without deleting caller policy from the middle."""
+    environment = {
+        "RUSTFLAGS": "-D warnings --cfg=trybuild_no_target -Cinstrument-coverage"
+    }
+    before = dict(environment)
+    assert verification_flags(environment) == (
+        "-D",
+        "warnings",
+        "--cfg=trybuild_no_target",
+        "-D",
+        "warnings",
+    )
+    assert environment == before

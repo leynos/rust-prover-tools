@@ -280,6 +280,15 @@ injected flags, and `kani_release_config` validates discovered Cargo inputs.
 `kani_exec_cli` binds the public command without expanding the existing CLI
 module. Keep installation and snapshot lifecycle code separate.
 
+The SDK-child boundary removes only the exact bare `-C instrument-coverage`,
+`--cfg=coverage` and `--cfg=coverage_nightly` atoms, in joined or paired forms.
+Incomplete paired `--cfg` values fail before execution. Parameterized options,
+valued or unrelated cfgs, compatible flags and `trybuild_no_target` remain in
+order. A present `CARGO_ENCODED_RUSTFLAGS` wins over plain flags, including an
+empty encoded value. Normalization preserves the parent mapping and configured
+compiler/rustdoc admission wrappers, and ensures terminal `-D warnings` without
+deduplicating earlier caller policy.
+
 Cuprum applies an environment overlay. The child therefore receives equivalent
 normalized plain and encoded flags; neither key is claimed to be removed. Kani
 0.67 reads plain flags and synthesizes its own encoded target flags. Its target
