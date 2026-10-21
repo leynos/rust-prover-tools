@@ -50,7 +50,7 @@ jobs:
       - name: Install mdtablefix
         # `make check-fmt` runs `mdtablefix --check --git`; 0.6.0 is the
         # first release with `--check` and `--git`.
-        uses: leynos/shared-actions/.github/actions/install-mdtablefix@3e4cba9ff5898f40723b95e09b8d5bae26c1b1f6
+        uses: leynos/shared-actions/.github/actions/install-mdtablefix@126d02e32a07c2b049e8b68fff09298526e5971a
         with:
           version: "0.6.1"
 
@@ -86,7 +86,7 @@ jobs:
       # report is compared, not published.
       - name: Test and Measure Coverage
         if: github.event_name == 'pull_request'
-        uses: leynos/shared-actions/.github/actions/generate-coverage@3e4cba9ff5898f40723b95e09b8d5bae26c1b1f6
+        uses: leynos/shared-actions/.github/actions/generate-coverage@126d02e32a07c2b049e8b68fff09298526e5971a
         with:
           language: python
           python-source: ./rust_prover_tools
