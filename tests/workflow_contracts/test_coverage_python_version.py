@@ -17,6 +17,13 @@ declares nothing. The ratchet baseline key already carries the interpreter
 misses its baseline rather than comparing against the wrong one; the lane
 parity check here makes that miss a contract failure instead of a silent
 restart.
+
+The three tests that read this repository's lanes skip when the files those
+lanes live in are absent. mutmut copies the sources into a ``mutants/``
+sandbox that omits ``.github/``, and a collection-time ``FileNotFoundError``
+there fails the baseline that mutmut runs before any mutant, aborting the
+whole run. The synthetic selection and range tests below need neither file,
+so they keep running in the sandbox.
 """
 
 from __future__ import annotations
@@ -55,6 +62,21 @@ AGREE: typ.Final[str] = "3.14"
 CONFLICT: typ.Final[str] = "3.13"
 #: The one interpreter both coverage lanes are pinned to.
 PINNED: typ.Final[str] = "3.14"
+#: The repository-backed tests below read the real lanes and the project's
+#: ``requires-python``, so they need these files to exist.
+REQUIRED_FILES = (*(WORKFLOWS / lane for lane in LANES), ROOT / "pyproject.toml")
+#: A working copy without those files (mutmut's ``mutants/`` sandbox omits
+#: ``.github/``) would fail them with ``FileNotFoundError`` before any mutant
+#: runs, so they skip instead. The synthetic tests below need none of the
+#: files and stay unguarded.
+NEEDS_REPOSITORY_FILES = pytest.mark.skipif(
+    not all(path.exists() for path in REQUIRED_FILES),
+    reason=(
+        "repository workflows or project file not present in this working "
+        "copy (for example inside mutmut's mutants/ sandbox, which does not "
+        "copy .github/)"
+    ),
+)
 
 
 def _lane_calls() -> dict[str, list[CoverageCall]]:
@@ -70,11 +92,13 @@ def _lane_calls() -> dict[str, list[CoverageCall]]:
     }
 
 
+@NEEDS_REPOSITORY_FILES
 def test_both_lanes_call_generate_coverage() -> None:
     """The pull-request lane and the publisher each measure coverage."""
     assert all(_lane_calls().values()), f"{LANES} must each call generate-coverage"
 
 
+@NEEDS_REPOSITORY_FILES
 def test_every_call_declares_one_accepted_python() -> None:
     """Each call names a Python, every source agrees, and the project accepts it."""
     accepted = requires_python((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -87,6 +111,7 @@ def test_every_call_declares_one_accepted_python() -> None:
             )
 
 
+@NEEDS_REPOSITORY_FILES
 def test_both_lanes_measure_on_one_python() -> None:
     """Both lanes measure on one Python, as the pull-request ratchet assumes."""
     effective = {call.effective for calls in _lane_calls().values() for call in calls}
