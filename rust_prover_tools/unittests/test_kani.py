@@ -22,6 +22,7 @@ from rust_prover_tools.kani import (
     install_kani,
     resolve_kani_version,
 )
+from rust_prover_tools.unittests import conftest
 from rust_prover_tools.versions import read_version_pin
 
 if typ.TYPE_CHECKING:
@@ -88,6 +89,7 @@ def test_check_kani_version_accepts_matching_override_command(
     )
 
 
+@conftest.SKIP_CHDIR_UNDER_MUTMUT
 def test_check_kani_version_resolves_relative_version_file_from_repo_root(
     tmp_path: Path,
     cmd_mox: CmdMox,
