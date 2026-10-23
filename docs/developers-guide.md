@@ -228,11 +228,15 @@ The caller passes a small set of configuration inputs, each carrying intent:
   so no path prefix needs stripping when translating a changed file into a
   mutation module glob.
 - `python-version` — the interpreter the shared workflow runs the project on,
-  written as a quoted string (`"3.14"`). The shared workflow takes this input
-  or its own default, and setup-uv exports the selection as `UV_PYTHON` for the
-  whole job, so `uv` syncs the project against it. The value must stay inside
-  `requires-python` in `pyproject.toml`; a selection outside that range makes
-  `uv` refuse the interpreter, and the run fails before collection or mutation.
+  written as a non-empty quoted string (`"3.14"`). An omitted input takes the
+  shared workflow's own default; an explicitly empty string does not, because
+  GitHub Actions passes it through and only applies an input default when the
+  caller omits the input
+  ([actions/runner#2907](https://github.com/actions/runner/issues/2907)).
+  setup-uv exports the selection as `UV_PYTHON` for the whole job, so `uv`
+  syncs the project against it. The value must stay inside `requires-python` in
+  `pyproject.toml`; a selection outside that range makes `uv` refuse the
+  interpreter, and the run fails before collection or mutation.
 
 At the pin this repository uses, the shared workflow defaults an omitted
 `python-version` to `3.13`. That default suits a project baselined on 3.13, but
@@ -267,11 +271,11 @@ scheduled run. The test module self-skips when the workflow file or
   SHA;
 - the `with:` block carries exactly the expected `paths`,
   `module-prefix-strip`, and `python-version` configuration;
-- the caller declares `python-version` explicitly as a string, and the
-  declared version is inside `requires-python`; omission, an empty value, an
-  older version and an unquoted YAML float are all rejected, and synthetic
-  in-memory callers prove that omission and an empty value both resolve to the
-  shared `3.13` default;
+- the caller declares `python-version` explicitly as a non-empty string, and
+  the declared version is inside `requires-python`; omission, an explicit empty
+  value, an older version and an unquoted YAML float are all rejected, and
+  synthetic in-memory callers prove that only omission resolves to the shared
+  `3.13` default while an explicit empty value stays empty;
 - job permissions are least-privilege (`contents: read`, `id-token: write`)
   and the workflow-level default token scope is empty;
 - `concurrency` serializes runs per ref without cancelling one in progress;

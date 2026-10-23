@@ -181,15 +181,20 @@ def test_with_block_carries_the_caller_configuration() -> None:
 def test_the_caller_selects_a_python_the_project_accepts() -> None:
     """The caller declares a string Python explicitly and inside requires-python."""
     selection = python_version_input(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    assert selection is not None, (
+        "jobs.mutation.with must declare python-version explicitly; an "
+        f"omitted input falls back to the shared {SHARED_DEFAULT_PYTHON} "
+        "default"
+    )
     assert isinstance(selection, str), (
         "jobs.mutation.with must declare python-version as a quoted string; "
         f"an unquoted 3.14 is a YAML float and 3.10 reads back as 3.1, got "
         f"{selection!r}"
     )
     assert selection, (
-        "jobs.mutation.with must declare python-version explicitly; an "
-        f"omitted input falls back to the shared {SHARED_DEFAULT_PYTHON} "
-        "default"
+        "jobs.mutation.with must declare a non-empty python-version; an "
+        "explicit empty string does not take the shared default and is "
+        "rejected by the shared workflow's version check"
     )
     accepted = requires_python(PYPROJECT_PATH.read_text(encoding="utf-8"))
     assert not rejected_versions(accepted, [selection]), (
@@ -201,7 +206,8 @@ def test_the_caller_selects_a_python_the_project_accepts() -> None:
 
 #: One in-memory caller declaring ``python-version`` as spelled in
 #: ``declaration``. ``raw`` is what PyYAML reads back, which separates a
-#: quoted string from a float; ``effective`` is what the shared workflow runs.
+#: quoted string from a float and an omitted input (``None``) from an
+#: explicit empty string; ``effective`` is what the shared workflow runs.
 class SyntheticCaller(typ.NamedTuple):
     """One caller's ``python-version`` spelling and the two ways to read it."""
 
@@ -216,8 +222,11 @@ class SyntheticCaller(typ.NamedTuple):
 #: used, and Ruff's ``math-constant`` suggestion would change the value.
 UNQUOTED_FLOAT: typ.Final[float] = 3.14  # ruff: ignore[math-constant]
 CALLERS: typ.Final[tuple[SyntheticCaller, ...]] = (
-    SyntheticCaller("", "", SHARED_DEFAULT_PYTHON),
-    SyntheticCaller('python-version: ""\n', "", SHARED_DEFAULT_PYTHON),
+    # Omission is the only spelling that gets the shared workflow's default.
+    SyntheticCaller("", None, SHARED_DEFAULT_PYTHON),
+    # An explicit empty value is passed through; GitHub Actions applies an
+    # input default only when the caller omits the input (actions/runner#2907).
+    SyntheticCaller('python-version: ""\n', "", ""),
     SyntheticCaller('python-version: "3.13"\n', "3.13", "3.13"),
     SyntheticCaller("python-version: 3.14\n", UNQUOTED_FLOAT, "3.14"),
     SyntheticCaller('python-version: "3.14"\n', "3.14", "3.14"),
@@ -244,9 +253,12 @@ def is_explicit_and_accepted(declaration: str, accepted: str) -> bool:
     so the synthetic cases exercise the real contract rather than a copy.
     """
     selection = python_version_input(_caller(declaration))
+    # An empty resolved value has no version to compare, so it can only fail
+    # the range check; short-circuit to keep a blank out of ``Version``.
+    effective = resolved_python(selection)
     is_explicit = isinstance(selection, str) and bool(selection)
-    is_in_range = not rejected_versions(
-        requires_python(accepted), [resolved_python(selection)]
+    is_in_range = bool(effective) and not rejected_versions(
+        requires_python(accepted), [effective]
     )
     return is_explicit and is_in_range
 
@@ -255,7 +267,7 @@ def is_explicit_and_accepted(declaration: str, accepted: str) -> bool:
 def test_the_selection_resolves_to_the_shared_default_only_when_absent(
     caller: SyntheticCaller,
 ) -> None:
-    """Omitted and empty inputs resolve to the shared 3.13 default."""
+    """Only an omitted input resolves to the shared 3.13 default."""
     selection = python_version_input(_caller(caller.declaration))
 
     assert selection == caller.raw, f"declared {selection!r}, expected {caller.raw!r}"
@@ -302,9 +314,6 @@ def test_a_malformed_caller_reads_as_no_selection(workflow: str) -> None:
     """A wrongly shaped workflow, job or ``with`` mapping declares nothing."""
     selection = python_version_input(workflow)
 
-    assert isinstance(selection, str), (
-        f"{workflow!r} should read as a string, got {selection!r}"
-    )
-    assert not selection, (
-        f"{workflow!r} should read as the empty selection, got {selection!r}"
+    assert selection is None, (
+        f"{workflow!r} should read as an omitted input, got {selection!r}"
     )

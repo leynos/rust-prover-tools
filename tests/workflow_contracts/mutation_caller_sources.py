@@ -8,6 +8,12 @@ omits the input runs its project on 3.13 whatever the project's
 ``requires-python`` says, and ``uv`` then refuses to sync the project
 against that interpreter.
 
+Only an *omitted* input takes the default: GitHub Actions passes an
+explicitly empty string through instead (actions/runner#2907), so the shared
+workflow's version check rejects it rather than substituting 3.13. The readers
+therefore keep "absent" and "declared blank" distinct rather than folding both
+into the default.
+
 The readers are pure over supplied text, so the contract can also be asked
 what a caller this repository does not contain would do.
 """
@@ -32,11 +38,13 @@ def _mapping(value: object) -> dict[str, object]:
 
 
 def python_version_input(workflow: str) -> object:
-    """Return the mutation call's raw ``python-version`` input, or ``""``.
+    """Return the mutation call's raw ``python-version`` input, or ``None``.
 
     The value is returned uncoerced. A caller that writes ``3.14`` without
     quotes hands YAML a float, and the contract has to be able to tell that
-    spelling from the string it requires; coercing here would hide it.
+    spelling from the string it requires; coercing here would hide it. An
+    explicit ``""`` likewise stays distinguishable from an absent input,
+    because only absence takes the shared default.
 
     Parameters
     ----------
@@ -46,14 +54,15 @@ def python_version_input(workflow: str) -> object:
     Returns
     -------
     object
-        The declared value, or ``""`` when the workflow, its ``jobs``, its
-        ``mutation`` job, its ``with`` mapping or the input itself is absent
-        or wrongly shaped.
+        The declared value: ``None`` when the workflow, its ``jobs``, its
+        ``mutation`` job, its ``with`` mapping, or the input itself is absent
+        or wrongly shaped; ``""`` when the caller declares an empty string;
+        otherwise the declared value as YAML read it.
 
     """
     document = _mapping(yaml.safe_load(workflow))
     job = _mapping(_mapping(document.get("jobs")).get("mutation"))
-    return _mapping(job.get("with")).get("python-version") or ""
+    return _mapping(job.get("with")).get("python-version")
 
 
 def resolved_python(selection: object) -> str:
@@ -68,15 +77,15 @@ def resolved_python(selection: object) -> str:
     Returns
     -------
     str
-        The shared workflow's own default when the caller declared nothing,
+        The shared workflow's own default when the caller omitted the input,
         otherwise the declared value as text. The text form is what GitHub
         Actions passes on to the input, so a bare YAML float still names a
-        version the project's range can be compared against.
+        version the project's range can be compared against, and an explicit
+        empty string stays empty rather than becoming the default.
 
     """
-    # A declared value is either a string or a number (an unquoted YAML
-    # float); both name a version the range can be compared against. Nothing
-    # declared arrives as ``None`` or as the empty string the reader
-    # normalises a missing input to.
-    declared = str(selection) if selection is not None else ""
-    return declared or SHARED_DEFAULT_PYTHON
+    # Only an absent input takes the default. A declared value is either a
+    # string or a number (an unquoted YAML float); both are passed on as text.
+    if selection is None:
+        return SHARED_DEFAULT_PYTHON
+    return str(selection)
