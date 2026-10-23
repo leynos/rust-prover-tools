@@ -300,6 +300,11 @@ def test_only_an_explicit_compatible_string_is_accepted(
 )
 def test_a_malformed_caller_reads_as_no_selection(workflow: str) -> None:
     """A wrongly shaped workflow, job or ``with`` mapping declares nothing."""
-    assert python_version_input(workflow) == "", (
-        f"{workflow!r} should hold no python-version input"
+    selection = python_version_input(workflow)
+
+    assert isinstance(selection, str), (
+        f"{workflow!r} should read as a string, got {selection!r}"
+    )
+    assert not selection, (
+        f"{workflow!r} should read as the empty selection, got {selection!r}"
     )

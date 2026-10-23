@@ -74,6 +74,9 @@ def resolved_python(selection: object) -> str:
         version the project's range can be compared against.
 
     """
-    if selection is None or selection == "":
-        return SHARED_DEFAULT_PYTHON
-    return str(selection)
+    # A declared value is either a string or a number (an unquoted YAML
+    # float); both name a version the range can be compared against. Nothing
+    # declared arrives as ``None`` or as the empty string the reader
+    # normalises a missing input to.
+    declared = str(selection) if selection is not None else ""
+    return declared or SHARED_DEFAULT_PYTHON
