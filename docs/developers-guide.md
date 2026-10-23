@@ -227,6 +227,25 @@ The caller passes a small set of configuration inputs, each carrying intent:
 - `module-prefix-strip` — set empty because the package uses a flat layout,
   so no path prefix needs stripping when translating a changed file into a
   mutation module glob.
+- `python-version` — the interpreter the shared workflow runs the project on,
+  written as a quoted string (`"3.14"`). The shared workflow takes this input
+  or its own default, and setup-uv exports the selection as `UV_PYTHON` for the
+  whole job, so `uv` syncs the project against it. The value must stay inside
+  `requires-python` in `pyproject.toml`; a selection outside that range makes
+  `uv` refuse the interpreter, and the run fails before collection or mutation.
+
+At the pin this repository uses, the shared workflow defaults an omitted
+`python-version` to `3.13`. That default suits a project baselined on 3.13, but
+not this one, whose `requires-python` is `>=3.14`. **Omitting the input
+therefore asks `uv` to sync this project on an interpreter the project
+rejects**, which is the failure recorded in
+[issue #172](https://github.com/leynos/rust-prover-tools/issues/172). For the
+same reason the input is quoted: an unquoted `3.14` is a YAML float, and an
+unquoted `3.10` reads back as `3.1`. Raise the caller's selection in the same
+change as any bump to the `requires-python` floor; the contract test fails the
+pull request if the two disagree. Making the shared workflow diagnose this
+mismatch itself is tracked in
+[shared-actions#591](https://github.com/leynos/shared-actions/issues/591).
 
 The `uses:` reference pins the shared workflow to a full 40-character commit
 SHA rather than a branch or tag, so a force-push upstream cannot silently
@@ -237,22 +256,37 @@ without any accompanying test edit.
 Because the caller is configuration rather than code,
 `tests/test_workflow_contract.py` pins the shape it must uphold, failing the
 pull request when the caller drifts — repointing the pin at a branch, widening
-the token scope, or dropping a configuration input — rather than letting the
-breakage surface only in a scheduled run. The test module self-skips when the
-workflow file is absent (mutmut copies the sources into a sandbox that omits
+the token scope, selecting an incompatible interpreter, or dropping a
+configuration input — rather than letting the breakage surface only in a
+scheduled run. The test module self-skips when the workflow file or
+`pyproject.toml` is absent (mutmut copies the sources into a sandbox that omits
 `.github/`, so the contract test does not run there). Run it locally with
 `uv run pytest tests/test_workflow_contract.py -v`. The test validates:
 
 - the `uses:` reference targets `mutation-mutmut.yml` pinned to a full commit
   SHA;
-- the `with:` block carries exactly the expected `paths` and
-  `module-prefix-strip` configuration;
+- the `with:` block carries exactly the expected `paths`,
+  `module-prefix-strip`, and `python-version` configuration;
+- the caller declares `python-version` explicitly as a string, and the
+  declared version is inside `requires-python`; omission, an empty value, an
+  older version and an unquoted YAML float are all rejected, and synthetic
+  in-memory callers prove that omission and an empty value both resolve to the
+  shared `3.13` default;
 - job permissions are least-privilege (`contents: read`, `id-token: write`)
   and the workflow-level default token scope is empty;
 - `concurrency` serializes runs per ref without cancelling one in progress;
   and
 - the triggers keep the daily schedule and a plain `workflow_dispatch` with
   no legacy branch input.
+
+The sandbox that mutmut builds also affects
+`tests/workflow_contracts/test_coverage_python_version.py`. Its three
+repository-backed tests — the ones that read `ci.yml`, `coverage-main.yml` and
+`pyproject.toml` to hold the coverage lanes to one accepted interpreter — skip
+when those files are absent, so the baseline mutmut runs before any mutant
+neither fails on a `FileNotFoundError` nor aborts the run. The synthetic
+selection and range tests need none of those files, so they keep running in the
+sandbox.
 
 ## Running uv through the helper
 
