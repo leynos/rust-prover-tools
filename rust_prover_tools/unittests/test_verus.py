@@ -9,6 +9,7 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.unittests import conftest
 from rust_prover_tools.verus import (
     VerusInstallOptions,
     VerusPaths,
@@ -140,6 +141,7 @@ def test_install_verus_downloads_checks_and_normalises_archive(
     )
 
 
+@conftest.SKIP_CHDIR_UNDER_MUTMUT
 def test_install_verus_resolves_relative_pin_files_from_repo_root(
     tmp_path: Path,
     cmd_mox: CmdMox,

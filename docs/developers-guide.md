@@ -292,6 +292,31 @@ neither fails on a `FileNotFoundError` nor aborts the run. The synthetic
 selection and range tests need none of those files, so they keep running in the
 sandbox.
 
+Two further hazards come from mutmut's own trampoline rather than from missing
+files, and both abort the run before any mutant is scored:
+
+- The trampoline resolves the configured `source_paths` against the process
+  working directory every time a mutated function is called. Tests that
+  `monkeypatch.chdir` away from the sandbox root therefore fail under mutmut
+  while passing in an ordinary run. `rust_prover_tools/unittests/conftest.py`
+  defines `SKIP_CHDIR_UNDER_MUTMUT`, a `skipif` marker on `MUTANT_UNDER_TEST`,
+  and the two affected tests carry it:
+  `test_check_kani_version_resolves_relative_version_file_from_repo_root` in
+  `test_kani.py` and
+  `test_install_verus_resolves_relative_pin_files_from_repo_root` in
+  `test_verus.py`. The marker is per test rather than per module, because both
+  modules otherwise run fine in the sandbox and only these two prove that
+  repository-relative paths resolve against the configured repository rather
+  than the current directory.
+- A test that patches `Path.resolve` globally breaks the trampoline's own
+  bookkeeping, because the patched method is the one it calls. The symlink-loop
+  boundary test therefore creates a real loop instead of monkeypatching the
+  method, which also keeps the test closer to the failure it describes.
+
+`rust_prover_tools/unittests/test_mutmut_sandbox.py` exercises the skip
+predicate directly, so a lost guard fails an ordinary pull request rather than
+waiting for the next scheduled mutation run.
+
 ## Running uv through the helper
 
 Every `uv` call in the Makefile goes through `scripts/uv_gate.py`, a copy of
