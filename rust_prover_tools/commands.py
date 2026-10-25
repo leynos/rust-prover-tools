@@ -22,7 +22,15 @@ import dataclasses as dc
 import shlex
 import typing as typ
 
-from cuprum import ExecutionContext, Program, ProgramCatalogue, ProjectSettings, sh
+from cuprum import (
+    BrokenPipePolicy,
+    ExecutionContext,
+    Program,
+    ProgramCatalogue,
+    ProjectSettings,
+    RunOutputOptions,
+    sh,
+)
 
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 
@@ -139,7 +147,15 @@ def run_command(spec: CommandSpec) -> CommandResult:
     catalogue = ProgramCatalogue(projects=(project,))
     cmd = sh.make(program, catalogue=catalogue)(*spec.argv[1:])
     context = ExecutionContext(env=spec.env, cwd=spec.cwd)
-    result = cmd.run_sync(echo=spec.echo, context=context)
+    # Echo mirrors output the user asked to see, such as a Verus proof run, so
+    # the reader is often a pipe. `BEST_EFFORT` keeps a reader that goes away
+    # (`| head`, a quit pager) from failing a command that succeeded, while
+    # capture and the child's exit status still reach the caller.
+    output = RunOutputOptions(
+        echo=spec.echo,
+        broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
+    )
+    result = cmd.run_sync(output=output, context=context)
     return CommandResult(
         stdout=result.stdout or "",
         stderr=result.stderr or "",
