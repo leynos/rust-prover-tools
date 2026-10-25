@@ -131,6 +131,28 @@ to inspect the exit code, such as `rustup which` or `verus --version`.
 Set `CommandSpec.echo=True` only when the child process output is part of the
 public CLI stream, such as a Verus proof run.
 
+The project pins `cuprum==0.2.0b2` exactly. Cuprum 0.2 moved capture and echo
+options from `run_sync` keyword arguments into `RunOutputOptions`, so
+`run_command` passes
+`output=RunOutputOptions(echo=..., broken_pipe_policy=...)` and
+`context=ExecutionContext(...)`. Echo runs under
+`BrokenPipePolicy.BEST_EFFORT`: the reader of an echoed stream is often a pipe
+that closes early, and `STRICT`, the default, would fail a command that
+succeeded. Do not raise the pin without reviewing
+`docs/cuprum-v0-2-0-migration-guide.md` for breaking changes; the selection
+contract reads the expected version from `pyproject.toml` and fails if any
+dependency path disagrees.
+
+`ExecutionContext.env` is an overlay on the parent environment, not a
+replacement. A workflow that must remove inherited variables needs
+`EnvMode.REPLACE`, which is imported from `cuprum.context` rather than from the
+package root.
+
+The two vendored guides under `docs/` are converted copies of the upstream
+cuprum documents at the pinned tag, not this project's prose. Their wording is
+upstream's; only links and line wrapping differ. Edit them only by re-running
+the conversion against a new tag.
+
 ## cmd-mox tests
 
 Use cmd-mox for unit tests that exercise external command orchestration. The
