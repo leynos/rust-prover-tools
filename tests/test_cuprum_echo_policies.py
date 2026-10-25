@@ -47,16 +47,24 @@ from cuprum import (
 from rust_prover_tools.commands import CommandSpec, run_command
 
 #: Enough output that the pipe buffer cannot hold it all, so the child is
-#: still writing when the reader has gone. Small enough to keep the run quick.
+#: still writing when the reader has gone. 20,000 lines of ``proof line N`` is
+#: 321.2 KiB, which is twice the size at which a raising echo sink stops
+#: raising and wedges the run instead (152 KiB raises, 153 KiB hangs). This
+#: test only survives that because `run_command` opts into `BEST_EFFORT`; run
+#: the same child under `STRICT` and it would hang rather than fail. That is
+#: the point of the test, so this constant should not be reduced to "keep the
+#: run quick" without losing the property it pins.
 _CHILD_LINES = 20_000
 
 #: The strict case's output, in lines of roughly 16 bytes.
 #:
-#: This must stay below the size at which a raising echo sink stops raising and
-#: wedges the run instead: on 0.2.0b2 that boundary is between 152 KiB, which
-#: raises, and 153 KiB, which hangs past 200 s. 1,500 lines is about 24 KiB, so
-#: `STRICT` fails within a tenth of a second as the test expects. Raising this
-#: constant past the threshold would turn a passing test into a hung one.
+#: This must stay *below* the size at which a raising echo sink stops raising
+#: and wedges the run instead: on 0.2.0b2 that boundary is between 152 KiB,
+#: which raises, and 153 KiB, which hangs past 200 s. 1,500 lines is 22.4 KiB,
+#: so `STRICT` fails within a tenth of a second as the test expects. Raising
+#: this constant past the threshold would turn a passing test into a hung one,
+#: which is why the limit is recorded as a byte budget rather than a guess at
+#: what keeps the run quick.
 _STRICT_CHILD_LINES = 1_500
 
 
