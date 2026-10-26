@@ -89,7 +89,7 @@ proof run whose proof had already succeeded would misreport it. `BEST_EFFORT`
 stops echoing the affected stream and keeps capture, line observation, and
 child reaping, so `CommandResult` still carries the output and the child's exit
 status. Cuprum records the handled failure in `CommandResult.relay_fallbacks`;
-`run_command` does not forward those to the caller, because no prover workflow
+`run_command` does not forward those to the caller because no prover workflow
 acts on them.
 
 Cuprum applies its `env` overlay to the parent environment rather than

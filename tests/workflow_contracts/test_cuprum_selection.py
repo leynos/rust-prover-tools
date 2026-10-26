@@ -108,6 +108,21 @@ def test_declared_pin_reads_the_project_requirement() -> None:
     assert declared_pin(text) == "0.2.0b2"
 
 
+@pytest.mark.parametrize("spelling", ["cuprum", "Cuprum", "CUPRUM"])
+def test_declared_pin_accepts_any_pep_503_spelling_of_the_name(
+    spelling: str,
+) -> None:
+    """A capitalised name pins the same distribution, so it must be accepted.
+
+    PEP 503 folds case in distribution names. :func:`names_cuprum` already
+    treats every spelling as naming cuprum, so rejecting one of them here would
+    make the two halves of this reader disagree about the same requirement.
+    """
+    text = f'[project]\nname = "demo"\ndependencies = ["{spelling}==0.2.0b2"]\n'
+
+    assert declared_pin(text) == "0.2.0b2"
+
+
 @pytest.mark.parametrize(
     "lock_text",
     [
@@ -157,23 +172,13 @@ def test_lock_specifier_rejects_a_lock_whose_requirement_is_a_range() -> None:
                 "name = 'rust-prover-tools'\n"
                 "version = '0.1.0'\n"
                 "[package.metadata]\n"
-                "requires-dist = [{ name = 'cuprum' }]\n"
-            ),
-            "a requirement with no specifier records no version at all",
-        ),
-        (
-            (
-                "[[package]]\n"
-                "name = 'rust-prover-tools'\n"
-                "version = '0.1.0'\n"
-                "[package.metadata]\n"
                 "requires-dist = [{ name = 'cuprum', specifier = '==0.2.0b2' }, "
                 "{ name = 'cuprum', specifier = '==0.1.0' }]\n"
             ),
             "one project, two answers",
         ),
     ],
-    ids=["no-project-entry", "unspecified-requirement", "two-cuprum-requirements"],
+    ids=["no-project-entry", "two-cuprum-requirements"],
 )
 def test_lock_specifier_rejects_a_lock_it_cannot_read_one_answer_from(
     lock_text: str, reason: str
@@ -188,6 +193,45 @@ def test_lock_specifier_rejects_a_lock_it_cannot_read_one_answer_from(
     """
     with pytest.raises(SelectionError):
         lock_specifier(lock_text, site=f"site rejected: {reason}")
+
+
+def test_lock_specifier_counts_an_unpinned_cuprum_record_as_a_second_site() -> None:
+    """A record with no specifier still names cuprum and must be counted.
+
+    Filtering on the specifier before counting would drop the unpinned record
+    and let a lock that names cuprum twice read as one clean pin, which is the
+    drift this contract exists to catch.
+    """
+    lock_text = (
+        "[[package]]\n"
+        "name = 'rust-prover-tools'\n"
+        "version = '0.1.0'\n"
+        "[package.metadata]\n"
+        "requires-dist = [{ name = 'cuprum', specifier = '==0.2.0b2' }, "
+        "{ name = 'cuprum' }]\n"
+    )
+
+    with pytest.raises(SelectionError, match="exactly one cuprum requirement"):
+        lock_specifier(lock_text, site="test lock")
+
+
+def test_lock_specifier_names_a_lone_unpinned_cuprum_record_as_unpinned() -> None:
+    """The sole cuprum record lacking a specifier is reported as unpinned.
+
+    This is the other half of the counting change: with one matching record the
+    failure is the missing specifier, not the count, so the message has to say
+    which of the two it is.
+    """
+    lock_text = (
+        "[[package]]\n"
+        "name = 'rust-prover-tools'\n"
+        "version = '0.1.0'\n"
+        "[package.metadata]\n"
+        "requires-dist = [{ name = 'cuprum' }]\n"
+    )
+
+    with pytest.raises(SelectionError, match="no specifier"):
+        lock_specifier(lock_text, site="test lock")
 
 
 def test_lock_specifier_reports_a_malformed_metadata_table_as_such() -> None:

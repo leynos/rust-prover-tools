@@ -38,7 +38,14 @@ _NAME = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)")
 #: One exact pin of ``cuprum`` and nothing else. Extras, a range, or an
 #: environment marker would each let two dependency paths resolve to different
 #: artefacts, which is exactly the drift a single-version contract forbids.
-_EXACT_PIN = re.compile(rf"^{CUP}==(?P<version>[^\s,;\[\]]+)$")
+#:
+#: The name matches case-insensitively for the same reason :func:`names_cuprum`
+#: folds case: PEP 503 names are case-insensitive, so ``Cuprum==0.2.0b2`` pins
+#: the same distribution. Accepting it there and rejecting it here would let a
+#: perfectly valid spelling pass one half of the contract and fail the other.
+_EXACT_PIN = re.compile(
+    rf"^{re.escape(CUP)}==(?P<version>[^\s,;\[\]]+)$", re.IGNORECASE
+)
 
 
 class SelectionError(AssertionError):
@@ -324,17 +331,21 @@ def lock_specifier(lock_text: str, *, site: str) -> str:
     packages = _packages(lock_text, site=site)
     project = _one_package(packages, "rust-prover-tools", site=site)
     recorded = _requirement_tables(_metadata_table(project, site=site), site=site)
-    specifiers = [
-        str(entry["specifier"])
-        for entry in recorded
-        if entry.get("name") == CUP and "specifier" in entry
-    ]
-    if len(specifiers) != 1:
+    # Count the records that name cuprum before reading any specifier. A record
+    # with no specifier is still a cuprum requirement, so filtering on the
+    # specifier first would drop it and let a lock that names cuprum twice read
+    # as a single clean pin.
+    named = [entry for entry in recorded if entry.get("name") == CUP]
+    if len(named) != 1:
         message = (
-            f"{site} must record exactly one cuprum requirement, found {specifiers}"
+            f"{site} must record exactly one cuprum requirement, found {len(named)}"
         )
         raise SelectionError(message)
-    return pin_from([f"{CUP}{specifiers[0]}"], site=f"{site} requirement")
+    record = named[0]
+    if "specifier" not in record:
+        message = f"{site} records a cuprum requirement with no specifier"
+        raise SelectionError(message)
+    return pin_from([f"{CUP}{record['specifier']}"], site=f"{site} requirement")
 
 
 def installed_version() -> str:

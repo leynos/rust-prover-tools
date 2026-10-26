@@ -181,6 +181,10 @@ def test_the_strict_policy_still_propagates_a_closed_reader() -> None:
     """
     reader = _ClosedReader()
 
+    assert RunOutputOptions(echo=True).broken_pipe_policy is BrokenPipePolicy.STRICT, (
+        "cuprum's default must stay STRICT for the opt-in to mean anything"
+    )
+
     with pytest.raises(BrokenPipeError):
         _run_through_cuprum(
             _STRICT_CHILD_LINES,
