@@ -24,7 +24,7 @@ import re
 import tomllib
 import typing as typ
 
-#: The distribution name every site constrains. PEP 503 normalisation folds
+#: The distribution name every site constrains. PEP 503 normalization folds
 #: case, ``-``, ``_``, and ``.`` together, so only a spelling that introduces a
 #: separator denotes a different project; ``cuprum`` has none to fold.
 CUP: str = "cuprum"
@@ -68,7 +68,7 @@ def names_cuprum(requirement: str) -> bool:
     Returns
     -------
     bool
-        Whether the requirement's normalised distribution name is ``cuprum``.
+        Whether the requirement's normalized distribution name is ``cuprum``.
     """
     match = _NAME.match(requirement.strip())
     if match is None:

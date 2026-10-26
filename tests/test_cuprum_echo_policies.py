@@ -169,7 +169,9 @@ def test_a_closed_reader_leaves_the_run_and_its_capture_intact(
     assert len(result.stdout.splitlines()) == _CHILD_LINES, (
         "capture must continue after echo is disabled"
     )
-    assert reader.write_attempts >= 1, "the echo path must have reached the reader"
+    assert reader.write_attempts == 1, (
+        "BEST_EFFORT must stop echoing after the first BrokenPipeError"
+    )
 
 
 def test_the_strict_policy_still_propagates_a_closed_reader() -> None:
@@ -192,7 +194,9 @@ def test_the_strict_policy_still_propagates_a_closed_reader() -> None:
             sink=reader,
         )
 
-    assert reader.write_attempts >= 1, "the raise must come from the echo path"
+    assert reader.write_attempts == 1, (
+        "the raise must come from the echo path, which STRICT stops at once"
+    )
 
 
 def test_best_effort_records_the_fallback_without_raising() -> None:

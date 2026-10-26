@@ -62,12 +62,12 @@ pytestmark = pytest.mark.timeout(60)
 
 
 def test_the_name_matcher_agrees_with_pep_503_on_what_is_cuprum() -> None:
-    """Only spellings that normalise to ``cuprum`` count as naming it.
+    """Only spellings that normalize to ``cuprum`` count as naming it.
 
     The readers treat "the site names no cuprum" and "the site names cuprum
     with the wrong specifier" as different failures, so the matcher deciding
     which is which has to agree with the index. ``Cuprum`` is the same
-    distribution; ``cup_rum`` normalises to ``cup-rum``, which is not.
+    distribution; ``cup_rum`` normalizes to ``cup-rum``, which is not.
     """
     assert names_cuprum("cuprum==0.2.0b2"), "the bare name must match"
     assert names_cuprum("Cuprum==0.2.0b2"), "case must fold"
@@ -112,7 +112,7 @@ def test_declared_pin_reads_the_project_requirement() -> None:
 def test_declared_pin_accepts_any_pep_503_spelling_of_the_name(
     spelling: str,
 ) -> None:
-    """A capitalised name pins the same distribution, so it must be accepted.
+    """A capitalized name pins the same distribution, so it must be accepted.
 
     PEP 503 folds case in distribution names. :func:`names_cuprum` already
     treats every spelling as naming cuprum, so rejecting one of them here would
