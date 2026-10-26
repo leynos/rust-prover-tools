@@ -195,6 +195,106 @@ def lock_pin(lock_text: str, *, site: str) -> str:
     return locked[0]
 
 
+def _one_package(
+    packages: list[dict[str, object]], name: str, *, site: str
+) -> dict[str, object]:
+    """Return the single package entry called ``name``.
+
+    A lock that names a package zero times, or more than once, cannot answer a
+    single-version question. Naming the package in the message keeps such a
+    lock from being reported as a defect in whichever requirement was read
+    next.
+
+    Parameters
+    ----------
+    packages : list[dict[str, object]]
+        The lock's package entries.
+    name : str
+        The distribution name to find.
+    site : str
+        Human-readable name of the lock, used in failure messages.
+
+    Returns
+    -------
+    dict[str, object]
+        The one entry for ``name``.
+
+    Raises
+    ------
+    SelectionError
+        If no entry names ``name``, or more than one does.
+    """
+    matches = [entry for entry in packages if entry.get("name") == name]
+    if len(matches) != 1:
+        message = f"{site} must contain exactly one {name} package entry"
+        raise SelectionError(message)
+    return matches[0]
+
+
+def _metadata_table(entry: dict[str, object], *, site: str) -> dict[str, object]:
+    """Return one package entry's ``metadata`` table.
+
+    Parameters
+    ----------
+    entry : dict[str, object]
+        A package entry from a lockfile.
+    site : str
+        Human-readable name of the lock, used in failure messages.
+
+    Returns
+    -------
+    dict[str, object]
+        The entry's metadata table, empty when the entry has none.
+
+    Raises
+    ------
+    SelectionError
+        If ``metadata`` is present but is not a table.
+    """
+    metadata = entry.get("metadata", {})
+    if not isinstance(metadata, dict):
+        message = f"{site} must record package metadata as a table"
+        raise SelectionError(message)
+    return typ.cast("dict[str, object]", metadata)
+
+
+def _requirement_tables(
+    metadata: dict[str, object], *, site: str
+) -> list[dict[str, object]]:
+    """Return a lock's recorded requirements as an array of tables.
+
+    Parses the shape only. A requirement that is not a table, or a record that
+    is not an array, means the document is not a lock in the sense this reader
+    understands, and reporting that as "no cuprum requirement" would name the
+    wrong defect.
+
+    Parameters
+    ----------
+    metadata : dict[str, object]
+        A package entry's metadata table.
+    site : str
+        Human-readable name of the lock, used in failure messages.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        The recorded requirement tables.
+
+    Raises
+    ------
+    SelectionError
+        If ``requires-dist`` is absent, is not an array, or holds anything
+        other than tables.
+    """
+    recorded = metadata.get("requires-dist", [])
+    if not isinstance(recorded, list) or not all(
+        isinstance(entry, dict) for entry in recorded
+    ):
+        message = f"{site} must record its requirements as an array of tables"
+        raise SelectionError(message)
+    return [typ.cast("dict[str, object]", entry) for entry in recorded]
+
+
 def lock_specifier(lock_text: str, *, site: str) -> str:
     """Return the version the lock's own recorded requirement pins.
 
@@ -222,21 +322,12 @@ def lock_specifier(lock_text: str, *, site: str) -> str:
         requirement is not a single exact pin.
     """
     packages = _packages(lock_text, site=site)
-    project = [entry for entry in packages if entry.get("name") == "rust-prover-tools"]
-    if len(project) != 1:
-        message = f"{site} must contain exactly one rust-prover-tools package entry"
-        raise SelectionError(message)
-    metadata = project[0].get("metadata", {})
-    requirements = (
-        metadata.get("requires-dist", []) if isinstance(metadata, dict) else []
-    )
-    if not isinstance(requirements, list):
-        message = f"{site} must record its requirements as an array of tables"
-        raise SelectionError(message)
+    project = _one_package(packages, "rust-prover-tools", site=site)
+    recorded = _requirement_tables(_metadata_table(project, site=site), site=site)
     specifiers = [
         str(entry["specifier"])
-        for entry in requirements
-        if isinstance(entry, dict) and entry.get("name") == CUP
+        for entry in recorded
+        if entry.get("name") == CUP and "specifier" in entry
     ]
     if len(specifiers) != 1:
         message = (

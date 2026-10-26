@@ -144,6 +144,90 @@ def test_lock_specifier_rejects_a_lock_whose_requirement_is_a_range() -> None:
         lock_specifier(lock_text, site="test lock")
 
 
+@pytest.mark.parametrize(
+    ("lock_text", "reason"),
+    [
+        (
+            "[[package]]\nname = 'cuprum'\nversion = '0.2.0b2'\n",
+            "a lock with no project entry names the wrong package",
+        ),
+        (
+            (
+                "[[package]]\n"
+                "name = 'rust-prover-tools'\n"
+                "version = '0.1.0'\n"
+                "[package.metadata]\n"
+                "requires-dist = [{ name = 'cuprum' }]\n"
+            ),
+            "a requirement with no specifier records no version at all",
+        ),
+        (
+            (
+                "[[package]]\n"
+                "name = 'rust-prover-tools'\n"
+                "version = '0.1.0'\n"
+                "[package.metadata]\n"
+                "requires-dist = [{ name = 'cuprum', specifier = '==0.2.0b2' }, "
+                "{ name = 'cuprum', specifier = '==0.1.0' }]\n"
+            ),
+            "one project, two answers",
+        ),
+    ],
+    ids=["no-project-entry", "unspecified-requirement", "two-cuprum-requirements"],
+)
+def test_lock_specifier_rejects_a_lock_it_cannot_read_one_answer_from(
+    lock_text: str, reason: str
+) -> None:
+    """Each shape that leaves the recorded requirement unreadable is refused.
+
+    These are the branches the decomposition in
+    :func:`~tests.workflow_contracts.cuprum_selection._one_package` and
+    :func:`~tests.workflow_contracts.cuprum_selection._requirement_tables`
+    separates, so each is asserted to reach :class:`SelectionError` rather than
+    an ``IndexError`` or ``KeyError`` from indexing a shape it did not expect.
+    """
+    with pytest.raises(SelectionError):
+        lock_specifier(lock_text, site=f"site rejected: {reason}")
+
+
+def test_lock_specifier_reports_a_malformed_metadata_table_as_such() -> None:
+    """A malformed record is named as malformed, not as a missing requirement.
+
+    ``requires-dist = 'cuprum==0.2.0b2'`` is a string where a lock writes an
+    array of tables. Reading it as "no cuprum requirement" would send a
+    maintainer looking for a requirement that is visibly present in the file.
+    """
+    lock_text = (
+        "[[package]]\n"
+        "name = 'rust-prover-tools'\n"
+        "version = '0.1.0'\n"
+        "[package.metadata]\n"
+        "requires-dist = 'cuprum==0.2.0b2'\n"
+    )
+
+    with pytest.raises(SelectionError, match="array of tables"):
+        lock_specifier(lock_text, site="test lock")
+
+
+def test_lock_specifier_reports_an_empty_requirement_list_as_missing() -> None:
+    """An empty array is well formed, so it is reported as a missing pin.
+
+    The distinction matters in the other direction from the malformed case: an
+    empty ``requires-dist`` parses fine and names no cuprum, so the useful
+    message is that the requirement is absent, not that the lock is corrupt.
+    """
+    lock_text = (
+        "[[package]]\n"
+        "name = 'rust-prover-tools'\n"
+        "version = '0.1.0'\n"
+        "[package.metadata]\n"
+        "requires-dist = []\n"
+    )
+
+    with pytest.raises(SelectionError, match="exactly one cuprum requirement"):
+        lock_specifier(lock_text, site="test lock")
+
+
 def test_every_site_declares_the_same_exact_cuprum_pin() -> None:
     """The declared, locked, recorded, and installed versions all agree.
 
