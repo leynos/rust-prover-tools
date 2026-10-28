@@ -25,3 +25,8 @@ jobs:
       # no path prefix is stripped for module-glob translation.
       paths: "rust_prover_tools/"
       module-prefix-strip: ""
+      # Must stay inside pyproject.toml's requires-python: setup-uv exports
+      # this as UV_PYTHON for the whole job, and uv refuses to sync a project
+      # on an interpreter its range excludes. Omitting it selects the shared
+      # workflow's 3.13 default, which this project (>=3.14) rejects.
+      python-version: "3.14"

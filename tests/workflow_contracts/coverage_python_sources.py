@@ -235,6 +235,12 @@ def rejected_versions(accepted: SpecifierSet, requested: list[str]) -> list[str]
     -------
     list of str
         The requested versions outside ``accepted``, in their original order.
+        An empty entry is reported as rejected rather than parsed: it names no
+        version to compare, and ``Version("")`` raises instead of answering.
 
     """
-    return [version for version in requested if Version(version) not in accepted]
+    return [
+        version
+        for version in requested
+        if not version or Version(version) not in accepted
+    ]

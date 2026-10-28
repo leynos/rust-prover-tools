@@ -17,6 +17,15 @@ declares nothing. The ratchet baseline key already carries the interpreter
 misses its baseline rather than comparing against the wrong one; the lane
 parity check here makes that miss a contract failure instead of a silent
 restart.
+
+The three tests that read this repository's lanes skip inside mutmut's
+sandbox. mutmut copies the sources into a ``mutants/`` tree that omits
+``.github/``, and a collection-time ``FileNotFoundError`` there fails the
+baseline that mutmut runs before any mutant, aborting the whole run. The skip
+is keyed on mutmut's marker rather than on the files being absent, so deleting
+a lane from an ordinary checkout still fails these tests instead of quietly
+skipping them. The synthetic selection and range tests below need neither
+file, so they keep running in the sandbox.
 """
 
 from __future__ import annotations
@@ -27,6 +36,8 @@ import typing as typ
 import pytest
 import yaml
 from packaging.specifiers import SpecifierSet
+
+from tests.conftest import IS_MUTMUT_SANDBOX
 
 from .coverage_python_sources import (
     LANES,
@@ -55,6 +66,21 @@ AGREE: typ.Final[str] = "3.14"
 CONFLICT: typ.Final[str] = "3.13"
 #: The one interpreter both coverage lanes are pinned to.
 PINNED: typ.Final[str] = "3.14"
+#: The repository-backed tests below read the real lanes and the project's
+#: ``requires-python``, so they need these files to exist.
+REQUIRED_FILES = (*(WORKFLOWS / lane for lane in LANES), ROOT / "pyproject.toml")
+#: mutmut copies the sources into a ``mutants/`` sandbox that omits ``.github/``,
+#: so the tests below would fail there with ``FileNotFoundError`` before any
+#: mutant runs, aborting the job. They skip only in that sandbox: in an ordinary
+#: run a missing lane is a real regression and skipping would hide it. The
+#: synthetic tests need none of the files, so they stay unguarded either way.
+NEEDS_REPOSITORY_FILES = pytest.mark.skipif(
+    IS_MUTMUT_SANDBOX,
+    reason=(
+        "mutmut's mutants/ sandbox does not copy .github/, so the coverage "
+        "lanes cannot be read there"
+    ),
+)
 
 
 def _lane_calls() -> dict[str, list[CoverageCall]]:
@@ -70,11 +96,29 @@ def _lane_calls() -> dict[str, list[CoverageCall]]:
     }
 
 
+#: The tests below that read the repository's own lanes and ``requires-python``.
+REPOSITORY_BACKED: typ.Final[tuple[str, ...]] = (
+    "test_both_lanes_call_generate_coverage",
+    "test_every_call_declares_one_accepted_python",
+    "test_both_lanes_measure_on_one_python",
+)
+
+
+def _carries_skip_marker(test: object) -> bool:
+    """Say whether ``test`` carries this module's sandbox skip marker."""
+    return any(
+        marker.name == "skipif" and marker.args and marker.args[0] is IS_MUTMUT_SANDBOX
+        for marker in getattr(test, "pytestmark", [])
+    )
+
+
+@NEEDS_REPOSITORY_FILES
 def test_both_lanes_call_generate_coverage() -> None:
     """The pull-request lane and the publisher each measure coverage."""
     assert all(_lane_calls().values()), f"{LANES} must each call generate-coverage"
 
 
+@NEEDS_REPOSITORY_FILES
 def test_every_call_declares_one_accepted_python() -> None:
     """Each call names a Python, every source agrees, and the project accepts it."""
     accepted = requires_python((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -87,6 +131,7 @@ def test_every_call_declares_one_accepted_python() -> None:
             )
 
 
+@NEEDS_REPOSITORY_FILES
 def test_both_lanes_measure_on_one_python() -> None:
     """Both lanes measure on one Python, as the pull-request ratchet assumes."""
     effective = {call.effective for calls in _lane_calls().values() for call in calls}
@@ -94,6 +139,33 @@ def test_both_lanes_measure_on_one_python() -> None:
     assert effective == {PINNED}, (
         f"coverage lanes measure on {sorted(effective)}, not only {PINNED}"
     )
+
+
+def test_the_lane_tests_skip_only_inside_the_mutmut_sandbox() -> None:
+    """A missing lane fails an ordinary run instead of silently skipping.
+
+    The skip is keyed on mutmut's sandbox marker rather than on the files being
+    absent, so deleting a lane from a normal checkout still fails this module.
+    """
+    (condition,) = NEEDS_REPOSITORY_FILES.mark.args
+    assert condition is IS_MUTMUT_SANDBOX, (
+        "the repository-backed tests must skip on mutmut's sandbox marker, not "
+        f"on their files being missing; the condition is {condition!r}"
+    )
+    guarded = set(REPOSITORY_BACKED)
+    carriers = {
+        name for name in REPOSITORY_BACKED if _carries_skip_marker(globals()[name])
+    }
+    assert carriers == guarded, (
+        "these repository-backed tests read .github/ but carry no sandbox skip: "
+        f"{sorted(guarded - carriers)}"
+    )
+    if IS_MUTMUT_SANDBOX:
+        return
+    absent = [
+        str(path.relative_to(ROOT)) for path in REQUIRED_FILES if not path.exists()
+    ]
+    assert not absent, f"an ordinary checkout is missing coverage lanes: {absent}"
 
 
 def _workflow(

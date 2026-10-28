@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import typing as typ
 
 import pytest
@@ -10,6 +11,36 @@ import pytest
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
+
+
+#: mutmut sets this in every process it runs tests in. It is also set for the
+#: baseline it runs before scoring any mutant, which is the run whose failure
+#: aborts the whole mutation job.
+MUTMUT_UNDER_TEST_ENV: typ.Final[str] = "MUTANT_UNDER_TEST"
+
+
+def is_mutmut_sandbox(environment: cabc.Mapping[str, str]) -> bool:
+    """Say whether a test process is running inside mutmut's sandbox.
+
+    Parameters
+    ----------
+    environment : collections.abc.Mapping of str to str
+        The environment to inspect, normally ``os.environ``.
+
+    Returns
+    -------
+    bool
+        ``True`` when mutmut's under-test marker is present.
+
+    """
+    return MUTMUT_UNDER_TEST_ENV in environment
+
+
+#: Whether this pytest process is one mutmut started. Read once because a
+#: running process's environment cannot change underneath it, and
+#: ``pytest.mark.skipif`` takes a condition rather than a callable in pytest's
+#: own type stubs.
+IS_MUTMUT_SANDBOX: typ.Final[bool] = is_mutmut_sandbox(os.environ)
 
 
 @dc.dataclass(frozen=True, slots=True)

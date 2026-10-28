@@ -58,18 +58,18 @@ def test_only_missing_components_are_absent(
     assert checked_stat(tmp_path / "missing") is None
 
 
-def test_resolution_failure_is_a_typed_validation_error(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A symlink loop cannot escape the expected CLI error boundary."""
+def test_resolution_failure_is_a_typed_validation_error(tmp_path: Path) -> None:
+    """A symlink loop cannot escape the expected CLI error boundary.
 
-    def resolve(_path: Path, *, strict: bool = False) -> Path:
-        raise OSError(errno.ELOOP, "injected symlink loop")
+    The loop is real rather than monkeypatched: mutmut's own trampoline calls
+    ``Path.resolve`` while it records a hit, so patching that method out from
+    under it breaks the mutation run instead of testing the boundary.
+    """
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
 
-    monkeypatch.setattr(Path, "resolve", resolve)
     with pytest.raises(ProverToolError, match="resolve filesystem input"):
-        checked_resolve(tmp_path)
+        checked_resolve(loop)
 
 
 @pytest.mark.parametrize(
