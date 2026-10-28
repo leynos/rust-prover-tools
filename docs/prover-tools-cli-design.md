@@ -63,6 +63,42 @@ The implementation does not use shell strings. User-provided command text is
 converted into an argument vector with `shlex.split`, and every command is
 executed as an argument vector.
 
+## Cuprum version and echo policy
+
+The project pins `cuprum==0.2.0b2` exactly, in `pyproject.toml`, and
+`tests/workflow_contracts/test_cuprum_selection.py` holds the declared version,
+the version `uv.lock` resolves, the requirement `uv.lock` records, and the
+version installed in the test interpreter in agreement. The expected version is
+read from `pyproject.toml`; the test holds no version literal, so a bump moves
+every site together or fails naming the site that lagged.
+
+An exact pin rather than a minimum version is deliberate. Cuprum 0.2 is a beta
+whose prerelease line is still moving, and it changed `run_sync`'s signature
+between 0.1.0 and 0.2.0b2: the `echo` and `capture` keywords became fields of
+`RunOutputOptions`. Dependabot edits `pyproject.toml` and `uv.lock` and its
+pull requests auto-merge, so a range would let an unreviewed later beta reach
+this repository.
+
+Cuprum 0.2 splits capture from echo. `run_command` builds a `RunOutputOptions`
+whose `echo` mirrors the child's output to the parent's streams and whose
+`broken_pipe_policy` is `BrokenPipePolicy.BEST_EFFORT`. The default policy,
+`STRICT`, propagates `BrokenPipeError` out of `run_sync`; because echoed output
+is the public CLI stream, its reader is often a pipe that closes early
+(`| head`, a quit pager, a CI collector that has seen enough), and failing a
+proof run whose proof had already succeeded would misreport it. `BEST_EFFORT`
+stops echoing the affected stream and keeps capture, line observation, and
+child reaping, so `CommandResult` still carries the output and the child's exit
+status. Cuprum records the handled failure in `CommandResult.relay_fallbacks`;
+`run_command` does not forward those to the caller because no prover workflow
+acts on them.
+
+Cuprum applies its `env` overlay to the parent environment rather than
+replacing it, which is why `prepare_kani_command` builds a child dictionary
+that is an overlay and lets inherited variables survive. `EnvMode.REPLACE`
+exists in 0.2.0b2 for callers that need an exact environment, but it is
+imported from `cuprum.context` rather than the package root, and no current
+workflow needs it.
+
 ## Test strategy
 
 Unit tests cover pure helpers and command orchestration. They use cmd-mox to

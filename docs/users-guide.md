@@ -138,6 +138,17 @@ by `verus --version`, optionally installs that Rust toolchain with `rustup`,
 and then runs Verus against the proof file. Verus output is streamed to
 standard output.
 
+Streaming continues when the reader goes away. Piping into `head`, quitting a
+pager, or an interrupted CI log collector closes the receiving end; the run
+then stops displaying output, still captures everything Verus wrote, and the
+command result carries Verus's own exit status rather than a broken-pipe
+failure. That guarantee stops at the `prover-tools` process boundary. Over a
+closed pipe the process itself can still exit 120, because Python reports that
+its own standard output was closed while shutting down. An exit status read
+through a pipe therefore cannot distinguish a passing proof from a failing one;
+rely on the command result, or on an unpiped run, where the status is the
+prover's own.
+
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
 output and continues to install or use the reported Rust toolchain.

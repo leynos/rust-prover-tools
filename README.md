@@ -129,6 +129,10 @@ ______________________________________________________________________
   construction, and test strategy.
 - [Developers' guide](docs/developers-guide.md) — adding prover workflows and
   writing command tests.
+- [Cuprum users' guide](docs/cuprum-users-guide.md) and
+  [Cuprum 0.2.0 migration guide](docs/cuprum-v0-2-0-migration-guide.md) —
+  vendored copies of the command-execution library's documentation at the
+  pinned release.
 
 ______________________________________________________________________
 
