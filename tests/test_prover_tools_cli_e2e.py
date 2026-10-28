@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import typing as typ
 
 import pytest
@@ -29,7 +30,9 @@ _READER_LINES = 5
 
 #: Seconds allowed for the CLI to finish once its reader has gone. The pytest
 #: global timeout is 30 seconds, so this leaves room to report a hang as a
-#: failed assertion rather than a killed test.
+#: failed assertion rather than a killed test. The bound covers the reads as
+#: well as the wait: a CLI that stops writing marks itself as hung by never
+#: closing its own end of the pipe.
 _CHILD_TIMEOUT = 20
 
 
@@ -261,18 +264,37 @@ def read_until_the_reader_goes_away(
         if process.stdout is None or process.stderr is None:  # pragma: no cover
             msg = "subprocess pipes were not created"
             raise AssertionError(msg)
-        consumed = [
-            line for _, line in zip(range(reader_lines), process.stdout, strict=False)
-        ]
-        process.stdout.close()
-        stderr = process.stderr.read()
-        process.stderr.close()
-        try:
-            return process.wait(timeout=_CHILD_TIMEOUT), consumed
-        except subprocess.TimeoutExpired:  # pragma: no cover - diagnosed as hang
+        expired = threading.Event()
+
+        def abandon_the_run() -> None:
+            # Killing the child is what unblocks a read that would otherwise
+            # wait forever for output the CLI never writes.
+            expired.set()
             process.kill()
-            msg = f"the CLI did not exit after its reader closed; stderr: {stderr!r}"
+
+        watchdog = threading.Timer(_CHILD_TIMEOUT, abandon_the_run)
+        watchdog.daemon = True
+        watchdog.start()
+        consumed: list[str] = []
+        stderr = ""
+        try:
+            consumed = [
+                line
+                for _, line in zip(range(reader_lines), process.stdout, strict=False)
+            ]
+            process.stdout.close()
+            stderr = process.stderr.read()
+            process.stderr.close()
+            status = process.wait()
+        finally:
+            watchdog.cancel()
+        if expired.is_set():  # pragma: no cover - diagnosed as hang
+            msg = (
+                f"the CLI neither finished within {_CHILD_TIMEOUT}s of its reader "
+                f"closing nor stopped writing; stderr: {stderr!r}"
+            )
             raise AssertionError(msg) from None
+        return status, consumed
 
 
 @pytest.mark.parametrize("prover_status", [0, 3])

@@ -163,9 +163,22 @@ The process exit status survives that reader going away too. Python normally
 replaces the requested status with 120 when it cannot flush its own standard
 output at shutdown, which would hide a failed proof behind a passing one for
 anyone reading the status through a pipe. `prover-tools` guards that flush, so
-`prover-tools verus run ... | head -n 5`, a `tee`-based CI log capture, or a
-shell pipeline that closes early all report the prover's status: `0` when the
+the `prover-tools` process itself still exits with Verus's status: `0` when the
 proof passed, and the prover's own non-zero status when it failed.
+
+A shell pipeline reports the status of its last command, not the prover's, so
+`prover-tools verus run ... | head -n 5` succeeds even when the proof fails. To
+read the prover's status from a pipeline that closes early, inspect the first
+stage explicitly:
+
+```bash
+prover-tools verus run --proof-file proofs/example.rs | tee build/verus.log
+status=${PIPESTATUS[0]}
+```
+
+`PIPESTATUS` must be read before running any other command, because it is
+overwritten by each one. It is a Bash feature; `zsh` spells the same array
+`pipestatus`.
 
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
