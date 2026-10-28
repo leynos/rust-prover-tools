@@ -152,20 +152,25 @@ def test_a_closed_reader_leaves_the_run_and_its_capture_intact(
 ) -> None:
     """`run_command` finishes when its own stdout has gone away.
 
-    The proof has already succeeded by the time the reader closes, so failing
-    the run here would report a proof failure that did not happen. Capture must
-    also survive: callers inspect `CommandResult.stdout`, and a run whose echo
-    broke still owes them the child's output.
+    Capture must survive: callers inspect `CommandResult.stdout`, and a run
+    whose echo broke still owes them the child's output. The child then exits
+    with a failure of its own, because the policy's other half is that the run
+    reports the child's status rather than the echo failure. A child that
+    exited 0 could not tell a preserved status from a lost one, so the
+    assertion here is on a status the run could not have invented.
     """
     reader = _ClosedReader()
     monkeypatch.setattr(sys, "stdout", reader)
-    source = f"for index in range({_CHILD_LINES}): print('proof line', index)"
+    source = (
+        f"for index in range({_CHILD_LINES}): print('proof line', index)\n"
+        "raise SystemExit(23)"
+    )
 
     result = run_command(
         CommandSpec((sys.executable, "-c", source), echo=True),
     )
 
-    assert result.exit_code == 0, result.stderr
+    assert result.exit_code == 23, result.stderr
     assert len(result.stdout.splitlines()) == _CHILD_LINES, (
         "capture must continue after echo is disabled"
     )

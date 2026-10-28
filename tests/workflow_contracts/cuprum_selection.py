@@ -186,20 +186,19 @@ def lock_pin(lock_text: str, *, site: str) -> str:
     Raises
     ------
     SelectionError
-        If the lock holds no cuprum package entry, or holds more than one.
+        If the lock holds no cuprum package entry, holds more than one, or
+        holds one that records no version.
     """
     packages = _packages(lock_text, site=site)
-    locked = [
-        str(entry["version"])
-        for entry in packages
-        if entry.get("name") == CUP and "version" in entry
-    ]
-    if len(locked) != 1:
-        message = (
-            f"{site} must contain exactly one cuprum package entry, found {locked}"
-        )
+    # Count the entries that name cuprum before reading any version. A lock
+    # holding one versioned entry and one unversioned entry names cuprum
+    # twice, and filtering on ``version`` first would drop the second and let
+    # two requirements read as a single clean pin.
+    entry = _one_package(packages, CUP, site=site)
+    if "version" not in entry:
+        message = f"{site} records a cuprum package entry with no version"
         raise SelectionError(message)
-    return locked[0]
+    return str(entry["version"])
 
 
 def _one_package(

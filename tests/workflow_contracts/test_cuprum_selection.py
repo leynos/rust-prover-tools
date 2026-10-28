@@ -140,6 +140,35 @@ def test_lock_pin_requires_exactly_one_package_entry(lock_text: str) -> None:
         lock_pin(lock_text, site="test lock")
 
 
+def test_lock_pin_counts_an_unversioned_cuprum_entry_as_a_second_site() -> None:
+    """An entry with no version still names cuprum and must be counted.
+
+    Filtering on ``version`` before counting would drop the unversioned entry
+    and let a lock that names cuprum twice read as one clean pin, which is the
+    drift this contract exists to catch.
+    """
+    lock_text = (
+        "[[package]]\nname = 'cuprum'\nversion = '0.2.0b2'\n\n"
+        "[[package]]\nname = 'cuprum'\n"
+    )
+
+    with pytest.raises(SelectionError, match="exactly one cuprum package entry"):
+        lock_pin(lock_text, site="test lock")
+
+
+def test_lock_pin_names_a_lone_unversioned_entry_as_unversioned() -> None:
+    """The sole cuprum entry lacking a version is reported as such.
+
+    Counting first splits the two failures apart: with one matching entry the
+    defect is the missing version, not the count, so the message has to say
+    which of the two it is.
+    """
+    lock_text = "[[package]]\nname = 'cuprum'\n"
+
+    with pytest.raises(SelectionError, match="no version"):
+        lock_pin(lock_text, site="test lock")
+
+
 def test_lock_specifier_rejects_a_lock_whose_requirement_is_a_range() -> None:
     """A stale recorded requirement is reported as such, not as a version drift.
 
