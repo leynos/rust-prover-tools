@@ -107,8 +107,9 @@ class VerusRunOptions:
     ----------
     paths : VerusPaths
         Verus path configuration.
-    proof_file : Path | None
-        Optional proof file override.
+    proof_files : tuple[Path, ...]
+        Proof files to verify, in the order given. An empty tuple selects the
+        compatibility default `EXAMPLE_VERUS_PROOF_PATH`.
     install_dir : Path | None
         Optional installation directory override.
     target : str
@@ -120,11 +121,11 @@ class VerusRunOptions:
     should_install_missing : bool
         Whether to install Verus if the default binary is missing.
     extra_args : tuple[str, ...]
-        Extra Verus arguments appended after the proof file.
+        Extra Verus arguments appended after each proof file.
     """
 
     paths: VerusPaths
-    proof_file: Path | None = None
+    proof_files: tuple[Path, ...] = ()
     install_dir: Path | None = None
     target: str = DEFAULT_TARGET
     verus_bin: str | None = None
@@ -166,12 +167,16 @@ class ProofFailureContext:
         Path to the proof file that failed verification.
     toolchain : str
         Rust toolchain identifier used for the proof run.
+    proved_proof_files : tuple[Path, ...]
+        Proof files verified successfully before the failing file, in the order
+        they ran. Empty for a single-file run or a failure on the first file.
     """
 
     exit_code: int
     binary: Path
     proof_file: Path
     toolchain: str
+    proved_proof_files: tuple[Path, ...] = ()
 
 
 class VerusProofFailedError(ProverToolError):
@@ -189,15 +194,20 @@ class VerusProofFailedError(ProverToolError):
         Parameters
         ----------
         context : ProofFailureContext
-            Failure context containing the exit code, binary, proof file, and
-            toolchain used to build the user-facing error message.
+            Failure context containing the exit code, binary, proof file,
+            toolchain, and any files proved before the failure used to build
+            the user-facing error message.
         """
-        super().__init__(
+        message = (
             f"Verus proofs failed (exit {context.exit_code}).\n"
             f"Binary: {context.binary}\n"
             f"Proof file: {context.proof_file}\n"
-            f"Toolchain: {context.toolchain}",
+            f"Toolchain: {context.toolchain}"
         )
+        if context.proved_proof_files:
+            proved = ", ".join(str(path) for path in context.proved_proof_files)
+            message += f"\nProved before the failure: {proved}"
+        super().__init__(message)
         self.exit_code = context.exit_code
 
 

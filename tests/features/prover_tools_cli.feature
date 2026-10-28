@@ -29,3 +29,15 @@ Feature: Prover tools command-line interface
     When the user runs a Verus proof on "example.rs"
     Then the command fails
     And stderr contains the missing toolchain message
+
+  Scenario: Verify several Verus proof files in one invocation
+    Given a repository with Verus version "0.1.0"
+    And the Verus proof for "passing.rs" is accepted
+    And the Verus proof for "failing.rs" is rejected with exit code 3
+    And a Verus binary that reports per-file proof verdicts
+    When the user runs Verus proofs on "passing.rs" and "failing.rs"
+    Then the command fails
+    And stdout contains the proof verification result for "passing.rs"
+    And stderr names the failing proof file "failing.rs"
+    And stderr reports the proof file proved before the failure "passing.rs"
+    And the command exits with the prover exit code 3

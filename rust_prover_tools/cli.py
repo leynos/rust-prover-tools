@@ -278,8 +278,11 @@ def run(
     *,
     repo_root: typ.Annotated[Path | None, Parameter(env_var="INPUT_REPO_ROOT")] = None,
     proof_file: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("VERUS_PROOF_FILE", "INPUT_PROOF_FILE")),
+        tuple[Path, ...] | None,
+        Parameter(
+            allow_repeating=True,
+            env_var=("VERUS_PROOF_FILE", "INPUT_PROOF_FILE"),
+        ),
     ] = None,
     version_file: typ.Annotated[
         Path | None,
@@ -320,8 +323,8 @@ def run(
     ----------
     repo_root : Path | None
         Repository root used to resolve default tool pin paths.
-    proof_file : Path | None
-        Optional proof file override.
+    proof_file : tuple[Path, ...] | None
+        Optional proof file overrides, verified in the order given.
     version_file : Path | None
         Optional Verus version pin override.
     checksum_file : Path | None
@@ -337,12 +340,17 @@ def run(
     install_missing : bool
         Whether to install the default Verus binary when missing.
     extra_arg : list[str] | None
-        Extra Verus arguments appended after the proof file.
+        Extra Verus arguments appended after each proof file.
 
     Returns
     -------
     int
         Exit code, where proof failures preserve the Verus exit code.
+
+    Notes
+    -----
+    Repeating `--proof-file` runs the verifier once per file, because Verus
+    accepts one input filename at a time. See `run_verus` for failures.
     """
     try:
         lines = run_verus(
@@ -352,7 +360,7 @@ def run(
                     version_file=version_file,
                     checksum_file=checksum_file,
                 ),
-                proof_file=proof_file,
+                proof_files=tuple(proof_file or ()),
                 install_dir=install_dir,
                 target=target,
                 verus_bin=verus_bin,

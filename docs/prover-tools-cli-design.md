@@ -135,7 +135,18 @@ Actions-style configuration.
 
 The Verus compatibility proof default is named `EXAMPLE_VERUS_PROOF_PATH` in
 code. Callers should provide `--proof-file` for project-specific proof entry
-points.
+points. `--proof-file` is repeatable and `VerusRunOptions.proof_files` carries
+a tuple, because the predecessor shell wrapper iterated a proof-file array. An
+empty tuple keeps the compatibility default, so the one-file form is unchanged.
+
+Verus refuses more than one input filename per invocation, so a multi-file run
+is a sequence of verifier invocations in the caller's order. `run_verus` checks
+every path before the first invocation, then stops at the first non-zero exit.
+The failure keeps `ProofFailureContext.proof_file` as the file that failed and
+adds `proved_proof_files` for the files already verified, so a partial run
+reports both halves of its result instead of collapsing to all-or-nothing. A
+manifest or argfile was rejected: the predecessor accepted a list of paths, and
+a repeatable flag covers that without inventing a file format.
 
 The Verus run path carries the selected release target into installer fallback.
 This keeps `prover-tools verus run --target <target>` aligned with

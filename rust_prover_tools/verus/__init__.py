@@ -36,8 +36,11 @@ from rust_prover_tools.verus.run import (
     ensure_verus_toolchain,
     fallback_warning,
     resolve_default_verus,
+    resolve_proof_files,
+    resolve_run_binary,
     resolve_verus_bin,
     run_verus,
+    verify_proof_files,
 )
 
 __all__ = [
@@ -62,7 +65,10 @@ __all__ = [
     "locate_extracted_verus_dir",
     "read_verus_version",
     "resolve_default_verus",
+    "resolve_proof_files",
+    "resolve_run_binary",
     "resolve_verus_bin",
     "run_verus",
     "verify_archive_sha",
+    "verify_proof_files",
 ]

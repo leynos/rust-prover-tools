@@ -209,7 +209,7 @@ def test_run_verus_uses_existing_binary_when_version_probe_succeeds(
     lines = run_verus(
         VerusRunOptions(
             paths=VerusPaths(repo_root=tmp_path),
-            proof_file=proof_file,
+            proof_files=(proof_file,),
         ),
     )
 
@@ -251,7 +251,7 @@ def test_run_verus_installs_missing_toolchain(
     cmd_mox.stub("rustup").runs(rustup_handler)
 
     run_verus(
-        VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_file=proof_file)
+        VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_files=(proof_file,))
     )
 
     assert [call.args for call in cmd_mox.journal] == [
@@ -279,12 +279,122 @@ def test_run_verus_raises_when_proof_fails(
         "exit 5\n",
     )
 
-    with pytest.raises(VerusProofFailedError, match="Verus proofs failed"):
+    with pytest.raises(VerusProofFailedError, match="Verus proofs failed") as exc_info:
         run_verus(
             VerusRunOptions(
-                paths=VerusPaths(repo_root=tmp_path), proof_file=proof_file
+                paths=VerusPaths(repo_root=tmp_path), proof_files=(proof_file,)
             ),
         )
+
+    assert exc_info.value.exit_code == 5, "Proof failure should keep the exit code"
+    assert f"Proof file: {proof_file}" in str(exc_info.value), (
+        "Single-file proof failure should name the proof file"
+    )
+    assert "Proved before the failure" not in str(exc_info.value), (
+        "Single-file failure should not claim an earlier partial result"
+    )
+
+
+def test_run_verus_proves_each_proof_file_in_order(tmp_path: Path) -> None:
+    """Repeated proof files each get their own verifier invocation, in order."""
+    write_verus_pins(tmp_path)
+    proof_files = tuple(tmp_path / name for name in ("first.rs", "second.rs"))
+    for proof_file in proof_files:
+        proof_file.write_text("proof", encoding="utf-8")
+    invocation_log = tmp_path / "invocations.log"
+    binary = tmp_path / ".verus" / "2025.01.01" / "verus" / "verus"
+    make_executable(
+        binary,
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then\n'
+        "  printf 'Verus\\nToolchain: nightly-test\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        f'printf "%s\\n" "$*" >> "{invocation_log}"\n',
+    )
+
+    run_verus(
+        VerusRunOptions(
+            paths=VerusPaths(repo_root=tmp_path),
+            proof_files=proof_files,
+            extra_args=("--crate-type=lib",),
+        ),
+    )
+
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        f"{proof_file} --crate-type=lib" for proof_file in proof_files
+    ], "Each proof file should be verified once, in the order given"
+
+
+def test_run_verus_stops_at_first_failing_proof_file(
+    tmp_path: Path,
+) -> None:
+    """A later failure names its own file and reports the earlier proved file."""
+    write_verus_pins(tmp_path)
+    proved_file = tmp_path / "proved.rs"
+    failing_file = tmp_path / "failing.rs"
+    unrun_file = tmp_path / "unrun.rs"
+    for proof_file in (proved_file, failing_file, unrun_file):
+        proof_file.write_text("proof", encoding="utf-8")
+    invocation_log = tmp_path / "invocations.log"
+    binary = tmp_path / ".verus" / "2025.01.01" / "verus" / "verus"
+    make_executable(
+        binary,
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then\n'
+        "  printf 'Verus\\nToolchain: nightly-test\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        f'printf "%s\\n" "$1" >> "{invocation_log}"\n'
+        f'if [ "$1" = "{failing_file}" ]; then\n'
+        "  exit 7\n"
+        "fi\n"
+        "exit 0\n",
+    )
+
+    with pytest.raises(VerusProofFailedError) as exc_info:
+        run_verus(
+            VerusRunOptions(
+                paths=VerusPaths(repo_root=tmp_path),
+                proof_files=(proved_file, failing_file, unrun_file),
+            ),
+        )
+
+    message = str(exc_info.value)
+    assert exc_info.value.exit_code == 7, "Failing file should supply the exit code"
+    assert f"Proof file: {failing_file}" in message, (
+        "Failure should name the file that failed, not the first file"
+    )
+    assert f"Proved before the failure: {proved_file}" in message, (
+        "Failure should report the file proved before it"
+    )
+    assert str(unrun_file) not in message, (
+        "Files after the failure should not be reported as proved or failed"
+    )
+    assert invocation_log.read_text(encoding="utf-8").splitlines() == [
+        str(proved_file),
+        str(failing_file),
+    ], "Run should stop at the first failing proof file"
+
+
+def test_run_verus_rejects_missing_proof_file_before_proving(tmp_path: Path) -> None:
+    """Every proof file is checked before the first verifier invocation."""
+    write_verus_pins(tmp_path)
+    present_file = tmp_path / "present.rs"
+    present_file.write_text("proof", encoding="utf-8")
+    missing_file = tmp_path / "missing.rs"
+
+    with pytest.raises(ProverToolError, match="Verus proof file not found") as exc_info:
+        run_verus(
+            VerusRunOptions(
+                paths=VerusPaths(repo_root=tmp_path),
+                proof_files=(present_file, missing_file),
+            ),
+        )
+
+    assert str(missing_file) in str(exc_info.value), (
+        "Missing-file error should name the path that does not exist"
+    )
 
 
 def test_run_verus_installs_missing_default_binary(
@@ -310,7 +420,7 @@ def test_run_verus_installs_missing_default_binary(
     cmd_mox.stub("unzip").returns()
 
     run_verus(
-        VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_file=proof_file)
+        VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_files=(proof_file,))
     )
 
     assert [call.command for call in list(cmd_mox.journal)[:3]] == [
@@ -346,7 +456,7 @@ def test_run_verus_forwards_target_to_missing_binary_installer(
     run_verus(
         VerusRunOptions(
             paths=VerusPaths(repo_root=tmp_path),
-            proof_file=proof_file,
+            proof_files=(proof_file,),
             target=target,
         ),
     )
@@ -384,7 +494,7 @@ def test_run_verus_warns_and_falls_back_from_invalid_override(
     lines = run_verus(
         VerusRunOptions(
             paths=VerusPaths(repo_root=tmp_path),
-            proof_file=proof_file,
+            proof_files=(proof_file,),
             verus_bin=str(invalid_binary),
         ),
     )
@@ -404,6 +514,6 @@ def test_run_verus_rejects_missing_proof_file(tmp_path: Path) -> None:
         run_verus(
             VerusRunOptions(
                 paths=VerusPaths(repo_root=tmp_path),
-                proof_file=missing_proof,
+                proof_files=(missing_proof,),
             ),
         )
