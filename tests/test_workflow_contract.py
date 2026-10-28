@@ -32,12 +32,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.workflow_contracts.coverage_python_sources import (
-    rejected_versions,
-    requires_python,
-)
+from tests.conftest import IS_MUTMUT_SANDBOX
+from tests.workflow_contracts.coverage_python_sources import requires_python
 from tests.workflow_contracts.mutation_caller_sources import (
     SHARED_DEFAULT_PYTHON,
+    is_explicit_and_accepted,
     python_version_input,
     resolved_python,
 )
@@ -46,12 +45,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "mutation-testing.yml"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
+#: mutmut copies the sources into a ``mutants/`` sandbox that omits ``.github/``,
+#: so these tests cannot read the caller there and would fail during the
+#: baseline mutmut runs before any mutant, aborting the job. They skip only in
+#: that sandbox; in an ordinary run a missing file is a real regression.
 pytestmark = pytest.mark.skipif(
-    not (WORKFLOW_PATH.exists() and PYPROJECT_PATH.exists()),
+    IS_MUTMUT_SANDBOX,
     reason=(
-        "workflow or project file not present in this working copy (for "
-        "example inside mutmut's mutants/ sandbox, which does not copy "
-        ".github/)"
+        "mutmut's mutants/ sandbox does not copy .github/, so the caller "
+        "cannot be read there"
     ),
 )
 
@@ -180,7 +182,9 @@ def test_with_block_carries_the_caller_configuration() -> None:
 
 def test_the_caller_selects_a_python_the_project_accepts() -> None:
     """The caller declares a string Python explicitly and inside requires-python."""
-    selection = python_version_input(WORKFLOW_PATH.read_text(encoding="utf-8"))
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    pyproject = PYPROJECT_PATH.read_text(encoding="utf-8")
+    selection = python_version_input(workflow)
     assert selection is not None, (
         "jobs.mutation.with must declare python-version explicitly; an "
         f"omitted input falls back to the shared {SHARED_DEFAULT_PYTHON} "
@@ -196,11 +200,10 @@ def test_the_caller_selects_a_python_the_project_accepts() -> None:
         "explicit empty string does not take the shared default and is "
         "rejected by the shared workflow's version check"
     )
-    accepted = requires_python(PYPROJECT_PATH.read_text(encoding="utf-8"))
-    assert not rejected_versions(accepted, [selection]), (
+    assert is_explicit_and_accepted(workflow, pyproject), (
         f"the caller selects Python {selection}, outside the project's "
-        f"requires-python {accepted}; raise the caller's selection in the "
-        "same change as the floor"
+        f"requires-python {requires_python(pyproject)}; raise the caller's "
+        "selection in the same change as the floor"
     )
 
 
@@ -246,23 +249,6 @@ CALLER_IDS: typ.Final[list[str]] = [
 ACCEPTED_CALLERS: typ.Final[frozenset[str]] = frozenset({"baseline", "newer"})
 
 
-def is_explicit_and_accepted(declaration: str, accepted: str) -> bool:
-    """Say whether a caller declares an explicit string inside ``accepted``.
-
-    The reader and both judgements are the ones the repository test applies,
-    so the synthetic cases exercise the real contract rather than a copy.
-    """
-    selection = python_version_input(_caller(declaration))
-    # An empty resolved value has no version to compare, so it can only fail
-    # the range check; short-circuit to keep a blank out of ``Version``.
-    effective = resolved_python(selection)
-    is_explicit = isinstance(selection, str) and bool(selection)
-    is_in_range = bool(effective) and not rejected_versions(
-        requires_python(accepted), [effective]
-    )
-    return is_explicit and is_in_range
-
-
 @pytest.mark.parametrize("caller", CALLERS, ids=CALLER_IDS)
 def test_the_selection_resolves_to_the_shared_default_only_when_absent(
     caller: SyntheticCaller,
@@ -286,9 +272,13 @@ def test_only_an_explicit_compatible_string_is_accepted(
     caller: SyntheticCaller, identifier: str
 ) -> None:
     """Omission, emptiness, an older version and a YAML float all fail."""
-    assert is_explicit_and_accepted(caller.declaration, REQUIRES_PYTHON_314) is (
-        identifier in ACCEPTED_CALLERS
-    ), f"caller {identifier} declared {caller.raw!r}"
+    # The same judgement runs over the checked-in caller, so these cases cannot
+    # drift from the contract the repository itself is held to.
+    assert is_explicit_and_accepted(
+        _caller(caller.declaration), REQUIRES_PYTHON_314
+    ) is (identifier in ACCEPTED_CALLERS), (
+        f"caller {identifier} declared {caller.raw!r}"
+    )
 
 
 @pytest.mark.parametrize(

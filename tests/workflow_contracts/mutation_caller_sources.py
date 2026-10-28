@@ -24,6 +24,11 @@ import typing as typ
 
 import yaml
 
+from tests.workflow_contracts.coverage_python_sources import (
+    rejected_versions,
+    requires_python,
+)
+
 #: The shared mutation workflow's default ``python-version`` at the pin in
 #: ``.github/workflows/mutation-testing.yml``. Omission selects it, which is
 #: why omission is a contract failure for a project whose
@@ -89,3 +94,35 @@ def resolved_python(selection: object) -> str:
     if selection is None:
         return SHARED_DEFAULT_PYTHON
     return str(selection)
+
+
+def is_explicit_and_accepted(workflow: str, pyproject: str) -> bool:
+    """Say whether a caller selects an explicit string the project accepts.
+
+    Both readers are the ones the repository contract applies, so this answers
+    for the checked-in caller and for a synthetic one alike, and the synthetic
+    cases cannot drift from the real check.
+
+    Parameters
+    ----------
+    workflow : str
+        The text of the caller workflow.
+    pyproject : str
+        The text of the project declaration holding ``requires-python``.
+
+    Returns
+    -------
+    bool
+        ``True`` only when the caller declares the input, declares it as a
+        non-empty string, and names a version inside ``requires-python``. An
+        omitted input resolves to the shared default, an unquoted float is not
+        a string, and an explicit empty string names no version; all fail.
+
+    """
+    selection = python_version_input(workflow)
+    is_explicit = isinstance(selection, str) and bool(selection)
+    # An empty resolved value is already refused above, so the range check
+    # only ever sees a version worth parsing.
+    return is_explicit and not rejected_versions(
+        requires_python(pyproject), [resolved_python(selection)]
+    )
