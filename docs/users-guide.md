@@ -157,12 +157,15 @@ Streaming continues when the reader goes away. Piping into `head`, quitting a
 pager, or an interrupted CI log collector closes the receiving end; the run
 then stops displaying output, still captures everything Verus wrote, and the
 command result carries Verus's own exit status rather than a broken-pipe
-failure. That guarantee stops at the `prover-tools` process boundary. Over a
-closed pipe the process itself can still exit 120, because Python reports that
-its own standard output was closed while shutting down. An exit status read
-through a pipe therefore cannot distinguish a passing proof from a failing one;
-rely on the command result, or on an unpiped run, where the status is the
-prover's own.
+failure.
+
+The process exit status survives that reader going away too. Python normally
+replaces the requested status with 120 when it cannot flush its own standard
+output at shutdown, which would hide a failed proof behind a passing one for
+anyone reading the status through a pipe. `prover-tools` guards that flush, so
+`prover-tools verus run ... | head -n 5`, a `tee`-based CI log capture, or a
+shell pipeline that closes early all report the prover's status: `0` when the
+proof passed, and the prover's own non-zero status when it failed.
 
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that

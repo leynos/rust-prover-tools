@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import os
-import shutil
 import shlex
+import shutil
 import subprocess
 import sys
 import typing as typ
@@ -251,31 +251,28 @@ def read_until_the_reader_goes_away(
     situation. The child's status is returned unchanged: this helper must not
     interpret it, because interpreting it is what the tests are asking about.
     """
-    process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+    with subprocess.Popen(
         argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=sanitized_subprocess_env(),
-    )
-    if process.stdout is None or process.stderr is None:  # pragma: no cover
-        msg = "subprocess pipes were not created"
-        raise AssertionError(msg)
-    consumed = [line for _, line in zip(range(reader_lines), process.stdout)]
-    process.stdout.close()
-    stderr = process.stderr.read()
-    process.stderr.close()
-    try:
-        status = process.wait(timeout=_CHILD_TIMEOUT)
-    except subprocess.TimeoutExpired:  # pragma: no cover - diagnosed as hang
-        process.kill()
-        process.wait()
-        msg = (
-            "the CLI did not exit after its reader closed; "
-            f"stderr: {stderr!r}"
-        )
-        raise AssertionError(msg) from None
-    return status, consumed
+    ) as process:
+        if process.stdout is None or process.stderr is None:  # pragma: no cover
+            msg = "subprocess pipes were not created"
+            raise AssertionError(msg)
+        consumed = [
+            line for _, line in zip(range(reader_lines), process.stdout, strict=False)
+        ]
+        process.stdout.close()
+        stderr = process.stderr.read()
+        process.stderr.close()
+        try:
+            return process.wait(timeout=_CHILD_TIMEOUT), consumed
+        except subprocess.TimeoutExpired:  # pragma: no cover - diagnosed as hang
+            process.kill()
+            msg = f"the CLI did not exit after its reader closed; stderr: {stderr!r}"
+            raise AssertionError(msg) from None
 
 
 @pytest.mark.parametrize("prover_status", [0, 3])
@@ -304,9 +301,9 @@ def test_verus_run_reports_the_prover_status_through_a_closed_pipe(
         reader_lines=_READER_LINES,
     )
 
-    assert consumed == [
-        f"proof line {index}\n" for index in range(_READER_LINES)
-    ], f"expected the first {_READER_LINES} streamed lines, got {consumed!r}"
+    assert consumed == [f"proof line {index}\n" for index in range(_READER_LINES)], (
+        f"expected the first {_READER_LINES} streamed lines, got {consumed!r}"
+    )
     assert status == prover_status, (
         f"expected the prover's status {prover_status} through the closed pipe, "
         f"got {status}"
@@ -333,11 +330,16 @@ def test_verus_run_reports_the_prover_status_through_a_tee_pipeline(
         prover_status=3,
     )
     log_file = tmp_path / "pipeline.log"
-    script = f'''
+    pipeline = (
+        '"$@" 2>/dev/null'
+        f" | tee {shlex.quote(str(log_file))}"
+        f" | head -n {_READER_LINES} > /dev/null"
+    )
+    script = f"""
 set -o pipefail
-"$@" 2>/dev/null | tee {shlex.quote(str(log_file))} | head -n {_READER_LINES} > /dev/null
+{pipeline}
 printf '%s\\n' "${{PIPESTATUS[0]}}"
-'''
+"""
 
     completed = subprocess.run(
         [

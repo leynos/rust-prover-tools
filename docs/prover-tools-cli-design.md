@@ -105,6 +105,29 @@ exists in 0.2.0b2 for callers that need an exact environment, but it is
 imported from `cuprum.context` rather than the package root, and no current
 workflow needs it.
 
+## Exit status under a closed pipe
+
+`BEST_EFFORT` keeps the run alive after its reader leaves, which moves the
+broken pipe from the echo path to the interpreter's shutdown. CPython flushes
+`sys.stdout` on exit, and a failing flush overrides the status passed to
+`sys.exit` with 120. For a command whose status is the proof result, that turns
+both a passing and a failing proof into the same unreadable number.
+
+`rust_prover_tools.exit_status.guard_shutdown_flush` installs an `atexit` hook
+that flushes while `BrokenPipeError` can still be caught and then points the
+dead descriptor at the null device, the recipe in CPython's `signal` module
+note on `SIGPIPE`. `cli.main` registers it before `sys.exit(app())`, so the
+status the command computed is the status the process reports.
+
+The hook belongs at the entry point, not in the echo path. The echo path cannot
+observe interpreter shutdown, and every command that writes to standard output
+would meet the same 120 through a closed pipe.
+
+`prover-tools --help | head` is unaffected and still exits 1: `rich` raises
+`SystemExit(1)` from inside the help render through `Console.on_broken_pipe`,
+which is its documented behaviour and a different question from preserving a
+child's status.
+
 ## Test strategy
 
 Unit tests cover pure helpers and command orchestration. They use cmd-mox to

@@ -33,6 +33,7 @@ import cyclopts
 from cyclopts import App, Parameter
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.exit_status import guard_shutdown_flush
 from rust_prover_tools.kani import (
     KaniCheckOptions,
     KaniInstallOptions,
@@ -287,8 +288,11 @@ def main() -> None:
     Notes
     -----
     This is the console-script and `python -m rust_prover_tools.cli` entry
-    point. It exits via `sys.exit(app())` rather than returning normally.
+    point. It exits via `sys.exit(app())` rather than returning normally, after
+    installing the shutdown guard that keeps a reader which closed the pipe from
+    replacing that status with CPython's 120.
     """
+    guard_shutdown_flush()
     sys.exit(app())
 
 
