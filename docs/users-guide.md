@@ -178,7 +178,8 @@ status=${PIPESTATUS[0]}
 
 `PIPESTATUS` must be read before running any other command, because it is
 overwritten by each one. It is a Bash feature; `zsh` spells the same array
-`pipestatus`.
+`pipestatus`, and its arrays start at index 1, so the prover's status is
+`${pipestatus[1]}` there.
 
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
