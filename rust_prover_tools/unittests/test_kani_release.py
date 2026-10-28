@@ -16,6 +16,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.commands import CommandSpec
+    from rust_prover_tools.kani_release_config import VerificationConfig
 
 
 @pytest.fixture(autouse=True)
@@ -24,8 +25,8 @@ def owned_config_discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     from rust_prover_tools import kani_release
     from rust_prover_tools.kani_release_config import check_verification_config
 
-    def validate(cwd: Path, environment: cabc.Mapping[str, str]) -> None:
-        check_verification_config(cwd, environment, search_roots=(tmp_path,))
+    def validate(cwd: Path, environment: cabc.Mapping[str, str]) -> VerificationConfig:
+        return check_verification_config(cwd, environment, search_roots=(tmp_path,))
 
     monkeypatch.setattr(kani_release, "check_verification_config", validate)
 
@@ -93,6 +94,70 @@ def test_runtime_path_wrappers_flags_and_literal_arguments(
     assert spec.env["RUSTFLAGS"] == "-D warnings"
     assert spec.env["CARGO_ENCODED_RUSTFLAGS"] == "-D\x1fwarnings"
     assert environment == before
+
+
+def test_profile_backend_selection_is_pinned_for_the_child(
+    installed_release: Path, tmp_path: Path
+) -> None:
+    """A repository development backend cannot reach the selected release."""
+    (tmp_path / ".cargo").mkdir()
+    (tmp_path / ".cargo" / "config.toml").write_text(
+        "[unstable]\ncodegen-backend = true\n\n"
+        '[profile.dev]\ncodegen-backend = "cranelift"\n',
+        encoding="utf-8",
+    )
+    environment = {"HOME": str(tmp_path), "CARGO_HOME": str(tmp_path / "cargo-home")}
+
+    spec = prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)), environment
+    )
+
+    assert spec.env is not None
+    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm"
+
+
+def test_profile_override_stays_child_scoped(
+    installed_release: Path, tmp_path: Path
+) -> None:
+    """The caller's environment is never mutated to carry the override."""
+    (tmp_path / ".cargo").mkdir()
+    (tmp_path / ".cargo" / "config.toml").write_text(
+        "[unstable]\ncodegen-backend = true\n\n"
+        '[profile.dev]\ncodegen-backend = "cranelift"\n',
+        encoding="utf-8",
+    )
+    environment = {"HOME": str(tmp_path), "CARGO_HOME": str(tmp_path / "cargo-home")}
+    before = dict(environment)
+
+    prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)), environment
+    )
+
+    assert environment == before
+
+
+def test_every_development_profile_is_pinned_independently(
+    installed_release: Path, tmp_path: Path
+) -> None:
+    """Hyphenated, custom, and test profiles each receive their own shadow."""
+    (tmp_path / ".cargo").mkdir()
+    (tmp_path / ".cargo" / "config.toml").write_text(
+        "[unstable]\ncodegen-backend = true\n\n"
+        '[profile.dev]\ncodegen-backend = "cranelift"\n\n'
+        '[profile.release-dev]\ncodegen-backend = "cranelift"\n\n'
+        '[profile.test]\ncodegen-backend = "cranelift"\n',
+        encoding="utf-8",
+    )
+    environment = {"HOME": str(tmp_path), "CARGO_HOME": str(tmp_path / "cargo-home")}
+
+    spec = prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)), environment
+    )
+
+    assert spec.env is not None
+    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm"
+    assert spec.env["CARGO_PROFILE_RELEASE_DEV_CODEGEN_BACKEND"] == "llvm"
+    assert spec.env["CARGO_PROFILE_TEST_CODEGEN_BACKEND"] == "llvm"
 
 
 @pytest.mark.parametrize(

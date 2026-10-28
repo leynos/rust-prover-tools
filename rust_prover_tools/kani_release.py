@@ -22,9 +22,11 @@ from pathlib import Path
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 from rust_prover_tools.kani_release_config import (
+    VerificationConfig,
     check_verification_config,
     checked_resolve,
     checked_stat,
+    codegen_backend_variable,
 )
 from rust_prover_tools.kani_release_flags import verification_flags
 
@@ -181,6 +183,17 @@ def _runtime_search_path(runtime: Path, inherited: str) -> str:
     return os.pathsep.join((str(runtime), *entries))
 
 
+def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) -> None:
+    """Pin every accepted profile backend to LLVM inside the child only.
+
+    Cargo reads `CARGO_PROFILE_<NAME>_CODEGEN_BACKEND` in preference to profile
+    tables in configuration files and manifests, so the selected release always
+    compiles with its own backend regardless of what the repository asked for.
+    """
+    for selection in config.selections:
+        child[codegen_backend_variable(selection.profile)] = "llvm"
+
+
 def prepare_kani_command(
     options: KaniExecOptions, environment: cabc.Mapping[str, str]
 ) -> CommandSpec:
@@ -211,9 +224,10 @@ def prepare_kani_command(
     cwd = checked_resolve(options.cwd)
     _validate_installation(root)
     _validate_arguments(options.arguments)
-    check_verification_config(cwd, environment)
+    config = check_verification_config(cwd, environment)
     flags = verification_flags(environment)
     child = dict(environment)
+    _apply_backend_overrides(child, config)
     child["LD_LIBRARY_PATH"] = _runtime_search_path(
         root / "toolchain/lib", child.get("LD_LIBRARY_PATH", "")
     )

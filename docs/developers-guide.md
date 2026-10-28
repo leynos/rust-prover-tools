@@ -409,6 +409,23 @@ logging option. Events contain the stage, release, duration, status class and
 error category; they omit paths, arguments, environment, output and exception
 text.
 
+Backend classification is positional, not name-based. `kani_release_config`
+walks every discovered Cargo configuration and ancestor manifest and returns a
+`VerificationConfig` holding each accepted `profile.<name>.codegen-backend`
+selection. `prepare_kani_command` then sets
+`CARGO_PROFILE_<NAME>_CODEGEN_BACKEND=llvm` for exactly those profiles in the
+child mapping. Cargo resolves that variable above both configuration files and
+manifest profiles, which `tests/test_kani_exec_codegen_backend.py` measures
+against the real bundled Cargo; the caller's mapping is never mutated. Only a
+string profile selection is overridable: the boolean `[unstable]
+codegen-backend` enable flag selects nothing, and a package-scoped
+`profile.<name>.package.<package>` override wins over the variable, so it is
+refused rather than silently ignored. Profile names are restricted to
+`[A-Za-z0-9_-]+` so the environment spelling is unambiguous. The opt-in
+measurement runs with
+`PROVER_TOOLS_KANI_067_INSTALLATION=$HOME/.kani/kani-0.67.0 uv run pytest
+tests/test_kani_exec_codegen_backend.py -v`; the module self-skips without it.
+
 Qualification must include a genuine dependency/build-script fixture after
 shared gates. Controlled child tests establish invocation and failure
 contracts, not full verifier compatibility. Linux x86_64 Kani 0.67.0 is the

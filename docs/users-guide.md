@@ -82,10 +82,23 @@ explicitly empty encoded value. Development frontend threads, Cranelift, and the
 `mold` linker selection are removed; compatible flags remain in order and
 warnings are denied. Whitespace-containing encoded atoms cannot pass through
 Kani 0.67's literal-space reader and are rejected. Independent profile
-backends, unresolved Cargo configuration includes, conflicting wrappers,
-protected routing environment overrides, and unchecked `--config`, `--profile`,
-or `--manifest-path` arguments fail before execution. Run from the proof
-package instead of selecting another manifest through an argument.
+backends supplied through `RUSTFLAGS`, unresolved Cargo configuration
+includes, conflicting wrappers, protected routing environment overrides, and
+unchecked `--config`, `--profile`, or `--manifest-path` arguments fail before
+execution. Run from the proof package instead of selecting another manifest
+through an argument.
+
+A repository that selects a development backend in Cargo configuration or a
+manifest profile is supported. `kani exec` accepts
+`profile.<name>.codegen-backend` for the standard and custom profiles it
+discovers, then sets `CARGO_PROFILE_<NAME>_CODEGEN_BACKEND=llvm` in the child
+environment only. Cargo gives that variable precedence over both
+configuration files and manifests, so the selected release keeps compiling
+with its own backend and the caller's environment is unchanged. The boolean
+`[unstable] codegen-backend` enable flag selects nothing on its own and is
+accepted without an override. Profile names whose environment spelling is
+ambiguous, and package-scoped `profile.<name>.package.<package>` overrides
+that the variable cannot shadow, are refused before execution.
 
 For an instrumented parent using cargo-llvm-cov's documented
 `--no-rustc-wrapper` mode, the SDK child additionally removes the exact bare
