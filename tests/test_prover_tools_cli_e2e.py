@@ -73,3 +73,50 @@ def test_verus_run_cli_accepts_indented_toolchain_output(
         f"expected Verus proof output; stdout: {completed.stdout}; "
         f"stderr: {completed.stderr}"
     )
+
+
+def test_verus_run_env_proof_file_is_not_split_on_path_separator(
+    tmp_path: Path,
+    fake_verus_binary_factory: cabc.Callable[..., None],
+) -> None:
+    """A legacy env-var proof path keeps path separators inside one filename."""
+    version_file = tmp_path / "tools" / "verus" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("2025.01.01\n", encoding="utf-8")
+    proof_dir = tmp_path / "proofs:colon"
+    proof_dir.mkdir()
+    proof_file = proof_dir / "proof.rs"
+    proof_file.write_text("proof", encoding="utf-8")
+    verus_bin = tmp_path / "bin" / "verus"
+    fake_verus_binary_factory(
+        verus_bin,
+        spec=FakeVerusBinarySpec(proof_command="printf 'verified %s\\n' \"$1\""),
+    )
+
+    environment = sanitized_subprocess_env()
+    environment["VERUS_PROOF_FILE"] = str(proof_file)
+    environment["VERUS_BIN"] = str(verus_bin)
+    environment["INPUT_REPO_ROOT"] = str(tmp_path)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rust_prover_tools.cli",
+            "verus",
+            "run",
+            "--no-ensure-toolchain",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, (
+        f"expected zero returncode, got {completed.returncode}; "
+        f"stdout: {completed.stdout}; stderr: {completed.stderr}"
+    )
+    assert f"verified {proof_file}" in completed.stdout, (
+        f"expected one proof invocation; stdout: {completed.stdout}; "
+        f"stderr: {completed.stderr}"
+    )
