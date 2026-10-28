@@ -7,6 +7,8 @@ import subprocess
 import sys
 import typing as typ
 
+import pytest
+
 from tests.conftest import FakeVerusBinarySpec
 
 if typ.TYPE_CHECKING:
@@ -75,9 +77,14 @@ def test_verus_run_cli_accepts_indented_toolchain_output(
     )
 
 
+@pytest.mark.parametrize(
+    "proof_env_var",
+    ["VERUS_PROOF_FILE", "INPUT_PROOF_FILE"],
+)
 def test_verus_run_env_proof_file_is_not_split_on_path_separator(
     tmp_path: Path,
     fake_verus_binary_factory: cabc.Callable[..., None],
+    proof_env_var: str,
 ) -> None:
     """A legacy env-var proof path keeps path separators inside one filename."""
     version_file = tmp_path / "tools" / "verus" / "VERSION"
@@ -94,7 +101,7 @@ def test_verus_run_env_proof_file_is_not_split_on_path_separator(
     )
 
     environment = sanitized_subprocess_env()
-    environment["VERUS_PROOF_FILE"] = str(proof_file)
+    environment[proof_env_var] = str(proof_file)
     environment["VERUS_BIN"] = str(verus_bin)
     environment["INPUT_REPO_ROOT"] = str(tmp_path)
     completed = subprocess.run(

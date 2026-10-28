@@ -179,14 +179,13 @@ def user_checks_kani_version(repo_root: Path) -> CliRun:
     )
 
 
-@when(
-    parsers.parse('the user runs a Verus proof on "{proof_name}"'),
-    target_fixture="cli_run",
-)
-def user_runs_verus_proof(repo_root: Path, verus_bin: Path, proof_name: str) -> CliRun:
-    """Run Verus proof checking through the public CLI."""
-    proof_file = repo_root / proof_name
-    proof_file.write_text("proof fn example() {}\n", encoding="utf-8")
+def run_verus_cli(
+    repo_root: Path,
+    verus_bin: Path,
+    proof_files: tuple[Path, ...],
+) -> CliRun:
+    """Run `verus run` through the public CLI with one flag per proof file."""
+    proof_args = [arg for proof in proof_files for arg in ("--proof-file", str(proof))]
     completed = subprocess.run(
         [
             sys.executable,
@@ -196,8 +195,7 @@ def user_runs_verus_proof(repo_root: Path, verus_bin: Path, proof_name: str) -> 
             "run",
             "--repo-root",
             str(repo_root),
-            "--proof-file",
-            str(proof_file),
+            *proof_args,
             "--verus-bin",
             str(verus_bin),
             "--no-ensure-toolchain",
@@ -212,6 +210,17 @@ def user_runs_verus_proof(repo_root: Path, verus_bin: Path, proof_name: str) -> 
         stderr=completed.stderr,
         returncode=completed.returncode,
     )
+
+
+@when(
+    parsers.parse('the user runs a Verus proof on "{proof_name}"'),
+    target_fixture="cli_run",
+)
+def user_runs_verus_proof(repo_root: Path, verus_bin: Path, proof_name: str) -> CliRun:
+    """Run Verus proof checking through the public CLI."""
+    proof_file = repo_root / proof_name
+    proof_file.write_text("proof fn example() {}\n", encoding="utf-8")
+    return run_verus_cli(repo_root, verus_bin, (proof_file,))
 
 
 @when(
@@ -227,32 +236,10 @@ def user_runs_verus_proofs(
     second_proof: str,
 ) -> CliRun:
     """Run two proof files through the public CLI in a single invocation."""
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "rust_prover_tools.cli",
-            "verus",
-            "run",
-            "--repo-root",
-            str(repo_root),
-            "--proof-file",
-            str(repo_root / first_proof),
-            "--proof-file",
-            str(repo_root / second_proof),
-            "--verus-bin",
-            str(verus_bin),
-            "--no-ensure-toolchain",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=sanitized_subprocess_env(),
-    )
-    return CliRun(
-        stdout=completed.stdout,
-        stderr=completed.stderr,
-        returncode=completed.returncode,
+    return run_verus_cli(
+        repo_root,
+        verus_bin,
+        (repo_root / first_proof, repo_root / second_proof),
     )
 
 

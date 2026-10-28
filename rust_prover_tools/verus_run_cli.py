@@ -42,7 +42,7 @@ def _single_env_token(
 
 # CLI parameter binding needs one explicit parameter per flag/env-var mapping.
 # pylint: disable-next=too-many-arguments
-def verus_run(
+def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI binding
     *,
     repo_root: typ.Annotated[Path | None, Parameter(env_var="INPUT_REPO_ROOT")] = None,
     proof_file: typ.Annotated[

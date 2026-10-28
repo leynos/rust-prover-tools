@@ -96,7 +96,6 @@ extend-ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["non-empty-init-module"]
 "rust_prover_tools/cli.py" = ["too-many-arguments", "too-many-positional-arguments"]
-"rust_prover_tools/verus_run_cli.py" = ["too-many-arguments", "too-many-positional-arguments"]
 "**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 "tests/steps/*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 
