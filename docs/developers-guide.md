@@ -417,14 +417,26 @@ selection. `prepare_kani_command` then sets
 child mapping. Cargo resolves that variable above both configuration files and
 manifest profiles, which `tests/test_kani_exec_codegen_backend.py` measures
 against the real bundled Cargo; the caller's mapping is never mutated. Only a
-string profile selection is overridable: the boolean `[unstable]
-codegen-backend` enable flag selects nothing, and a package-scoped
+string profile selection is overridable: the boolean
+`[unstable] codegen-backend` enable flag selects nothing, and a package-scoped
 `profile.<name>.package.<package>` override wins over the variable, so it is
 refused rather than silently ignored. Profile names are restricted to
 `[A-Za-z0-9_-]+` so the environment spelling is unambiguous. The opt-in
 measurement runs with
 `PROVER_TOOLS_KANI_067_INSTALLATION=$HOME/.kani/kani-0.67.0 uv run pytest
-tests/test_kani_exec_codegen_backend.py -v`; the module self-skips without it.
+tests/test_kani_exec_codegen_backend.py -v`;
+the module self-skips without it.
+
+That module carries two levels of evidence. The measured builds require a zero
+status and the `llvm` backend for the accepted configuration-file and manifest
+selections, and preserve an expected failure for the refused package override;
+these pin the override mechanism. One acceptance case writes the exact
+development configuration, adds a `#[kani::proof]` harness, and runs it through
+the public CLI, which is the only evidence that such a repository completes a
+proof. Keep the acceptance case and the measurement cases separate: Kani 0.67
+supplies its own `-Zcodegen-backend` for the harness build and tolerates an
+unknown name, so a successful harness run alone does not demonstrate the child
+override.
 
 Qualification must include a genuine dependency/build-script fixture after
 shared gates. Controlled child tests establish invocation and failure
