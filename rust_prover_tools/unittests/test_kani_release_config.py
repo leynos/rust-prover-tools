@@ -139,7 +139,7 @@ def test_codegen_backend_variable_names_the_profile(
 def test_hyphenated_and_underscored_profiles_share_one_variable(
     tmp_path: Path,
 ) -> None:
-    """Spellings that Cargo maps to one variable remain distinguishable."""
+    """Distinct profile spellings may share one environment variable."""
     _write_config(
         tmp_path,
         '[profile.release-lto]\ncodegen-backend = "cranelift"\n'
