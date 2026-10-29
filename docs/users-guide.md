@@ -82,11 +82,12 @@ explicitly empty encoded value. Development frontend threads, Cranelift, and the
 `mold` linker selection are removed; compatible flags remain in order and
 warnings are denied. Whitespace-containing encoded atoms cannot pass through
 Kani 0.67's literal-space reader and are rejected. Independent profile backends
-supplied through `RUSTFLAGS`, unresolved Cargo configuration includes,
-conflicting wrappers, protected routing environment overrides, and unchecked
-`--config`, `--profile`, or `--manifest-path` arguments fail before execution.
-Run from the proof package instead of selecting another manifest through an
-argument.
+supplied through `RUSTFLAGS`, a caller-set
+`CARGO_PROFILE_<NAME>_CODEGEN_BACKEND` variable, unresolved Cargo configuration
+includes, conflicting wrappers, protected routing environment overrides, and
+unchecked `--config`, `--profile`, or `--manifest-path` arguments fail before
+execution. Run from the proof package instead of selecting another manifest
+through an argument.
 
 A repository that selects a development backend in Cargo configuration or a
 manifest profile is supported. `kani exec` accepts

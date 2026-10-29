@@ -49,6 +49,9 @@ _MANIFEST_PROFILE = (
 
 _HARNESS = "#[kani::proof]\nfn check_addition() {\n    assert_eq!(1 + 1, 2);\n}\n"
 
+# The release's declared toolchain identity, which `kani exec` also selects.
+_TOOLCHAIN_IDENTITY = "nightly-2025-11-21-x86_64-unknown-linux-gnu"
+
 
 # Caller state that would change the compiler invocation being measured.
 _IGNORED = frozenset({
@@ -70,6 +73,21 @@ def _inherited(tmp_path: Path) -> dict[str, str]:
         key: value for key, value in os.environ.items() if key not in _IGNORED
     }
     environment["CARGO_HOME"] = str(tmp_path / "cargo-home")
+    return environment
+
+
+def _release_toolchain(environment: dict[str, str]) -> dict[str, str]:
+    """Route `cargo` to the selected release's own `rustc`, as the child does.
+
+    Cargo resolves `rustc` through `PATH`, so a measurement built from the
+    caller's shell alone would depend on whichever compiler that shell exposes.
+    """
+    installation = Path(_INSTALLATION or "")
+    environment["PATH"] = os.pathsep.join((
+        str(installation / "toolchain/bin"),
+        environment.get("PATH", ""),
+    ))
+    environment["RUSTUP_TOOLCHAIN"] = _TOOLCHAIN_IDENTITY
     return environment
 
 
@@ -182,6 +200,7 @@ def test_package_override_is_not_shadowed_by_the_child(tmp_path: Path) -> None:
 
     environment = _inherited(tmp_path)
     environment["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] = "llvm"
+    _release_toolchain(environment)
 
     build = _cargo(tmp_path, environment)
     # The negative measurement is the backend choice, not build success: the
@@ -200,8 +219,7 @@ def test_cabochon_configuration_verifies_a_real_harness(tmp_path: Path) -> None:
     measurement cases above are what pin the override itself.
     """
     _write_project(tmp_path, lib_source=_HARNESS)
-    environment = _inherited(tmp_path)
-    environment["CARGO_HOME"] = str(tmp_path / "cargo-home")
+    environment = _release_toolchain(_inherited(tmp_path))
 
     completed = subprocess.run(
         (

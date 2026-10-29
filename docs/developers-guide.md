@@ -421,11 +421,14 @@ string profile selection is overridable: the boolean
 `[unstable] codegen-backend` enable flag selects nothing, and a package-scoped
 `profile.<name>.package.<package>` override wins over the variable, so it is
 refused rather than silently ignored. Profile names are restricted to
-`[A-Za-z0-9_-]+` so the environment spelling is unambiguous. The opt-in
-measurement runs with
-`PROVER_TOOLS_KANI_067_INSTALLATION=$HOME/.kani/kani-0.67.0 uv run pytest
-tests/test_kani_exec_codegen_backend.py -v`;
-the module self-skips without it.
+`[A-Za-z0-9_-]+`, so the environment spelling is unambiguous. The opt-in
+measurement module skips itself unless `PROVER_TOOLS_KANI_067_INSTALLATION`
+names an installation root. Run it with:
+
+```bash
+PROVER_TOOLS_KANI_067_INSTALLATION="$HOME/.kani/kani-0.67.0" \
+  uv run pytest tests/test_kani_exec_codegen_backend.py -v
+```
 
 That module carries two levels of evidence. The measured builds require a zero
 status and the `llvm` backend for the accepted configuration-file and manifest

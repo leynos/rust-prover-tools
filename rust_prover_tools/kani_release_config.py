@@ -26,10 +26,6 @@ if typ.TYPE_CHECKING:
     from os import stat_result
 
 _PROFILE_NAME = re.compile(r"[A-Za-z0-9_-]+")
-# Keys that reach the unstable enable flag, including the flag key itself.
-_UNSTABLE_ENABLE_FLAG = ("unstable", "codegen-backend")
-# Keys that reach a profile-level selection: `profile.<name>.codegen-backend`.
-_PROFILE_SELECTION = ("profile", "<name>", "codegen-backend")
 _UNPROVED_BACKEND = "Kani exec cannot prove isolation of Cargo backend configuration"
 _PACKAGE_BACKEND = (
     "Kani exec cannot prove isolation of a package-specific Cargo backend override"
@@ -158,21 +154,6 @@ def _profile_name_is_overridable(profile: object) -> bool:
     return isinstance(profile, str) and _PROFILE_NAME.fullmatch(profile) is not None
 
 
-def _is_unstable_enable_flag(keys: tuple[str, ...], value: object) -> bool:
-    """Recognize the flag that only unlocks the unstable profile option."""
-    return keys == _UNSTABLE_ENABLE_FLAG and isinstance(value, bool)
-
-
-def _is_profile_selection(keys: tuple[str, ...]) -> bool:
-    """Recognize `profile.<name>.codegen-backend`, the overridable position."""
-    return keys[:1] == ("profile",) and len(keys) == len(_PROFILE_SELECTION)
-
-
-def _is_package_selection(keys: tuple[str, ...]) -> bool:
-    """Recognize `profile.<name>.package.<package>.codegen-backend` and deeper."""
-    return keys[:1] == ("profile",) and keys[2:3] == ("package",)
-
-
 def _collect_profile_selection(
     path: Path,
     table: tuple[str, ...],
@@ -197,6 +178,22 @@ def _collect_profile_selection(
     selections.append(BackendSelection(path, profile, value))
 
 
+def _unoverridable_backend(path: Path, keys: tuple[str, ...]) -> ProverToolError:
+    """Refuse a position whose selection the child environment cannot shadow."""
+    return ProverToolError(
+        f"{_UNPROVED_BACKEND}: {path} sets [{'.'.join(keys)}], which "
+        "the configured environment cannot override"
+    )
+
+
+def _package_backend(path: Path, keys: tuple[str, ...]) -> ProverToolError:
+    """Refuse a package override, which Cargo resolves above the variable."""
+    return ProverToolError(
+        f"{_PACKAGE_BACKEND}: {path} sets [{'.'.join(keys)}], which "
+        f"{codegen_backend_variable(keys[1])} cannot override"
+    )
+
+
 def _check_backend(
     path: Path,
     table: tuple[str, ...],
@@ -214,24 +211,20 @@ def _check_backend(
     for key, value in document.items():
         here = (*table, key)
         if key == "codegen-backend":
-            if _is_unstable_enable_flag(here, value):
-                continue
-            if _is_profile_selection(here):
-                _collect_profile_selection(path, table, value, selections)
-                continue
-            if _is_package_selection(here):
-                # The measured child environment cannot shadow a package
-                # override, so this position always fails closed.
-                msg = (
-                    f"{_PACKAGE_BACKEND}: {path} sets [{'.'.join(here)}], which "
-                    f"{codegen_backend_variable(table[1])} cannot override"
-                )
-                raise ProverToolError(msg)
-            msg = (
-                f"{_UNPROVED_BACKEND}: {path} sets [{'.'.join(here)}], which "
-                "the configured environment cannot override"
-            )
-            raise ProverToolError(msg)
+            match here:
+                # The enable flag only unlocks the profile option, so it
+                # selects nothing and needs no override.
+                case ("unstable", "codegen-backend") if isinstance(value, bool):
+                    continue
+                case ("profile", _, "codegen-backend"):
+                    _collect_profile_selection(path, table, value, selections)
+                    continue
+                case ("profile", _, "package", *_):
+                    # The measured child environment cannot shadow a package
+                    # override, so this position always fails closed.
+                    raise _package_backend(path, here)
+                case _:
+                    raise _unoverridable_backend(path, here)
         if isinstance(value, dict):
             _check_backend(path, here, value, selections)
 
