@@ -390,3 +390,54 @@ printf '%s\\n' "${{PIPESTATUS[0]}}"
     assert log_file.read_text(encoding="utf-8").startswith("proof line 0\n"), (
         "expected tee to receive the streamed proof output"
     )
+
+
+def test_verus_run_reports_the_prover_status_through_a_pager_that_quits(
+    tmp_path: Path,
+    fake_verus_binary_factory: cabc.Callable[..., None],
+) -> None:
+    """A reader that quits mid-stream cannot replace the prover's status.
+
+    Quitting a pager closes the receiving end while the CLI still has output to
+    write, which is the same broken pipe `| head` produces but without the
+    reader consuming a fixed count first. `sed 5q` stands in for a pager that
+    stops reading after the fifth line and exits.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash is required to run the pager pipeline")
+    proof_file, verus_bin = chatty_proof_repo(
+        tmp_path,
+        fake_verus_binary_factory,
+        prover_status=3,
+    )
+    script = f"""
+set -o pipefail
+"$@" 2>/dev/null | sed '{_READER_LINES}q' > /dev/null
+printf '%s\\n' "${{PIPESTATUS[0]}}"
+"""
+
+    completed = subprocess.run(
+        [
+            bash,
+            "-c",
+            script,
+            "pipeline",
+            *fake_verus_argv(tmp_path, proof_file, verus_bin),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sanitized_subprocess_env(),
+        timeout=_CHILD_TIMEOUT,
+    )
+
+    assert completed.returncode == 0, (
+        f"the pipeline helper failed: stdout={completed.stdout!r}; "
+        f"stderr={completed.stderr!r}"
+    )
+    reported = completed.stdout.strip().splitlines()
+    assert reported == ["3"], (
+        f"expected the CLI to report the prover's status 3 after the pager "
+        f"quit, got {reported!r}; stderr: {completed.stderr!r}"
+    )
