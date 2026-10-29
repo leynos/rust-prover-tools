@@ -114,10 +114,19 @@ broken pipe from the echo path to the interpreter's shutdown. CPython flushes
 both a passing and a failing proof into the same unreadable number.
 
 `rust_prover_tools.exit_status.guard_shutdown_flush` installs an `atexit` hook
-that flushes while `BrokenPipeError` can still be caught and then points the
-dead descriptor at the null device, the recipe in CPython's `signal` module
-note on `SIGPIPE`. `cli.main` registers it before `sys.exit(app())`, so the
-status the command computed is the status the process reports.
+that flushes each stream while `BrokenPipeError` can still be caught and then
+points the dead descriptor at the null device, the recipe in CPython's `signal`
+module note on `SIGPIPE`. `cli.main` registers it before `sys.exit(app())`, so
+the status the command computed is the status the process reports.
+
+Both streams are guarded because `2>&1 | head` merges them onto one dead
+descriptor, and CPython flushes `sys.stderr` at shutdown as well. Guarding only
+`sys.stdout` leaves the combined redirect reporting 120, so the guard covers
+the pair. The in-loop path needs the same care: `_error_exit` writes the
+diagnostic before returning the prover's status, and that write raises
+`BrokenPipeError` once the reader is gone. The diagnostic is suppressed and the
+status is returned, because the status is the proof result and the diagnostic
+is not.
 
 The hook belongs at the entry point, not in the echo path. The echo path cannot
 observe interpreter shutdown, and every command that writes to standard output

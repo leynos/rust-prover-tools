@@ -165,7 +165,9 @@ output at shutdown. That 120 is still a failure, but it is the same failure for
 every run, so anyone reading the status through a pipe cannot tell a passing
 proof from a failing one. `prover-tools` guards that flush, so the
 `prover-tools` process itself still exits with Verus's status: `0` when the
-proof passed, and the prover's own non-zero status when it failed.
+proof passed, and the prover's own non-zero status when it failed. The guard
+covers standard error as well, so redirecting both streams into one closed pipe
+(`2>&1 | head -n 5`) reports the prover's status too.
 
 A shell pipeline reports the status of its last command, not the prover's, so
 `prover-tools verus run ... | head -n 5` succeeds even when the proof fails. To

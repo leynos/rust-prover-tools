@@ -25,6 +25,7 @@ legacy `KANI` and `VERUS_*` variables preserved from the shell scripts.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import typing as typ
 from pathlib import Path
@@ -81,7 +82,9 @@ def _print_lines(lines: tuple[str, ...], *, stream: typ.TextIO = sys.stdout) -> 
 
 def _error_exit(exc: ProverToolError) -> int:
     """Print a user-facing error and return the appropriate exit status."""
-    print(exc, file=sys.stderr)
+    # A closed pipe loses only this diagnostic; the proof result must survive.
+    with contextlib.suppress(BrokenPipeError):
+        print(exc, file=sys.stderr)
     match exc:
         case VerusProofFailedError(exit_code=code):
             return code
@@ -288,9 +291,8 @@ def main() -> None:
     Notes
     -----
     This is the console-script and `python -m rust_prover_tools.cli` entry
-    point. It exits via `sys.exit(app())` rather than returning normally, after
-    installing the shutdown guard that keeps a reader which closed the pipe from
-    replacing that status with CPython's 120.
+    point. The shutdown guard runs first so a closed pipe cannot replace the
+    status with CPython's 120.
     """
     guard_shutdown_flush()
     sys.exit(app())
