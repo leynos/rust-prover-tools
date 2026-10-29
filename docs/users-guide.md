@@ -161,9 +161,10 @@ failure.
 
 The process exit status survives that reader going away too. Python normally
 replaces the requested status with 120 when it cannot flush its own standard
-output at shutdown, which would hide a failed proof behind a passing one for
-anyone reading the status through a pipe. `prover-tools` guards that flush, so
-the `prover-tools` process itself still exits with Verus's status: `0` when the
+output at shutdown. That 120 is still a failure, but it is the same failure for
+every run, so anyone reading the status through a pipe cannot tell a passing
+proof from a failing one. `prover-tools` guards that flush, so the
+`prover-tools` process itself still exits with Verus's status: `0` when the
 proof passed, and the prover's own non-zero status when it failed.
 
 A shell pipeline reports the status of its last command, not the prover's, so
@@ -172,7 +173,7 @@ read the prover's status from a pipeline that closes early, inspect the first
 stage explicitly:
 
 ```bash
-prover-tools verus run --proof-file proofs/example.rs | tee build/verus.log
+prover-tools verus run --proof-file proofs/example.rs | tee verus.log
 status=${PIPESTATUS[0]}
 ```
 
