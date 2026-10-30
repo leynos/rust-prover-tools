@@ -178,12 +178,17 @@ stage explicitly:
 
 ```bash
 # Read PIPESTATUS in each branch so `set -e` cannot skip the capture.
-if prover-tools verus run --proof-file proofs/example.rs | tee verus.log; then
+if prover-tools verus run --proof-file proofs/example.rs \
+  | tee verus.log | head -n 5; then
   prover_status=${PIPESTATUS[0]}
 else
   prover_status=${PIPESTATUS[0]}
 fi
 ```
+
+`PIPESTATUS[0]` is the prover's status because the prover is still the first
+stage, even though the pipeline ends at `head`. `tee`'s log may stop when
+`head` does; the run itself continues and keeps its own capture.
 
 `PIPESTATUS` must be read before running any other command, because it is
 overwritten by each one. Reading it inside both branches keeps the capture
