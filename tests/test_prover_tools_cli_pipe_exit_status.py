@@ -68,10 +68,24 @@ def read_until_the_reader_goes_away(
 ) -> tuple[int, list[str]]:
     """Run ``argv`` and close its standard output after ``reader_lines`` lines.
 
+    Parameters
+    ----------
+    argv : list[str]
+        Command and arguments to run.
+    reader_lines : int
+        Number of output lines to consume before closing the pipe.
+
+    Returns
+    -------
+    tuple[int, list[str]]
+        The child's exit status, unchanged, and the lines this reader consumed.
+
+    Notes
+    -----
     The pipe is the only channel between the CLI and this reader, so closing it
     while the child still has output to write is exactly the `| head -n 5`
-    situation. The child's status is returned unchanged: this helper must not
-    interpret it, because interpreting it is what the tests are asking about.
+    situation. The status is returned uninterpreted because interpreting it is
+    what the tests are asking about.
     """
     with subprocess.Popen(
         argv,
