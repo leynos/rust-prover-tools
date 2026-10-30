@@ -236,6 +236,29 @@ def test_backend_override_event_reports_collisions(
     assert event["collision_count"] == 1, "one pair of spellings collided"
 
 
+def test_backend_override_event_distinguishes_duplicates_from_collisions(
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One profile declared twice is a duplicate, not a spelling collision."""
+    caplog.set_level("INFO", logger="rust_prover_tools.kani_release")
+    (tmp_path / "Cargo.toml").write_text(
+        '[profile.dev]\ncodegen-backend = "cranelift"\n', encoding="utf-8"
+    )
+
+    prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)),
+        cargo_profile_project("dev"),
+    )
+
+    event = _backend_event(caplog)
+    assert event["selection_count"] == 2, "both declarations were discovered"
+    assert event["variable_count"] == 1, "both declarations name one variable"
+    assert event["collision_count"] == 0, "a repeated spelling does not collide"
+
+
 def test_proof_failure_preserves_backend_and_stage_events(
     installed_release: Path,
     tmp_path: Path,

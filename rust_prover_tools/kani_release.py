@@ -204,9 +204,8 @@ def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) 
     compiles with its own backend regardless of what the repository asked for.
     """
     started = time.monotonic()
-    variables = {
-        codegen_backend_variable(selection.profile) for selection in config.selections
-    }
+    spellings = {selection.profile for selection in config.selections}
+    variables = {codegen_backend_variable(profile) for profile in spellings}
     for variable in variables:
         child[variable] = "llvm"
     if not config.selections:
@@ -215,7 +214,8 @@ def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) 
         # an unrelated empty repository.
         return
     # Report the decision without naming profiles, paths, or configuration
-    # values. A collision means two spellings shared one normalized variable.
+    # values. A collision means two spellings share one normalized variable;
+    # one profile declared in several files is a duplicate, not a collision.
     # The event keeps the stage schema so a sink can read every record alike.
     _emit_stage_event(
         "backend_overrides",
@@ -226,7 +226,7 @@ def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) 
             "operation": "backend_overrides",
             "selection_count": len(config.selections),
             "variable_count": len(variables),
-            "collision_count": len(config.selections) - len(variables),
+            "collision_count": len(spellings) - len(variables),
         },
     )
 
