@@ -139,6 +139,35 @@ The hook belongs at the entry point, not in the echo path. The echo path cannot
 observe interpreter shutdown, and every command that writes to standard output
 would meet the same 120 through a closed pipe.
 
+For screen readers: The following sequence diagram traces a proof run whose
+reader closes the pipe mid-stream. The CLI suppresses the diagnostic write that
+would fail, exits with the prover's status, and the shutdown hook flushes the
+dead streams so the interpreter reports that status instead of 120.
+
+```mermaid
+sequenceDiagram
+    participant Shell
+    participant CLI
+    participant Prover
+    participant Reader
+    participant Python
+
+    Shell->>CLI: main()
+    CLI->>CLI: guard_shutdown_flush()
+    CLI->>Prover: run proof
+    Prover-->>CLI: proof result and output
+    CLI-->>Reader: echo output
+    Reader--xCLI: close pipe
+    CLI->>CLI: _error_exit(exc)
+    Note over CLI: BrokenPipeError diagnostic is suppressed
+    CLI->>Python: sys.exit(prover_status)
+    Python->>Python: _redirect_closed_outputs()
+    Python-->>Python: flush streams, redirect dead descriptors to os.devnull
+    Python-->>Shell: prover_status
+```
+
+_Figure 1: Preserving the prover's exit status when the reader closes the pipe._
+
 When `prover-tools --help` writes to a closed pipe, `rich` raises
 `SystemExit(1)` from inside the help render through `Console.on_broken_pipe`,
 which is its documented behaviour and a different question from preserving a
