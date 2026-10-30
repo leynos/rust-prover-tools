@@ -34,15 +34,10 @@ __all__ = ("guard_shutdown_flush",)
 
 
 def _redirect_closed_stream(stream: typ.TextIO | None) -> None:
-    """Point a dead output stream at the null device.
-
-    Notes
-    -----
-    Any buffered output left after the failed flush is written to the null
-    device by the interpreter's own final flush. The data is lost either way,
-    because the reader that would have received it is gone; what changes is that
-    losing it no longer replaces the exit status.
-    """
+    """Point a dead output stream at the null device."""
+    # Buffered output left after the failed flush reaches the null device at the
+    # interpreter's final flush. The reader is gone, so the data is lost either
+    # way; the exit status no longer is.
     if stream is None:
         # A windowed interpreter has no such stream to flush.
         return
@@ -67,14 +62,9 @@ def _redirect_closed_stream(stream: typ.TextIO | None) -> None:
 
 
 def _redirect_closed_outputs() -> None:
-    """Point every dead output stream at the null device.
-
-    Notes
-    -----
-    Both streams are checked because `2>&1 | head` merges them onto one dead
-    descriptor; leaving standard error unguarded would let its shutdown flush
-    replace the status that standard output's guard just preserved.
-    """
+    """Point every dead output stream at the null device."""
+    # Check both streams: `2>&1 | head` merges them onto one dead descriptor,
+    # and an unguarded standard error would replace the preserved status.
     _redirect_closed_stream(sys.stdout)
     _redirect_closed_stream(sys.stderr)
 
