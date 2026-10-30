@@ -158,7 +158,9 @@ no CLI output. Events contain only bounded fields: the stream (`stdout`,
 `stderr`, or `custom`), the phase (`flush` or `write`), the action
 (`redirected`, `sink`, `suppressed`, or `failed`), and the error category
 (`broken_pipe` or `os_error`). They omit output, paths, commands and exception
-text.
+text. A dead stream is replaced by a sink whenever it cannot be redirected,
+including when the redirect itself fails, so no branch leaves the interpreter a
+stream whose final flush would report 120.
 
 `parse_verus_toolchain` accepts `Toolchain: <name>` lines at column zero or
 with leading spaces or tabs. It extracts `<name>` before the trailing

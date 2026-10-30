@@ -12,8 +12,8 @@ stops early. `guard_shutdown_flush` installs the `atexit` hook that CPython's
 own `signal` module documentation recommends: flush while the failure can still
 be caught, then point each dead descriptor at the null device so the
 interpreter's final flush succeeds and the requested status stands. A dead
-stream with no descriptor cannot be pointed anywhere, so it is replaced by a
-sink that discards output.
+stream that cannot be pointed anywhere, whether because it has no descriptor or
+because the redirect itself fails, is replaced by a sink that discards output.
 
 Closed-pipe handling is observable without changing CLI output: every handled
 case emits one INFO event with the stream, phase, action, and error category
@@ -80,6 +80,16 @@ class _NullTextSink(io.TextIOBase):
         return len(text)
 
 
+def _replace_with_sink(name: str, *, action: str) -> None:
+    """Replace a dead stream with a sink whose flush cannot fail.
+
+    The interpreter flushes `sys.stdout` and `sys.stderr` once more at shutdown,
+    so a dead stream left installed fails that flush and reports 120 after all.
+    """
+    setattr(sys, name, _NullTextSink())
+    _observe_closed_pipe(stream=name, phase="flush", action=action)
+
+
 def _guard_output(name: str) -> None:
     """Point a dead output stream at the null device, or replace it."""
     # Buffered output left after the failed flush reaches the null device at the
@@ -99,20 +109,19 @@ def _guard_output(name: str) -> None:
         descriptor = stream.fileno()
     except OSError:
         # `io.UnsupportedOperation`, raised by a stream with no descriptor,
-        # subclasses `OSError`. The interpreter still flushes such a stream at
-        # shutdown, so leaving it installed would fail again and report 120.
-        # Replace it with a sink whose flush cannot fail.
-        setattr(sys, name, _NullTextSink())
-        _observe_closed_pipe(stream=name, phase="flush", action="sink")
+        # subclasses `OSError`. The stream cannot be pointed anywhere, so it is
+        # replaced instead.
+        _replace_with_sink(name, action="sink")
         return
     devnull: int | None = None
     try:
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, descriptor)
     except OSError:
-        # The final flush will fail again and report 120 either way; raising
-        # here would only add an atexit traceback without preserving the status.
-        _observe_closed_pipe(stream=name, phase="flush", action="failed")
+        # The redirect failed, so the descriptor is still dead. Reporting is all
+        # the event can do about the pipe, but the stream must still be replaced
+        # or the final flush reintroduces the status 120 this guard prevents.
+        _replace_with_sink(name, action="failed")
     else:
         _observe_closed_pipe(stream=name, phase="flush", action="redirected")
     finally:

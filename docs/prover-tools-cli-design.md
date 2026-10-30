@@ -140,9 +140,12 @@ case emits one INFO event with the stream, phase, action and error category
 when the host application enables logging; `print_lines` reuses that path for
 the diagnostic `cli._error_exit` writes. The module installs no logger or
 handler and attaches no output, path, command or exception text. A redirect
-that cannot open the null device is recorded as a failed action rather than
-raised from the shutdown hook, because the status is already unrecoverable and
-an unhandled `atexit` exception would only add noise.
+that cannot point the descriptor at the null device is recorded as a failed
+action rather than raised from the shutdown hook, because an unhandled `atexit`
+exception would only add noise. The dead stream is still replaced by the sink
+in that branch: a redirect can fail while the stream is still flushed once more
+at shutdown, so leaving it installed would reintroduce the status 120 the guard
+exists to prevent.
 
 The hook belongs at the entry point, not in the echo path. The echo path cannot
 observe interpreter shutdown, and every command that writes to standard output

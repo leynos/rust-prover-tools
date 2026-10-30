@@ -326,12 +326,13 @@ def test_healthy_stream_emits_no_closed_pipe_event(
     )
 
 
-def test_failed_redirect_is_recorded_without_raising(
+def test_failed_redirect_falls_back_to_a_sink_without_raising(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A redirect that cannot open the null device is reported, not raised."""
-    monkeypatch.setattr(exit_status.sys, "stdout", _ClosingStream(descriptor=3))
+    """A redirect that cannot open the null device still leaves a flushable stream."""
+    stream = _ClosingStream(descriptor=3)
+    monkeypatch.setattr(exit_status.sys, "stdout", stream)
     monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
 
     def refuse_open(*_args: object, **_kwargs: object) -> int:
@@ -341,6 +342,16 @@ def test_failed_redirect_is_recorded_without_raising(
 
     with caplog.at_level(logging.INFO, logger=exit_status.__name__):
         _installed_shutdown_hook(monkeypatch)()  # Must not raise from the hook.
+
+    replacement = exit_status.sys.stdout
+    assert replacement is not stream, (
+        "a stream that cannot be redirected must be replaced as well; the "
+        "interpreter flushes it again at shutdown and would report 120"
+    )
+    replacement.flush()  # The final flush must succeed.
+    assert replacement.write("discarded") == len("discarded"), (
+        "the replacement should accept output instead of failing"
+    )
 
     records = _closed_pipe_events(caplog)
     assert len(records) == 1, "a failed redirect should emit exactly one event"
