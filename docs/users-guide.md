@@ -171,9 +171,10 @@ covers standard error as well, so redirecting both streams into one closed pipe
 
 A shell pipeline normally reports the status of its last command, not the
 prover's, so `prover-tools verus run ... | head -n 5` succeeds even when the
-proof fails. With `set -o pipefail`, the pipeline instead reports the first
-failing stage. To read the prover's status from a pipeline that closes early,
-inspect the first stage explicitly:
+proof fails. With `set -o pipefail`, the pipeline reports the rightmost failing
+stage instead, which is the prover's status only when no later stage fails. To
+read the prover's status from a pipeline that closes early, inspect the first
+stage explicitly:
 
 ```bash
 # Read PIPESTATUS in each branch so `set -e` cannot skip the capture.
