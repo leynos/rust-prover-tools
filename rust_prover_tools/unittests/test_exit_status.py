@@ -146,6 +146,20 @@ def test_print_lines_writes_every_line() -> None:
     )
 
 
+def test_print_lines_defaults_to_the_current_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A standard output redirected after import is still honoured."""
+    stream = io.StringIO()
+    monkeypatch.setattr(exit_status.sys, "stdout", stream)
+
+    exit_status.print_lines(("first",))
+
+    assert stream.getvalue() == "first\n", (
+        "the helper should resolve standard output when it runs"
+    )
+
+
 def test_print_lines_ignores_a_closed_pipe() -> None:
     """A dead reader cannot turn completed work into a failure."""
     stream = _BrokenPipeStream()

@@ -82,15 +82,19 @@ def guard_shutdown_flush() -> None:
     atexit.register(_redirect_closed_outputs)
 
 
-def print_lines(lines: tuple[str, ...], *, stream: typ.TextIO = sys.stdout) -> None:
+def print_lines(
+    lines: tuple[str, ...],
+    *,
+    stream: typ.TextIO | None = None,
+) -> None:
     """Print lines to a text stream, ignoring a reader that has gone away.
 
     Parameters
     ----------
     lines : tuple[str, ...]
         Lines to print, each followed by a newline.
-    stream : TextIO
-        Destination stream; defaults to standard output.
+    stream : TextIO | None
+        Destination stream; defaults to the current standard output.
 
     Notes
     -----
@@ -99,8 +103,9 @@ def print_lines(lines: tuple[str, ...], *, stream: typ.TextIO = sys.stdout) -> N
     performs immediately, needs its own protection; otherwise a closed reader
     replaces a completed command's status with a broken-pipe failure.
     """
+    destination = sys.stdout if stream is None else stream
     # The loop stops at the first failed write: there is no reader left, and
     # the remaining lines would meet the same dead descriptor.
     with contextlib.suppress(BrokenPipeError):
         for line in lines:
-            print(line, file=stream)
+            print(line, file=destination)
