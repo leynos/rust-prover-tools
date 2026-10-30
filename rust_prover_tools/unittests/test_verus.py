@@ -12,7 +12,9 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import rust_prover_tools.verus.batch as verus_batch_module
+import rust_prover_tools.verus.install as verus_install_module
 from rust_prover_tools.commands import CommandResult, CommandSpec
+from rust_prover_tools.downloads import PinnedAsset
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.unittests import conftest
 from rust_prover_tools.verus import (
@@ -72,6 +74,21 @@ def write_verus_pins_for_target(
     )
 
 
+def stub_archive_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[PinnedAsset, Path]]:
+    """Replace the network download and capture each pinned asset request."""
+    captured: list[tuple[PinnedAsset, Path]] = []
+
+    def fake_download_pinned(asset: PinnedAsset, destination: Path) -> Path:
+        captured.append((asset, destination))
+        destination.write_bytes(b"archive")
+        return destination
+
+    monkeypatch.setattr(verus_install_module, "download_pinned", fake_download_pinned)
+    return captured
+
+
 @pytest.mark.parametrize(
     "layout",
     [
@@ -93,17 +110,17 @@ def test_resolve_verus_bin_accepts_supported_directory_layouts(
     )
 
 
-def test_install_verus_downloads_checks_and_normalises_archive(
+def test_install_verus_requests_pinned_archive_and_normalises_it(
     tmp_path: Path,
     cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verus installation preserves download, checksum, and unzip behaviour."""
+    """Verus installation uses the shared pinned downloader, then unzips."""
     write_verus_pins(tmp_path)
     install_dir = tmp_path / ".verus" / "2025.01.01"
     extracted_binary = install_dir / "verus-x86-linux" / "verus"
     make_executable(extracted_binary)
-    cmd_mox.stub("curl").returns()
-    cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
+    downloads = stub_archive_download(monkeypatch)
     cmd_mox.stub("unzip").returns()
 
     lines = install_verus(
@@ -119,37 +136,25 @@ def test_install_verus_downloads_checks_and_normalises_archive(
         f"Export VERUS_BIN={install_dir / 'verus' / 'verus'}",
     ), "Install should return status and export instruction"
     assert [call.command for call in cmd_mox.journal] == [
-        "curl",
-        "sha256sum",
         "unzip",
-    ], "Should execute curl, sha256sum, and unzip in sequence"
-    assert cmd_mox.journal[0].args[:8] == [
-        "-sSfL",
-        "--connect-timeout",
-        "15",
-        "--max-time",
-        "300",
-        "--max-filesize",
-        str(VERUS_ARCHIVE_MAX_BYTES),
-        "https://example.test/2025.01.01/verus-2025.01.01-x86-linux.zip",
-    ], "curl should download from correct URL with bounded flags"
-    assert cmd_mox.journal[0].args[8] == "-o", (
-        "curl should write the archive to an output path"
+    ], "The installer should use the Python downloader and external unzip only"
+    assert len(downloads) == 1, "Install should request exactly one archive"
+    asset, archive_path = downloads[0]
+    assert asset == PinnedAsset(
+        name="verus-2025.01.01-x86-linux.zip",
+        url="https://example.test/2025.01.01/verus-2025.01.01-x86-linux.zip",
+        sha256="abc123",
+        max_bytes=VERUS_ARCHIVE_MAX_BYTES,
+    ), "The download should carry the pinned name, URL, digest, and ceiling"
+    assert archive_path.name == "verus-release.zip", (
+        "The local archive name must not come from repository input"
     )
-    assert (
-        cmd_mox
-        .journal[1]
-        .args[0]
-        .endswith(
-            "verus-2025.01.01-x86-linux.zip",
-        )
-    ), "sha256sum should verify the downloaded archive"
-    assert cmd_mox.journal[2].args == [
+    assert cmd_mox.journal[0].args == [
         "-q",
-        cmd_mox.journal[0].args[9],
+        str(archive_path),
         "-d",
         str(install_dir),
-    ], "unzip should extract to install_dir"
+    ], "unzip should extract the downloaded archive to install_dir"
     assert (install_dir / "verus" / "verus").exists(), (
         "Install should normalise final binary path"
     )
@@ -176,8 +181,7 @@ def test_install_verus_resolves_relative_pin_files_from_repo_root(
     install_dir = repo_root / ".verus" / "2025.01.01"
     extracted_binary = install_dir / "verus-x86-linux" / "verus"
     make_executable(extracted_binary)
-    cmd_mox.stub("curl").returns()
-    cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
+    stub_archive_download(monkeypatch)
     cmd_mox.stub("unzip").returns()
 
     lines = install_verus(
@@ -197,10 +201,90 @@ def test_install_verus_resolves_relative_pin_files_from_repo_root(
         f"Export VERUS_BIN={install_dir / 'verus' / 'verus'}",
     ), "Install should read relative pins from repo_root"
     assert [call.command for call in cmd_mox.journal] == [
-        "curl",
-        "sha256sum",
         "unzip",
-    ], "Relative pin overrides should still perform install commands"
+    ], "Relative pin overrides should still extract the downloaded archive"
+
+
+@pytest.mark.parametrize(
+    "unsafe_version",
+    ["", "..", "../escape", "-rf", "a/b", "a\\b", "a\nb", "/absolute"],
+)
+def test_verus_archive_rejects_unsafe_version(
+    tmp_path: Path,
+    unsafe_version: str,
+) -> None:
+    """A version must be one safe path and URL component."""
+    with pytest.raises(ProverToolError, match="invalid Verus version"):
+        verus_install_module.verus_archive(
+            VerusInstallOptions(paths=VerusPaths(repo_root=tmp_path)),
+            unsafe_version,
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_target",
+    ["", "..", "../escape", "-rf", "a/b", "a\\b", "a\nb", "/absolute"],
+)
+def test_verus_archive_rejects_unsafe_target(
+    tmp_path: Path,
+    unsafe_target: str,
+) -> None:
+    """A target must be one safe path and URL component."""
+    with pytest.raises(ProverToolError, match="invalid Verus target"):
+        verus_install_module.verus_archive(
+            VerusInstallOptions(
+                paths=VerusPaths(repo_root=tmp_path), target=unsafe_target
+            ),
+            "2025.01.01",
+        )
+
+
+def test_install_verus_rejects_traversal_version_before_creating_paths(
+    tmp_path: Path,
+) -> None:
+    """A traversal in the version pin must fail before its path is used."""
+    tools_dir = tmp_path / "tools" / "verus"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "VERSION").write_text("../escape\n", encoding="utf-8")
+
+    with pytest.raises(ProverToolError, match="invalid Verus version"):
+        install_verus(VerusInstallOptions(paths=VerusPaths(repo_root=tmp_path)))
+
+    assert not (tmp_path / "escape").exists(), (
+        "Rejected traversal must not create a directory outside .verus"
+    )
+
+
+def test_install_verus_lowercases_the_pinned_digest(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checksum rows are accepted in either hex case."""
+    tools_dir = tmp_path / "tools" / "verus"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "VERSION").write_text("2025.01.01\n", encoding="utf-8")
+    digest = "ABCDEF0123456789" * 4
+    (tools_dir / "SHA256SUMS").write_text(
+        f"{digest} verus-2025.01.01-x86-linux.zip\n",
+        encoding="utf-8",
+    )
+    install_dir = tmp_path / ".verus" / "2025.01.01"
+    make_executable(install_dir / "verus-x86-linux" / "verus")
+    downloads = stub_archive_download(monkeypatch)
+    cmd_mox.stub("unzip").returns()
+
+    install_verus(
+        VerusInstallOptions(
+            paths=VerusPaths(repo_root=tmp_path),
+            install_dir=install_dir,
+            base_url="https://example.test",
+        ),
+    )
+
+    assert downloads[0][0].sha256 == digest.lower(), (
+        "The downloader compares against lowercase hexadecimal digests"
+    )
 
 
 def test_run_verus_uses_existing_binary_when_version_probe_succeeds(
@@ -704,6 +788,7 @@ def test_verify_proof_files_reports_unexpected_failure(
 def test_run_verus_installs_missing_default_binary(
     tmp_path: Path,
     cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A missing default Verus binary triggers installer fallback."""
     write_verus_pins(tmp_path)
@@ -719,24 +804,22 @@ def test_run_verus_installs_missing_default_binary(
         "fi\n"
         "exit 0\n",
     )
-    cmd_mox.stub("curl").returns()
-    cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
+    stub_archive_download(monkeypatch)
     cmd_mox.stub("unzip").returns()
 
     run_verus(
         VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_files=(proof_file,))
     )
 
-    assert [call.command for call in list(cmd_mox.journal)[:3]] == [
-        "curl",
-        "sha256sum",
-        "unzip",
-    ], "Missing default binary should trigger installer commands"
+    assert cmd_mox.journal[0].command == "unzip", (
+        "Missing default binary should trigger the installer's unzip step"
+    )
 
 
 def test_run_verus_forwards_target_to_missing_binary_installer(
     tmp_path: Path,
     cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Auto-install fallback fetches the requested Verus target archive."""
     target = "aarch64-macos"
@@ -753,8 +836,7 @@ def test_run_verus_forwards_target_to_missing_binary_installer(
         "fi\n"
         "exit 0\n",
     )
-    cmd_mox.stub("curl").returns()
-    cmd_mox.stub("sha256sum").returns(stdout="abc123 archive.zip\n")
+    downloads = stub_archive_download(monkeypatch)
     cmd_mox.stub("unzip").returns()
 
     run_verus(
@@ -765,14 +847,9 @@ def test_run_verus_forwards_target_to_missing_binary_installer(
         ),
     )
 
-    assert (
-        cmd_mox
-        .journal[0]
-        .args[7]
-        .endswith(
-            "verus-2025.01.01-aarch64-macos.zip",
-        )
-    ), "Fallback installer should fetch the requested Verus target"
+    assert downloads[0][0].url.endswith("verus-2025.01.01-aarch64-macos.zip"), (
+        "Fallback installer should fetch the requested Verus target"
+    )
 
 
 def test_run_verus_warns_and_falls_back_from_invalid_override(

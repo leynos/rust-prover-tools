@@ -72,8 +72,8 @@ path only after the digest matches.
 split into:
 
 - `rust_prover_tools.verus.models`: dataclasses, constants, and path helpers.
-- `rust_prover_tools.verus.install`: release archive download, checksum
-  verification, extraction, and directory normalization.
+- `rust_prover_tools.verus.install`: release archive download through the
+  shared verified store, extraction, and directory normalization.
 - `rust_prover_tools.verus.run`: binary resolution and toolchain management.
 - `rust_prover_tools.verus.batch`: ordered per-file proof execution, partial
   failure reporting, and bounded telemetry.
@@ -212,12 +212,13 @@ enable `pipefail` or inspect `${PIPESTATUS[0]}` to read the producer's status.
 ## Test strategy
 
 Unit tests cover pure helpers and command orchestration. They use cmd-mox to
-intercept external commands on `PATH`, including `cargo`, `curl`, `sha256sum`,
-`shasum`, `unzip`, and `rustup`. Download tests replace the HTTPS connection
-with an in-memory response so byte ceilings, deadlines, redirects, digest
-mismatches, and pending-file cleanup are deterministic and never touch the
-network. Kani and Z3 tests build small local archives and stub only the
-verified-download step.
+intercept external commands on `PATH`, including `cargo`, `unzip`, and
+`rustup`. Download tests replace the HTTPS connection with an in-memory
+response so byte ceilings, deadlines, redirects, digest mismatches, and
+pending-file cleanup are deterministic and never touch the network. Kani and Z3
+tests build small local archives and stub only the verified-download step.
+Verus install tests stub the same verified-download step and assert the pinned
+asset request, so no network access or external downloader is involved.
 
 Behavioural tests use `pytest-bdd` to verify public CLI scenarios for matching
 and mismatched Kani versions, successful Verus proof execution, and missing
@@ -298,8 +299,13 @@ version probe fails with a parseable missing-toolchain message and automatic
 toolchain installation is enabled.
 
 The Verus installer keeps the original checksum validation and extraction
-contract, but adds bounded `curl` timeouts and `--max-filesize` to avoid
-indefinite network hangs and unbounded archive writes.
+contract, but obtains its archive through the shared bounded HTTPS downloader
+rather than `curl`. The pinned SHA-256 digest from `SHA256SUMS` becomes the
+`PinnedAsset` digest, and the 2 GiB archive ceiling becomes its byte limit, so
+the installer inherits the same redirect cap, deadline, streamed byte counting,
+and atomic verified store as the Kani and Z3 installers. Because a repository
+pin must not choose a local path, the archive is written under a fixed local
+name and the version and target are validated as single safe path components.
 
 Kani and Z3 binaries do not come from a user-managed checksum file. Their
 pinned names, URLs, digests, and byte ceilings live in

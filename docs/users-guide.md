@@ -161,9 +161,13 @@ Useful options are:
   `.verus/<version>` below the repository root.
 - `--base-url URL`: override the Verus release download base URL.
 
-The installer keeps the shell-script behaviour of using `curl -sSfL`, but also
-sets `--connect-timeout 15`, `--max-time 300`, and `--max-filesize` so stalled
-or oversized downloads fail within a bounded interval.
+The installer downloads the archive through the shared bounded HTTPS
+downloader. It accepts only `https` URLs, applies a redirect cap, a 15-second
+connect timeout, a 300-second total transfer deadline, and the 2 GiB archive
+ceiling described under [download safeguards](#download-safeguards). The
+archive is stored under a fixed local name, so a version or target pin cannot
+select a path outside the temporary download directory, and the version and
+target are restricted to a single safe path component.
 
 `prover-tools verus run` resolves a Verus binary, checks the toolchain reported
 by `verus --version`, optionally installs that Rust toolchain with `rustup`,

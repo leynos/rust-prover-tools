@@ -19,8 +19,8 @@ ______________________________________________________________________
   repository (`tools/kani/VERSION`, `tools/verus/VERSION`), so every machine
   and every CI run installs the same build.
 - **Verified downloads**: every installer checks its release archive against a
-  pinned SHA-256 digest before extracting it. Kani and Z3 archives also carry a
-  byte ceiling, an early `Content-Length` check, and a total transfer deadline.
+  pinned SHA-256 digest before extracting it. Every archive also carries a byte
+  ceiling, an early `Content-Length` check, and a total transfer deadline.
 - **Repository-local installs**: Verus lands under `.verus/<version>` rather
   than a shared global toolchain, so projects can pin different releases.
 - **One place to change**: workflows that used to live in shell scripts now

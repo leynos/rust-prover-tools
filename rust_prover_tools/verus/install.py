@@ -2,9 +2,9 @@
 
 This module owns the network and archive steps for installing a pinned Verus
 release. It turns repository pins into a `VerusArchive`, downloads that archive
-with Cuprum-backed `curl`, verifies its SHA-256 checksum with the platform
-checksum tool, unzips it, and normalises the extracted directory to the
-`verus` layout expected by `prover-tools verus run`.
+with the shared bounded HTTPS downloader, verifies its pinned SHA-256 digest,
+unzips it, and normalises the extracted directory to the `verus` layout
+expected by `prover-tools verus run`.
 
 Import `install_verus` when a caller needs the full installation workflow, and
 import the smaller helpers when testing or validating individual release
@@ -27,11 +27,13 @@ messages = install_verus(
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 from pathlib import Path
 
 from rust_prover_tools.commands import CommandSpec, run_checked
+from rust_prover_tools.downloads import PinnedAsset, download_pinned, sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.versions import expected_sha256
 from rust_prover_tools.verus.models import (
@@ -46,6 +48,16 @@ from rust_prover_tools.verus.models import (
 # response from filling the runner's temporary filesystem. The value follows
 # the design document's 2 GiB compressed-payload bound.
 VERUS_ARCHIVE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
+# The release name is derived from repository input, so it is never used as a
+# local path. A fixed name keeps the download inside the temporary directory
+# even if a pin contains separators or traversal sequences.
+ARCHIVE_FILE_NAME = "verus-release.zip"
+
+# Version and target values become URL path segments and extracted-directory
+# names. Restricting them to a single safe component also prevents a leading
+# dash from being mistaken for an option by a later command.
+RELEASE_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
@@ -66,10 +78,10 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
     Raises
     ------
     ProverToolError
-        Raised when version pins, checksum pins, archive hashes, or extracted
-        directories are invalid.
+        Raised when version pins, checksum pins, archive hashes, network
+        transfers, or extracted directories are invalid.
     CommandFailedError
-        Raised when `curl`, the checksum tool, or `unzip` exits non-zero.
+        Raised when `unzip` exits non-zero.
     OSError
         Raised when filesystem creation, removal, or moves fail.
 
@@ -81,6 +93,9 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
     concurrent processes, or serialize access externally with a lock.
     """
     version = read_verus_version(options.paths)
+    # Validate before the version reaches the default install path.
+    _require_safe_release_component(version, label="version")
+    _require_safe_release_component(options.target, label="target")
     install_dir = options.install_dir or default_install_dir(options.paths, version)
     installed_bin = install_dir / "verus" / "verus"
     if is_executable_file(installed_bin):
@@ -90,7 +105,6 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
     install_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary_directory:
         archive_path = download_archive(archive, Path(temporary_directory))
-        verify_archive_sha(archive, archive_path)
         run_checked(
             CommandSpec(("unzip", "-q", str(archive_path), "-d", str(install_dir))),
         )
@@ -109,7 +123,16 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
 
 
 def verus_archive(options: VerusInstallOptions, version: str) -> VerusArchive:
-    """Build the Verus release archive request."""
+    """Build the Verus release archive request.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the version or target is not a single safe path component,
+        or when the checksum file has no row for the archive.
+    """
+    _require_safe_release_component(version, label="version")
+    _require_safe_release_component(options.target, label="target")
     name = f"verus-{version}-{options.target}.zip"
     return VerusArchive(
         name=name,
@@ -119,40 +142,33 @@ def verus_archive(options: VerusInstallOptions, version: str) -> VerusArchive:
 
 
 def download_archive(archive: VerusArchive, temporary_directory: Path) -> Path:
-    """Download a Verus archive into a temporary directory."""
-    archive_path = temporary_directory / archive.name
-    run_checked(
-        CommandSpec((
-            "curl",
-            "-sSfL",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "300",
-            "--max-filesize",
-            str(VERUS_ARCHIVE_MAX_BYTES),
-            archive.url,
-            "-o",
-            str(archive_path),
-        )),
+    """Download a Verus archive into a temporary directory.
+
+    The archive is written under a fixed local name. The release name comes
+    from repository pins, so it must never select a path outside
+    `temporary_directory`.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the URL, transfer, byte ceiling, or digest check fails.
+    """
+    archive_path = temporary_directory / ARCHIVE_FILE_NAME
+    asset = PinnedAsset(
+        name=archive.name,
+        url=archive.url,
+        sha256=archive.expected_sha.lower(),
+        max_bytes=VERUS_ARCHIVE_MAX_BYTES,
     )
-    return archive_path
+    return download_pinned(asset, archive_path)
 
 
 def verify_archive_sha(archive: VerusArchive, archive_path: Path) -> None:
     """Verify a downloaded Verus archive against its pinned checksum.
 
-    Parameters
-    ----------
-    archive : VerusArchive
-        Archive metadata containing the expected SHA-256 digest.
-    archive_path : Path
-        Path to the downloaded archive file.
-
-    Returns
-    -------
-    None
-        Returns after `calculate_sha256` matches `archive.expected_sha`.
+    `download_archive` already verifies the digest before it returns, so the
+    installer does not need a second pass. This helper remains available for
+    callers that verify an archive obtained elsewhere.
 
     Raises
     ------
@@ -161,7 +177,7 @@ def verify_archive_sha(archive: VerusArchive, archive_path: Path) -> None:
         digest.
     """
     actual_sha = calculate_sha256(archive_path)
-    if actual_sha != archive.expected_sha:
+    if actual_sha != archive.expected_sha.lower():
         msg = (
             f"SHA-256 mismatch for {archive.name}.\n"
             f"Expected: {archive.expected_sha}\n"
@@ -171,38 +187,29 @@ def verify_archive_sha(archive: VerusArchive, archive_path: Path) -> None:
 
 
 def calculate_sha256(path: Path) -> str:
-    """Calculate a SHA-256 checksum using the platform checksum tool.
-
-    Parameters
-    ----------
-    path : Path
-        File path to checksum.
-
-    Returns
-    -------
-    str
-        SHA-256 hexadecimal digest string.
+    """Return the lowercase SHA-256 digest of a file.
 
     Raises
     ------
     ProverToolError
-        Raised when neither `sha256sum` nor `shasum` is available, or when the
-        checksum command produces empty output.
+        Raised when the file cannot be read.
     """
-    if shutil.which("sha256sum") is not None:
-        result = run_checked(CommandSpec(("sha256sum", str(path))))
-    elif shutil.which("shasum") is not None:
-        result = run_checked(CommandSpec(("shasum", "-a", "256", str(path))))
-    else:
-        msg = "missing SHA-256 tool (sha256sum or shasum)."
-        raise ProverToolError(msg)
+    return sha256_file(path)
 
-    stdout = result.stdout.strip()
-    if not stdout:
-        detail = result.stderr.strip() or result.stdout
-        msg = f"empty stdout from sha256sum/shasum: {detail}"
+
+def _require_safe_release_component(value: str, *, label: str) -> None:
+    """Reject a Verus version or target that is unsafe in paths or URLs.
+
+    Both values are repository-controlled and flow into a URL segment, an
+    archive name, and an extracted-directory lookup. A leading dash or a path
+    separator must fail before any of those uses.
+    """
+    if RELEASE_COMPONENT_PATTERN.fullmatch(value) is None:
+        msg = (
+            f"invalid Verus {label} {value!r}: expected ASCII letters, digits, "
+            "'.', '_' or '-', starting with a letter or digit"
+        )
         raise ProverToolError(msg)
-    return stdout.split()[0]
 
 
 def locate_extracted_verus_dir(install_dir: Path, target: str) -> Path:
