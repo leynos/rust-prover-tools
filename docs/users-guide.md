@@ -318,6 +318,8 @@ exhaust disk space or hang a CI job:
 - one monotonic deadline covers connection, redirects, and body transfer;
 - bytes are written to a pending file that is removed on any failure, and the
   final path appears only after the pinned digest matches.
+- downloads connect directly over HTTPS; proxy environment variables such as
+  `HTTPS_PROXY` are not read.
 
 ### GitHub Actions inputs
 
