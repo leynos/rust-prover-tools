@@ -12,6 +12,7 @@ from pathlib import Path
 from cyclopts import Parameter
 
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
+from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.kani_release import KaniExecOptions, exec_kani
 
 
@@ -44,8 +45,9 @@ def kani_exec(
         )
         return 128 - status if status < 0 else status
     except CommandFailedError as exc:
-        print(exc, file=sys.stderr)
+        # A closed pipe loses only this diagnostic; the verifier status stands.
+        print_lines((str(exc),), stream=sys.stderr)
         return 128 - exc.exit_code if exc.exit_code < 0 else exc.exit_code
     except ProverToolError as exc:
-        print(exc, file=sys.stderr)
+        print_lines((str(exc),), stream=sys.stderr)
         return 1

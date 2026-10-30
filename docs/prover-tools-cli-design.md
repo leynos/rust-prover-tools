@@ -133,7 +133,9 @@ and the diagnostic is not. `exit_status.print_lines` follows the same rule for
 the fallback warnings an unresolved `--verus-bin` produces: with an unbuffered
 standard output that write happens while the command is still running, escapes
 the shutdown guard, and without suppression would report a successful proof as
-a failure.
+a failure. `kani_exec_cli.kani_exec` follows the same rule for the diagnostics
+its two error branches emit, so a closed standard error cannot replace a Kani
+verifier status with a traceback either.
 
 Closed-pipe handling is observable without changing CLI output. Each handled
 case emits one INFO event with the stream, phase, action and error category

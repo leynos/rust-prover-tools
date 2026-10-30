@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import typing as typ
 
 import pytest
@@ -13,6 +14,14 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from rust_prover_tools.kani_release import KaniExecOptions
+
+
+class _BrokenPipeStream(io.StringIO):
+    """A standard-error double whose writes fail as a closed pipe does."""
+
+    def write(self, _text: str) -> int:
+        """Fail as a closed pipe does."""
+        raise BrokenPipeError
 
 
 @pytest.mark.parametrize(("status", "expected"), [(0, 0), (23, 23), (-15, 143)])
@@ -72,3 +81,30 @@ def test_adapter_prints_one_typed_validation_error(
         == 1
     )
     assert capsys.readouterr() == ("", "invalid selected release\n")
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (CommandFailedError("selected-tool", 23, "identity failed"), 23),
+        (ProverToolError("invalid selected release"), 1),
+    ],
+    ids=("command-failed", "validation-failed"),
+)
+def test_closed_diagnostic_pipe_preserves_the_computed_status(
+    monkeypatch: pytest.MonkeyPatch,
+    error: ProverToolError,
+    expected: int,
+) -> None:
+    """A reader that has gone away cannot replace the status with a traceback."""
+    monkeypatch.setattr(kani_exec_cli.sys, "stderr", _BrokenPipeStream())
+
+    def run(_options: KaniExecOptions, _environment: cabc.Mapping[str, str]) -> int:
+        raise error
+
+    monkeypatch.setattr(kani_exec_cli, "exec_kani", run)
+
+    assert (
+        kani_exec_cli.kani_exec(installation="sdk", cwd="proof", extra_arg=["list"])
+        == expected
+    ), "the diagnostic is expendable; the verifier status is not"
