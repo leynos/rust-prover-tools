@@ -169,21 +169,28 @@ proof passed, and the prover's own non-zero status when it failed. The guard
 covers standard error as well, so redirecting both streams into one closed pipe
 (`2>&1 | head -n 5`) reports the prover's status too.
 
-A shell pipeline reports the status of its last command, not the prover's, so
-`prover-tools verus run ... | head -n 5` succeeds even when the proof fails. To
-read the prover's status from a pipeline that closes early, inspect the first
-stage explicitly:
+A shell pipeline normally reports the status of its last command, not the
+prover's, so `prover-tools verus run ... | head -n 5` succeeds even when the
+proof fails. With `set -o pipefail`, the pipeline instead reports the first
+failing stage. To read the prover's status from a pipeline that closes early,
+inspect the first stage explicitly:
 
 ```bash
-prover-tools verus run --proof-file proofs/example.rs | tee verus.log
-prover_status=${PIPESTATUS[0]}
+# Read PIPESTATUS in each branch so `set -e` cannot skip the capture.
+if prover-tools verus run --proof-file proofs/example.rs | tee verus.log; then
+  prover_status=${PIPESTATUS[0]}
+else
+  prover_status=${PIPESTATUS[0]}
+fi
 ```
 
 `PIPESTATUS` must be read before running any other command, because it is
-overwritten by each one. It is a Bash feature; `zsh` spells the same array
-`pipestatus`, and its arrays start at index 1, so use the same `prover_status`
-variable with `${pipestatus[1]}` there. Avoid the name `status` in `zsh`: it is
-a read-only special parameter that aliases `$?`.
+overwritten by each one. Reading it inside both branches keeps the capture
+reachable under `set -e`: commands in an `if` condition are exempt from
+`errexit`. It is a Bash feature; `zsh` spells the same array `pipestatus`, and
+its arrays start at index 1, so use the same `prover_status` variable with
+`${pipestatus[1]}` there. Avoid the name `status` in `zsh`: it is a read-only
+special parameter that aliases `$?`.
 
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
