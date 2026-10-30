@@ -176,13 +176,14 @@ stage explicitly:
 
 ```bash
 prover-tools verus run --proof-file proofs/example.rs | tee verus.log
-status=${PIPESTATUS[0]}
+prover_status=${PIPESTATUS[0]}
 ```
 
 `PIPESTATUS` must be read before running any other command, because it is
 overwritten by each one. It is a Bash feature; `zsh` spells the same array
-`pipestatus`, and its arrays start at index 1, so the prover's status is
-`${pipestatus[1]}` there.
+`pipestatus`, and its arrays start at index 1, so use the same `prover_status`
+variable with `${pipestatus[1]}` there. Avoid the name `status` in `zsh`: it is
+a read-only special parameter that aliases `$?`.
 
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
