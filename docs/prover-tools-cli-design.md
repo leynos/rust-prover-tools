@@ -132,10 +132,11 @@ The hook belongs at the entry point, not in the echo path. The echo path cannot
 observe interpreter shutdown, and every command that writes to standard output
 would meet the same 120 through a closed pipe.
 
-`prover-tools --help | head` is unaffected and still exits 1: `rich` raises
+When `prover-tools --help` writes to a closed pipe, `rich` raises
 `SystemExit(1)` from inside the help render through `Console.on_broken_pipe`,
 which is its documented behaviour and a different question from preserving a
-child's status.
+child's status. Bash normally reports `head`'s status, 0, for that pipeline;
+enable `pipefail` or inspect `${PIPESTATUS[0]}` to read the producer's status.
 
 ## Test strategy
 
