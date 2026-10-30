@@ -108,7 +108,12 @@ class VerusRunOptions:
     paths : VerusPaths
         Verus path configuration.
     proof_file : Path | None
-        Optional proof file override.
+        Deprecated single-file alias. Callers that still pass one path, by
+        keyword or in the former second positional slot, have it folded into
+        `proof_files`. It is mutually exclusive with `proof_files`.
+    proof_files : tuple[Path, ...]
+        Proof files to verify, in the order given. An empty tuple selects the
+        compatibility default `EXAMPLE_VERUS_PROOF_PATH`.
     install_dir : Path | None
         Optional installation directory override.
     target : str
@@ -120,17 +125,39 @@ class VerusRunOptions:
     should_install_missing : bool
         Whether to install Verus if the default binary is missing.
     extra_args : tuple[str, ...]
-        Extra Verus arguments appended after the proof file.
+        Extra Verus arguments appended after each proof file.
     """
 
     paths: VerusPaths
-    proof_file: Path | None = None
+    # InitVar rather than a stored field: it keeps the former second positional
+    # slot and the `proof_file=` keyword working without exposing two sources of
+    # truth. `__post_init__` folds it into `proof_files`.
+    proof_file: dc.InitVar[Path | None] = None
+    proof_files: tuple[Path, ...] = ()
     install_dir: Path | None = None
     target: str = DEFAULT_TARGET
     verus_bin: str | None = None
     should_ensure_toolchain: bool = True
     should_install_missing: bool = True
     extra_args: tuple[str, ...] = ()
+
+    def __post_init__(self, proof_file: Path | None) -> None:
+        """Fold the deprecated single-file alias into `proof_files`."""
+        files: object = self.proof_files
+        if proof_file is not None:
+            if not isinstance(proof_file, Path):
+                msg = "proof_file must be a pathlib.Path"
+                raise TypeError(msg)
+            if self.proof_files:
+                msg = "pass proof_file or proof_files, not both"
+                raise TypeError(msg)
+            object.__setattr__(self, "proof_files", (proof_file,))
+        elif isinstance(files, Path):
+            # A caller using the former third positional slot passes a bare
+            # `Path` here, which used to be `install_dir`. Reject it: wrapping
+            # would silently treat an install directory as a proof file.
+            msg = "proof_files must be a tuple of pathlib.Path values"
+            raise TypeError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -152,6 +179,31 @@ class VerusArchive:
     expected_sha: str
 
 
+def display_proof_path(path: Path) -> str:
+    """Render a user-supplied path safely inside a single-line diagnostic.
+
+    Paths come from command-line flags and environment variables, so one may
+    contain a newline, a terminal control character, or the ``, `` list
+    delimiter. Quoting such a path with `repr` keeps it from spoofing the
+    failure report or blurring the boundary between proved files.
+
+    Parameters
+    ----------
+    path : Path
+        Path to render.
+
+    Returns
+    -------
+    str
+        The plain path when it is printable and unambiguous, otherwise its
+        quoted representation.
+    """
+    text = os.fspath(path)
+    if text.isprintable() and ", " not in text:
+        return text
+    return repr(text)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ProofFailureContext:
     """Context printed when Verus proof verification fails.
@@ -166,12 +218,16 @@ class ProofFailureContext:
         Path to the proof file that failed verification.
     toolchain : str
         Rust toolchain identifier used for the proof run.
+    proved_proof_files : tuple[Path, ...]
+        Proof files verified successfully before the failing file, in the order
+        they ran. Empty for a single-file run or a failure on the first file.
     """
 
     exit_code: int
     binary: Path
     proof_file: Path
     toolchain: str
+    proved_proof_files: tuple[Path, ...] = ()
 
 
 class VerusProofFailedError(ProverToolError):
@@ -189,15 +245,22 @@ class VerusProofFailedError(ProverToolError):
         Parameters
         ----------
         context : ProofFailureContext
-            Failure context containing the exit code, binary, proof file, and
-            toolchain used to build the user-facing error message.
+            Failure context containing the exit code, binary, proof file,
+            toolchain, and any files proved before the failure used to build
+            the user-facing error message.
         """
-        super().__init__(
+        message = (
             f"Verus proofs failed (exit {context.exit_code}).\n"
-            f"Binary: {context.binary}\n"
-            f"Proof file: {context.proof_file}\n"
-            f"Toolchain: {context.toolchain}",
+            f"Binary: {display_proof_path(context.binary)}\n"
+            f"Proof file: {display_proof_path(context.proof_file)}\n"
+            f"Toolchain: {context.toolchain}"
         )
+        if context.proved_proof_files:
+            proved = ", ".join(
+                display_proof_path(path) for path in context.proved_proof_files
+            )
+            message += f"\nProved before the failure: {proved}"
+        super().__init__(message)
         self.exit_code = context.exit_code
 
 

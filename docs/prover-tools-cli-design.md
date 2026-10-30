@@ -25,10 +25,15 @@ typed Python modules.
 
 ## Architecture
 
-`rust_prover_tools.cli` owns Cyclopts application construction, environment
-variable binding, exit-code mapping, and output printing. Command functions are
-thin adapters. They construct option dataclasses and delegate to feature
-modules.
+`rust_prover_tools.cli` owns Cyclopts application construction and command
+registration. Command functions are thin adapters: they construct option
+dataclasses, delegate to feature modules, and translate expected errors to
+process exit codes. Commands with a wide parameter table live in a dedicated
+adapter module so the application module stays readable:
+`rust_prover_tools.kani_exec_cli` for legacy Kani execution and
+`rust_prover_tools.verus_run_cli` for `verus run`. An adapter module owns its
+Cyclopts and environment-variable binding, output printing, and exit-code
+mapping.
 
 `rust_prover_tools.commands` is the only module that invokes external
 programmes. It builds Cuprum `CommandSpec` values and returns a small
@@ -48,8 +53,9 @@ split into:
 - `rust_prover_tools.verus.models`: dataclasses, constants, and path helpers.
 - `rust_prover_tools.verus.install`: release archive download, checksum
   verification, extraction, and directory normalization.
-- `rust_prover_tools.verus.run`: binary resolution, toolchain management, and
-  proof execution.
+- `rust_prover_tools.verus.run`: binary resolution and toolchain management.
+- `rust_prover_tools.verus.batch`: ordered per-file proof execution, partial
+  failure reporting, and bounded telemetry.
 
 ## Command invocation
 
@@ -136,7 +142,42 @@ Actions-style configuration.
 
 The Verus compatibility proof default is named `EXAMPLE_VERUS_PROOF_PATH` in
 code. Callers should provide `--proof-file` for project-specific proof entry
-points.
+points. `--proof-file` is repeatable and `VerusRunOptions.proof_files` carries
+a tuple, because the predecessor shell wrapper iterated a proof-file array. An
+empty tuple keeps the compatibility default, so the one-file form is unchanged.
+
+Verus refuses more than one input filename per invocation, so a multi-file run
+is a sequence of verifier invocations in the caller's order. `run_verus` checks
+every path before the first invocation, then stops at the first non-zero exit.
+The failure keeps `ProofFailureContext.proof_file` as the file that failed and
+adds `proved_proof_files` for the files already verified, so a partial run
+reports both halves of its result instead of collapsing to all-or-nothing. A
+manifest or argfile was rejected: the predecessor accepted a list of paths, and
+a repeatable flag covers that without inventing a file format. A path is
+rendered unchanged in the failure report when it is printable and unambiguous;
+a path containing a newline, a terminal control character, or the `", "` list
+delimiter is quoted so it cannot spoof or split the diagnostic.
+
+The batch and each invocation emit a start event followed by a completion
+event, which gives log-based spans without a tracing dependency: a stalled
+invocation is visible as an unmatched start. Only a genuinely stalled process
+leaves that gap, because every other exit path, including an exception outside
+the handled failures, closes the invocation span as `failure` / `unexpected`.
+Completion events carry the proof ordinal and count, status class, exit code,
+error category, and duration, and the batch completion adds the proved count.
+Those bounded fields are the metric surface for a log pipeline (batch size,
+invocation outcome, and invocation duration); no metrics client is installed.
+Timings come from an injectable monotonic clock so tests can assert
+deterministic durations. A batch that aborts outside the handled failure paths
+reports `failure` / `unexpected` instead of a misleading success. The events
+never carry proof paths, arguments, or verifier output, and the module installs
+no logger or handler, so the CLI's normal stream is unchanged unless the host
+application enables logging.
+
+Binary discovery is split from installation at the API boundary.
+`resolve_verus_bin` is the read-only probe that returns `None` when no
+executable is found; `ensure_run_binary` owns the install fallback and is named
+for that side effect.
 
 The Verus run path carries the selected release target into installer fallback.
 This keeps `prover-tools verus run --target <target>` aligned with

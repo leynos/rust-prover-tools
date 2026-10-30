@@ -95,6 +95,11 @@ prover-tools verus install
 prover-tools verus run --proof-file verus/my_proof.rs
 ```
 
+`--proof-file` may be repeated when a repository holds several proof files.
+Each file is verified in the order given, in its own Verus invocation, because
+the verifier rejects more than one input filename at a time. A run stops at the
+first failure and reports that file together with the files already proved.
+
 The `--proof-file` flag is optional and defaults to
 `verus/edge_harvest_proofs.rs`, a compatibility path inherited from the
 original shell scripts. When the default Verus binary is missing, `verus run`
@@ -131,6 +136,9 @@ ______________________________________________________________________
   construction, and test strategy.
 - [Developers' guide](docs/developers-guide.md) — adding prover workflows and
   writing command tests.
+- [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) — repeatable
+  `--proof-file`, the single-file environment bindings, partial-run reporting,
+  and the `VerusRunOptions.proof_files` API change.
 - [Cuprum users' guide](docs/cuprum-users-guide.md) and
   [Cuprum 0.2.0 migration guide](docs/cuprum-v0-2-0-migration-guide.md) —
   vendored copies of the command-execution library's documentation at the

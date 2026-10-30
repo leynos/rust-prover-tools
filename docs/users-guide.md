@@ -150,8 +150,8 @@ within a bounded interval.
 
 `prover-tools verus run` resolves a Verus binary, checks the toolchain reported
 by `verus --version`, optionally installs that Rust toolchain with `rustup`,
-and then runs Verus against the proof file. Verus output is streamed to
-standard output.
+and then runs Verus against each requested proof file. Verus output is streamed
+to standard output.
 
 Streaming continues when the reader goes away. Piping into `head`, quitting a
 pager, or an interrupted CI log collector closes the receiving end; the run
@@ -170,8 +170,9 @@ output and continues to install or use the reported Rust toolchain.
 
 Useful options are:
 
-- `--proof-file PATH`: proof entry point to verify. When omitted, the command
-  uses the compatibility example path `verus/edge_harvest_proofs.rs`.
+- `--proof-file PATH`: proof entry point to verify. This option may be
+  repeated, and every named file is verified. When omitted, the command uses
+  the compatibility example path `verus/edge_harvest_proofs.rs`.
 - `--verus-bin TEXT`: executable, directory, or command name used to locate
   Verus.
 - `--install-dir PATH`: installation directory used for the default binary.
@@ -180,8 +181,35 @@ Useful options are:
 - `--no-ensure-toolchain`: skip automatic `rustup` toolchain installation.
 - `--no-install-missing`: do not run the installer when the default binary is
   missing.
-- `--extra-arg TEXT`: append an additional argument to the Verus invocation.
+- `--extra-arg TEXT`: append an additional argument to each Verus invocation.
   This option may be repeated.
+
+#### Verifying several proof files
+
+Verus accepts only one input filename per invocation, so `prover-tools` runs
+the verifier once per `--proof-file` value instead of passing several names at
+once. Files are verified in the order given:
+
+```bash
+prover-tools verus run --repo-root . \
+  --proof-file verus/edge_harvest_proofs.rs \
+  --proof-file verus/session_core_distance.rs
+```
+
+The command stops at the first failing file. The error message names that file
+on its `Proof file:` line and lists any files already proved on a separate
+`Proved before the failure:` line, so a partial run cannot be mistaken for a
+total one. The process exits with the failing file's Verus exit status. Every
+named file must exist before the first verifier invocation starts; a missing
+path fails the run without proving anything.
+
+The environment binding remains a single-file form: `VERUS_PROOF_FILE` and
+`INPUT_PROOF_FILE` each supply one proof file. Repeating `--proof-file` on the
+command line overrides the environment value.
+
+Callers upgrading from the single-file release should read the
+[0.2.0 migration guide](v0-2-0-migration-guide.md), which also covers the
+`VerusRunOptions` API change.
 
 The run command recognizes Verus binaries in these directory layouts:
 

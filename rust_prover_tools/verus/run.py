@@ -2,8 +2,9 @@
 
 This module resolves a Verus binary, checks the Rust toolchain required by
 `verus --version`, optionally installs that toolchain with `rustup`, and runs
-the requested proof file. It is useful for CLI code and tests that need the
-runner behaviour without reimplementing the shell script's fallback rules.
+the requested proof files one at a time. It is useful for CLI code and tests
+that need the runner behaviour without reimplementing the shell script's
+fallback rules.
 
 Use `run_verus` for the complete proof workflow. Import `resolve_verus_bin`,
 `ensure_verus_toolchain`, or `ensure_toolchain_installed` when a caller needs
@@ -21,7 +22,7 @@ from rust_prover_tools.verus.run import run_verus
 run_verus(
     VerusRunOptions(
         paths=VerusPaths(repo_root=Path.cwd()),
-        proof_file=Path("verus/edge_harvest_proofs.rs"),
+        proof_files=(Path("verus/edge_harvest_proofs.rs"),),
     ),
 )
 ```
@@ -35,12 +36,11 @@ from pathlib import Path
 from rust_prover_tools.commands import CommandSpec, run_checked, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.versions import parse_verus_toolchain
+from rust_prover_tools.verus.batch import VerusRunSettings, verify_proof_files
 from rust_prover_tools.verus.install import install_verus
 from rust_prover_tools.verus.models import (
     EXAMPLE_VERUS_PROOF_PATH,
-    ProofFailureContext,
     VerusInstallOptions,
-    VerusProofFailedError,
     VerusRunOptions,
     default_install_dir,
     is_executable_file,
@@ -85,14 +85,14 @@ def resolve_verus_bin(candidate: str) -> Path | None:
 
 
 def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
-    """Run Verus against a proof file.
+    """Run Verus against each requested proof file.
 
     Parameters
     ----------
     options : VerusRunOptions
-        Proof-run options including repository paths, optional proof file,
-        optional Verus binary, toolchain behaviour, install fallback behaviour,
-        and extra verifier arguments.
+        Proof-run options including repository paths, proof files, optional
+        Verus binary, toolchain behaviour, install fallback behaviour, and
+        extra verifier arguments.
 
     Returns
     -------
@@ -104,22 +104,96 @@ def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
     Raises
     ------
     ProverToolError
-        Raised when the proof file, Verus binary, or toolchain output is
+        Raised when a proof file, the Verus binary, or the toolchain output is
         missing or invalid.
     VerusProofFailedError
-        Raised when the verifier exits non-zero; its exit code is preserved for
-        the CLI.
+        Raised when the verifier exits non-zero for any proof file; its exit
+        code is preserved for the CLI and the message names the failing file
+        together with the files proved before it.
     CommandFailedError
         Raised when an installer or `rustup` command exits non-zero.
+
+    Notes
+    -----
+    Verus rejects more than one input filename per invocation, so a
+    multi-file run is a sequence of verifier invocations in the order given.
+    Every proof file is checked for existence before the first invocation
+    starts, which keeps a mistyped path from being reported as a partial proof
+    run. The loop stops at the first failing file so the prover's exit status
+    survives.
+    """
+    proof_files = resolve_proof_files(options)
+    resolved, lines = ensure_run_binary(options)
+    toolchain = ensure_verus_toolchain(
+        resolved,
+        should_install=options.should_ensure_toolchain,
+    )
+    verify_proof_files(
+        proof_files,
+        VerusRunSettings(resolved, toolchain, options.extra_args),
+    )
+    return lines
+
+
+def resolve_proof_files(options: VerusRunOptions) -> tuple[Path, ...]:
+    """Resolve the proof files to verify.
+
+    Parameters
+    ----------
+    options : VerusRunOptions
+        Run options carrying the requested proof files and repository paths.
+
+    Returns
+    -------
+    tuple[Path, ...]
+        Proof files to verify, defaulting to `EXAMPLE_VERUS_PROOF_PATH` below
+        the repository root when none were requested.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when any proof file is missing. Every path is checked before
+        verification starts, so a mistyped path cannot leave a partial run.
+    """
+    proof_files = options.proof_files or (
+        options.paths.repo_root / EXAMPLE_VERUS_PROOF_PATH,
+    )
+    for proof_file in proof_files:
+        if not proof_file.is_file():
+            msg = f"Verus proof file not found: {proof_file}"
+            raise ProverToolError(msg)
+    return proof_files
+
+
+def ensure_run_binary(options: VerusRunOptions) -> tuple[Path, tuple[str, ...]]:
+    """Ensure a usable Verus binary exists for a proof run.
+
+    Parameters
+    ----------
+    options : VerusRunOptions
+        Run options carrying the binary override, install directory, and
+        fallback behaviour.
+
+    Returns
+    -------
+    tuple[Path, tuple[str, ...]]
+        Resolved executable and any wrapper warning lines describing a
+        fallback from an invalid explicit override.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when no executable Verus binary can be resolved, even after the
+        install fallback.
+
+    Notes
+    -----
+    The name records the side effect: when the default binary is missing and
+    `options.should_install_missing` is true, this function may download and
+    install Verus before returning. Callers that need a read-only probe should
+    use `resolve_verus_bin` instead.
     """
     version = read_verus_version(options.paths)
-    proof_file = (
-        options.proof_file or options.paths.repo_root / EXAMPLE_VERUS_PROOF_PATH
-    )
-    if not proof_file.is_file():
-        msg = f"Verus proof file not found: {proof_file}"
-        raise ProverToolError(msg)
-
     default_bin = (
         (options.install_dir or default_install_dir(options.paths, version))
         / "verus"
@@ -136,17 +210,7 @@ def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
     if resolved is None or not is_executable_file(resolved):
         msg = f"Verus binary not found after install: {default_bin}"
         raise ProverToolError(msg)
-
-    toolchain = ensure_verus_toolchain(
-        resolved,
-        should_install=options.should_ensure_toolchain,
-    )
-    command = (str(resolved), str(proof_file), *options.extra_args)
-    result = run_command(CommandSpec(command, echo=True))
-    if result.exit_code != 0:
-        context = ProofFailureContext(result.exit_code, resolved, proof_file, toolchain)
-        raise VerusProofFailedError(context)
-    return lines
+    return resolved, lines
 
 
 def fallback_warning(verus_bin: str, default_bin: Path) -> tuple[str, ...]:

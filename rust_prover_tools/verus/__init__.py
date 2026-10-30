@@ -9,6 +9,7 @@ Cuprum.
 
 from __future__ import annotations
 
+from rust_prover_tools.verus.batch import VerusRunSettings, verify_proof_files
 from rust_prover_tools.verus.install import (
     calculate_sha256,
     install_verus,
@@ -32,10 +33,12 @@ from rust_prover_tools.verus.models import (
     read_verus_version,
 )
 from rust_prover_tools.verus.run import (
+    ensure_run_binary,
     ensure_toolchain_installed,
     ensure_verus_toolchain,
     fallback_warning,
     resolve_default_verus,
+    resolve_proof_files,
     resolve_verus_bin,
     run_verus,
 )
@@ -52,8 +55,10 @@ __all__ = [
     "VerusPaths",
     "VerusProofFailedError",
     "VerusRunOptions",
+    "VerusRunSettings",
     "calculate_sha256",
     "default_install_dir",
+    "ensure_run_binary",
     "ensure_toolchain_installed",
     "ensure_verus_toolchain",
     "fallback_warning",
@@ -62,7 +67,9 @@ __all__ = [
     "locate_extracted_verus_dir",
     "read_verus_version",
     "resolve_default_verus",
+    "resolve_proof_files",
     "resolve_verus_bin",
     "run_verus",
     "verify_archive_sha",
+    "verify_proof_files",
 ]

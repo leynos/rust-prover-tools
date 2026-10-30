@@ -47,10 +47,9 @@ from rust_prover_tools.verus import (
     VerusInstallOptions,
     VerusPaths,
     VerusProofFailedError,
-    VerusRunOptions,
     install_verus,
-    run_verus,
 )
+from rust_prover_tools.verus_run_cli import verus_run
 
 app: cyclopts.App = App(
     "prover-tools",
@@ -271,103 +270,8 @@ def install_verifier(
     return 0
 
 
-@verus_app.command(name="run")
-# CLI parameter binding needs one explicit parameter per flag/env-var mapping.
-# pylint: disable-next=too-many-arguments
-def run(
-    *,
-    repo_root: typ.Annotated[Path | None, Parameter(env_var="INPUT_REPO_ROOT")] = None,
-    proof_file: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("VERUS_PROOF_FILE", "INPUT_PROOF_FILE")),
-    ] = None,
-    version_file: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("INPUT_VERSION_FILE", "INPUT_VERUS_VERSION_FILE")),
-    ] = None,
-    checksum_file: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("INPUT_CHECKSUM_FILE", "INPUT_VERUS_CHECKSUM_FILE")),
-    ] = None,
-    install_dir: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("VERUS_INSTALL_DIR", "INPUT_VERUS_INSTALL_DIR")),
-    ] = None,
-    target: typ.Annotated[
-        str,
-        Parameter(env_var=("VERUS_TARGET", "INPUT_VERUS_TARGET")),
-    ] = DEFAULT_TARGET,
-    verus_bin: typ.Annotated[
-        str | None,
-        Parameter(env_var=("VERUS_BIN", "INPUT_VERUS_BIN")),
-    ] = None,
-    ensure_toolchain: typ.Annotated[
-        bool,
-        Parameter(negative="--no-ensure-toolchain"),
-    ] = True,
-    install_missing: typ.Annotated[
-        bool,
-        Parameter(negative="--no-install-missing"),
-    ] = True,
-    extra_arg: typ.Annotated[
-        list[str] | None,
-        Parameter(allow_repeating=True, env_var="INPUT_EXTRA_ARG"),
-    ] = None,
-) -> int:
-    """Run Verus against a proof file.
-
-    Parameters
-    ----------
-    repo_root : Path | None
-        Repository root used to resolve default tool pin paths.
-    proof_file : Path | None
-        Optional proof file override.
-    version_file : Path | None
-        Optional Verus version pin override.
-    checksum_file : Path | None
-        Optional checksum file override used if installation is needed.
-    install_dir : Path | None
-        Optional Verus installation directory.
-    target : str
-        Verus release target used if installation is needed.
-    verus_bin : str | None
-        Optional Verus binary, directory, or command name.
-    ensure_toolchain : bool
-        Whether to install the required Rust toolchain with `rustup`.
-    install_missing : bool
-        Whether to install the default Verus binary when missing.
-    extra_arg : list[str] | None
-        Extra Verus arguments appended after the proof file.
-
-    Returns
-    -------
-    int
-        Exit code, where proof failures preserve the Verus exit code.
-    """
-    try:
-        lines = run_verus(
-            VerusRunOptions(
-                paths=VerusPaths(
-                    repo_root=_repo_root(repo_root),
-                    version_file=version_file,
-                    checksum_file=checksum_file,
-                ),
-                proof_file=proof_file,
-                install_dir=install_dir,
-                target=target,
-                verus_bin=verus_bin,
-                should_ensure_toolchain=ensure_toolchain,
-                should_install_missing=install_missing,
-                extra_args=tuple(extra_arg or ()),
-            ),
-        )
-    except ProverToolError as exc:
-        return _error_exit(exc)
-    _print_lines(lines)
-    return 0
-
-
 kani_app.command(kani_exec, name="exec")
+verus_app.command(verus_run, name="run")
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")
 
