@@ -134,6 +134,9 @@ ______________________________________________________________________
   construction, and test strategy.
 - [Developers' guide](docs/developers-guide.md) — adding prover workflows and
   writing command tests.
+- [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) — repeatable
+  `--proof-file`, the single-file environment bindings, partial-run reporting,
+  and the `VerusRunOptions.proof_files` API change.
 - [Cuprum users' guide](docs/cuprum-users-guide.md) and
   [Cuprum 0.2.0 migration guide](docs/cuprum-v0-2-0-migration-guide.md) —
   vendored copies of the command-execution library's documentation at the

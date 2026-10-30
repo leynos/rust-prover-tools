@@ -25,10 +25,15 @@ typed Python modules.
 
 ## Architecture
 
-`rust_prover_tools.cli` owns Cyclopts application construction, environment
-variable binding, exit-code mapping, and output printing. Command functions are
-thin adapters. They construct option dataclasses and delegate to feature
-modules.
+`rust_prover_tools.cli` owns Cyclopts application construction and command
+registration. Command functions are thin adapters: they construct option
+dataclasses, delegate to feature modules, and translate expected errors to
+process exit codes. Commands with a wide parameter table live in a dedicated
+adapter module so the application module stays readable:
+`rust_prover_tools.kani_exec_cli` for legacy Kani execution and
+`rust_prover_tools.verus_run_cli` for `verus run`. An adapter module owns its
+Cyclopts and environment-variable binding, output printing, and exit-code
+mapping.
 
 `rust_prover_tools.commands` is the only module that invokes external
 programmes. It builds Cuprum `CommandSpec` values and returns a small
@@ -48,8 +53,9 @@ split into:
 - `rust_prover_tools.verus.models`: dataclasses, constants, and path helpers.
 - `rust_prover_tools.verus.install`: release archive download, checksum
   verification, extraction, and directory normalization.
-- `rust_prover_tools.verus.run`: binary resolution, toolchain management, and
-  proof execution.
+- `rust_prover_tools.verus.run`: binary resolution and toolchain management.
+- `rust_prover_tools.verus.batch`: ordered per-file proof execution, partial
+  failure reporting, and bounded telemetry.
 
 ## Command invocation
 
@@ -146,7 +152,16 @@ The failure keeps `ProofFailureContext.proof_file` as the file that failed and
 adds `proved_proof_files` for the files already verified, so a partial run
 reports both halves of its result instead of collapsing to all-or-nothing. A
 manifest or argfile was rejected: the predecessor accepted a list of paths, and
-a repeatable flag covers that without inventing a file format.
+a repeatable flag covers that without inventing a file format. A path is
+rendered unchanged in the failure report when it is printable and unambiguous;
+a path containing a newline, a terminal control character, or the `", "` list
+delimiter is quoted so it cannot spoof or split the diagnostic.
+
+Each completed invocation emits one bounded INFO event, and the batch emits a
+closing event. The events carry the proof ordinal and count, status class, exit
+code, error category, and duration; they never carry proof paths, arguments, or
+verifier output. The module installs no logger or handler, so the CLI's normal
+stream is unchanged unless the host application enables logging.
 
 The Verus run path carries the selected release target into installer fallback.
 This keeps `prover-tools verus run --target <target>` aligned with

@@ -107,6 +107,10 @@ class VerusRunOptions:
     ----------
     paths : VerusPaths
         Verus path configuration.
+    proof_file : Path | None
+        Deprecated single-file alias. Callers that still pass one path, by
+        keyword or in the former second positional slot, have it folded into
+        `proof_files`. It is mutually exclusive with `proof_files`.
     proof_files : tuple[Path, ...]
         Proof files to verify, in the order given. An empty tuple selects the
         compatibility default `EXAMPLE_VERUS_PROOF_PATH`.
@@ -125,6 +129,10 @@ class VerusRunOptions:
     """
 
     paths: VerusPaths
+    # InitVar rather than a stored field: it keeps the former second positional
+    # slot and the `proof_file=` keyword working without exposing two sources of
+    # truth. `__post_init__` folds it into `proof_files`.
+    proof_file: dc.InitVar[Path | None] = None
     proof_files: tuple[Path, ...] = ()
     install_dir: Path | None = None
     target: str = DEFAULT_TARGET
@@ -132,6 +140,22 @@ class VerusRunOptions:
     should_ensure_toolchain: bool = True
     should_install_missing: bool = True
     extra_args: tuple[str, ...] = ()
+
+    def __post_init__(self, proof_file: Path | None) -> None:
+        """Fold the deprecated single-file alias into `proof_files`."""
+        files: object = self.proof_files
+        if proof_file is not None:
+            if not isinstance(proof_file, Path):
+                msg = "proof_file must be a pathlib.Path"
+                raise TypeError(msg)
+            if self.proof_files:
+                msg = "pass proof_file or proof_files, not both"
+                raise TypeError(msg)
+            object.__setattr__(self, "proof_files", (proof_file,))
+        elif isinstance(files, Path):
+            # A positional legacy call reaches here as a bare Path bound to
+            # `proof_files`; keep it usable rather than iterating its characters.
+            object.__setattr__(self, "proof_files", (files,))
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -151,6 +175,31 @@ class VerusArchive:
     name: str
     url: str
     expected_sha: str
+
+
+def display_proof_path(path: Path) -> str:
+    """Render a user-supplied path safely inside a single-line diagnostic.
+
+    Paths come from command-line flags and environment variables, so one may
+    contain a newline, a terminal control character, or the ``, `` list
+    delimiter. Quoting such a path with `repr` keeps it from spoofing the
+    failure report or blurring the boundary between proved files.
+
+    Parameters
+    ----------
+    path : Path
+        Path to render.
+
+    Returns
+    -------
+    str
+        The plain path when it is printable and unambiguous, otherwise its
+        quoted representation.
+    """
+    text = os.fspath(path)
+    if text.isprintable() and ", " not in text:
+        return text
+    return repr(text)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -200,12 +249,14 @@ class VerusProofFailedError(ProverToolError):
         """
         message = (
             f"Verus proofs failed (exit {context.exit_code}).\n"
-            f"Binary: {context.binary}\n"
-            f"Proof file: {context.proof_file}\n"
+            f"Binary: {display_proof_path(context.binary)}\n"
+            f"Proof file: {display_proof_path(context.proof_file)}\n"
             f"Toolchain: {context.toolchain}"
         )
         if context.proved_proof_files:
-            proved = ", ".join(str(path) for path in context.proved_proof_files)
+            proved = ", ".join(
+                display_proof_path(path) for path in context.proved_proof_files
+            )
             message += f"\nProved before the failure: {proved}"
         super().__init__(message)
         self.exit_code = context.exit_code

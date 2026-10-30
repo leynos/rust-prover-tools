@@ -192,6 +192,10 @@ The environment binding remains a single-file form: `VERUS_PROOF_FILE` and
 `INPUT_PROOF_FILE` each supply one proof file. Repeating `--proof-file` on the
 command line overrides the environment value.
 
+Callers upgrading from the single-file release should read the
+[0.2.0 migration guide](v0-2-0-migration-guide.md), which also covers the
+`VerusRunOptions` API change.
+
 The run command recognizes Verus binaries in these directory layouts:
 
 - `verus`

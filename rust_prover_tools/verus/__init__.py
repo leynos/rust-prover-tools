@@ -9,6 +9,7 @@ Cuprum.
 
 from __future__ import annotations
 
+from rust_prover_tools.verus.batch import verify_proof_files
 from rust_prover_tools.verus.install import (
     calculate_sha256,
     install_verus,
@@ -40,7 +41,6 @@ from rust_prover_tools.verus.run import (
     resolve_run_binary,
     resolve_verus_bin,
     run_verus,
-    verify_proof_files,
 )
 
 __all__ = [

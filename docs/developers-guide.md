@@ -93,22 +93,48 @@ copy is newer. Bump the pin by changing `TYPOS_CONFIG_BUILDER_VERSION` in the
 ## Prover CLI internals
 
 The `prover-tools` command is implemented as package code under
-`rust_prover_tools/`. Keep command functions in `rust_prover_tools.cli` thin:
-they should bind Cyclopts parameters, construct option dataclasses, call a
-feature module, and translate expected `ProverToolError` exceptions to process
-exit codes.
+`rust_prover_tools/`. Keep command functions thin: they should bind Cyclopts
+parameters, construct option dataclasses, call a feature module, and translate
+expected `ProverToolError` exceptions to process exit codes.
+
+`rust_prover_tools.cli` builds the Cyclopts applications and registers the
+commands. A command whose parameter table is long enough to crowd that module
+gets its own adapter module, which owns its parameter binding, environment
+variables, output printing, and exit-code mapping:
+
+- `rust_prover_tools.kani_exec_cli` for legacy Kani execution.
+- `rust_prover_tools.verus_run_cli` for `verus run`. It binds `--proof-file`
+  as a repeatable tuple, keeps `VERUS_PROOF_FILE` and `INPUT_PROOF_FILE` as
+  single-file environment bindings, and supplies `env_var_split` so a path
+  separator inside one value is not split into several proof files.
 
 Feature modules should own workflow behaviour:
 
 - `rust_prover_tools.kani` for Kani installation and version checks.
 - `rust_prover_tools.verus.install` for Verus release installation.
-- `rust_prover_tools.verus.run` for Verus binary resolution, toolchain checks,
-  and proof execution.
+- `rust_prover_tools.verus.run` for Verus binary resolution and toolchain
+  checks.
+- `rust_prover_tools.verus.batch` for the ordered, fail-fast proof-file loop,
+  its partial-failure reporting, and its bounded telemetry.
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 
 Public helpers exported from `rust_prover_tools.verus` should keep structured
 NumPy-style docstrings. That package is the stable import facade for tests and
-future callers.
+future callers. The proof-run flow is split across three exported steps so each
+can be tested alone: `resolve_proof_files` checks every requested path before
+any verifier starts and falls back to the compatibility example path,
+`resolve_run_binary` locates or installs the executable, and
+`verify_proof_files` runs one invocation per file in the caller's order and
+stops at the first non-zero exit. `VerusRunOptions.proof_files` is the tuple
+that carries the request; the deprecated `proof_file` alias is folded into it
+when a caller still uses the former single-path form.
+
+`verify_proof_files`, in `rust_prover_tools.verus.batch`, emits one bounded
+INFO event per completed invocation and one for the batch, following the
+`kani_release` convention. Events carry the proof ordinal and count, status
+class, exit code, error category, and duration, and never carry proof paths or
+verifier output. It installs no logger or handler, so the normal CLI stream is
+unchanged unless the application enables logging.
 
 `parse_verus_toolchain` accepts `Toolchain: <name>` lines at column zero or
 with leading spaces or tabs. It extracts `<name>` before the trailing

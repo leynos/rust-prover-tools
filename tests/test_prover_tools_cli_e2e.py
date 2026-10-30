@@ -90,7 +90,9 @@ def test_verus_run_env_proof_file_is_not_split_on_path_separator(
     version_file = tmp_path / "tools" / "verus" / "VERSION"
     version_file.parent.mkdir(parents=True)
     version_file.write_text("2025.01.01\n", encoding="utf-8")
-    proof_dir = tmp_path / "proofs:colon"
+    # Use the platform's own separator so the directory name stays legal on
+    # Windows while still exercising the split Cyclopts would otherwise apply.
+    proof_dir = tmp_path / f"proofs{os.pathsep}separator"
     proof_dir.mkdir()
     proof_file = proof_dir / "proof.rs"
     proof_file.write_text("proof", encoding="utf-8")

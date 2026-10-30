@@ -36,12 +36,11 @@ from pathlib import Path
 from rust_prover_tools.commands import CommandSpec, run_checked, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.versions import parse_verus_toolchain
+from rust_prover_tools.verus.batch import verify_proof_files
 from rust_prover_tools.verus.install import install_verus
 from rust_prover_tools.verus.models import (
     EXAMPLE_VERUS_PROOF_PATH,
-    ProofFailureContext,
     VerusInstallOptions,
-    VerusProofFailedError,
     VerusRunOptions,
     default_install_dir,
     is_executable_file,
@@ -202,48 +201,6 @@ def resolve_run_binary(options: VerusRunOptions) -> tuple[Path, tuple[str, ...]]
         msg = f"Verus binary not found after install: {default_bin}"
         raise ProverToolError(msg)
     return resolved, lines
-
-
-def verify_proof_files(
-    proof_files: tuple[Path, ...],
-    verus_bin: Path,
-    toolchain: str,
-    extra_args: tuple[str, ...],
-) -> None:
-    """Verify each proof file in order, stopping at the first failure.
-
-    Parameters
-    ----------
-    proof_files : tuple[Path, ...]
-        Proof files to verify, already checked for existence.
-    verus_bin : Path
-        Resolved Verus executable.
-    toolchain : str
-        Rust toolchain identifier, reported on failure.
-    extra_args : tuple[str, ...]
-        Extra verifier arguments appended after each proof file.
-
-    Raises
-    ------
-    VerusProofFailedError
-        Raised on the first non-zero verifier exit. The context names the file
-        that failed and the files proved before it, and preserves the exit
-        code.
-    """
-    proved: list[Path] = []
-    for proof_file in proof_files:
-        command = (str(verus_bin), str(proof_file), *extra_args)
-        result = run_command(CommandSpec(command, echo=True))
-        if result.exit_code != 0:
-            context = ProofFailureContext(
-                result.exit_code,
-                verus_bin,
-                proof_file,
-                toolchain,
-                tuple(proved),
-            )
-            raise VerusProofFailedError(context)
-        proved.append(proof_file)
 
 
 def fallback_warning(verus_bin: str, default_bin: Path) -> tuple[str, ...]:
