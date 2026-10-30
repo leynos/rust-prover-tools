@@ -144,6 +144,22 @@ for deterministic tests. Events never carry proof paths or verifier output, and
 the module installs no logger or handler, so the normal CLI stream is unchanged
 unless the application enables logging.
 
+`rust_prover_tools.exit_status` owns the closed-pipe boundary. `cli.main`
+registers `guard_shutdown_flush()` before `app()` runs, so the interpreter's
+final flush cannot replace the prover's status with 120, and it covers standard
+error as well as standard output. Command functions must not install their own
+`atexit` handling; use `exit_status.print_lines()` rather than bare `print()`
+for output or diagnostics whose failure must not change the status. The design
+rationale is in `docs/prover-tools-cli-design.md`.
+
+Closed-pipe handling emits one opt-in INFO event per handled case when the host
+application enables logging. The module installs no logger or handler and adds
+no CLI output. Events contain only bounded fields: the stream (`stdout`,
+`stderr`, or `custom`), the phase (`flush` or `write`), the action
+(`redirected`, `sink`, `suppressed`, or `failed`), and the error category
+(`broken_pipe` or `os_error`). They omit output, paths, commands and exception
+text.
+
 `parse_verus_toolchain` accepts `Toolchain: <name>` lines at column zero or
 with leading spaces or tabs. It extracts `<name>` before the trailing
 `RUSTUP_TOOLCHAIN` override message emitted by official Verus releases, so

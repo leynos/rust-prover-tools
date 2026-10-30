@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import typing as typ
+
+import pytest
 
 from rust_prover_tools import exit_status
 
@@ -12,10 +15,11 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    import pytest
-
 #: Raised by doubles that model a stream without a file descriptor.
 _NO_DESCRIPTOR_MESSAGE = "stream has no usable descriptor"
+
+#: Raised when the null device itself cannot be opened.
+_NO_DESCRIPTORS_MESSAGE = "no descriptors available"
 
 
 class _UnexpectedRedirectError(RuntimeError):
@@ -217,3 +221,132 @@ def test_guard_registers_the_shutdown_hook(
 
     assert len(registered) == 1, "the guard should register exactly one hook"
     assert callable(registered[0]), "the registered hook should be callable"
+
+
+def _closed_pipe_events(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Return the bounded closed-pipe events captured during a test."""
+    return [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Closed-pipe output handling"
+    ]
+
+
+def _event_fields(record: logging.LogRecord) -> dict[str, object]:
+    """Read the bounded fields an event carries, without any payload."""
+    names = ("stream", "phase", "action", "error_category")
+    return {name: getattr(record, name) for name in names}
+
+
+def test_redirected_stream_emits_a_bounded_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A redirect reports the stream, phase, action and error category."""
+    target = tmp_path / "pipe-buffer"
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+    monkeypatch.setattr(exit_status.sys, "stdout", _ClosingStream(descriptor))
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
+    try:
+        with caplog.at_level(logging.INFO, logger=exit_status.__name__):
+            _installed_shutdown_hook(monkeypatch)()
+        os.write(descriptor, b"discarded")
+    finally:
+        os.close(descriptor)
+
+    records = _closed_pipe_events(caplog)
+    assert len(records) == 1, "a handled redirect should emit exactly one event"
+    assert _event_fields(records[0]) == {
+        "stream": "stdout",
+        "phase": "flush",
+        "action": "redirected",
+        "error_category": "broken_pipe",
+    }, "the event should describe the handled redirect"
+
+
+def test_descriptorless_stream_emits_a_sink_event(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Replacing a dead descriptorless stream is reported as a sink action."""
+    monkeypatch.setattr(exit_status.sys, "stdout", _ClosingStream(descriptor=None))
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
+
+    with caplog.at_level(logging.INFO, logger=exit_status.__name__):
+        _installed_shutdown_hook(monkeypatch)()
+
+    records = _closed_pipe_events(caplog)
+    assert len(records) == 1, "a replaced stream should emit exactly one event"
+    assert _event_fields(records[0]) == {
+        "stream": "stdout",
+        "phase": "flush",
+        "action": "sink",
+        "error_category": "broken_pipe",
+    }, "the event should describe the replacement rather than a redirect"
+
+
+@pytest.mark.parametrize("attribute", ["stdout", "stderr"])
+def test_suppressed_write_names_its_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    attribute: str,
+) -> None:
+    """A suppressed write reports which standard stream had gone away."""
+    broken = _BrokenPipeStream()
+    monkeypatch.setattr(exit_status.sys, attribute, broken)
+
+    with caplog.at_level(logging.INFO, logger=exit_status.__name__):
+        exit_status.print_lines(("first", "second"), stream=broken)
+
+    records = _closed_pipe_events(caplog)
+    assert len(records) == 1, "one closed write should emit exactly one event"
+    assert _event_fields(records[0]) == {
+        "stream": attribute,
+        "phase": "write",
+        "action": "suppressed",
+        "error_category": "broken_pipe",
+    }, "the event should name the stream whose write was suppressed"
+
+
+def test_healthy_stream_emits_no_closed_pipe_event(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Normal output stays silent even when logging is enabled."""
+    monkeypatch.setattr(exit_status.sys, "stdout", _OpenStream())
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
+
+    with caplog.at_level(logging.INFO, logger=exit_status.__name__):
+        _installed_shutdown_hook(monkeypatch)()
+        exit_status.print_lines(("first",), stream=io.StringIO())
+
+    assert _closed_pipe_events(caplog) == [], (
+        "a healthy stream should emit no closed-pipe event"
+    )
+
+
+def test_failed_redirect_is_recorded_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A redirect that cannot open the null device is reported, not raised."""
+    monkeypatch.setattr(exit_status.sys, "stdout", _ClosingStream(descriptor=3))
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
+
+    def refuse_open(*_args: object, **_kwargs: object) -> int:
+        raise OSError(_NO_DESCRIPTORS_MESSAGE)
+
+    monkeypatch.setattr(exit_status.os, "open", refuse_open)
+
+    with caplog.at_level(logging.INFO, logger=exit_status.__name__):
+        _installed_shutdown_hook(monkeypatch)()  # Must not raise from the hook.
+
+    records = _closed_pipe_events(caplog)
+    assert len(records) == 1, "a failed redirect should emit exactly one event"
+    assert _event_fields(records[0]) == {
+        "stream": "stdout",
+        "phase": "flush",
+        "action": "failed",
+        "error_category": "os_error",
+    }, "the event should distinguish a failed redirect from a handled pipe"

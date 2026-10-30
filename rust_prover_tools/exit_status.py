@@ -15,6 +15,11 @@ interpreter's final flush succeeds and the requested status stands. A dead
 stream with no descriptor cannot be pointed anywhere, so it is replaced by a
 sink that discards output.
 
+Closed-pipe handling is observable without changing CLI output: every handled
+case emits one INFO event with the stream, phase, action, and error category
+when the host application enables logging. No logger or handler is installed,
+and the event carries no output, path, or exception text.
+
 Example
 -------
 ```python
@@ -30,11 +35,35 @@ from __future__ import annotations
 import atexit
 import contextlib
 import io
+import logging
 import os
 import sys
 import typing as typ
 
 __all__ = ("guard_shutdown_flush", "print_lines")
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _observe_closed_pipe(*, stream: str, phase: str, action: str) -> None:
+    """Emit one opt-in structured event for a handled closed pipe.
+
+    INFO keeps normal CLI output unchanged unless the host application enables
+    logging. Only bounded identifiers are attached: never output, paths, or
+    exception text.
+    """
+    # Observability must not defeat the guard it describes: a logging failure
+    # inside the shutdown hook would abort the redirect and restore status 120.
+    with contextlib.suppress(Exception):
+        _LOGGER.info(
+            "Closed-pipe output handling",
+            extra={
+                "stream": stream,
+                "phase": phase,
+                "action": action,
+                "error_category": "broken_pipe" if action != "failed" else "os_error",
+            },
+        )
 
 
 class _NullTextSink(io.TextIOBase):
@@ -74,12 +103,22 @@ def _guard_output(name: str) -> None:
         # shutdown, so leaving it installed would fail again and report 120.
         # Replace it with a sink whose flush cannot fail.
         setattr(sys, name, _NullTextSink())
+        _observe_closed_pipe(stream=name, phase="flush", action="sink")
         return
-    devnull = os.open(os.devnull, os.O_WRONLY)
+    devnull: int | None = None
     try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, descriptor)
+    except OSError:
+        # The final flush will fail again and report 120 either way; raising
+        # here would only add an atexit traceback without preserving the status.
+        _observe_closed_pipe(stream=name, phase="flush", action="failed")
+    else:
+        _observe_closed_pipe(stream=name, phase="flush", action="redirected")
     finally:
-        os.close(devnull)
+        if devnull is not None:
+            with contextlib.suppress(OSError):
+                os.close(devnull)
 
 
 def _redirect_closed_outputs() -> None:
@@ -100,6 +139,15 @@ def guard_shutdown_flush() -> None:
     inspects the streams as they are when the interpreter shuts down.
     """
     atexit.register(_redirect_closed_outputs)
+
+
+def _stream_name(destination: typ.TextIO) -> str:
+    """Name a destination with a bounded identifier rather than its contents."""
+    if destination is sys.stdout:
+        return "stdout"
+    if destination is sys.stderr:
+        return "stderr"
+    return "custom"
 
 
 def print_lines(
@@ -126,6 +174,12 @@ def print_lines(
     destination = sys.stdout if stream is None else stream
     # The loop stops at the first failed write: there is no reader left, and
     # the remaining lines would meet the same dead descriptor.
-    with contextlib.suppress(BrokenPipeError):
+    try:
         for line in lines:
             print(line, file=destination)
+    except BrokenPipeError:
+        _observe_closed_pipe(
+            stream=_stream_name(destination),
+            phase="write",
+            action="suppressed",
+        )

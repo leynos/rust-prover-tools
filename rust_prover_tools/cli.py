@@ -25,7 +25,6 @@ legacy `KANI` and `VERUS_*` variables preserved from the shell scripts.
 
 from __future__ import annotations
 
-import contextlib
 import sys
 import typing as typ
 from pathlib import Path
@@ -77,8 +76,7 @@ def _repo_root(path: Path | None) -> Path:
 def _error_exit(exc: ProverToolError) -> int:
     """Print a user-facing error and return the appropriate exit status."""
     # A closed pipe loses only this diagnostic; the proof result must survive.
-    with contextlib.suppress(BrokenPipeError):
-        print(exc, file=sys.stderr)
+    print_lines((str(exc),), stream=sys.stderr)
     match exc:
         case VerusProofFailedError(exit_code=code):
             return code
