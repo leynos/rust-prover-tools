@@ -133,13 +133,16 @@ former single-path form.
 `verify_proof_files`, in `rust_prover_tools.verus.batch`, emits bounded INFO
 events following the `kani_release` convention: a batch start and completion
 event, and a start and completion event per invocation, so a stalled invocation
-appears as an unmatched start. Completion events carry the proof ordinal and
-count, status class, exit code, error category, and duration; the batch
-completion adds the proved count. Those fields are the metric surface for a log
-pipeline (batch size, invocation outcome, and duration); no metrics client is
-installed. The clock is injectable for deterministic tests. Events never carry
-proof paths or verifier output, and the module installs no logger or handler,
-so the normal CLI stream is unchanged unless the application enables logging.
+appears as an unmatched start. Only a genuinely stalled process leaves that
+gap: every other exit path, including an exception outside the handled
+failures, closes the invocation span as `failure` / `unexpected`. Completion
+events carry the proof ordinal and count, status class, exit code, error
+category, and duration; the batch completion adds the proved count. Those
+fields are the metric surface for a log pipeline (batch size, invocation
+outcome, and duration); no metrics client is installed. The clock is injectable
+for deterministic tests. Events never carry proof paths or verifier output, and
+the module installs no logger or handler, so the normal CLI stream is unchanged
+unless the application enables logging.
 
 `parse_verus_toolchain` accepts `Toolchain: <name>` lines at column zero or
 with leading spaces or tabs. It extracts `<name>` before the trailing

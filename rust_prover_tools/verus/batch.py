@@ -194,40 +194,38 @@ class _ProofBatch:
         count = len(self.proof_files)
         _emit_batch_start(count)
         for ordinal, proof_file in enumerate(self.proof_files, start=1):
-            started_at = self.settings.clock()
-            _emit_invocation_start(_InvocationStart(ordinal=ordinal, count=count))
-            try:
-                result = _invoke(
-                    self.settings.verus_bin,
-                    proof_file,
-                    self.settings.extra_args,
-                )
-            except OSError as exc:
-                self.status_class, self.error_category = "failure", "execution"
-                failure_event = _InvocationEvent(
-                    ordinal=ordinal,
-                    count=count,
-                    status_class=self.status_class,
-                    exit_code=None,
-                    error_category=self.error_category,
-                    duration_seconds=self.settings.clock() - started_at,
-                )
-                _emit_invocation(failure_event)
-                raise _partial_run_error(self.proved, proof_file, exc) from exc
+            self._run_one(ordinal, proof_file, count)
+        self.status_class, self.error_category = "success", "none"
 
-            status = _outcome_class(result.exit_code)
-            category = "none" if status == "success" else "command"
-            result_event = _InvocationEvent(
-                ordinal=ordinal,
-                count=count,
-                status_class=status,
-                exit_code=result.exit_code,
-                error_category=category,
-                duration_seconds=self.settings.clock() - started_at,
+    def _run_one(self, ordinal: int, proof_file: Path, count: int) -> None:
+        """Run one invocation and close its span on every exit path.
+
+        The completion event defaults to an unexpected failure because the
+        `finally` emits it even when a handler re-raises. An exception outside
+        the handled paths therefore closes the span instead of leaving an
+        unmatched start that would read as a stalled invocation.
+        """
+        started_at = self.settings.clock()
+        _emit_invocation_start(_InvocationStart(ordinal=ordinal, count=count))
+        status_class = "failure"
+        exit_code: int | None = None
+        error_category = "unexpected"
+        try:
+            result = _invoke(
+                self.settings.verus_bin,
+                proof_file,
+                self.settings.extra_args,
             )
-            _emit_invocation(result_event)
+        except OSError as exc:
+            self.status_class, self.error_category = "failure", "execution"
+            error_category = "execution"
+            raise _partial_run_error(self.proved, proof_file, exc) from exc
+        else:
+            status_class = _outcome_class(result.exit_code)
+            exit_code = result.exit_code
+            error_category = "none" if status_class == "success" else "command"
             if result.exit_code != 0:
-                self.status_class, self.error_category = status, category
+                self.status_class, self.error_category = status_class, error_category
                 context = ProofFailureContext(
                     result.exit_code,
                     self.settings.verus_bin,
@@ -237,7 +235,17 @@ class _ProofBatch:
                 )
                 raise VerusProofFailedError(context)
             self.proved.append(proof_file)
-        self.status_class, self.error_category = "success", "none"
+        finally:
+            _emit_invocation(
+                _InvocationEvent(
+                    ordinal=ordinal,
+                    count=count,
+                    status_class=status_class,
+                    exit_code=exit_code,
+                    error_category=error_category,
+                    duration_seconds=self.settings.clock() - started_at,
+                )
+            )
 
     def emit_summary(self) -> None:
         """Emit the closing telemetry event for this batch."""

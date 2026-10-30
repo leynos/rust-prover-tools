@@ -159,16 +159,19 @@ delimiter is quoted so it cannot spoof or split the diagnostic.
 
 The batch and each invocation emit a start event followed by a completion
 event, which gives log-based spans without a tracing dependency: a stalled
-invocation is visible as an unmatched start. Completion events carry the proof
-ordinal and count, status class, exit code, error category, and duration, and
-the batch completion adds the proved count. Those bounded fields are the metric
-surface for a log pipeline (batch size, invocation outcome, and invocation
-duration); no metrics client is installed. Timings come from an injectable
-monotonic clock so tests can assert deterministic durations. A batch that
-aborts outside the handled failure paths reports `failure` / `unexpected`
-instead of a misleading success. The events never carry proof paths, arguments,
-or verifier output, and the module installs no logger or handler, so the CLI's
-normal stream is unchanged unless the host application enables logging.
+invocation is visible as an unmatched start. Only a genuinely stalled process
+leaves that gap, because every other exit path, including an exception outside
+the handled failures, closes the invocation span as `failure` / `unexpected`.
+Completion events carry the proof ordinal and count, status class, exit code,
+error category, and duration, and the batch completion adds the proved count.
+Those bounded fields are the metric surface for a log pipeline (batch size,
+invocation outcome, and invocation duration); no metrics client is installed.
+Timings come from an injectable monotonic clock so tests can assert
+deterministic durations. A batch that aborts outside the handled failure paths
+reports `failure` / `unexpected` instead of a misleading success. The events
+never carry proof paths, arguments, or verifier output, and the module installs
+no logger or handler, so the CLI's normal stream is unchanged unless the host
+application enables logging.
 
 Binary discovery is split from installation at the API boundary.
 `resolve_verus_bin` is the read-only probe that returns `None` when no

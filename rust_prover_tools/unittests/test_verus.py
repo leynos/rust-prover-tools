@@ -660,6 +660,29 @@ def test_verify_proof_files_reports_unexpected_failure(
             VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
         )
 
+    operations = [getattr(record, "operation", None) for record in caplog.records]
+    assert operations == [
+        "verus-proof-batch-start",
+        "verus-proof-invocation-start",
+        "verus-proof-invocation",
+        "verus-proof-batch",
+    ], "An unhandled exception should still close the invocation span"
+
+    invocation_events = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "verus-proof-invocation"
+    ]
+    assert getattr(invocation_events[-1], "status_class", None) == "failure", (
+        "An unhandled exception should close the invocation as a failure"
+    )
+    assert getattr(invocation_events[-1], "exit_code", "missing") is None, (
+        "An unhandled exception has no verifier exit code"
+    )
+    assert getattr(invocation_events[-1], "error_category", None) == "unexpected", (
+        "An unhandled exception should carry the unexpected error category"
+    )
+
     batch_events = [
         record
         for record in caplog.records
