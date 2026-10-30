@@ -28,7 +28,13 @@ CHILD_TIMEOUT = 20
 
 
 def sanitized_subprocess_env() -> dict[str, str]:
-    """Return subprocess environment without GitHub Actions input bindings."""
+    """Return subprocess environment without GitHub Actions input bindings.
+
+    Returns
+    -------
+    dict[str, str]
+        A copy of the environment with every ``INPUT_`` binding removed.
+    """
     return {
         key: value for key, value in os.environ.items() if not key.startswith("INPUT_")
     }
@@ -39,7 +45,22 @@ def fake_verus_argv(
     proof_file: Path,
     verus_bin: Path,
 ) -> list[str]:
-    """Return the public CLI argument vector for one Verus proof run."""
+    """Return the public CLI argument vector for one Verus proof run.
+
+    Parameters
+    ----------
+    repo_root : Path
+        Repository root passed to ``--repo-root``.
+    proof_file : Path
+        Proof file passed to ``--proof-file``.
+    verus_bin : Path
+        Fake Verus binary passed to ``--verus-bin``.
+
+    Returns
+    -------
+    list[str]
+        Arguments that invoke the installed CLI through the current interpreter.
+    """
     return [
         sys.executable,
         "-m",
@@ -64,6 +85,22 @@ def chatty_proof_repo(
 ) -> tuple[Path, Path]:
     """Create a proof run whose child outlives the reader that started it.
 
+    Parameters
+    ----------
+    repo_root : Path
+        Temporary repository root to populate.
+    fake_verus_binary_factory : collections.abc.Callable[..., None]
+        Fixture that writes a deterministic fake Verus binary.
+    prover_status : int
+        Exit status the fake prover returns after streaming its output.
+
+    Returns
+    -------
+    tuple[Path, Path]
+        The proof file and fake Verus binary created in ``repo_root``.
+
+    Notes
+    -----
     The child writes ``PROOF_LINES`` lines before exiting with
     ``prover_status``. That is far more than a pipe buffer holds, so closing the
     reader early reaches the writer as a broken pipe instead of being absorbed by
