@@ -117,7 +117,17 @@ def _check_routing_overrides(
 
 @dc.dataclass(frozen=True, slots=True)
 class BackendSelection:
-    """One Cargo profile backend that the child environment can override."""
+    """One Cargo profile backend that the child environment can override.
+
+    Attributes
+    ----------
+    source : Path
+        Configuration file or manifest that declared the selection.
+    profile : str
+        Cargo profile name as written in that file.
+    backend : str
+        Backend named by the repository. The child pins the profile to LLVM.
+    """
 
     source: Path
     profile: str
@@ -126,7 +136,14 @@ class BackendSelection:
 
 @dc.dataclass(frozen=True, slots=True)
 class VerificationConfig:
-    """Accepted profile backends discovered across Cargo's configuration roots."""
+    """Accepted profile backends discovered across Cargo's configuration roots.
+
+    Attributes
+    ----------
+    selections : tuple of BackendSelection
+        Accepted selections in discovery order. Empty when no profile selects
+        a backend.
+    """
 
     selections: tuple[BackendSelection, ...] = ()
 

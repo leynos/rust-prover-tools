@@ -125,6 +125,8 @@ ______________________________________________________________________
 
 - [Users' guide](docs/users-guide.md) — every command, option, and environment
   variable.
+- [0.2.0 migration guide](docs/rust-prover-tools-v0-2-0-migration-guide.md) —
+  upgrading `kani exec` callers to overridable Cargo profile backends.
 - [CLI design](docs/prover-tools-cli-design.md) — architecture, command
   construction, and test strategy.
 - [Developers' guide](docs/developers-guide.md) — adding prover workflows and

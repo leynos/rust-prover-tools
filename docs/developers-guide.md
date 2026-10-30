@@ -407,7 +407,10 @@ removal of an existing admission wrapper.
 application enables logging. It installs no logger or handler and adds no CLI
 logging option. Events contain the stage, release, duration, status class and
 error category; they omit paths, arguments, environment, output and exception
-text.
+text. When at least one profile backend is pinned, the override reports a
+`backend_overrides` stage event on the same logger before the enclosing
+validation stage completes, adding the selection, variable and collision
+counts. A repository that selects no backend emits no such event.
 
 Backend classification is positional, not name-based. `kani_release_config`
 walks every discovered Cargo configuration and ancestor manifest and returns a

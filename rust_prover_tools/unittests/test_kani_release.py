@@ -97,67 +97,196 @@ def test_runtime_path_wrappers_flags_and_literal_arguments(
 
 
 def test_profile_backend_selection_is_pinned_for_the_child(
-    installed_release: Path, tmp_path: Path
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
 ) -> None:
     """A repository development backend cannot reach the selected release."""
-    (tmp_path / ".cargo").mkdir()
-    (tmp_path / ".cargo" / "config.toml").write_text(
-        "[unstable]\ncodegen-backend = true\n\n"
-        '[profile.dev]\ncodegen-backend = "cranelift"\n',
-        encoding="utf-8",
-    )
-    environment = {"HOME": str(tmp_path), "CARGO_HOME": str(tmp_path / "cargo-home")}
+    environment = cargo_profile_project("dev")
 
     spec = prepare_kani_command(
         KaniExecOptions(installed_release, tmp_path, ("list",)), environment
     )
 
-    assert spec.env is not None
-    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm"
+    assert spec.env is not None, "a prepared command must carry a child environment"
+    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm", (
+        "the development profile must be pinned to LLVM for the child"
+    )
 
 
 def test_profile_override_stays_child_scoped(
-    installed_release: Path, tmp_path: Path
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
 ) -> None:
     """The caller's environment is never mutated to carry the override."""
-    (tmp_path / ".cargo").mkdir()
-    (tmp_path / ".cargo" / "config.toml").write_text(
-        "[unstable]\ncodegen-backend = true\n\n"
-        '[profile.dev]\ncodegen-backend = "cranelift"\n',
-        encoding="utf-8",
-    )
-    environment = {"HOME": str(tmp_path), "CARGO_HOME": str(tmp_path / "cargo-home")}
+    environment = cargo_profile_project("dev")
     before = dict(environment)
 
     prepare_kani_command(
         KaniExecOptions(installed_release, tmp_path, ("list",)), environment
     )
 
-    assert environment == before
+    assert environment == before, "the caller's environment must not be mutated"
 
 
 def test_every_development_profile_is_pinned_independently(
-    installed_release: Path, tmp_path: Path
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
 ) -> None:
     """Hyphenated, custom, and test profiles each receive their own shadow."""
-    (tmp_path / ".cargo").mkdir()
-    (tmp_path / ".cargo" / "config.toml").write_text(
-        "[unstable]\ncodegen-backend = true\n\n"
-        '[profile.dev]\ncodegen-backend = "cranelift"\n\n'
-        '[profile.release-dev]\ncodegen-backend = "cranelift"\n\n'
-        '[profile.test]\ncodegen-backend = "cranelift"\n',
-        encoding="utf-8",
-    )
-    environment = {"HOME": str(tmp_path), "CARGO_HOME": str(tmp_path / "cargo-home")}
+    environment = cargo_profile_project("dev", "release-dev", "test")
 
     spec = prepare_kani_command(
         KaniExecOptions(installed_release, tmp_path, ("list",)), environment
     )
 
-    assert spec.env is not None
-    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm"
-    assert spec.env["CARGO_PROFILE_RELEASE_DEV_CODEGEN_BACKEND"] == "llvm"
-    assert spec.env["CARGO_PROFILE_TEST_CODEGEN_BACKEND"] == "llvm"
+    assert spec.env is not None, "a prepared command must carry a child environment"
+    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm", (
+        "the selected release must not inherit the dev backend"
+    )
+    assert spec.env["CARGO_PROFILE_RELEASE_DEV_CODEGEN_BACKEND"] == "llvm", (
+        "a hyphenated profile must be pinned to LLVM for the child"
+    )
+    assert spec.env["CARGO_PROFILE_TEST_CODEGEN_BACKEND"] == "llvm", (
+        "the test profile must be pinned to LLVM for the child"
+    )
+
+
+def _backend_event(caplog: pytest.LogCaptureFixture) -> dict[str, object]:
+    """Return the fields of the single backend-override decision event."""
+    events = [
+        record.__dict__
+        for record in caplog.records
+        if record.__dict__.get("stage") == "backend_overrides"
+    ]
+    assert len(events) == 1, "exactly one backend override decision must be logged"
+    return events[0]
+
+
+def test_unselected_repository_logs_no_override_event(
+    installed_release: Path, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A repository without profile backends records no override decision."""
+    caplog.set_level("INFO", logger="rust_prover_tools.kani_release")
+
+    spec = prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)),
+        {"CARGO_HOME": str(tmp_path / "cargo-home")},
+    )
+
+    assert spec.env is not None, "a prepared command must carry a child environment"
+    assert not any(
+        key.startswith("CARGO_PROFILE_") and key.endswith("_CODEGEN_BACKEND")
+        for key in spec.env
+    ), "an unselected repository must not receive a profile override"
+    assert not [
+        record
+        for record in caplog.records
+        if record.__dict__.get("stage") == "backend_overrides"
+    ], "an unselected repository must not report an override decision"
+
+
+def test_backend_override_event_reports_one_selection(
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A single accepted profile reports one selection and one variable."""
+    caplog.set_level("INFO", logger="rust_prover_tools.kani_release")
+
+    prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)),
+        cargo_profile_project("dev"),
+    )
+
+    event = _backend_event(caplog)
+    assert event["stage"] == "backend_overrides", "the event names the stage"
+    assert event["operation"] == "backend_overrides", "the event names its operation"
+    assert event["release"] == "0.67.0", "the event names the qualified release"
+    assert event["status_class"] == "success", "the override completed"
+    assert event["error_category"] == "none", "no failure category applies"
+    duration = event["duration_seconds"]
+    assert isinstance(duration, float), "the event reports a real duration"
+    assert duration >= 0, "the observed duration cannot be negative"
+    assert event["selection_count"] == 1, "one profile selection was discovered"
+    assert event["variable_count"] == 1, "one environment variable was written"
+    assert event["collision_count"] == 0, "a single spelling cannot collide"
+
+
+def test_backend_override_event_reports_collisions(
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two spellings of one variable report one written variable and a collision."""
+    caplog.set_level("INFO", logger="rust_prover_tools.kani_release")
+
+    prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)),
+        cargo_profile_project("release-lto", "release_lto"),
+    )
+
+    event = _backend_event(caplog)
+    assert event["selection_count"] == 2, "both profile spellings were discovered"
+    assert event["variable_count"] == 1, "both spellings share one variable"
+    assert event["collision_count"] == 1, "one pair of spellings collided"
+
+
+def test_proof_failure_preserves_backend_and_stage_events(
+    installed_release: Path,
+    tmp_path: Path,
+    cargo_profile_project: cabc.Callable[..., dict[str, str]],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The new decision event does not replace existing stage reporting."""
+    from rust_prover_tools.kani_release import exec_kani
+
+    compiler = installed_release / "toolchain/bin/rustc"
+    compiler.write_text(
+        '#!/bin/sh\nprintf "rustc 1.93.0-nightly (53732d5e0 2025-11-20)\\n"\n',
+        encoding="utf-8",
+    )
+    (installed_release / "bin/kani-compiler").write_text(
+        compiler.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    driver = installed_release / "bin/kani-driver"
+    driver.write_text(
+        (
+            '#!/bin/sh\nif [ "$1" = "kani" ] && [ "$2" = "--version" ]; '
+            'then printf "kani 0.67.0\\n"; exit 0; fi\nexit 23\n'
+        ),
+        encoding="utf-8",
+    )
+    environment = cargo_profile_project("dev")
+    caplog.set_level("INFO", logger="rust_prover_tools.kani_release")
+
+    assert (
+        exec_kani(KaniExecOptions(installed_release, tmp_path, ("list",)), environment)
+        == 23
+    ), "the verifier failure must survive stage observation"
+    stages = [
+        record.__dict__
+        for record in caplog.records
+        if record.getMessage() == "Kani execution stage completed"
+    ]
+    assert [stage["stage"] for stage in stages] == [
+        "backend_overrides",
+        "validation",
+        "rustc_identity",
+        "compiler_identity",
+        "verifier_identity",
+        "proof",
+    ], "the decision and every execution stage must both report, in order"
+    proof = next(stage for stage in stages if stage["stage"] == "proof")
+    assert proof["status_class"] == "nonzero", "the proof failure must be classified"
+    assert proof["error_category"] == "command", "the failure came from the command"
+    assert _backend_event(caplog)["selection_count"] == 1, (
+        "the backend decision must be recorded alongside stage events"
+    )
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ import pytest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 #: mutmut sets this in every process it runs tests in: ``"fail"`` for the
 #: forced-fail check, ``"stats"`` while mapping tests to mutants, and the
@@ -60,3 +61,32 @@ SKIP_CHDIR_UNDER_MUTMUT = pytest.mark.skipif(
         "working directory, so a test that chdirs fails inside its sandbox"
     ),
 )
+
+
+@pytest.fixture
+def cargo_profile_project(tmp_path: Path) -> cabc.Callable[..., dict[str, str]]:
+    """Create a Cargo configuration selecting development backends.
+
+    The returned factory takes the profile names to select. Each profile gets
+    the Cranelift backend, which the qualified release does not build with, so
+    a child that fails to shadow the selection cannot compile. It also returns
+    the ``HOME``/``CARGO_HOME`` pair that keeps Cargo discovery inside the
+    test's temporary directory.
+    """
+
+    def create(*profiles: str) -> dict[str, str]:
+        config = tmp_path / ".cargo"
+        config.mkdir(parents=True, exist_ok=True)
+        tables = ["[unstable]\ncodegen-backend = true"]
+        tables.extend(
+            f'[profile.{profile}]\ncodegen-backend = "cranelift"'
+            for profile in profiles
+        )
+        tables.append("")
+        (config / "config.toml").write_text("\n".join(tables), encoding="utf-8")
+        return {
+            "HOME": str(tmp_path),
+            "CARGO_HOME": str(tmp_path / "cargo-home"),
+        }
+
+    return create

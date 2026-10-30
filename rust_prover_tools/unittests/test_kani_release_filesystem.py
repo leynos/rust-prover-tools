@@ -137,7 +137,7 @@ def test_package_metadata_reserved_words_are_not_cargo_controls(tmp_path: Path) 
     assert (
         check_verification_config(tmp_path, environment, search_roots=(tmp_path,))
         == VerificationConfig()
-    )
+    ), "publication metadata keys must not count as backend selections"
     with (tmp_path / "Cargo.toml").open("a", encoding="utf-8") as manifest:
         manifest.write('[profile.dev]\ncodegen-backend="cranelift"\n')
     # A real workspace profile is overridable; publication metadata is not.
@@ -145,4 +145,4 @@ def test_package_metadata_reserved_words_are_not_cargo_controls(tmp_path: Path) 
         tmp_path, environment, search_roots=(tmp_path,)
     ) == VerificationConfig(
         selections=(BackendSelection(tmp_path / "Cargo.toml", "dev", "cranelift"),)
-    )
+    ), "a workspace manifest profile must be recorded for the child override"

@@ -170,8 +170,10 @@ def test_profile_selection_is_shadowed_by_the_prepared_child(
         KaniExecOptions(Path(_INSTALLATION or ""), tmp_path, ("list",)), environment
     )
 
-    assert spec.env is not None
-    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm"
+    assert spec.env is not None, "a prepared command must carry a child environment"
+    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm", (
+        "the child must pin the development profile to LLVM"
+    )
     _assert_shadowed(tmp_path, spec.env)
 
 
@@ -186,8 +188,10 @@ def test_manifest_profile_selection_is_shadowed_by_the_prepared_child(
         KaniExecOptions(Path(_INSTALLATION or ""), tmp_path, ("list",)), environment
     )
 
-    assert spec.env is not None
-    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm"
+    assert spec.env is not None, "a prepared command must carry a child environment"
+    assert spec.env["CARGO_PROFILE_DEV_CODEGEN_BACKEND"] == "llvm", (
+        "the child must pin the manifest profile to LLVM"
+    )
     _assert_shadowed(tmp_path, spec.env)
 
 
