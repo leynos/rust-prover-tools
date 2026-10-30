@@ -163,4 +163,3 @@ def test_verus_run_streams_every_line_when_the_reader_stays(
     assert not mismatches, (
         f"expected the streamed lines in order; first mismatches: {mismatches!r}"
     )
-# weave: run 'weave explain tests/test_prover_tools_cli_e2e.py' for per-hunk detail, 'weave check' to verify your resolution

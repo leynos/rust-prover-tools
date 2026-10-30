@@ -266,8 +266,6 @@ def install_verifier(
     return 0
 
 
-
-
 kani_app.command(kani_exec, name="exec")
 verus_app.command(verus_run, name="run")
 app.command(kani_app, name="kani")
@@ -294,4 +292,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# weave: run 'weave explain rust_prover_tools/cli.py' for per-hunk detail, 'weave check' to verify your resolution
