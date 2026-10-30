@@ -28,6 +28,7 @@ from rust_prover_tools.verus import (
     run_verus,
     verify_proof_files,
 )
+from rust_prover_tools.verus.install import VERUS_ARCHIVE_MAX_BYTES
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -122,15 +123,19 @@ def test_install_verus_downloads_checks_and_normalises_archive(
         "sha256sum",
         "unzip",
     ], "Should execute curl, sha256sum, and unzip in sequence"
-    assert cmd_mox.journal[0].args[:7] == [
+    assert cmd_mox.journal[0].args[:8] == [
         "-sSfL",
         "--connect-timeout",
         "15",
         "--max-time",
         "300",
+        "--max-filesize",
+        str(VERUS_ARCHIVE_MAX_BYTES),
         "https://example.test/2025.01.01/verus-2025.01.01-x86-linux.zip",
-        "-o",
-    ], "curl should download from correct URL with correct flags"
+    ], "curl should download from correct URL with bounded flags"
+    assert cmd_mox.journal[0].args[8] == "-o", (
+        "curl should write the archive to an output path"
+    )
     assert (
         cmd_mox
         .journal[1]
@@ -141,7 +146,7 @@ def test_install_verus_downloads_checks_and_normalises_archive(
     ), "sha256sum should verify the downloaded archive"
     assert cmd_mox.journal[2].args == [
         "-q",
-        cmd_mox.journal[0].args[7],
+        cmd_mox.journal[0].args[9],
         "-d",
         str(install_dir),
     ], "unzip should extract to install_dir"
@@ -763,7 +768,7 @@ def test_run_verus_forwards_target_to_missing_binary_installer(
     assert (
         cmd_mox
         .journal[0]
-        .args[5]
+        .args[7]
         .endswith(
             "verus-2025.01.01-aarch64-macos.zip",
         )

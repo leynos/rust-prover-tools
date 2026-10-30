@@ -2,8 +2,8 @@
 
 This module exposes the `prover-tools` console script. Commands are grouped by
 tool noun: `kani` handles installation, version checks and explicit qualified
-release execution, while `verus`
-handles Verus installation and proof execution.
+release execution, `verus` handles Verus installation and proof execution, and
+`z3` installs the solver that Verus uses.
 
 Examples
 --------
@@ -51,6 +51,8 @@ from rust_prover_tools.verus import (
     install_verus,
 )
 from rust_prover_tools.verus_run_cli import verus_run
+from rust_prover_tools.z3 import Z3InstallOptions
+from rust_prover_tools.z3 import install_z3 as install_z3_solver
 
 app: cyclopts.App = App(
     "prover-tools",
@@ -65,6 +67,10 @@ kani_app: cyclopts.App = App(
 verus_app: cyclopts.App = App(
     "verus",
     help="Manage Verus verifier installation and proof execution",
+)
+z3_app: cyclopts.App = App(
+    "z3",
+    help="Install the pinned Z3 solver used by Verus",
 )
 
 
@@ -97,6 +103,22 @@ def install(
     version: typ.Annotated[str | None, Parameter(env_var="INPUT_VERSION")] = None,
     setup: typ.Annotated[bool, Parameter(negative="--no-setup")] = True,
     verify: typ.Annotated[bool, Parameter(negative="--no-verify")] = True,
+    compile_from_source: typ.Annotated[
+        bool,
+        Parameter(
+            name="--compile",
+            negative="--no-compile",
+            env_var="INPUT_KANI_COMPILE",
+        ),
+    ] = False,
+    install_dir: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("KANI_INSTALL_DIR", "INPUT_KANI_INSTALL_DIR")),
+    ] = None,
+    cache_dir: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("KANI_CACHE_DIR", "INPUT_KANI_CACHE_DIR")),
+    ] = None,
 ) -> int:
     """Install the pinned Kani verifier.
 
@@ -112,6 +134,15 @@ def install(
         Whether to run `cargo kani setup` after installation.
     verify : bool
         Whether to run `cargo kani --version` after installation.
+    compile_from_source : bool
+        Whether to compile Kani from source instead of installing the pinned
+        prebuilt release.
+    install_dir : Path | None
+        Directory for prebuilt Kani executables. Defaults to Cargo's binary
+        directory.
+    cache_dir : Path | None
+        Directory for verified Kani archives. Defaults to `.cache/kani` below
+        the repository root.
 
     Returns
     -------
@@ -132,6 +163,9 @@ def install(
                 version=version,
                 should_setup=setup,
                 should_verify=verify,
+                should_compile=compile_from_source,
+                install_dir=install_dir,
+                cache_dir=cache_dir,
             ),
         )
     except ProverToolError as exc:
@@ -266,10 +300,60 @@ def install_verifier(
     return 0
 
 
+@z3_app.command(name="install")
+def install_solver(
+    *,
+    repo_root: typ.Annotated[Path | None, Parameter(env_var="INPUT_REPO_ROOT")] = None,
+    install_dir: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("Z3_INSTALL_DIR", "INPUT_Z3_INSTALL_DIR")),
+    ] = None,
+    cache_dir: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("Z3_CACHE_DIR", "INPUT_Z3_CACHE_DIR")),
+    ] = None,
+) -> int:
+    """Install the pinned Z3 solver used by Verus.
+
+    Parameters
+    ----------
+    repo_root : Path | None
+        Repository root used to resolve default install paths.
+    install_dir : Path | None
+        Directory for the `z3` binary. Defaults to `.cache/z3/<version>` below
+        the repository root.
+    cache_dir : Path | None
+        Directory for verified Z3 archives. Defaults to `.cache/z3` below the
+        repository root.
+
+    Returns
+    -------
+    int
+        Exit code, where `0` indicates success.
+
+    Notes
+    -----
+    `ProverToolError` is handled with `_error_exit`.
+    """
+    try:
+        lines = install_z3_solver(
+            Z3InstallOptions(
+                repo_root=_repo_root(repo_root),
+                install_dir=install_dir,
+                cache_dir=cache_dir,
+            ),
+        )
+    except ProverToolError as exc:
+        return _error_exit(exc)
+    print_lines(lines)
+    return 0
+
+
 kani_app.command(kani_exec, name="exec")
 verus_app.command(verus_run, name="run")
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")
+app.command(z3_app, name="z3")
 
 
 def main() -> None:

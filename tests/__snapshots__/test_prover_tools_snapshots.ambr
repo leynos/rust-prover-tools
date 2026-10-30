@@ -25,6 +25,7 @@
   ╭─ Commands ───────────────────────────────────────────────────────────────────╮
   │ kani         Manage Kani verifier installation and version checking          │
   │ verus        Manage Verus verifier installation and proof execution          │
+  │ z3           Install the pinned Z3 solver used by Verus                      │
   │ --help (-h)  Display this message and exit.                                  │
   │ --version    Display application version.                                    │
   ╰──────────────────────────────────────────────────────────────────────────────╯

@@ -23,6 +23,60 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
+def test_kani_install_compile_is_an_opt_in_cli_fallback(tmp_path: Path) -> None:
+    """The public CLI compiles Kani only when --compile is requested."""
+    version_file = tmp_path / "tools" / "kani" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("0.61.0\n", encoding="utf-8")
+    cargo_log = tmp_path / "cargo.log"
+    cargo = tmp_path / "bin" / "cargo"
+    cargo.parent.mkdir()
+    cargo.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$CARGO_LOG"\n'
+        'if [ "$1" = "kani" ] && [ "$2" = "--version" ]; then\n'
+        "  printf 'kani 0.61.0\\n'\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    cargo.chmod(0o755)
+    environment = sanitized_subprocess_env()
+    environment["PATH"] = os.pathsep.join(
+        (str(cargo.parent), os.environ.get("PATH", "")),
+    )
+    environment["CARGO_LOG"] = str(cargo_log)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rust_prover_tools.cli",
+            "kani",
+            "install",
+            "--repo-root",
+            str(tmp_path),
+            "--compile",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, (
+        f"expected zero returncode, got {completed.returncode}; "
+        f"stdout: {completed.stdout}; stderr: {completed.stderr}"
+    )
+    assert "Installing kani-verifier 0.61.0" in completed.stdout
+    assert "kani 0.61.0" in completed.stdout
+    assert cargo_log.read_text(encoding="utf-8").splitlines() == [
+        "install --locked kani-verifier --version 0.61.0",
+        "kani setup",
+        "kani --version",
+    ], "the compile fallback should run the expected Cargo sequence"
+
+
 def test_verus_run_cli_accepts_indented_toolchain_output(
     tmp_path: Path,
     fake_verus_binary_factory: cabc.Callable[..., None],

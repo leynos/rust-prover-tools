@@ -9,17 +9,30 @@ Verus workflows that were previously handled by repository shell scripts.
 prover-tools kani install
 prover-tools kani check-version
 prover-tools verus install
+prover-tools z3 install
 prover-tools verus run --proof-file verus/edge_harvest_proofs.rs
 ```
 
-`kani install`, `kani check-version`, `verus install`, and `verus run` accept
-`--repo-root PATH`, which defaults to the current working directory.
-`kani exec` requires `--installation` and `--cwd`.
+`kani install`, `kani check-version`, `verus install`, `verus run`, and
+`z3 install` accept `--repo-root PATH`, which defaults to the current working
+directory. `kani exec` requires `--installation` and `--cwd`.
 
 ### Kani commands
 
 `prover-tools kani install` reads `tools/kani/VERSION` below the repository
-root, validates that it uses `MAJOR.MINOR.PATCH` format, and runs:
+root and validates that it uses `MAJOR.MINOR.PATCH` format. By default it
+installs the pinned prebuilt release on Linux x86_64:
+
+1. Download the cargo-quickinstall frontend archive and the matching Kani
+   native bundle, verifying both pinned SHA-256 digests.
+2. Extract only the `cargo-kani` and `kani` executables into
+   `$CARGO_HOME/bin` (or `~/.cargo/bin` when `CARGO_HOME` is unset).
+3. Run `cargo kani setup --use-local-bundle <bundle>`.
+4. Run `cargo kani --version`.
+
+The prebuilt route only covers the release pinned by this package. Any other
+version is rejected with a pointer to the compile fallback. Pass `--compile` to
+build from source instead, which runs the older sequence:
 
 ```bash
 cargo install --locked kani-verifier --version <version>
@@ -28,7 +41,11 @@ cargo kani --version
 ```
 
 Use `--version TEXT` to provide the version directly. Use `--no-setup` to skip
-`cargo kani setup`, and `--no-verify` to skip the final version probe.
+setup, and `--no-verify` to skip the final version probe. Use `--install-dir`
+to place the extracted binaries elsewhere, and `--cache-dir` to choose where
+verified archives are cached (default `.cache/kani` below the repository root).
+The `KANI_INSTALL_DIR` and `KANI_CACHE_DIR` environment variables, with
+`INPUT_`-prefixed forms, provide the same bindings.
 
 `prover-tools kani check-version` reads the expected version, runs the Kani
 command with `--version`, parses the first semantic version from the output,
@@ -145,8 +162,8 @@ Useful options are:
 - `--base-url URL`: override the Verus release download base URL.
 
 The installer keeps the shell-script behaviour of using `curl -sSfL`, but also
-sets `--connect-timeout 15` and `--max-time 300` so stalled downloads fail
-within a bounded interval.
+sets `--connect-timeout 15`, `--max-time 300`, and `--max-filesize` so stalled
+or oversized downloads fail within a bounded interval.
 
 `prover-tools verus run` resolves a Verus binary, checks the toolchain reported
 by `verus --version`, optionally installs that Rust toolchain with `rustup`,
@@ -262,6 +279,41 @@ The legacy Verus environment variables are still supported:
 - `VERUS_INSTALL_DIR`
 - `VERUS_BIN`
 - `VERUS_PROOF_FILE`
+
+### Z3 solver commands
+
+Verus uses a Z3 solver that it does not ship in its own archive.
+`prover-tools z3 install` downloads the pinned official Z3 release for Linux
+x86_64, verifies its SHA-256 digest, extracts only `bin/z3`, and records the
+installed version beside the binary. A repeated run reuses a marked
+installation without another download.
+
+```bash
+prover-tools z3 install
+export VERUS_Z3_PATH=".cache/z3/4.16.0/z3"
+```
+
+Useful options are:
+
+- `--install-dir PATH`: select the directory for the `z3` binary. The default
+  is `.cache/z3/<version>` below the repository root.
+- `--cache-dir PATH`: select the verified archive cache. The default is
+  `.cache/z3` below the repository root.
+
+### Download safeguards
+
+Kani, Z3, and Verus downloads are bounded so a bad or hostile response cannot
+exhaust disk space or hang a CI job:
+
+- only `https` URLs are accepted, redirects are re-validated, and the redirect
+  count is capped;
+- each pinned asset declares a byte ceiling, and a `Content-Length` above that
+  ceiling is rejected before the body is read;
+- streamed bytes are counted, so a response without a length header is still
+  cut off at the ceiling;
+- one monotonic deadline covers connection, redirects, and body transfer;
+- bytes are written to a pending file that is removed on any failure, and the
+  final path appears only after the pinned digest matches.
 
 ### GitHub Actions inputs
 

@@ -18,8 +18,9 @@ ______________________________________________________________________
 - **Pinned, not guessed**: prover versions come from files in the consuming
   repository (`tools/kani/VERSION`, `tools/verus/VERSION`), so every machine
   and every CI run installs the same build.
-- **Verified downloads**: the Verus installer checks the release archive
-  against `tools/verus/SHA256SUMS` before extracting it.
+- **Verified downloads**: every installer checks its release archive against a
+  pinned SHA-256 digest before extracting it. Kani and Z3 archives also carry a
+  byte ceiling, an early `Content-Length` check, and a total transfer deadline.
 - **Repository-local installs**: Verus lands under `.verus/<version>` rather
   than a shared global toolchain, so projects can pin different releases.
 - **One place to change**: workflows that used to live in shell scripts now
@@ -62,6 +63,12 @@ prover-tools kani install
 prover-tools kani check-version
 ```
 
+`kani install` downloads the pinned prebuilt Kani release for Linux x86_64,
+verifies both archives, extracts `cargo-kani` and `kani` into Cargo's binary
+directory (`$CARGO_HOME/bin`, or `~/.cargo/bin`), and runs
+`cargo kani setup --use-local-bundle`. Use `--compile` only when a prebuilt
+release is unsuitable; it builds Kani from source with `cargo install`.
+
 To execute an already installed, supported Kani release on Linux x86_64:
 
 ```bash
@@ -95,6 +102,14 @@ prover-tools verus install
 prover-tools verus run --proof-file verus/my_proof.rs
 ```
 
+Verus needs a Z3 solver of its own. Install the pinned release and point
+`VERUS_Z3_PATH` at it:
+
+```bash
+prover-tools z3 install
+export VERUS_Z3_PATH=".cache/z3/4.16.0/z3"
+```
+
 `--proof-file` may be repeated when a repository holds several proof files.
 Each file is verified in the order given, in its own Verus invocation, because
 the verifier rejects more than one input filename at a time. A run stops at the
@@ -112,15 +127,15 @@ ______________________________________________________________________
 ## Features
 
 - A small noun/verb surface: `kani install`, `kani check-version`, `kani exec`,
-  `verus install`, and `verus run`.
+  `verus install`, `verus run`, and `z3 install`.
 - `--repo-root PATH` on commands that resolve repository pins, defaulting to
   the current directory. `kani exec` instead requires explicit `--installation`
   and `--cwd` paths.
 - `INPUT_`-prefixed environment variables for GitHub Actions-style wrappers.
 - Legacy `KANI`, `VERUS_TARGET`, `VERUS_INSTALL_DIR`, `VERUS_BIN`, and
   `VERUS_PROOF_FILE` variables honoured for compatibility.
-- Bounded download timeouts, so a stalled Verus download fails rather than
-  hanging.
+- Bounded downloads: a transfer deadline, redirect cap, per-asset byte ceiling,
+  and streamed byte counting stop a stalled or oversized response.
 - No shell strings: user-supplied command text is parsed into an argument
   vector and executed directly.
 

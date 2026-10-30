@@ -42,6 +42,11 @@ from rust_prover_tools.verus.models import (
     read_verus_version,
 )
 
+# Verus release archives are large, but a ceiling stops a malicious or broken
+# response from filling the runner's temporary filesystem. The value follows
+# the design document's 2 GiB compressed-payload bound.
+VERUS_ARCHIVE_MAX_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
     """Install Verus and return user-facing output lines.
@@ -124,6 +129,8 @@ def download_archive(archive: VerusArchive, temporary_directory: Path) -> Path:
             "15",
             "--max-time",
             "300",
+            "--max-filesize",
+            str(VERUS_ARCHIVE_MAX_BYTES),
             archive.url,
             "-o",
             str(archive_path),

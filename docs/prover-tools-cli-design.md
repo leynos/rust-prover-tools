@@ -46,6 +46,27 @@ toolchain parsing.
 
 `rust_prover_tools.kani` owns Kani installation and installed-version checks.
 It keeps command strings shell-free by parsing overrides with `shlex.split`.
+Installation defaults to the pinned prebuilt release and delegates to
+`rust_prover_tools.kani_binary`; `--compile` selects the older source build in
+the same module.
+
+`rust_prover_tools.z3` installs the pinned Z3 solver used by Verus. It
+downloads the official release archive, extracts only the pinned `z3` binary,
+and records a version marker so later runs reuse the installation.
+
+`rust_prover_tools.binary_assets` is the manifest of pinned release artefacts:
+names, HTTPS URLs, SHA-256 digests, per-asset byte ceilings, archive members,
+and extraction ceilings. `rust_prover_tools.platforms` holds the shared Linux
+x86_64 host check, and `rust_prover_tools.path_resolution` resolves optional
+CLI paths against the repository root.
+
+`rust_prover_tools.downloads` adds digest pinning and the atomic verified
+store. It delegates the network policy to
+`rust_prover_tools.download_transport`, which accepts only HTTPS, follows a
+bounded number of re-validated redirects, rejects an oversized `Content-Length`
+before reading, counts streamed bytes, and enforces one monotonic transfer
+deadline. A pending file is removed on any failure and renamed to the final
+path only after the digest matches.
 
 `rust_prover_tools.verus` is a public package facade. Its implementation is
 split into:
@@ -192,7 +213,11 @@ enable `pipefail` or inspect `${PIPESTATUS[0]}` to read the producer's status.
 
 Unit tests cover pure helpers and command orchestration. They use cmd-mox to
 intercept external commands on `PATH`, including `cargo`, `curl`, `sha256sum`,
-`shasum`, `unzip`, and `rustup`.
+`shasum`, `unzip`, and `rustup`. Download tests replace the HTTPS connection
+with an in-memory response so byte ceilings, deadlines, redirects, digest
+mismatches, and pending-file cleanup are deterministic and never touch the
+network. Kani and Z3 tests build small local archives and stub only the
+verified-download step.
 
 Behavioural tests use `pytest-bdd` to verify public CLI scenarios for matching
 and mismatched Kani versions, successful Verus proof execution, and missing
@@ -273,7 +298,20 @@ version probe fails with a parseable missing-toolchain message and automatic
 toolchain installation is enabled.
 
 The Verus installer keeps the original checksum validation and extraction
-contract, but adds bounded `curl` timeouts to avoid indefinite network hangs.
+contract, but adds bounded `curl` timeouts and `--max-filesize` to avoid
+indefinite network hangs and unbounded archive writes.
+
+Kani and Z3 binaries do not come from a user-managed checksum file. Their
+pinned names, URLs, digests, and byte ceilings live in
+`rust_prover_tools.binary_assets`, because these are fixed release artefacts
+that every consumer must install identically. The downloader streams through a
+pending file with a monotonic deadline and a byte ceiling rather than relying
+on the server's declared length, and it removes that pending file on any
+failure. Kani's prebuilt route is the default because a binary install is the
+whole point of the shared tooling; `--compile` remains an explicit fallback for
+hosts or versions the pinned release does not cover. Extraction is restricted
+to named archive members with their own size ceilings, so a verified archive
+still cannot write arbitrary paths.
 
 ## Operational notes
 
