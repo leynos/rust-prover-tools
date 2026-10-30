@@ -117,7 +117,8 @@ fake Verus binaries. They do not download real Verus releases in the default
 test suite.
 
 Hypothesis property tests cover invariants in the pure helper layer, such as
-valid semantic-version acceptance and supported Verus toolchain output forms.
+valid semantic-version acceptance, supported Verus toolchain output forms,
+Cargo backend-position classification, and profile-to-variable normalization.
 
 ## Decisions
 
@@ -171,6 +172,27 @@ identity queries and subsequent Cargo compilation retain every configured
 admission wrapper. Wrappers are optional when absent; the runtime does not
 create a substitute on hosted runners. Environment and Cargo configuration
 validation reject malformed selections and unproved backend or wrapper routes.
+
+Profile backends are classified by position, not by name. Discovery returns a
+`VerificationConfig` holding an immutable `BackendSelection` for each string
+`profile.<name>.codegen-backend` found in Cargo configuration or an ancestor
+workspace manifest. `prepare_kani_command` then sets
+`CARGO_PROFILE_<NAME>_CODEGEN_BACKEND=llvm` for exactly those profiles in a
+copied child mapping, leaving the caller's environment unchanged. Cargo gives
+that variable precedence over both configuration files and manifest profiles,
+so the selected release keeps compiling with its own backend. Profile names
+must match `[A-Za-z0-9_-]+`; Cargo uppercases them and maps `-` to `_`, so two
+spellings can share one variable and are pinned to the same value. The boolean
+`[unstable] codegen-backend` flag only unlocks the profile option and selects
+no profile, so it needs no override. A package-scoped
+`profile.<name>.package.<package>` selection is refused because Cargo resolves
+it above the profile variable, and an unresolved `include` is refused because
+it hides inputs from validation. The override decision emits one
+`backend_overrides` stage event on the `kani_release` logger, carrying the
+selection, variable, and collision counts alongside the standard stage fields,
+but no names or paths. It is emitted only when at least one profile is pinned,
+so a repository that selects no backend logs no decision event.
+
 The caller must trust the selected SDK and proof workspace, and keep their
 files and Cargo configuration unchanged throughout the invocation, including
 nested Cargo processes. Validation does not snapshot or lock those inputs,

@@ -22,9 +22,11 @@ from pathlib import Path
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 from rust_prover_tools.kani_release_config import (
+    VerificationConfig,
     check_verification_config,
     checked_resolve,
     checked_stat,
+    codegen_backend_variable,
 )
 from rust_prover_tools.kani_release_flags import verification_flags
 
@@ -42,6 +44,26 @@ def _status_class(status: int) -> str:
     if status == 0:
         return "success"
     return "signal" if status < 0 else "nonzero"
+
+
+def _emit_stage_event(
+    stage: str, started: float, fields: cabc.Mapping[str, object]
+) -> None:
+    """Emit one bounded event for a completed stage, without private payloads.
+
+    Every record on this logger carries the same fields, so an application sink
+    can read ``stage`` without inspecting the message. A caller may add counts
+    that describe a decision, but never names, paths, arguments, or output.
+    """
+    _LOGGER.info(
+        "Kani execution stage completed",
+        extra={
+            "stage": stage,
+            "release": "0.67.0",
+            "duration_seconds": time.monotonic() - started,
+            **fields,
+        },
+    )
 
 
 def _observe_stage[T](
@@ -68,15 +90,8 @@ def _observe_stage[T](
     finally:
         # INFO keeps the normal CLI output unchanged unless the application
         # explicitly enables logging. Never attach exception text or traceback.
-        _LOGGER.info(
-            "Kani execution stage completed",
-            extra={
-                "stage": stage,
-                "release": "0.67.0",
-                "duration_seconds": time.monotonic() - started,
-                "status_class": status,
-                "error_category": category,
-            },
+        _emit_stage_event(
+            stage, started, {"status_class": status, "error_category": category}
         )
 
 
@@ -181,6 +196,41 @@ def _runtime_search_path(runtime: Path, inherited: str) -> str:
     return os.pathsep.join((str(runtime), *entries))
 
 
+def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) -> None:
+    """Pin every accepted profile backend to LLVM inside the child only.
+
+    Cargo reads `CARGO_PROFILE_<NAME>_CODEGEN_BACKEND` in preference to profile
+    tables in configuration files and manifests, so the selected release always
+    compiles with its own backend regardless of what the repository asked for.
+    """
+    started = time.monotonic()
+    spellings = {selection.profile for selection in config.selections}
+    variables = {codegen_backend_variable(profile) for profile in spellings}
+    for variable in variables:
+        child[variable] = "llvm"
+    if not config.selections:
+        # No profile selected a backend, so there is no decision to report. An
+        # event per run would be noise and would make the stage log depend on
+        # an unrelated empty repository.
+        return
+    # Report the decision without naming profiles, paths, or configuration
+    # values. A collision means two spellings share one normalized variable;
+    # one profile declared in several files is a duplicate, not a collision.
+    # The event keeps the stage schema so a sink can read every record alike.
+    _emit_stage_event(
+        "backend_overrides",
+        started,
+        {
+            "status_class": "success",
+            "error_category": "none",
+            "operation": "backend_overrides",
+            "selection_count": len(config.selections),
+            "variable_count": len(variables),
+            "collision_count": len(spellings) - len(variables),
+        },
+    )
+
+
 def prepare_kani_command(
     options: KaniExecOptions, environment: cabc.Mapping[str, str]
 ) -> CommandSpec:
@@ -211,9 +261,10 @@ def prepare_kani_command(
     cwd = checked_resolve(options.cwd)
     _validate_installation(root)
     _validate_arguments(options.arguments)
-    check_verification_config(cwd, environment)
+    config = check_verification_config(cwd, environment)
     flags = verification_flags(environment)
     child = dict(environment)
+    _apply_backend_overrides(child, config)
     child["LD_LIBRARY_PATH"] = _runtime_search_path(
         root / "toolchain/lib", child.get("LD_LIBRARY_PATH", "")
     )

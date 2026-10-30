@@ -407,7 +407,42 @@ removal of an existing admission wrapper.
 application enables logging. It installs no logger or handler and adds no CLI
 logging option. Events contain the stage, release, duration, status class and
 error category; they omit paths, arguments, environment, output and exception
-text.
+text. When at least one profile backend is pinned, the override reports a
+`backend_overrides` stage event on the same logger before the enclosing
+validation stage completes, adding the selection, variable and collision
+counts. A repository that selects no backend emits no such event.
+
+Backend classification is positional, not name-based. `kani_release_config`
+walks every discovered Cargo configuration and ancestor manifest and returns a
+`VerificationConfig` holding each accepted `profile.<name>.codegen-backend`
+selection. `prepare_kani_command` then sets
+`CARGO_PROFILE_<NAME>_CODEGEN_BACKEND=llvm` for exactly those profiles in the
+child mapping. Cargo resolves that variable above both configuration files and
+manifest profiles, which `tests/test_kani_exec_codegen_backend.py` measures
+against the real bundled Cargo; the caller's mapping is never mutated. Only a
+string profile selection is overridable: the boolean
+`[unstable] codegen-backend` enable flag selects nothing, and a package-scoped
+`profile.<name>.package.<package>` override wins over the variable, so it is
+refused rather than silently ignored. Profile names are restricted to
+`[A-Za-z0-9_-]+`, so the environment spelling is unambiguous. The opt-in
+measurement module skips itself unless `PROVER_TOOLS_KANI_067_INSTALLATION`
+names an installation root. Run it with:
+
+```bash
+PROVER_TOOLS_KANI_067_INSTALLATION="$HOME/.kani/kani-0.67.0" \
+  uv run pytest tests/test_kani_exec_codegen_backend.py -v
+```
+
+That module carries two levels of evidence. The measured builds require a zero
+status and the `llvm` backend for the accepted configuration-file and manifest
+selections, and preserve an expected failure for the refused package override;
+these pin the override mechanism. One acceptance case writes the exact
+development configuration, adds a `#[kani::proof]` harness, and runs it through
+the public CLI, which is the only evidence that such a repository completes a
+proof. Keep the acceptance case and the measurement cases separate: Kani 0.67
+supplies its own `-Zcodegen-backend` for the harness build and tolerates an
+unknown name, so a successful harness run alone does not demonstrate the child
+override.
 
 Qualification must include a genuine dependency/build-script fixture after
 shared gates. Controlled child tests establish invocation and failure

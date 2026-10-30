@@ -10,6 +10,8 @@ import pytest
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_release_config import (
+    BackendSelection,
+    VerificationConfig,
     check_verification_config,
     checked_resolve,
     checked_stat,
@@ -132,8 +134,15 @@ def test_package_metadata_reserved_words_are_not_cargo_controls(tmp_path: Path) 
         encoding="utf-8",
     )
     environment = {"CARGO_HOME": str(tmp_path / "home")}
-    check_verification_config(tmp_path, environment, search_roots=(tmp_path,))
+    assert (
+        check_verification_config(tmp_path, environment, search_roots=(tmp_path,))
+        == VerificationConfig()
+    ), "publication metadata keys must not count as backend selections"
     with (tmp_path / "Cargo.toml").open("a", encoding="utf-8") as manifest:
         manifest.write('[profile.dev]\ncodegen-backend="cranelift"\n')
-    with pytest.raises(ProverToolError, match="backend"):
-        check_verification_config(tmp_path, environment, search_roots=(tmp_path,))
+    # A real workspace profile is overridable; publication metadata is not.
+    assert check_verification_config(
+        tmp_path, environment, search_roots=(tmp_path,)
+    ) == VerificationConfig(
+        selections=(BackendSelection(tmp_path / "Cargo.toml", "dev", "cranelift"),)
+    ), "a workspace manifest profile must be recorded for the child override"
