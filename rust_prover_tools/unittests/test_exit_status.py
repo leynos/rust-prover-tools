@@ -78,15 +78,34 @@ class _OpenStream(io.StringIO):
         raise _UnexpectedRedirectError
 
 
+def _installed_shutdown_hook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> cabc.Callable[[], None]:
+    """Install the guard and return the shutdown hook it registered.
+
+    The guard's behaviour is only reachable through `atexit`, so each test
+    captures the hook from there and runs it directly; that keeps the tests on
+    the public entry point rather than on the helpers it installs.
+    """
+    hooks: list[cabc.Callable[[], None]] = []
+    monkeypatch.setattr(exit_status.atexit, "register", hooks.append)
+    exit_status.guard_shutdown_flush()
+    assert len(hooks) == 1, "the guard should register exactly one shutdown hook"
+    return hooks[0]
+
+
 def test_closed_stream_is_redirected_to_the_null_device(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed flush moves the descriptor so the interpreter's flush succeeds."""
     target = tmp_path / "pipe-buffer"
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
     stream = _ClosingStream(descriptor)
+    monkeypatch.setattr(exit_status.sys, "stdout", stream)
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
     try:
-        exit_status._redirect_closed_stream(stream)
+        _installed_shutdown_hook(monkeypatch)()
         os.write(descriptor, b"discarded")
     finally:
         os.close(descriptor)
@@ -98,25 +117,34 @@ def test_closed_stream_is_redirected_to_the_null_device(
     )
 
 
-def test_healthy_stream_is_left_alone() -> None:
+def test_healthy_stream_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     """A stream that flushes is not redirected."""
     stream = _OpenStream()
+    monkeypatch.setattr(exit_status.sys, "stdout", stream)
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
 
-    exit_status._redirect_closed_stream(stream)
+    _installed_shutdown_hook(monkeypatch)()
 
     assert stream.flush_calls == 1, "the guard should flush a healthy stream"
 
 
-def test_missing_stream_is_ignored() -> None:
+def test_missing_stream_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     """A windowed interpreter has nothing to flush and nothing to redirect."""
-    exit_status._redirect_closed_stream(None)
+    monkeypatch.setattr(exit_status.sys, "stdout", None)
+    monkeypatch.setattr(exit_status.sys, "stderr", None)
+
+    _installed_shutdown_hook(monkeypatch)()
 
 
-def test_descriptorless_closed_stream_is_ignored() -> None:
+def test_descriptorless_closed_stream_is_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A closed stream without a descriptor cannot fail a later flush."""
     stream = _ClosingStream(descriptor=None)
+    monkeypatch.setattr(exit_status.sys, "stdout", stream)
+    monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
 
-    exit_status._redirect_closed_stream(stream)
+    _installed_shutdown_hook(monkeypatch)()
 
     assert stream.flush_calls == 1, "the guard should still probe the stream"
 
@@ -128,7 +156,7 @@ def test_both_output_streams_are_guarded(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(exit_status.sys, "stdout", stdout)
     monkeypatch.setattr(exit_status.sys, "stderr", stderr)
 
-    exit_status._redirect_closed_outputs()
+    _installed_shutdown_hook(monkeypatch)()
 
     assert (stdout.flush_calls, stderr.flush_calls) == (1, 1), (
         "the guard should probe standard output and standard error"
@@ -178,6 +206,5 @@ def test_guard_registers_the_shutdown_hook(
 
     exit_status.guard_shutdown_flush()
 
-    assert registered == [exit_status._redirect_closed_outputs], (
-        "the guard should register exactly one shutdown hook"
-    )
+    assert len(registered) == 1, "the guard should register exactly one hook"
+    assert callable(registered[0]), "the registered hook should be callable"
