@@ -136,17 +136,26 @@ def test_missing_stream_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     _installed_shutdown_hook(monkeypatch)()
 
 
-def test_descriptorless_closed_stream_is_ignored(
+def test_descriptorless_closed_stream_is_replaced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A closed stream without a descriptor cannot fail a later flush."""
+    """A dead stream with no descriptor is swapped for a sink that flushes."""
     stream = _ClosingStream(descriptor=None)
     monkeypatch.setattr(exit_status.sys, "stdout", stream)
     monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
 
     _installed_shutdown_hook(monkeypatch)()
 
+    replacement = exit_status.sys.stdout
     assert stream.flush_calls == 1, "the guard should still probe the stream"
+    assert replacement is not stream, (
+        "a stream that cannot be redirected must be replaced; the interpreter "
+        "flushes it again at shutdown and would report 120"
+    )
+    replacement.flush()  # The final flush must succeed.
+    assert replacement.write("discarded") == len("discarded"), (
+        "the replacement should accept output instead of failing"
+    )
 
 
 def test_both_output_streams_are_guarded(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -11,7 +11,9 @@ The prover's status is the command's result, so it must survive a reader that
 stops early. `guard_shutdown_flush` installs the `atexit` hook that CPython's
 own `signal` module documentation recommends: flush while the failure can still
 be caught, then point each dead descriptor at the null device so the
-interpreter's final flush succeeds and the requested status stands.
+interpreter's final flush succeeds and the requested status stands. A dead
+stream with no descriptor cannot be pointed anywhere, so it is replaced by a
+sink that discards output.
 
 Example
 -------
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import io
 import os
 import sys
 import typing as typ
@@ -34,11 +37,26 @@ import typing as typ
 __all__ = ("guard_shutdown_flush", "print_lines")
 
 
-def _redirect_closed_stream(stream: typ.TextIO | None) -> None:
-    """Point a dead output stream at the null device."""
+class _NullTextSink(io.TextIOBase):
+    """A text stream that discards everything written to it."""
+
+    @typ.override
+    def writable(self) -> bool:
+        """Report that this stream accepts writes."""
+        return True
+
+    @typ.override
+    def write(self, text: str) -> int:
+        """Discard the text and report it as written."""
+        return len(text)
+
+
+def _guard_output(name: str) -> None:
+    """Point a dead output stream at the null device, or replace it."""
     # Buffered output left after the failed flush reaches the null device at the
     # interpreter's final flush. The reader is gone, so the data is lost either
     # way; the exit status no longer is.
+    stream = getattr(sys, name)
     if stream is None:
         # A windowed interpreter has no such stream to flush.
         return
@@ -52,8 +70,10 @@ def _redirect_closed_stream(stream: typ.TextIO | None) -> None:
         descriptor = stream.fileno()
     except OSError:
         # `io.UnsupportedOperation`, raised by a stream with no descriptor,
-        # subclasses `OSError`. Such a stream is not flushed at shutdown either,
-        # so no later flush can fail.
+        # subclasses `OSError`. The interpreter still flushes such a stream at
+        # shutdown, so leaving it installed would fail again and report 120.
+        # Replace it with a sink whose flush cannot fail.
+        setattr(sys, name, _NullTextSink())
         return
     devnull = os.open(os.devnull, os.O_WRONLY)
     try:
@@ -66,8 +86,8 @@ def _redirect_closed_outputs() -> None:
     """Point every dead output stream at the null device."""
     # Check both streams: `2>&1 | head` merges them onto one dead descriptor,
     # and an unguarded standard error would replace the preserved status.
-    _redirect_closed_stream(sys.stdout)
-    _redirect_closed_stream(sys.stderr)
+    _guard_output("stdout")
+    _guard_output("stderr")
 
 
 def guard_shutdown_flush() -> None:
