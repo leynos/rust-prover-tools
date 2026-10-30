@@ -146,8 +146,21 @@ def test_verus_run_streams_every_line_when_the_reader_stays(
         f"expected the prover's status 3, got {completed.returncode}; "
         f"stderr: {completed.stderr}"
     )
-    assert f"proof line {PROOF_LINES - 1}\n" in completed.stdout, (
-        "expected every streamed line, including the last; "
-        f"stdout ended with: {completed.stdout[-200:]!r}"
+    # Compare the whole sequence: a passing check on the last line alone would
+    # not notice an earlier line going missing from the stream.
+    expected_lines = [f"proof line {index}" for index in range(PROOF_LINES)]
+    actual_lines = completed.stdout.splitlines()
+    mismatches = [
+        (index, wanted, actual)
+        for index, (actual, wanted) in enumerate(
+            zip(actual_lines, expected_lines, strict=False)
+        )
+        if actual != wanted
+    ][:5]
+    assert len(actual_lines) == len(expected_lines), (
+        f"expected {len(expected_lines)} streamed lines, got {len(actual_lines)}"
+    )
+    assert not mismatches, (
+        f"expected the streamed lines in order; first mismatches: {mismatches!r}"
     )
 # weave: run 'weave explain tests/test_prover_tools_cli_e2e.py' for per-hunk detail, 'weave check' to verify your resolution
