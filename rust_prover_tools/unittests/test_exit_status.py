@@ -6,13 +6,13 @@ import io
 import os
 import typing as typ
 
-import pytest
-
 from rust_prover_tools import exit_status
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
+
+    import pytest
 
 #: Raised by doubles that model a stream without a file descriptor.
 _NO_DESCRIPTOR_MESSAGE = "stream has no usable descriptor"
@@ -71,7 +71,6 @@ class _OpenStream(io.StringIO):
 
 
 def test_closed_stream_is_redirected_to_the_null_device(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """A failed flush moves the descriptor so the interpreter's flush succeeds."""
@@ -100,10 +99,9 @@ def test_healthy_stream_is_left_alone() -> None:
     assert stream.flush_calls == 1, "the guard should flush a healthy stream"
 
 
-@pytest.mark.parametrize("stream", [None])
-def test_missing_stream_is_ignored(stream: None) -> None:
+def test_missing_stream_is_ignored() -> None:
     """A windowed interpreter has nothing to flush and nothing to redirect."""
-    exit_status._redirect_closed_stream(stream)
+    exit_status._redirect_closed_stream(None)
 
 
 def test_descriptorless_closed_stream_is_ignored() -> None:

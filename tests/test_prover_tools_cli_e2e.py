@@ -5,95 +5,22 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import threading
 import typing as typ
 
+import pytest
+
 from tests.conftest import FakeVerusBinarySpec
+from tests.support import (
+    CHILD_TIMEOUT,
+    PROOF_LINES,
+    chatty_proof_repo,
+    fake_verus_argv,
+    sanitized_subprocess_env,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
-
-
-#: Enough proof output that the pipe buffer cannot hold it, so the CLI still
-#: has output to write when the reader goes away. A reader that stops after five
-#: lines is the normal `| head -n 5` case, and this test only has a broken pipe
-#: to observe if more output follows the point where the reader left.
-_PROOF_LINES = 40_000
-
-#: Lines the test reader consumes before closing, mirroring `| head -n 5`.
-_READER_LINES = 5
-
-#: Seconds allowed for the CLI to finish once its reader has gone. The pytest
-#: global timeout is 30 seconds, so this leaves room to report a hang as a
-#: failed assertion rather than a killed test. The bound covers the reads as
-#: well as the wait: a CLI that stops writing marks itself as hung by never
-#: closing its own end of the pipe.
-_CHILD_TIMEOUT = 20
-
-
-def sanitized_subprocess_env() -> dict[str, str]:
-    """Return subprocess environment without GitHub Actions input bindings."""
-    return {
-        key: value for key, value in os.environ.items() if not key.startswith("INPUT_")
-    }
-
-
-def fake_verus_argv(
-    repo_root: Path,
-    proof_file: Path,
-    verus_bin: Path,
-) -> list[str]:
-    """Return the public CLI argument vector for one Verus proof run."""
-    return [
-        sys.executable,
-        "-m",
-        "rust_prover_tools.cli",
-        "verus",
-        "run",
-        "--repo-root",
-        str(repo_root),
-        "--proof-file",
-        str(proof_file),
-        "--verus-bin",
-        str(verus_bin),
-        "--no-ensure-toolchain",
-    ]
-
-
-def chatty_proof_repo(
-    repo_root: Path,
-    fake_verus_binary_factory: cabc.Callable[..., None],
-    *,
-    prover_status: int,
-) -> tuple[Path, Path]:
-    """Create a proof run whose child outlives the reader that started it.
-
-    The child writes ``_PROOF_LINES`` lines before exiting with
-    ``prover_status``. That is far more than a pipe buffer holds, so closing the
-    reader early reaches the writer as a broken pipe instead of being absorbed by
-    kernel buffering.
-    """
-    version_file = repo_root / "tools" / "verus" / "VERSION"
-    version_file.parent.mkdir(parents=True)
-    version_file.write_text("2025.01.01\n", encoding="utf-8")
-    proof_file = repo_root / "proof.rs"
-    proof_file.write_text("proof\n", encoding="utf-8")
-    verus_bin = repo_root / "bin" / "verus"
-    fake_verus_binary_factory(
-        verus_bin,
-        spec=FakeVerusBinarySpec(
-            proof_command=(
-                "i=0\n"
-                f'while [ "$i" -lt {_PROOF_LINES} ]; do\n'
-                '  printf "proof line %s\\n" "$i"\n'
-                "  i=$((i+1))\n"
-                "done\n"
-                f"exit {prover_status}"
-            ),
-        ),
-    )
-    return proof_file, verus_bin
 
 
 def test_verus_run_cli_accepts_indented_toolchain_output(
@@ -120,20 +47,7 @@ def test_verus_run_cli_accepts_indented_toolchain_output(
     )
 
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "rust_prover_tools.cli",
-            "verus",
-            "run",
-            "--repo-root",
-            str(tmp_path),
-            "--proof-file",
-            str(proof_file),
-            "--verus-bin",
-            str(verus_bin),
-            "--no-ensure-toolchain",
-        ],
+        fake_verus_argv(tmp_path, proof_file, verus_bin),
         check=False,
         capture_output=True,
         text=True,
@@ -225,69 +139,15 @@ def test_verus_run_streams_every_line_when_the_reader_stays(
         capture_output=True,
         text=True,
         env=sanitized_subprocess_env(),
-        timeout=_CHILD_TIMEOUT,
+        timeout=CHILD_TIMEOUT,
     )
 
     assert completed.returncode == 3, (
         f"expected the prover's status 3, got {completed.returncode}; "
         f"stderr: {completed.stderr}"
     )
-    assert f"proof line {_PROOF_LINES - 1}\n" in completed.stdout, (
+    assert f"proof line {PROOF_LINES - 1}\n" in completed.stdout, (
         "expected every streamed line, including the last; "
         f"stdout ended with: {completed.stdout[-200:]!r}"
     )
-
-
-def read_until_the_reader_goes_away(
-    argv: list[str],
-    *,
-    reader_lines: int,
-) -> tuple[int, list[str]]:
-    """Run ``argv`` and close its standard output after ``reader_lines`` lines.
-
-    The pipe is the only channel between the CLI and this reader, so closing it
-    while the child still has output to write is exactly the `| head -n 5`
-    situation. The child's status is returned unchanged: this helper must not
-    interpret it, because interpreting it is what the tests are asking about.
-    """
-    with subprocess.Popen(
-        argv,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=sanitized_subprocess_env(),
-    ) as process:
-        if process.stdout is None or process.stderr is None:  # pragma: no cover
-            msg = "subprocess pipes were not created"
-            raise AssertionError(msg)
-        expired = threading.Event()
-
-        def abandon_the_run() -> None:
-            # Killing the child is what unblocks a read that would otherwise
-            # wait forever for output the CLI never writes.
-            expired.set()
-            process.kill()
-
-        watchdog = threading.Timer(_CHILD_TIMEOUT, abandon_the_run)
-        watchdog.daemon = True
-        watchdog.start()
-        consumed: list[str] = []
-        stderr = ""
-        try:
-            consumed = [
-                line
-                for _, line in zip(range(reader_lines), process.stdout, strict=False)
-            ]
-            process.stdout.close()
-            stderr = process.stderr.read()
-            process.stderr.close()
-            status = process.wait()
-        finally:
-            watchdog.cancel()
-        if expired.is_set():  # pragma: no cover - diagnosed as hang
-            msg = (
-                f"the CLI neither finished within {_CHILD_TIMEOUT}s of its reader "
-                f"closing nor stopped writing; stderr: {stderr!r}"
-            )
-            raise AssertionError(msg) from None
-        return status, consumed
+# weave: run 'weave explain tests/test_prover_tools_cli_e2e.py' for per-hunk detail, 'weave check' to verify your resolution
