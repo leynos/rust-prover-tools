@@ -126,7 +126,11 @@ the pair. The in-loop path needs the same care: `_error_exit` writes the
 diagnostic before returning the prover's status, and that write raises
 `BrokenPipeError` once the reader is gone. The diagnostic is suppressed and the
 status is returned, because the status is the proof result and the diagnostic
-is not.
+is not. `exit_status.print_lines` follows the same rule for the fallback
+warnings an unresolved `--verus-bin` produces: with an unbuffered standard
+output that write happens while the command is still running, escapes the
+shutdown guard, and without suppression would report a successful proof as a
+failure.
 
 The hook belongs at the entry point, not in the echo path. The echo path cannot
 observe interpreter shutdown, and every command that writes to standard output

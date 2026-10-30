@@ -34,7 +34,7 @@ import cyclopts
 from cyclopts import App, Parameter
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.exit_status import guard_shutdown_flush
+from rust_prover_tools.exit_status import guard_shutdown_flush, print_lines
 from rust_prover_tools.kani import (
     KaniCheckOptions,
     KaniInstallOptions,
@@ -72,12 +72,6 @@ verus_app: cyclopts.App = App(
 def _repo_root(path: Path | None) -> Path:
     """Return the requested repository root or the current working directory."""
     return (path or Path.cwd()).resolve()
-
-
-def _print_lines(lines: tuple[str, ...], *, stream: typ.TextIO = sys.stdout) -> None:
-    """Print lines to a text stream."""
-    for line in lines:
-        print(line, file=stream)
 
 
 def _error_exit(exc: ProverToolError) -> int:
@@ -144,7 +138,7 @@ def install(
         )
     except ProverToolError as exc:
         return _error_exit(exc)
-    _print_lines(lines)
+    print_lines(lines)
     return 0
 
 
@@ -199,7 +193,7 @@ def check_version(
         )
     except ProverToolError as exc:
         return _error_exit(exc)
-    _print_lines((message,))
+    print_lines((message,))
     return 0
 
 
@@ -270,8 +264,10 @@ def install_verifier(
         )
     except ProverToolError as exc:
         return _error_exit(exc)
-    _print_lines(lines)
+    print_lines(lines)
     return 0
+
+
 
 
 kani_app.command(kani_exec, name="exec")
@@ -300,3 +296,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+# weave: run 'weave explain rust_prover_tools/cli.py' for per-hunk detail, 'weave check' to verify your resolution

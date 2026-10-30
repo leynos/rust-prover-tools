@@ -52,6 +52,14 @@ class _ClosingStream(io.StringIO):
         return self._descriptor
 
 
+class _BrokenPipeStream(io.StringIO):
+    """A stream whose writes fail as a closed pipe does."""
+
+    def write(self, _text: str) -> int:
+        """Fail as a closed pipe does."""
+        raise BrokenPipeError
+
+
 class _OpenStream(io.StringIO):
     """A standard-output double that flushes normally."""
 
@@ -125,6 +133,26 @@ def test_both_output_streams_are_guarded(monkeypatch: pytest.MonkeyPatch) -> Non
     assert (stdout.flush_calls, stderr.flush_calls) == (1, 1), (
         "the guard should probe standard output and standard error"
     )
+
+
+def test_print_lines_writes_every_line() -> None:
+    """A healthy stream receives each line followed by a newline."""
+    stream = io.StringIO()
+
+    exit_status.print_lines(("first", "second"), stream=stream)
+
+    assert stream.getvalue() == "first\nsecond\n", (
+        "the helper should print each line on its own line"
+    )
+
+
+def test_print_lines_ignores_a_closed_pipe() -> None:
+    """A dead reader cannot turn completed work into a failure."""
+    stream = _BrokenPipeStream()
+
+    exit_status.print_lines(("first", "second"), stream=stream)
+
+    assert stream.getvalue() == "", "a broken pipe accepts no output"
 
 
 def test_guard_registers_the_shutdown_hook(

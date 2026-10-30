@@ -44,6 +44,8 @@ def fake_verus_argv(
     repo_root: Path,
     proof_file: Path,
     verus_bin: Path,
+    *,
+    extra_args: cabc.Sequence[str] = (),
 ) -> list[str]:
     """Return the public CLI argument vector for one Verus proof run.
 
@@ -55,6 +57,8 @@ def fake_verus_argv(
         Proof file passed to ``--proof-file``.
     verus_bin : Path
         Fake Verus binary passed to ``--verus-bin``.
+    extra_args : collections.abc.Sequence[str]
+        Additional options appended after the standard arguments.
 
     Returns
     -------
@@ -74,6 +78,7 @@ def fake_verus_argv(
         "--verus-bin",
         str(verus_bin),
         "--no-ensure-toolchain",
+        *extra_args,
     ]
 
 

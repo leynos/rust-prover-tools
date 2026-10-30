@@ -65,6 +65,7 @@ def read_until_the_reader_goes_away(
     argv: list[str],
     *,
     reader_lines: int,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, list[str]]:
     """Run ``argv`` and close its standard output after ``reader_lines`` lines.
 
@@ -74,6 +75,8 @@ def read_until_the_reader_goes_away(
         Command and arguments to run.
     reader_lines : int
         Number of output lines to consume before closing the pipe.
+    env : dict[str, str] | None
+        Child environment; defaults to the sanitized process environment.
 
     Returns
     -------
@@ -92,7 +95,7 @@ def read_until_the_reader_goes_away(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=sanitized_subprocess_env(),
+        env=sanitized_subprocess_env() if env is None else env,
     ) as process:
         if process.stdout is None or process.stderr is None:  # pragma: no cover
             msg = "subprocess pipes were not created"
@@ -167,6 +170,43 @@ def _reported_status(
         f"stderr={completed.stderr!r}"
     )
     return completed.stdout.strip().splitlines()
+
+
+def test_verus_run_keeps_the_status_when_fallback_warnings_hit_a_closed_pipe(
+    tmp_path: Path,
+    fake_verus_binary_factory: cabc.Callable[..., None],
+) -> None:
+    """An unbuffered warning write cannot replace a successful proof's status.
+
+    An unresolved `--verus-bin` makes the CLI print fallback warnings after the
+    proof finishes. With an unbuffered standard output that write reaches the
+    dead pipe while the command is still running, so the shutdown guard has not
+    been reached yet. The proof itself succeeded, so the status must stay 0.
+    """
+    proof_file, verus_bin = chatty_proof_repo(
+        tmp_path,
+        fake_verus_binary_factory,
+        prover_status=0,
+    )
+    # The fallback target is `<install-dir>/verus/verus`, so link the chatty
+    # fake into that layout and leave `--verus-bin` pointing nowhere.
+    install_dir = tmp_path / "install"
+    default_bin = install_dir / "verus" / "verus"
+    default_bin.parent.mkdir(parents=True)
+    default_bin.symlink_to(verus_bin)
+
+    status, _ = read_until_the_reader_goes_away(
+        fake_verus_argv(
+            tmp_path,
+            proof_file,
+            tmp_path / "missing" / "verus",
+            extra_args=("--install-dir", str(install_dir)),
+        ),
+        reader_lines=READER_LINES,
+        env={**sanitized_subprocess_env(), "PYTHONUNBUFFERED": "1"},
+    )
+
+    assert status == 0, f"expected the successful proof to keep status 0, got {status}"
 
 
 def test_verus_run_reports_the_prover_status_through_a_tee_pipeline(
