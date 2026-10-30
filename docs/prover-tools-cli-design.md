@@ -157,11 +157,23 @@ rendered unchanged in the failure report when it is printable and unambiguous;
 a path containing a newline, a terminal control character, or the `", "` list
 delimiter is quoted so it cannot spoof or split the diagnostic.
 
-Each completed invocation emits one bounded INFO event, and the batch emits a
-closing event. The events carry the proof ordinal and count, status class, exit
-code, error category, and duration; they never carry proof paths, arguments, or
-verifier output. The module installs no logger or handler, so the CLI's normal
-stream is unchanged unless the host application enables logging.
+The batch and each invocation emit a start event followed by a completion
+event, which gives log-based spans without a tracing dependency: a stalled
+invocation is visible as an unmatched start. Completion events carry the proof
+ordinal and count, status class, exit code, error category, and duration, and
+the batch completion adds the proved count. Those bounded fields are the metric
+surface for a log pipeline (batch size, invocation outcome, and invocation
+duration); no metrics client is installed. Timings come from an injectable
+monotonic clock so tests can assert deterministic durations. A batch that
+aborts outside the handled failure paths reports `failure` / `unexpected`
+instead of a misleading success. The events never carry proof paths, arguments,
+or verifier output, and the module installs no logger or handler, so the CLI's
+normal stream is unchanged unless the host application enables logging.
+
+Binary discovery is split from installation at the API boundary.
+`resolve_verus_bin` is the read-only probe that returns `None` when no
+executable is found; `ensure_run_binary` owns the install fallback and is named
+for that side effect.
 
 The Verus run path carries the selected release target into installer fallback.
 This keeps `prover-tools verus run --target <target>` aligned with

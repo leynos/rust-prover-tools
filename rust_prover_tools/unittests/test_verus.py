@@ -22,6 +22,7 @@ from rust_prover_tools.verus import (
     VerusPaths,
     VerusProofFailedError,
     VerusRunOptions,
+    VerusRunSettings,
     install_verus,
     resolve_verus_bin,
     run_verus,
@@ -467,9 +468,7 @@ def test_verify_proof_files_keeps_partial_result_when_invocation_fails(
     with pytest.raises(ProverToolError, match="Verus invocation failed") as exc_info:
         verify_proof_files(
             (proved_file, unstartable_file),
-            pathlib.Path("/bin/verus"),
-            "toolchain",
-            (),
+            VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
         )
 
     message = str(exc_info.value)
@@ -513,6 +512,27 @@ def test_verus_run_options_rejects_both_proof_file_forms(tmp_path: Path) -> None
         )
 
 
+@pytest.mark.parametrize("use_positional", [False, True], ids=["keyword", "positional"])
+def test_verus_run_options_rejects_bare_path_as_proof_files(
+    tmp_path: Path,
+    *,
+    use_positional: bool,
+) -> None:
+    """A bare Path in the tuple slot cannot be mistaken for one proof file."""
+    path = tmp_path / "proof.rs"
+    bare_path = typ.cast("tuple[pathlib.Path, ...]", path)
+
+    def build() -> None:
+        if use_positional:
+            # The former third positional slot was `install_dir`.
+            VerusRunOptions(VerusPaths(repo_root=tmp_path), None, bare_path)
+        else:
+            VerusRunOptions(paths=VerusPaths(repo_root=tmp_path), proof_files=bare_path)
+
+    with pytest.raises(TypeError, match=r"tuple of pathlib\.Path values"):
+        build()
+
+
 def test_failure_message_quotes_unsafe_paths(tmp_path: Path) -> None:
     """Unsafe path text cannot spoof or split the failure report."""
     unsafe_file = tmp_path / "bad, name\nspoof.rs"
@@ -547,7 +567,10 @@ def test_verify_proof_files_emits_bounded_events(
     monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
 
     with caplog.at_level(logging.INFO, logger="rust_prover_tools.verus.batch"):
-        verify_proof_files(proof_files, pathlib.Path("/bin/verus"), "toolchain", ())
+        verify_proof_files(
+            proof_files,
+            VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
+        )
 
     events = [
         record
@@ -555,16 +578,99 @@ def test_verify_proof_files_emits_bounded_events(
         if record.name == "rust_prover_tools.verus.batch"
     ]
     assert [getattr(event, "operation", None) for event in events] == [
+        "verus-proof-batch-start",
+        "verus-proof-invocation-start",
         "verus-proof-invocation",
+        "verus-proof-invocation-start",
         "verus-proof-invocation",
         "verus-proof-batch",
-    ], "Each invocation and the batch should emit one bounded event"
-    assert getattr(events[-1], "proof_count", None) == 2
-    assert getattr(events[-1], "proved_count", None) == 2
+    ], "The batch and each invocation should emit paired start and completion events"
+    assert getattr(events[-1], "proof_count", None) == 2, (
+        "The batch event should report both requested proof files"
+    )
+    assert getattr(events[-1], "proved_count", None) == 2, (
+        "The batch event should report both proof files as proved"
+    )
     for event in events:
         payload = str(vars(event))
         assert "first.rs" not in payload, "Telemetry must not carry proof paths"
         assert "second.rs" not in payload, "Telemetry must not carry proof paths"
+
+
+def test_verify_proof_files_uses_injected_clock(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Telemetry durations come from the injected clock, not wall time."""
+    proof_files = (pathlib.Path("first.rs"), pathlib.Path("second.rs"))
+    ticks = iter([0.0, 1.0, 2.0, 3.0, 5.0, 6.0])
+
+    def fake_run_command(_spec: object) -> CommandResult:
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
+    monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
+
+    with caplog.at_level(logging.INFO, logger="rust_prover_tools.verus.batch"):
+        verify_proof_files(
+            proof_files,
+            VerusRunSettings(
+                pathlib.Path("/bin/verus"),
+                "toolchain",
+                clock=lambda: next(ticks),
+            ),
+        )
+
+    durations = [
+        getattr(record, "duration_seconds", None)
+        for record in caplog.records
+        if getattr(record, "operation", None) == "verus-proof-invocation"
+    ]
+    assert durations == pytest.approx([1.0, 2.0]), (
+        "Each invocation duration should be measured with the injected clock"
+    )
+    batch_events = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "verus-proof-batch"
+    ]
+    assert getattr(batch_events[-1], "duration_seconds", None) == pytest.approx(6.0), (
+        "The batch duration should span the injected clock's readings"
+    )
+
+
+def test_verify_proof_files_reports_unexpected_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An exception outside the handled paths still reports a failed batch."""
+    proof_files = (pathlib.Path("first.rs"),)
+
+    def fake_run_command(_spec: object) -> CommandResult:
+        msg = "verifier wrapper crashed"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
+
+    with (
+        caplog.at_level(logging.INFO, logger="rust_prover_tools.verus.batch"),
+        pytest.raises(RuntimeError, match="verifier wrapper crashed"),
+    ):
+        verify_proof_files(
+            proof_files,
+            VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
+        )
+
+    batch_events = [
+        record
+        for record in caplog.records
+        if getattr(record, "operation", None) == "verus-proof-batch"
+    ]
+    assert getattr(batch_events[-1], "status_class", None) == "failure", (
+        "An unhandled exception must not be reported as a successful batch"
+    )
+    assert getattr(batch_events[-1], "error_category", None) == "unexpected", (
+        "An unhandled exception should carry the unexpected error category"
+    )
 
 
 def test_run_verus_installs_missing_default_binary(
@@ -730,9 +836,11 @@ def test_verify_proof_files_runs_an_ordered_prefix(
     if failing_index is None:
         verify_proof_files(
             proof_files,
-            pathlib.Path("/bin/verus"),
-            "toolchain",
-            ("--extra",),
+            VerusRunSettings(
+                pathlib.Path("/bin/verus"),
+                "toolchain",
+                ("--extra",),
+            ),
         )
         assert [argv[1] for argv in invocations] == [
             str(path) for path in proof_files
@@ -742,9 +850,11 @@ def test_verify_proof_files_runs_an_ordered_prefix(
     with pytest.raises(VerusProofFailedError) as exc_info:
         verify_proof_files(
             proof_files,
-            pathlib.Path("/bin/verus"),
-            "toolchain",
-            ("--extra",),
+            VerusRunSettings(
+                pathlib.Path("/bin/verus"),
+                "toolchain",
+                ("--extra",),
+            ),
         )
 
     expected_prefix = proof_files[: failing_index + 1]

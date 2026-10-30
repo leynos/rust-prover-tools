@@ -27,9 +27,33 @@ from rust_prover_tools.verus.models import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class VerusRunSettings:
+    """Fixed inputs shared by every invocation in one proof batch.
+
+    Attributes
+    ----------
+    verus_bin : Path
+        Resolved Verus executable.
+    toolchain : str
+        Rust toolchain identifier, reported on failure.
+    extra_args : tuple[str, ...]
+        Extra verifier arguments appended after each proof file.
+    clock : Callable[[], float]
+        Monotonic time source for telemetry durations. Tests inject a
+        deterministic fake; production callers keep the default.
+    """
+
+    verus_bin: Path
+    toolchain: str
+    extra_args: tuple[str, ...] = ()
+    clock: cabc.Callable[[], float] = time.monotonic
 
 
 def _outcome_class(exit_code: int) -> str:
@@ -37,6 +61,14 @@ def _outcome_class(exit_code: int) -> str:
     if exit_code == 0:
         return "success"
     return "signal" if exit_code < 0 else "nonzero"
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _InvocationStart:
+    """Bounded telemetry emitted when a verifier invocation begins."""
+
+    ordinal: int
+    count: int
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -66,8 +98,20 @@ class _BatchEvent:
     duration_seconds: float
 
 
+def _emit_invocation_start(event: _InvocationStart) -> None:
+    """Write the start of one invocation span to this module's logger."""
+    _LOGGER.info(
+        "Verus proof invocation started",
+        extra={
+            "operation": "verus-proof-invocation-start",
+            "proof_ordinal": event.ordinal,
+            "proof_count": event.count,
+        },
+    )
+
+
 def _emit_invocation(event: _InvocationEvent) -> None:
-    """Write one invocation event to this module's logger."""
+    """Write one invocation completion event to this module's logger."""
     _LOGGER.info(
         "Verus proof invocation completed",
         extra={
@@ -79,6 +123,14 @@ def _emit_invocation(event: _InvocationEvent) -> None:
             "error_category": event.error_category,
             "duration_seconds": event.duration_seconds,
         },
+    )
+
+
+def _emit_batch_start(count: int) -> None:
+    """Write the start of the batch span to this module's logger."""
+    _LOGGER.info(
+        "Verus proof batch started",
+        extra={"operation": "verus-proof-batch-start", "proof_count": count},
     )
 
 
@@ -129,21 +181,27 @@ class _ProofBatch:
     """One ordered, fail-fast batch of single-file verifier invocations."""
 
     proof_files: tuple[Path, ...]
-    verus_bin: Path
-    toolchain: str
-    extra_args: tuple[str, ...]
+    settings: VerusRunSettings
+    started_at: float
     proved: list[Path] = dc.field(default_factory=list)
-    status_class: str = "success"
-    error_category: str = "none"
-    started_at: float = dc.field(default_factory=time.monotonic)
+    # Failure by default: `run` sets success only after the whole loop
+    # finishes, so an interrupted or unexpected abort cannot look successful.
+    status_class: str = "failure"
+    error_category: str = "unexpected"
 
     def run(self) -> None:
         """Verify each file in order, stopping at the first failure."""
         count = len(self.proof_files)
+        _emit_batch_start(count)
         for ordinal, proof_file in enumerate(self.proof_files, start=1):
-            started_at = time.monotonic()
+            started_at = self.settings.clock()
+            _emit_invocation_start(_InvocationStart(ordinal=ordinal, count=count))
             try:
-                result = _invoke(self.verus_bin, proof_file, self.extra_args)
+                result = _invoke(
+                    self.settings.verus_bin,
+                    proof_file,
+                    self.settings.extra_args,
+                )
             except OSError as exc:
                 self.status_class, self.error_category = "failure", "execution"
                 failure_event = _InvocationEvent(
@@ -152,7 +210,7 @@ class _ProofBatch:
                     status_class=self.status_class,
                     exit_code=None,
                     error_category=self.error_category,
-                    duration_seconds=time.monotonic() - started_at,
+                    duration_seconds=self.settings.clock() - started_at,
                 )
                 _emit_invocation(failure_event)
                 raise _partial_run_error(self.proved, proof_file, exc) from exc
@@ -165,20 +223,21 @@ class _ProofBatch:
                 status_class=status,
                 exit_code=result.exit_code,
                 error_category=category,
-                duration_seconds=time.monotonic() - started_at,
+                duration_seconds=self.settings.clock() - started_at,
             )
             _emit_invocation(result_event)
             if result.exit_code != 0:
                 self.status_class, self.error_category = status, category
                 context = ProofFailureContext(
                     result.exit_code,
-                    self.verus_bin,
+                    self.settings.verus_bin,
                     proof_file,
-                    self.toolchain,
+                    self.settings.toolchain,
                     tuple(self.proved),
                 )
                 raise VerusProofFailedError(context)
             self.proved.append(proof_file)
+        self.status_class, self.error_category = "success", "none"
 
     def emit_summary(self) -> None:
         """Emit the closing telemetry event for this batch."""
@@ -187,16 +246,14 @@ class _ProofBatch:
             proved_count=len(self.proved),
             status_class=self.status_class,
             error_category=self.error_category,
-            duration_seconds=time.monotonic() - self.started_at,
+            duration_seconds=self.settings.clock() - self.started_at,
         )
         _emit_batch(event)
 
 
 def verify_proof_files(
     proof_files: tuple[Path, ...],
-    verus_bin: Path,
-    toolchain: str,
-    extra_args: tuple[str, ...],
+    settings: VerusRunSettings,
 ) -> None:
     """Verify each proof file in order, stopping at the first failure.
 
@@ -204,12 +261,9 @@ def verify_proof_files(
     ----------
     proof_files : tuple[Path, ...]
         Proof files to verify, already checked for existence.
-    verus_bin : Path
-        Resolved Verus executable.
-    toolchain : str
-        Rust toolchain identifier, reported on failure.
-    extra_args : tuple[str, ...]
-        Extra verifier arguments appended after each proof file.
+    settings : VerusRunSettings
+        Resolved executable, toolchain, extra arguments, and timing source
+        shared by every invocation in the batch.
 
     Raises
     ------
@@ -223,11 +277,13 @@ def verify_proof_files(
 
     Notes
     -----
-    Each completed invocation emits one INFO event carrying only bounded
-    fields, and the batch emits one closing event. The events never include
-    proof paths.
+    The batch and each invocation emit a start event followed by a completion
+    event, so a stalled invocation is visible as an unmatched start. Every
+    event carries only bounded counters, classifications, and durations; none
+    includes proof paths. A batch that aborts without a handled failure
+    reports `failure` / `unexpected` rather than a misleading success.
     """
-    batch = _ProofBatch(proof_files, verus_bin, toolchain, extra_args)
+    batch = _ProofBatch(proof_files, settings, settings.clock())
     try:
         batch.run()
     finally:

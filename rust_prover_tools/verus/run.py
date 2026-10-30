@@ -36,7 +36,7 @@ from pathlib import Path
 from rust_prover_tools.commands import CommandSpec, run_checked, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.versions import parse_verus_toolchain
-from rust_prover_tools.verus.batch import verify_proof_files
+from rust_prover_tools.verus.batch import VerusRunSettings, verify_proof_files
 from rust_prover_tools.verus.install import install_verus
 from rust_prover_tools.verus.models import (
     EXAMPLE_VERUS_PROOF_PATH,
@@ -123,12 +123,15 @@ def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
     survives.
     """
     proof_files = resolve_proof_files(options)
-    resolved, lines = resolve_run_binary(options)
+    resolved, lines = ensure_run_binary(options)
     toolchain = ensure_verus_toolchain(
         resolved,
         should_install=options.should_ensure_toolchain,
     )
-    verify_proof_files(proof_files, resolved, toolchain, options.extra_args)
+    verify_proof_files(
+        proof_files,
+        VerusRunSettings(resolved, toolchain, options.extra_args),
+    )
     return lines
 
 
@@ -162,8 +165,8 @@ def resolve_proof_files(options: VerusRunOptions) -> tuple[Path, ...]:
     return proof_files
 
 
-def resolve_run_binary(options: VerusRunOptions) -> tuple[Path, tuple[str, ...]]:
-    """Resolve the Verus binary for a proof run.
+def ensure_run_binary(options: VerusRunOptions) -> tuple[Path, tuple[str, ...]]:
+    """Ensure a usable Verus binary exists for a proof run.
 
     Parameters
     ----------
@@ -182,6 +185,13 @@ def resolve_run_binary(options: VerusRunOptions) -> tuple[Path, tuple[str, ...]]
     ProverToolError
         Raised when no executable Verus binary can be resolved, even after the
         install fallback.
+
+    Notes
+    -----
+    The name records the side effect: when the default binary is missing and
+    `options.should_install_missing` is true, this function may download and
+    install Verus before returning. Callers that need a read-only probe should
+    use `resolve_verus_bin` instead.
     """
     version = read_verus_version(options.paths)
     default_bin = (

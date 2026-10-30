@@ -43,10 +43,12 @@ only ever one source of truth.
 failure, in the order they ran. It is empty for a single-file run or a failure
 on the first file.
 
-Callers that unpack `VerusRunOptions` positionally past the first argument
-should switch to keyword arguments, because `proof_files` now occupies the
-second slot in the constructor and the later fields keep their previous
-positions only for keyword use.
+Callers that pass `VerusRunOptions` arguments positionally past the second
+argument must switch to keyword arguments. The deprecated `proof_file` alias
+keeps the second slot, `proof_files` takes the third, and every later field
+moves one position along. For example, an old third positional argument that
+named `install_dir` now binds to `proof_files` and is rejected with `TypeError`
+rather than being treated as a proof file.
 
 ## Why the API changed
 

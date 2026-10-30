@@ -123,18 +123,23 @@ NumPy-style docstrings. That package is the stable import facade for tests and
 future callers. The proof-run flow is split across three exported steps so each
 can be tested alone: `resolve_proof_files` checks every requested path before
 any verifier starts and falls back to the compatibility example path,
-`resolve_run_binary` locates or installs the executable, and
-`verify_proof_files` runs one invocation per file in the caller's order and
-stops at the first non-zero exit. `VerusRunOptions.proof_files` is the tuple
-that carries the request; the deprecated `proof_file` alias is folded into it
-when a caller still uses the former single-path form.
+`ensure_run_binary` ensures the executable exists and installs it when
+configured to, and `verify_proof_files` runs one invocation per file in the
+caller's order and stops at the first non-zero exit.
+`VerusRunOptions.proof_files` is the tuple that carries the request; the
+deprecated `proof_file` alias is folded into it when a caller still uses the
+former single-path form.
 
-`verify_proof_files`, in `rust_prover_tools.verus.batch`, emits one bounded
-INFO event per completed invocation and one for the batch, following the
-`kani_release` convention. Events carry the proof ordinal and count, status
-class, exit code, error category, and duration, and never carry proof paths or
-verifier output. It installs no logger or handler, so the normal CLI stream is
-unchanged unless the application enables logging.
+`verify_proof_files`, in `rust_prover_tools.verus.batch`, emits bounded INFO
+events following the `kani_release` convention: a batch start and completion
+event, and a start and completion event per invocation, so a stalled invocation
+appears as an unmatched start. Completion events carry the proof ordinal and
+count, status class, exit code, error category, and duration; the batch
+completion adds the proved count. Those fields are the metric surface for a log
+pipeline (batch size, invocation outcome, and duration); no metrics client is
+installed. The clock is injectable for deterministic tests. Events never carry
+proof paths or verifier output, and the module installs no logger or handler,
+so the normal CLI stream is unchanged unless the application enables logging.
 
 `parse_verus_toolchain` accepts `Toolchain: <name>` lines at column zero or
 with leading spaces or tabs. It extracts `<name>` before the trailing

@@ -153,9 +153,11 @@ class VerusRunOptions:
                 raise TypeError(msg)
             object.__setattr__(self, "proof_files", (proof_file,))
         elif isinstance(files, Path):
-            # A positional legacy call reaches here as a bare Path bound to
-            # `proof_files`; keep it usable rather than iterating its characters.
-            object.__setattr__(self, "proof_files", (files,))
+            # A caller using the former third positional slot passes a bare
+            # `Path` here, which used to be `install_dir`. Reject it: wrapping
+            # would silently treat an install directory as a proof file.
+            msg = "proof_files must be a tuple of pathlib.Path values"
+            raise TypeError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
