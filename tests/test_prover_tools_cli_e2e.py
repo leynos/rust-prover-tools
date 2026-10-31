@@ -10,17 +10,17 @@ import typing as typ
 import pytest
 
 from tests.conftest import FakeVerusBinarySpec
+from tests.support import (
+    CHILD_TIMEOUT,
+    PROOF_LINES,
+    chatty_proof_repo,
+    fake_verus_argv,
+    sanitized_subprocess_env,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
-
-
-def sanitized_subprocess_env() -> dict[str, str]:
-    """Return subprocess environment without GitHub Actions input bindings."""
-    return {
-        key: value for key, value in os.environ.items() if not key.startswith("INPUT_")
-    }
 
 
 def test_verus_run_cli_accepts_indented_toolchain_output(
@@ -47,20 +47,7 @@ def test_verus_run_cli_accepts_indented_toolchain_output(
     )
 
     completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "rust_prover_tools.cli",
-            "verus",
-            "run",
-            "--repo-root",
-            str(tmp_path),
-            "--proof-file",
-            str(proof_file),
-            "--verus-bin",
-            str(verus_bin),
-            "--no-ensure-toolchain",
-        ],
+        fake_verus_argv(tmp_path, proof_file, verus_bin),
         check=False,
         capture_output=True,
         text=True,
@@ -128,4 +115,51 @@ def test_verus_run_env_proof_file_is_not_split_on_path_separator(
     assert f"verified {proof_file}" in completed.stdout, (
         f"expected one proof invocation; stdout: {completed.stdout}; "
         f"stderr: {completed.stderr}"
+    )
+
+
+def test_verus_run_streams_every_line_when_the_reader_stays(
+    tmp_path: Path,
+    fake_verus_binary_factory: cabc.Callable[..., None],
+) -> None:
+    """A reader that stays receives the whole output and the prover's status.
+
+    This is the no-broken-pipe reference for the piped cases: streaming must not
+    become conditional, and the failing status must survive the ordinary path.
+    """
+    proof_file, verus_bin = chatty_proof_repo(
+        tmp_path,
+        fake_verus_binary_factory,
+        prover_status=3,
+    )
+
+    completed = subprocess.run(
+        fake_verus_argv(tmp_path, proof_file, verus_bin),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sanitized_subprocess_env(),
+        timeout=CHILD_TIMEOUT,
+    )
+
+    assert completed.returncode == 3, (
+        f"expected the prover's status 3, got {completed.returncode}; "
+        f"stderr: {completed.stderr}"
+    )
+    # Compare the whole sequence: a passing check on the last line alone would
+    # not notice an earlier line going missing from the stream.
+    expected_lines = [f"proof line {index}" for index in range(PROOF_LINES)]
+    actual_lines = completed.stdout.splitlines()
+    mismatches = [
+        (index, wanted, actual)
+        for index, (actual, wanted) in enumerate(
+            zip(actual_lines, expected_lines, strict=False)
+        )
+        if actual != wanted
+    ][:5]
+    assert len(actual_lines) == len(expected_lines), (
+        f"expected {len(expected_lines)} streamed lines, got {len(actual_lines)}"
+    )
+    assert not mismatches, (
+        f"expected the streamed lines in order; first mismatches: {mismatches!r}"
     )

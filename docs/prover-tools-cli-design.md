@@ -105,6 +105,89 @@ exists in 0.2.0b2 for callers that need an exact environment, but it is
 imported from `cuprum.context` rather than the package root, and no current
 workflow needs it.
 
+## Exit status under a closed pipe
+
+`BEST_EFFORT` keeps the run alive after its reader leaves, which moves the
+broken pipe from the echo path to the interpreter's shutdown. CPython flushes
+`sys.stdout` on exit, and a failing flush overrides the status passed to
+`sys.exit` with 120. For a command whose status is the proof result, that turns
+both a passing and a failing proof into the same unreadable number.
+
+`rust_prover_tools.exit_status.guard_shutdown_flush` installs an `atexit` hook
+that flushes each stream while `BrokenPipeError` can still be caught and then
+points the dead descriptor at the null device, the recipe in CPython's `signal`
+module note on `SIGPIPE`. `cli.main` registers it before `sys.exit(app())`, so
+the status the command computed is the status the process reports.
+
+Both streams are guarded because `2>&1 | head` merges them onto one dead
+descriptor, and CPython flushes `sys.stderr` at shutdown as well. Guarding only
+`sys.stdout` leaves the combined redirect reporting 120, so the guard covers
+the pair. CPython's final flush touches `sys.stdout` and `sys.stderr` whether
+or not they have a file descriptor, so a dead stream that cannot be redirected
+is replaced by a sink that discards output; leaving it installed would fail the
+final flush and report 120 after all. The in-loop path needs the same care:
+`_error_exit` writes the diagnostic before returning the prover's status, and
+that write raises `BrokenPipeError` once the reader is gone. The diagnostic is
+suppressed and the status is returned, because the status is the proof result
+and the diagnostic is not. `exit_status.print_lines` follows the same rule for
+the fallback warnings an unresolved `--verus-bin` produces: with an unbuffered
+standard output that write happens while the command is still running, escapes
+the shutdown guard, and without suppression would report a successful proof as
+a failure. `kani_exec_cli.kani_exec` follows the same rule for the diagnostics
+its two error branches emit, so a closed standard error cannot replace a Kani
+verifier status with a traceback either.
+
+Closed-pipe handling is observable without changing CLI output. Each handled
+case emits one INFO event with the stream, phase, action and error category
+when the host application enables logging; `print_lines` reuses that path for
+the diagnostic `cli._error_exit` writes. The module installs no logger or
+handler and attaches no output, path, command or exception text. A redirect
+that cannot point the descriptor at the null device is recorded as a failed
+action rather than raised from the shutdown hook, because an unhandled `atexit`
+exception would only add noise. The dead stream is still replaced by the sink
+in that branch: a redirect can fail while the stream is still flushed once more
+at shutdown, so leaving it installed would reintroduce the status 120 the guard
+exists to prevent.
+
+The hook belongs at the entry point, not in the echo path. The echo path cannot
+observe interpreter shutdown, and every command that writes to standard output
+would meet the same 120 through a closed pipe.
+
+For screen readers: The following sequence diagram traces a proof run whose
+reader closes the pipe mid-stream. The CLI suppresses the diagnostic write that
+would fail, exits with the prover's status, and the shutdown hook flushes the
+dead streams so the interpreter reports that status instead of 120.
+
+```mermaid
+sequenceDiagram
+    participant Shell
+    participant CLI
+    participant Prover
+    participant Reader
+    participant Python
+
+    Shell->>CLI: main()
+    CLI->>CLI: guard_shutdown_flush()
+    CLI->>Prover: run proof
+    Prover-->>CLI: proof result and output
+    CLI-->>Reader: echo output
+    Reader--xCLI: close pipe
+    CLI->>CLI: _error_exit(exc)
+    Note over CLI: BrokenPipeError diagnostic is suppressed
+    CLI->>Python: sys.exit(prover_status)
+    Python->>Python: _redirect_closed_outputs()
+    Python-->>Python: flush streams, redirect dead descriptors to os.devnull
+    Python-->>Shell: prover_status
+```
+
+_Figure 1: Preserving the prover's exit status when the reader closes the pipe._
+
+When `prover-tools --help` writes to a closed pipe, `rich` raises
+`SystemExit(1)` from inside the help render through `Console.on_broken_pipe`,
+which is its documented behaviour and a different question from preserving a
+child's status. Bash normally reports `head`'s status, 0, for that pipeline;
+enable `pipefail` or inspect `${PIPESTATUS[0]}` to read the producer's status.
+
 ## Test strategy
 
 Unit tests cover pure helpers and command orchestration. They use cmd-mox to

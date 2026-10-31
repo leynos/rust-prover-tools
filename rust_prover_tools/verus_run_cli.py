@@ -15,6 +15,7 @@ from pathlib import Path
 from cyclopts import Parameter
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.verus import (
     DEFAULT_TARGET,
     VerusPaths,
@@ -142,12 +143,12 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
             ),
         )
     except ProverToolError as exc:
-        print(exc, file=sys.stderr)
+        # A closed pipe loses only this diagnostic; the proof result must survive.
+        print_lines((str(exc),), stream=sys.stderr)
         match exc:
             case VerusProofFailedError(exit_code=code):
                 return code
             case _:
                 return 1
-    for line in lines:
-        print(line)
+    print_lines(lines)
     return 0

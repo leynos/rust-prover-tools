@@ -33,6 +33,7 @@ import cyclopts
 from cyclopts import App, Parameter
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.exit_status import guard_shutdown_flush, print_lines
 from rust_prover_tools.kani import (
     KaniCheckOptions,
     KaniInstallOptions,
@@ -72,15 +73,10 @@ def _repo_root(path: Path | None) -> Path:
     return (path or Path.cwd()).resolve()
 
 
-def _print_lines(lines: tuple[str, ...], *, stream: typ.TextIO = sys.stdout) -> None:
-    """Print lines to a text stream."""
-    for line in lines:
-        print(line, file=stream)
-
-
 def _error_exit(exc: ProverToolError) -> int:
     """Print a user-facing error and return the appropriate exit status."""
-    print(exc, file=sys.stderr)
+    # A closed pipe loses only this diagnostic; the proof result must survive.
+    print_lines((str(exc),), stream=sys.stderr)
     match exc:
         case VerusProofFailedError(exit_code=code):
             return code
@@ -140,7 +136,7 @@ def install(
         )
     except ProverToolError as exc:
         return _error_exit(exc)
-    _print_lines(lines)
+    print_lines(lines)
     return 0
 
 
@@ -195,7 +191,7 @@ def check_version(
         )
     except ProverToolError as exc:
         return _error_exit(exc)
-    _print_lines((message,))
+    print_lines((message,))
     return 0
 
 
@@ -266,7 +262,7 @@ def install_verifier(
         )
     except ProverToolError as exc:
         return _error_exit(exc)
-    _print_lines(lines)
+    print_lines(lines)
     return 0
 
 
@@ -287,8 +283,10 @@ def main() -> None:
     Notes
     -----
     This is the console-script and `python -m rust_prover_tools.cli` entry
-    point. It exits via `sys.exit(app())` rather than returning normally.
+    point. The shutdown guard runs first so a closed pipe cannot replace the
+    status with CPython's 120.
     """
+    guard_shutdown_flush()
     sys.exit(app())
 
 

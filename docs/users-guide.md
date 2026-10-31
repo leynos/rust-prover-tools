@@ -157,12 +157,46 @@ Streaming continues when the reader goes away. Piping into `head`, quitting a
 pager, or an interrupted CI log collector closes the receiving end; the run
 then stops displaying output, still captures everything Verus wrote, and the
 command result carries Verus's own exit status rather than a broken-pipe
-failure. That guarantee stops at the `prover-tools` process boundary. Over a
-closed pipe the process itself can still exit 120, because Python reports that
-its own standard output was closed while shutting down. An exit status read
-through a pipe therefore cannot distinguish a passing proof from a failing one;
-rely on the command result, or on an unpiped run, where the status is the
-prover's own.
+failure.
+
+The process exit status survives that reader going away too. Python normally
+replaces the requested status with 120 when it cannot flush its own standard
+output at shutdown. That 120 is still a failure, but it is the same failure for
+every run, so anyone reading the status through a pipe cannot tell a passing
+proof from a failing one. `prover-tools` guards that flush, so the
+`prover-tools` process itself still exits with Verus's status: `0` when the
+proof passed, and the prover's own non-zero status when it failed. The guard
+covers standard error as well, so redirecting both streams into one closed pipe
+(`2>&1 | head -n 5`) reports the prover's status too.
+
+A shell pipeline normally reports the status of its last command, not the
+prover's, so `prover-tools verus run ... | head -n 5` succeeds even when the
+proof fails. With `set -o pipefail`, the pipeline reports the rightmost failing
+stage instead, which is the prover's status only when no later stage fails. To
+read the prover's status from a pipeline that closes early, inspect the first
+stage explicitly:
+
+```bash
+# Read PIPESTATUS in each branch so `set -e` cannot skip the capture.
+if prover-tools verus run --proof-file proofs/example.rs \
+  | tee verus.log | head -n 5; then
+  prover_status=${PIPESTATUS[0]}
+else
+  prover_status=${PIPESTATUS[0]}
+fi
+```
+
+`PIPESTATUS[0]` is the prover's status because the prover is still the first
+stage, even though the pipeline ends at `head`. `tee`'s log may stop when
+`head` does; the run itself continues and keeps its own capture.
+
+`PIPESTATUS` must be read before running any other command, because it is
+overwritten by each one. Reading it inside both branches keeps the capture
+reachable under `set -e`: commands in an `if` condition are exempt from
+`errexit`. It is a Bash feature; `zsh` spells the same array `pipestatus`, and
+its arrays start at index 1, so use the same `prover_status` variable with
+`${pipestatus[1]}` there. Avoid the name `status` in `zsh`: it is a read-only
+special parameter that aliases `$?`.
 
 Official Verus releases may indent the `Toolchain:` line and append an
 `RUSTUP_TOOLCHAIN` override message. `prover-tools verus run` accepts that
