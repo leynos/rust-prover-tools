@@ -101,8 +101,11 @@ def test_stream_never_writes_past_the_byte_ceiling(
         download_transport._stream(
             response,
             destination,
-            max_bytes=max_bytes,
-            deadline=NO_DEADLINE,
+            download_transport._StreamLimits(
+                destination.name,
+                max_bytes,
+                NO_DEADLINE,
+            ),
         )
     except ProverToolError:
         assert destination.stat().st_size <= max_bytes, (
@@ -130,8 +133,10 @@ def test_download_never_exceeds_the_redirect_budget(
         url: str,
         limits: DownloadLimits,
         deadline: float,
+        *,
+        asset_name: str,
     ) -> tuple[RedirectResponse, ClosingConnection]:
-        del limits, deadline
+        del limits, deadline, asset_name
         opened.append(url)
         return RedirectResponse(), ClosingConnection()
 
@@ -139,10 +144,12 @@ def test_download_never_exceeds_the_redirect_budget(
 
     with pytest.raises(ProverToolError, match="too many redirects"):
         download_transport._download(
-            "https://example.test/start",
-            tmp_path / "asset.bin",
-            max_bytes=16,
-            limits=DownloadLimits(max_redirects=max_redirects),
+            download_transport._DownloadRequest(
+                "https://example.test/start",
+                tmp_path / "asset.bin",
+                16,
+            ),
+            DownloadLimits(max_redirects=max_redirects),
         )
 
     assert len(opened) == max_redirects + 1, (

@@ -123,7 +123,8 @@ Feature modules should own workflow behaviour:
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified
-  store, with network policy in `rust_prover_tools.download_transport`.
+  store, with HTTPS URL policy in `rust_prover_tools.download_url` and network
+  policy in `rust_prover_tools.download_transport`.
 - `rust_prover_tools.platforms` and `rust_prover_tools.path_resolution` for the
   shared host check and CLI path resolution.
 

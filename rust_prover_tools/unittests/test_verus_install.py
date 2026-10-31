@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import pathlib
 import typing as typ
 
@@ -27,11 +28,21 @@ from rust_prover_tools.verus import (
 from rust_prover_tools.verus.install import VERUS_ARCHIVE_MAX_BYTES
 
 if typ.TYPE_CHECKING:
+    import os
     from pathlib import Path
 
     from cmd_mox import CmdMox
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
+
+
+def events_from(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    """Return the structured events captured during a test."""
+    return [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
 
 
 @pytest.mark.parametrize(
@@ -329,3 +340,184 @@ def test_run_verus_warns_and_falls_back_from_invalid_override(
         f"VERUS_BIN is not executable: {invalid_binary}",
         f"Falling back to {default_binary}",
     ), "Invalid override should return fallback warning lines"
+
+
+def test_install_verus_reports_extraction_and_completion_events(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A successful install records extraction and completion boundaries."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.verus.install")
+    write_verus_pins(tmp_path)
+    install_dir = tmp_path / ".verus" / "2025.01.01"
+    make_executable(install_dir / "verus-x86-linux" / "verus")
+    stub_archive_download(monkeypatch)
+    cmd_mox.stub("unzip").returns()
+
+    install_verus(
+        VerusInstallOptions(
+            paths=VerusPaths(repo_root=tmp_path),
+            install_dir=install_dir,
+            base_url="https://example.test",
+        ),
+    )
+
+    events = events_from(caplog)
+    asset_name = "verus-2025.01.01-x86-linux.zip"
+    assert [event["event"] for event in events] == [
+        "verus.install.start",
+        "verus.extract.start",
+        "verus.extract.complete",
+        "verus.install.complete",
+    ], "each install boundary should record one event in order"
+    assert events[0]["version"] == "2025.01.01"
+    assert events[0]["target"] == "x86-linux"
+    assert events[1]["asset"] == asset_name
+    assert events[2]["asset"] == asset_name
+    complete = events[3]
+    assert complete["version"] == "2025.01.01"
+    elapsed = complete["elapsed_seconds"]
+    assert isinstance(elapsed, float), "completion must carry a float duration"
+    assert elapsed >= 0.0, "completion must carry a non-negative duration"
+
+
+def test_install_verus_reports_reuse_instead_of_a_reinstall(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An installed binary reports reuse and stops before downloading."""
+    write_verus_pins(tmp_path)
+    install_dir = tmp_path / ".verus" / "2025.01.01"
+    make_executable(install_dir / "verus-x86-linux" / "verus")
+    stub_archive_download(monkeypatch)
+    cmd_mox.stub("unzip").returns()
+    options = VerusInstallOptions(
+        paths=VerusPaths(repo_root=tmp_path),
+        install_dir=install_dir,
+        base_url="https://example.test",
+    )
+    install_verus(options)
+    caplog.clear()
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.verus.install")
+
+    install_verus(options)
+
+    assert events_from(caplog) == [
+        {
+            "event": "verus.install.start",
+            "version": "2025.01.01",
+            "target": "x86-linux",
+        },
+        {"event": "verus.install.reuse", "version": "2025.01.01"},
+    ], "reuse should be visible without extraction or completion events"
+
+
+def test_install_verus_reports_a_download_failure_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed archive download reports one bounded reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.verus.install")
+    write_verus_pins(tmp_path)
+
+    def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        del asset, destination
+        msg = "digest mismatch"
+        raise ProverToolError(msg)
+
+    monkeypatch.setattr(verus_install_module, "download_pinned", fail_download)
+
+    with pytest.raises(ProverToolError, match="digest mismatch"):
+        install_verus(
+            VerusInstallOptions(
+                paths=VerusPaths(repo_root=tmp_path),
+                install_dir=tmp_path / ".verus" / "2025.01.01",
+                base_url="https://example.test",
+            ),
+        )
+
+    assert events_from(caplog) == [
+        {
+            "event": "verus.install.start",
+            "version": "2025.01.01",
+            "target": "x86-linux",
+        },
+        {"event": "verus.install.failed", "reason": "download"},
+    ], "a download failure must not be reported as an extraction failure"
+
+
+def test_install_verus_reports_an_extract_failure_event(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing unzip command reports the extraction boundary."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.verus.install")
+    write_verus_pins(tmp_path)
+    stub_archive_download(monkeypatch)
+    cmd_mox.stub("unzip").returns(stderr="bad archive\n", exit_code=2)
+
+    with pytest.raises(ProverToolError, match="bad archive"):
+        install_verus(
+            VerusInstallOptions(
+                paths=VerusPaths(repo_root=tmp_path),
+                install_dir=tmp_path / ".verus" / "2025.01.01",
+                base_url="https://example.test",
+            ),
+        )
+
+    events = events_from(caplog)
+    assert [event["event"] for event in events] == [
+        "verus.install.start",
+        "verus.extract.start",
+        "verus.install.failed",
+    ], "a failed extraction should record its start and one failure reason"
+    assert events[-1]["reason"] == "extract"
+
+
+def test_install_verus_reports_an_inspection_failure_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An unreadable installation is reported instead of treated as absent."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.verus.install")
+    write_verus_pins(tmp_path)
+    install_dir = tmp_path / ".verus" / "2025.01.01"
+    installed_bin = install_dir / "verus" / "verus"
+    original_stat = pathlib.Path.stat
+
+    def deny_stat(
+        path: pathlib.Path,
+        *,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        if path == installed_bin:
+            raise PermissionError(13, "permission denied", str(path))
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(pathlib.Path, "stat", deny_stat)
+
+    with pytest.raises(ProverToolError, match="failed to inspect Verus installation"):
+        install_verus(
+            VerusInstallOptions(
+                paths=VerusPaths(repo_root=tmp_path),
+                install_dir=install_dir,
+                base_url="https://example.test",
+            ),
+        )
+
+    assert events_from(caplog) == [
+        {
+            "event": "verus.install.start",
+            "version": "2025.01.01",
+            "target": "x86-linux",
+        },
+        {"event": "verus.install.failed", "reason": "inspect"},
+    ], "an inspection failure must report one bounded reason"

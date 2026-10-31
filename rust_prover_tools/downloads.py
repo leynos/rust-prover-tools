@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses as dc
 import hashlib
 import logging
+import stat
 import typing as typ
 
 from rust_prover_tools.download_transport import (
@@ -41,6 +42,7 @@ from rust_prover_tools.download_transport import (
     READ_CHUNK_SIZE,
     DownloadLimits,
     _download,
+    _DownloadRequest,
 )
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.observability import log_event
@@ -139,7 +141,26 @@ def _ensure_parent_directory(destination: Path) -> None:
 
 def _has_verified_copy(asset: PinnedAsset, destination: Path) -> bool:
     """Return whether `destination` already holds the expected asset."""
-    return destination.is_file() and sha256_file(destination) == asset.sha256
+    if not _is_regular_file(destination):
+        return False
+    return sha256_file(destination) == asset.sha256
+
+
+def _is_regular_file(path: Path) -> bool:
+    """Return whether `path` names an existing regular file.
+
+    A missing entry is an ordinary cache miss. Any other inspection failure is
+    reported instead, because treating an unreadable cache entry as absent
+    would silently replace an asset over a broken environment.
+    """
+    try:
+        status = path.stat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        msg = f"failed to inspect download cache '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+    return stat.S_ISREG(status.st_mode)
 
 
 def _download_verified(
@@ -148,7 +169,15 @@ def _download_verified(
     limits: DownloadLimits,
 ) -> None:
     """Download into `pending` and reject a digest that does not match."""
-    _download(asset.url, pending, asset.max_bytes, limits)
+    _download(
+        _DownloadRequest(
+            url=asset.url,
+            destination=pending,
+            max_bytes=asset.max_bytes,
+            asset_name=asset.name,
+        ),
+        limits,
+    )
     actual = sha256_file(pending)
     if actual != asset.sha256:
         log_event(

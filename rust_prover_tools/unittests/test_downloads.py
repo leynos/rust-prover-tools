@@ -19,10 +19,37 @@ from rust_prover_tools.downloads import (
 from rust_prover_tools.errors import ProverToolError
 
 if typ.TYPE_CHECKING:
+    import os
     from pathlib import Path
 
 # Tests that exercise byte limits rather than time keep the deadline open.
 NO_DEADLINE = float("inf")
+
+
+def stream_limits(
+    max_bytes: int,
+    deadline: float,
+    *,
+    name: str = "asset.bin",
+) -> download_transport._StreamLimits:
+    """Return stream limits for a test asset."""
+    return download_transport._StreamLimits(name, max_bytes, deadline)
+
+
+def download_request(
+    url: str,
+    destination: Path,
+    *,
+    max_bytes: int,
+    asset_name: str | None = None,
+) -> download_transport._DownloadRequest:
+    """Return one bounded download request for a test URL."""
+    return download_transport._DownloadRequest(
+        url,
+        destination,
+        max_bytes,
+        asset_name,
+    )
 
 
 class FakeClock:
@@ -100,7 +127,9 @@ def test_stream_rejects_oversized_content_length_before_reading(
 
     with pytest.raises(ProverToolError, match="Content-Length 100 exceeds"):
         download_transport._stream(
-            response, destination, max_bytes=10, deadline=NO_DEADLINE
+            response,
+            destination,
+            stream_limits(10, NO_DEADLINE),
         )
 
     assert response.read_count == 0, "the body must not be read"
@@ -116,7 +145,9 @@ def test_stream_stops_at_byte_ceiling_without_length_header(
 
     with pytest.raises(ProverToolError, match="streamed size exceeded"):
         download_transport._stream(
-            response, destination, max_bytes=8, deadline=NO_DEADLINE
+            response,
+            destination,
+            stream_limits(8, NO_DEADLINE),
         )
 
     assert response.read_count == 2, "the offending chunk should stop the read"
@@ -136,7 +167,9 @@ def test_stream_emits_a_size_limit_event_at_debug_level(
 
     with pytest.raises(ProverToolError, match="streamed size exceeded"):
         download_transport._stream(
-            response, destination, max_bytes=8, deadline=NO_DEADLINE
+            response,
+            destination,
+            stream_limits(8, NO_DEADLINE),
         )
 
     events = [
@@ -160,7 +193,9 @@ def test_stream_is_silent_without_debug_logging(
     response = FakeResponse(chunks=(b"payload",))
 
     download_transport._stream(
-        response, destination, max_bytes=100, deadline=NO_DEADLINE
+        response,
+        destination,
+        stream_limits(100, NO_DEADLINE),
     )
 
     assert not caplog.records, "download events must be opt-in"
@@ -206,7 +241,11 @@ def test_stream_stops_when_total_deadline_expires(
     response = FakeResponse(chunks=(b"a", b"b"), clock=clock)
 
     with pytest.raises(ProverToolError, match="transfer deadline"):
-        download_transport._stream(response, destination, max_bytes=100, deadline=0.0)
+        download_transport._stream(
+            response,
+            destination,
+            stream_limits(100, 0.0),
+        )
 
     assert response.read_count == 1, "the deadline should stop further reads"
     assert destination.read_bytes() == b"a", (
@@ -224,9 +263,7 @@ def test_stream_accepts_a_complete_body_matching_content_length(
         chunks=(b"abc", b"def"),
     )
 
-    download_transport._stream(
-        response, destination, max_bytes=10, deadline=NO_DEADLINE
-    )
+    download_transport._stream(response, destination, stream_limits(10, NO_DEADLINE))
 
     assert destination.read_bytes() == b"abcdef", "the complete body must be written"
 
@@ -241,7 +278,9 @@ def test_stream_rejects_an_incomplete_body(tmp_path: Path) -> None:
 
     with pytest.raises(ProverToolError, match="incomplete download"):
         download_transport._stream(
-            response, destination, max_bytes=20, deadline=NO_DEADLINE
+            response,
+            destination,
+            stream_limits(20, NO_DEADLINE),
         )
 
 
@@ -256,7 +295,9 @@ def test_stream_rejects_invalid_content_length(
 
     with pytest.raises(ProverToolError, match="Content-Length"):
         download_transport._stream(
-            response, destination, max_bytes=10, deadline=NO_DEADLINE
+            response,
+            destination,
+            stream_limits(10, NO_DEADLINE),
         )
 
 
@@ -287,18 +328,18 @@ def test_download_follows_a_bounded_https_redirect(
         url: str,
         limits: DownloadLimits,
         deadline: float,
+        *,
+        asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
-        del url, limits, deadline
+        del url, limits, deadline, asset_name
         return next(responses)
 
     monkeypatch.setattr(download_transport, "_open", fake_open)
     destination = tmp_path / "asset.bin"
 
     download_transport._download(
-        "https://example.test/asset",
-        destination,
-        max_bytes=100,
-        limits=DownloadLimits(max_redirects=1),
+        download_request("https://example.test/asset", destination, max_bytes=100),
+        DownloadLimits(max_redirects=1),
     )
 
     assert destination.read_bytes() == b"payload", (
@@ -323,18 +364,22 @@ def test_download_rejects_excess_redirects(
         url: str,
         limits: DownloadLimits,
         deadline: float,
+        *,
+        asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
-        del url, limits, deadline
+        del url, limits, deadline, asset_name
         return response, connection
 
     monkeypatch.setattr(download_transport, "_open", fake_open)
 
     with pytest.raises(ProverToolError, match="too many redirects"):
         download_transport._download(
-            "https://example.test/asset",
-            tmp_path / "asset.bin",
-            max_bytes=100,
-            limits=DownloadLimits(max_redirects=0),
+            download_request(
+                "https://example.test/asset",
+                tmp_path / "asset.bin",
+                max_bytes=100,
+            ),
+            DownloadLimits(max_redirects=0),
         )
 
     assert connection.closed, "the rejected redirect connection must close"
@@ -362,15 +407,17 @@ def test_download_rejects_invalid_response(
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline: (response, connection),
+        lambda url, limits, deadline, *, asset_name: (response, connection),
     )
 
     with pytest.raises(ProverToolError, match=match):
         download_transport._download(
-            "https://example.test/asset",
-            tmp_path / "asset.bin",
-            max_bytes=100,
-            limits=DownloadLimits(),
+            download_request(
+                "https://example.test/asset",
+                tmp_path / "asset.bin",
+                max_bytes=100,
+            ),
+            DownloadLimits(),
         )
 
     assert connection.closed, "the failed connection must close"
@@ -407,12 +454,10 @@ def test_download_pinned_reuses_a_matching_cache_file(
     )
 
     def fail_download(
-        url: str,
-        target: Path,
-        max_bytes: int,
+        request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
-        del url, target, max_bytes, limits
+        del request, limits
         msg = "network must not be used for a cache hit"
         raise AssertionError(msg)
 
@@ -440,13 +485,11 @@ def test_download_pinned_removes_pending_file_on_digest_mismatch(
     )
 
     def write_wrong_payload(
-        url: str,
-        target: Path,
-        max_bytes: int,
+        request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
-        del url, max_bytes, limits
-        target.write_bytes(b"wrong")
+        del limits
+        request.destination.write_bytes(b"wrong")
 
     monkeypatch.setattr(downloads, "_download", write_wrong_payload)
 
@@ -476,13 +519,11 @@ def test_download_pinned_stores_a_verified_asset(
     )
 
     def write_payload(
-        url: str,
-        target: Path,
-        max_bytes: int,
+        request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
-        del url, max_bytes, limits
-        target.write_bytes(payload)
+        del limits
+        request.destination.write_bytes(payload)
 
     monkeypatch.setattr(downloads, "_download", write_payload)
 
@@ -512,7 +553,7 @@ def test_download_pinned_removes_pending_file_when_stream_is_stopped(
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline: (response, connection),
+        lambda url, limits, deadline, *, asset_name: (response, connection),
     )
     destination = tmp_path / "asset.bin"
 
@@ -568,13 +609,11 @@ def test_download_pinned_reports_a_store_failure(
     )
 
     def write_payload(
-        url: str,
-        target: Path,
-        max_bytes: int,
+        request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
-        del url, max_bytes, limits
-        target.write_bytes(payload)
+        del limits
+        request.destination.write_bytes(payload)
 
     monkeypatch.setattr(downloads, "_download", write_payload)
     original_replace = pathlib.Path.replace
@@ -609,8 +648,7 @@ def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
         download_transport._stream(
             response,
             destination,
-            max_bytes=100,
-            deadline=NO_DEADLINE,
+            stream_limits(100, NO_DEADLINE),
         )
 
 
@@ -660,6 +698,7 @@ def test_open_requests_the_validated_path_with_identity_encoding(
         "https://example.test:8443/asset.bin?token=abc",
         DownloadLimits(connect_timeout_seconds=5.0),
         download_transport.monotonic() + 60.0,
+        asset_name="asset.bin",
     )
 
     assert returned_response is response, "the response must be returned"
@@ -676,8 +715,12 @@ def test_open_requests_the_validated_path_with_identity_encoding(
     }, "the request must ask for an identity body"
 
 
-def test_open_reports_a_failed_request(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_reports_a_failed_request(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """A connection error is reported and the connection is closed."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
 
     class FailingConnection:
         def __init__(
@@ -718,10 +761,21 @@ def test_open_reports_a_failed_request(monkeypatch: pytest.MonkeyPatch) -> None:
             "https://example.test/asset.bin",
             DownloadLimits(),
             download_transport.monotonic() + 60.0,
+            asset_name="asset.bin",
         )
 
     assert len(connections) == 1, "the transport should open one connection"
     assert connections[0].closed, "the failed connection must close"
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "transport_error",
+    } in events, "a transport failure should report the logical asset"
 
 
 def test_open_rejects_an_expired_deadline() -> None:
@@ -731,4 +785,239 @@ def test_open_rejects_an_expired_deadline() -> None:
             "https://example.test/asset.bin",
             DownloadLimits(),
             download_transport.monotonic() - 1.0,
+            asset_name="asset.bin",
         )
+
+
+def test_download_complete_event_reports_bytes_elapsed_and_asset(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Completion reports the transferred size, duration, and logical asset."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    payload = b"verified"
+    response = FakeResponse(chunks=(payload,))
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        download_transport,
+        "_open",
+        lambda url, limits, deadline, *, asset_name: (response, connection),
+    )
+
+    download_transport._download(
+        download_request(
+            "https://example.test/asset.bin",
+            tmp_path / "asset.bin.download",
+            max_bytes=100,
+            asset_name="asset.bin",
+        ),
+        DownloadLimits(),
+    )
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    complete = [event for event in events if event["event"] == "download.complete"]
+    assert len(complete) == 1, "a successful download emits one completion event"
+    event = complete[0]
+    assert event["asset"] == "asset.bin", "completion names the logical asset"
+    assert event["written"] == len(payload), "completion reports the body bytes"
+    assert event["redirects"] == 0, "a direct download followed no redirects"
+    elapsed = event["elapsed_seconds"]
+    assert isinstance(elapsed, float), "completion reports a float elapsed time"
+    assert elapsed >= 0.0, "completion reports a non-negative elapsed time"
+    assets = {
+        event["asset"]
+        for event in events
+        if str(event["event"]).startswith("download.")
+    }
+    assert assets == {"asset.bin"}, "every transport event uses one asset value"
+
+
+def test_download_reports_a_missing_redirect_location(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A redirect without a Location header reports that bounded reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    connection = FakeConnection()
+    response = FakeResponse(status=302)
+    monkeypatch.setattr(
+        download_transport,
+        "_open",
+        lambda url, limits, deadline, *, asset_name: (response, connection),
+    )
+
+    with pytest.raises(ProverToolError, match="no Location"):
+        download_transport._download(
+            download_request(
+                "https://example.test/asset.bin",
+                tmp_path / "asset.bin.download",
+                max_bytes=100,
+                asset_name="asset.bin",
+            ),
+            DownloadLimits(),
+        )
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "redirect_location",
+        "status": 302,
+    } in events, "a bad redirect should report its status and bounded reason"
+
+
+def test_download_reports_an_http_status_class(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A non-success response reports its status and status class."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    connection = FakeConnection()
+    response = FakeResponse(status=503)
+    monkeypatch.setattr(
+        download_transport,
+        "_open",
+        lambda url, limits, deadline, *, asset_name: (response, connection),
+    )
+
+    with pytest.raises(ProverToolError, match="HTTP status 503"):
+        download_transport._download(
+            download_request(
+                "https://example.test/asset.bin",
+                tmp_path / "asset.bin.download",
+                max_bytes=100,
+                asset_name="asset.bin",
+            ),
+            DownloadLimits(),
+        )
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "http_status",
+        "status": 503,
+        "status_class": "5xx",
+    } in events, "a failed response should report a bounded status class"
+
+
+def test_download_reports_a_stream_error(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A transport error while reading the body is reported once."""
+
+    class FailingResponse(FakeResponse):
+        def read(self, amt: int | None = None) -> bytes:
+            del amt
+            msg = "connection reset"
+            raise OSError(msg)
+
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+
+    with pytest.raises(ProverToolError, match=r"failed to download asset\.bin"):
+        download_transport._stream(
+            FailingResponse(),
+            tmp_path / "asset.bin",
+            stream_limits(100, NO_DEADLINE),
+        )
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "stream_error",
+    } in events, "a body transport error should report one bounded event"
+
+
+def test_download_pinned_passes_the_logical_asset_to_the_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The downloader reports the pinned asset name, not the pending path."""
+    payload = b"verified"
+    destination = tmp_path / "asset.bin"
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        max_bytes=100,
+    )
+    captured: dict[str, str | None] = {}
+
+    def record_asset(
+        request: download_transport._DownloadRequest,
+        limits: DownloadLimits,
+    ) -> None:
+        del limits
+        captured["asset_name"] = request.asset_name
+        request.destination.write_bytes(payload)
+
+    monkeypatch.setattr(downloads, "_download", record_asset)
+
+    download_pinned(asset, destination)
+
+    assert captured["asset_name"] == "asset.bin", (
+        "transport events must use the same asset value as downloader events"
+    )
+
+
+def test_download_pinned_reports_an_unreadable_cache_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cache inspection failure is reported before any network work."""
+
+    class UnreadablePath:
+        """A destination whose `stat` reports an environmental failure."""
+
+        def __init__(self, path: Path) -> None:
+            self._path = path
+
+        @property
+        def parent(self) -> Path:
+            return self._path.parent
+
+        def stat(self) -> os.stat_result:
+            raise PermissionError(13, "permission denied", str(self._path))
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._path, name)
+
+    calls: list[tuple[object, object]] = []
+
+    def record_download(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(downloads, "_download", record_download)
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256="0" * 64,
+        max_bytes=100,
+    )
+    destination = typ.cast("Path", UnreadablePath(tmp_path / "asset.bin"))
+
+    with pytest.raises(ProverToolError, match="failed to inspect download cache"):
+        download_pinned(asset, destination)
+
+    assert not calls, "an unreadable cache entry must not trigger a download"

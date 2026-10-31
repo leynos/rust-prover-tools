@@ -17,6 +17,7 @@ import typing as typ
 import urllib.parse
 from time import monotonic
 
+from rust_prover_tools.download_url import _parse_https_url, _validate_url
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.observability import log_event
 
@@ -88,63 +89,92 @@ DEFAULT_DOWNLOAD_LIMITS: typ.Final[DownloadLimits] = DownloadLimits()
 
 
 @dc.dataclass(frozen=True, slots=True)
-class _HTTPSUrl:
-    """Validated HTTPS URL components."""
+class _DownloadRequest:
+    """One bounded download and the asset identity its events report.
 
-    host: str
-    port: int | None
-    path: str
-    query: str
+    `asset_name` defaults to the destination file name for direct callers;
+    `download_pinned` supplies the pinned asset name so transport events join
+    with the downloader's own events.
+    """
+
+    url: str
+    destination: Path
+    max_bytes: int
+    asset_name: str | None = None
+
+    @property
+    def name(self) -> str:
+        """Logical asset name reported by every event."""
+        return self.asset_name or self.destination.name
 
 
-def _download(
-    url: str,
-    destination: Path,
-    max_bytes: int,
-    limits: DownloadLimits,
-) -> None:
-    """Fetch `url` into `destination`, following bounded redirects."""
-    deadline = monotonic() + limits.transfer_timeout_seconds
-    current = _validate_url(url)
-    log_event(_LOGGER, "download.start", asset=destination.name, max_bytes=max_bytes)
+def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
+    """Fetch `request.url` into `request.destination`, following redirects."""
+    name = request.name
+    started = monotonic()
+    deadline = started + limits.transfer_timeout_seconds
+    current = _validate_url(request.url)
+    log_event(_LOGGER, "download.start", asset=name, max_bytes=request.max_bytes)
     for hop in range(limits.max_redirects + 1):
-        response, connection = _open(current, limits, deadline)
+        response, connection = _open(current, limits, deadline, asset_name=name)
         try:
-            location = _redirect_location(response, current)
+            location = _redirect_location(response, current, asset_name=name)
             if location is not None:
                 if hop >= limits.max_redirects:
-                    log_event(
-                        _LOGGER,
-                        "download.failed",
-                        asset=destination.name,
-                        reason="redirect_limit",
-                    )
-                    msg = f"too many redirects while downloading {url}"
+                    _log_failure(name, "redirect_limit")
+                    msg = f"too many redirects while downloading {request.url}"
                     raise ProverToolError(msg)
-                current = _validate_url(urllib.parse.urljoin(current, location))
+                try:
+                    current = _validate_url(urllib.parse.urljoin(current, location))
+                except ProverToolError:
+                    _log_failure(name, "redirect_target")
+                    raise
                 continue
-            _require_success(response, current)
-            _stream(response, destination, max_bytes, deadline)
-            log_event(_LOGGER, "download.complete", asset=destination.name)
+            _require_success(response, current, asset_name=name)
+            written = _stream(
+                response,
+                request.destination,
+                _StreamLimits(name, request.max_bytes, deadline),
+            )
+            log_event(
+                _LOGGER,
+                "download.complete",
+                asset=name,
+                written=written,
+                redirects=hop,
+                elapsed_seconds=monotonic() - started,
+            )
             return
         finally:
             connection.close()
-    log_event(
-        _LOGGER, "download.failed", asset=destination.name, reason="redirect_limit"
-    )
-    msg = f"too many redirects while downloading {url}"
+    _log_failure(name, "redirect_limit")
+    msg = f"too many redirects while downloading {request.url}"
     raise ProverToolError(msg)
+
+
+def _log_failure(asset_name: str, reason: str, **fields: object) -> None:
+    """Record one bounded download failure event."""
+    log_event(
+        _LOGGER,
+        "download.failed",
+        asset=asset_name,
+        reason=reason,
+        **fields,
+    )
 
 
 def _open(
     url: str,
     limits: DownloadLimits,
     deadline: float,
+    *,
+    asset_name: str,
 ) -> tuple[HTTPResponseLike, http.client.HTTPSConnection]:
     """Request `url` and return the response with its connection."""
     parsed = _parse_https_url(url)
     remaining = deadline - monotonic()
     if remaining <= 0:
+        _log_failure(asset_name, "deadline")
         msg = f"download of {url} exceeded the transfer deadline"
         raise ProverToolError(msg)
     timeout = min(limits.connect_timeout_seconds, remaining)
@@ -168,88 +198,49 @@ def _open(
         response = connection.getresponse()
     except (OSError, http.client.HTTPException) as exc:
         connection.close()
-        log_event(_LOGGER, "download.failed", reason="transport_error")
+        _log_failure(asset_name, "transport_error")
         msg = f"failed to download {url}: {exc}"
         raise ProverToolError(msg) from exc
     return response, connection
 
 
-def _parse_https_url(url: str) -> _HTTPSUrl:
-    """Return parsed URL components after enforcing the HTTPS policy."""
-    parsed, port = _split_url(url)
-    _require_https_scheme(parsed, url)
-    host = _require_host(parsed, url)
-    _require_no_credentials(parsed, url)
-    return _HTTPSUrl(host=host, port=port, path=parsed.path, query=parsed.query)
-
-
-def _split_url(url: str) -> tuple[urllib.parse.SplitResult, int | None]:
-    """Parse a URL and its port, rejecting values urllib cannot interpret."""
-    try:
-        parsed = urllib.parse.urlsplit(url)
-        # Accessing ``port`` may itself raise for a malformed port.
-        port = parsed.port
-    except ValueError as exc:
-        msg = f"invalid download URL '{url}': {exc}"
-        raise ProverToolError(msg) from exc
-    return parsed, port
-
-
-def _require_https_scheme(parsed: urllib.parse.SplitResult, url: str) -> None:
-    """Reject a URL whose scheme is not HTTPS."""
-    if parsed.scheme.lower() != "https":
-        msg = f"download URL must use https, got '{url}'"
-        raise ProverToolError(msg)
-
-
-def _require_host(parsed: urllib.parse.SplitResult, url: str) -> str:
-    """Return the URL host, rejecting an address without one."""
-    host = parsed.hostname
-    if host is None:
-        msg = f"download URL has no host: '{url}'"
-        raise ProverToolError(msg)
-    return host
-
-
-def _require_no_credentials(parsed: urllib.parse.SplitResult, url: str) -> None:
-    """Reject embedded credentials, which would otherwise reach the network."""
-    if parsed.username is not None or parsed.password is not None:
-        msg = f"download URL must not contain credentials: '{url}'"
-        raise ProverToolError(msg)
-
-
-def _validate_url(url: str) -> str:
-    """Validate a URL and return it unchanged for redirect bookkeeping."""
-    _parse_https_url(url)
-    return url
-
-
 def _redirect_location(
     response: HTTPResponseLike,
     url: str,
+    *,
+    asset_name: str,
 ) -> str | None:
     """Return a redirect target, `None` for success, or raise for a bad hop."""
     if response.status not in REDIRECT_STATUSES:
         return None
     location = response.getheader("Location")
     if not location:
+        _log_failure(asset_name, "redirect_location", status=response.status)
         msg = f"redirect response from {url} has no Location header"
         raise ProverToolError(msg)
     return location
 
 
-def _require_success(response: HTTPResponseLike, url: str) -> None:
+def _require_success(
+    response: HTTPResponseLike,
+    url: str,
+    *,
+    asset_name: str,
+) -> None:
     """Raise unless the response is a complete HTTP 200."""
     if response.status == HTTP_OK:
         return
+    _log_failure(
+        asset_name,
+        "http_status",
+        status=response.status,
+        status_class=f"{response.status // 100}xx",
+    )
     msg = f"download of {url} failed with HTTP status {response.status}"
     raise ProverToolError(msg)
 
 
-def _content_length(
-    response: HTTPResponseLike,
-    destination: Path,
-) -> int | None:
+def _content_length(response: HTTPResponseLike, asset_name: str) -> int | None:
     """Return a valid non-negative `Content-Length`, when present."""
     raw = response.getheader("Content-Length")
     if raw is None:
@@ -257,10 +248,12 @@ def _content_length(
     try:
         value = int(raw)
     except ValueError as exc:
-        msg = f"invalid Content-Length '{raw}' from {destination.name}"
+        _log_failure(asset_name, "invalid_content_length")
+        msg = f"invalid Content-Length '{raw}' from {asset_name}"
         raise ProverToolError(msg) from exc
     if value < 0:
-        msg = f"invalid negative Content-Length '{raw}' from {destination.name}"
+        _log_failure(asset_name, "invalid_content_length", declared=value)
+        msg = f"invalid negative Content-Length '{raw}' from {asset_name}"
         raise ProverToolError(msg)
     return value
 
@@ -277,20 +270,27 @@ class _StreamLimits:
 def _stream(
     response: HTTPResponseLike,
     destination: Path,
-    max_bytes: int,
-    deadline: float,
-) -> None:
-    """Write a response body, enforcing the byte ceiling and deadline."""
-    expected = _content_length(response, destination)
-    limits = _StreamLimits(destination.name, max_bytes, deadline)
+    limits: _StreamLimits,
+) -> int:
+    """Write a response body, enforcing the byte ceiling and deadline.
+
+    The caller supplies the limits so the logical asset name, byte ceiling, and
+    deadline travel together; transport events then join with the downloader's
+    events. The byte count is returned so the caller can report the transferred
+    size without re-reading the file.
+    """
+    name = limits.name
+    expected = _content_length(response, name)
     _reject_declared_oversize(limits, expected)
     try:
         with destination.open("wb") as output:
             written = _copy_body(response, output, limits)
     except (OSError, http.client.HTTPException) as exc:
-        msg = f"failed to download {destination.name}: {exc}"
+        _log_failure(name, "stream_error")
+        msg = f"failed to download {name}: {exc}"
         raise ProverToolError(msg) from exc
     _require_complete_body(limits, written, expected)
+    return written
 
 
 def _reject_declared_oversize(
@@ -300,11 +300,9 @@ def _reject_declared_oversize(
     """Reject a `Content-Length` above the ceiling before reading the body."""
     if declared is None or declared <= limits.max_bytes:
         return
-    log_event(
-        _LOGGER,
-        "download.failed",
-        asset=limits.name,
-        reason="content_length",
+    _log_failure(
+        limits.name,
+        "content_length",
         declared=declared,
         max_bytes=limits.max_bytes,
     )
@@ -324,13 +322,7 @@ def _copy_body(
     written = 0
     while True:
         if monotonic() > limits.deadline:
-            log_event(
-                _LOGGER,
-                "download.failed",
-                asset=limits.name,
-                reason="deadline",
-                written=written,
-            )
+            _log_failure(limits.name, "deadline", written=written)
             msg = f"download of {limits.name} exceeded the transfer deadline"
             raise ProverToolError(msg)
         chunk = response.read(READ_CHUNK_SIZE)
@@ -338,11 +330,9 @@ def _copy_body(
             return written
         written += len(chunk)
         if written > limits.max_bytes:
-            log_event(
-                _LOGGER,
-                "download.failed",
-                asset=limits.name,
-                reason="size_limit",
+            _log_failure(
+                limits.name,
+                "size_limit",
                 written=written,
                 max_bytes=limits.max_bytes,
             )
@@ -362,11 +352,9 @@ def _require_complete_body(
     """Reject a body shorter than its declared `Content-Length`."""
     if expected is None or written == expected:
         return
-    log_event(
-        _LOGGER,
-        "download.failed",
-        asset=limits.name,
-        reason="incomplete_body",
+    _log_failure(
+        limits.name,
+        "incomplete_body",
         written=written,
         expected=expected,
     )

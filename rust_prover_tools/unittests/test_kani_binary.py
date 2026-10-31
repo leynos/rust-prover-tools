@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import tarfile
 import typing as typ
@@ -63,6 +64,15 @@ def stub_downloads(
         return paths[asset.name]
 
     monkeypatch.setattr(kani_binary, "download_pinned", fake_download)
+
+
+def events_from(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    """Return the structured events captured during a test."""
+    return [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
 
 
 def binary_options(
@@ -258,3 +268,157 @@ def test_default_install_dir_honours_cargo_home(
     assert default_kani_install_dir() == cargo_home / "bin", (
         "CARGO_HOME must select the default binary directory"
     )
+
+
+def kani_options(tmp_path: Path) -> KaniBinaryInstallOptions:
+    """Return options selecting the prebuilt route with explicit paths."""
+    return KaniBinaryInstallOptions(
+        repo_root=tmp_path,
+        version="0.67.0",
+        version_file=tmp_path / "VERSION",
+        install_dir=tmp_path / "bin",
+        cache_dir=tmp_path / "cache",
+    )
+
+
+def test_install_kani_binary_reports_each_boundary_event(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A successful install records extraction, setup, verification, and totals."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+    frontend = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"cargo-kani", "kani": b"kani"},
+    )
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"bundle")
+    stub_downloads(monkeypatch, frontend, bundle)
+    cmd_mox.stub("cargo").runs(lambda invocation: ("", "", 0))
+
+    install_kani_binary(kani_options(tmp_path))
+
+    events = events_from(caplog)
+    assert [event["event"] for event in events] == [
+        "kani.install.start",
+        "kani.extract.complete",
+        "kani.setup.complete",
+        "kani.verify.complete",
+        "kani.install.complete",
+    ], "each install boundary should record one event in order"
+    extract = events[1]
+    assert extract["asset"] == KANI_FRONTEND_ASSET.name
+    assert extract["members"] == 2
+    assert extract["bytes"] == len(b"cargo-kani") + len(b"kani")
+    assert events[2]["asset"] == KANI_BUNDLE_ASSET.name
+    complete = events[4]
+    assert complete["version"] == "0.67.0"
+    assert complete["bytes"] == len(b"cargo-kani") + len(b"kani")
+    elapsed = complete["elapsed_seconds"]
+    assert isinstance(elapsed, float), "completion must carry a float duration"
+    assert elapsed >= 0.0, "completion must carry a non-negative duration"
+
+
+def test_install_kani_binary_reports_a_download_failure_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed download reports one bounded reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+
+    def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        del asset, destination
+        msg = "digest mismatch"
+        raise ProverToolError(msg)
+
+    monkeypatch.setattr(kani_binary, "download_pinned", fail_download)
+
+    with pytest.raises(ProverToolError, match="digest mismatch"):
+        install_kani_binary(kani_options(tmp_path))
+
+    assert events_from(caplog) == [
+        {"event": "kani.install.start", "version": "0.67.0"},
+        {"event": "kani.install.failed", "reason": "download"},
+    ], "a download failure must report its own reason"
+
+
+def test_install_kani_binary_reports_an_extract_failure_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed frontend archive reports an extraction reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+    frontend = write_tar(tmp_path / "frontend.tar.gz", {"cargo-kani": b"only"})
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"bundle")
+    stub_downloads(monkeypatch, frontend, bundle)
+
+    with pytest.raises(ProverToolError, match="missing kani"):
+        install_kani_binary(kani_options(tmp_path))
+
+    assert events_from(caplog)[-1] == {
+        "event": "kani.install.failed",
+        "reason": "extract",
+    }, "a malformed archive must report an extraction failure"
+
+
+def test_install_kani_binary_reports_a_setup_failure_event(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing setup command reports its own reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+    frontend = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"cargo-kani", "kani": b"kani"},
+    )
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"bundle")
+    stub_downloads(monkeypatch, frontend, bundle)
+    cmd_mox.stub("cargo").returns(stderr="setup failed\n", exit_code=2)
+
+    with pytest.raises(ProverToolError, match="setup failed"):
+        install_kani_binary(kani_options(tmp_path))
+
+    assert events_from(caplog)[-1] == {
+        "event": "kani.install.failed",
+        "reason": "setup",
+    }, "a setup failure must not be reported as a download failure"
+
+
+def test_install_kani_binary_reports_a_verify_failure_event(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failing verification command reports its own reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+    frontend = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"cargo-kani", "kani": b"kani"},
+    )
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"bundle")
+    stub_downloads(monkeypatch, frontend, bundle)
+
+    def cargo_handler(invocation: Invocation) -> tuple[str, str, int]:
+        if invocation.args == ["kani", "--version"]:
+            return ("", "not callable\n", 1)
+        return ("", "", 0)
+
+    cmd_mox.stub("cargo").runs(cargo_handler)
+
+    with pytest.raises(ProverToolError, match="not callable"):
+        install_kani_binary(kani_options(tmp_path))
+
+    assert events_from(caplog)[-1] == {
+        "event": "kani.install.failed",
+        "reason": "verify",
+    }, "a verification failure must not be reported as a setup failure"

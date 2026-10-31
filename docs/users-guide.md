@@ -327,8 +327,10 @@ exhaust disk space or hang a CI job:
   `HTTPS_PROXY` are not read;
 - opt-in structured events are available through Python logging at debug level
   for download start, completion, cache hits, verification, and bounded failure
-  categories. The library installs no handlers, so output is unchanged unless
-  your application lowers the `rust_prover_tools` logger level.
+  categories, and for each installer's start, reuse, extraction, setup,
+  verification, marker, and completion boundaries. The library installs no
+  handlers, so output is unchanged unless the application lowers the
+  `rust_prover_tools` logger level.
 
 ### GitHub Actions inputs
 

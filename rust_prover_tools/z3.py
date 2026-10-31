@@ -9,10 +9,11 @@ the installed version so repeated CI runs can reuse the binary.
 from __future__ import annotations
 
 import dataclasses as dc
-import os
+import logging
 import stat
 import typing as typ
 import zipfile
+from time import monotonic
 
 from rust_prover_tools.binary_assets import (
     COPY_CHUNK_SIZE,
@@ -23,10 +24,12 @@ from rust_prover_tools.binary_assets import (
 )
 from rust_prover_tools.downloads import download_pinned
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.observability import log_event
 from rust_prover_tools.path_resolution import resolve_configured_path
 from rust_prover_tools.platforms import require_linux_x86_64
 
 if typ.TYPE_CHECKING:
+    import os
     from pathlib import Path
 
 __all__ = (
@@ -37,6 +40,9 @@ __all__ = (
 )
 
 MARKER_NAME = ".z3-version"
+_EXECUTE_BITS: typ.Final[int] = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -124,35 +130,68 @@ def install_z3(options: Z3InstallOptions) -> tuple[str, ...]:
     )
     binary = install_dir / "z3"
     marker = install_dir / MARKER_NAME
-    if _is_installed(binary, marker):
+    started = monotonic()
+    log_event(_LOGGER, "z3.install.start", version=Z3_VERSION)
+    try:
+        installed = _is_installed(binary, marker)
+    except ProverToolError:
+        _log_failure("inspect")
+        raise
+    if installed:
+        log_event(_LOGGER, "z3.install.reuse", version=Z3_VERSION)
         return (
             f"Z3 {Z3_VERSION} already installed at {binary}",
             f"Export VERUS_Z3_PATH={binary}",
         )
 
-    archive = download_pinned(Z3_ASSET, cache_dir / Z3_ASSET.name)
-    _extract_z3(archive, install_dir, binary)
-    _write_marker(marker)
+    try:
+        archive = download_pinned(Z3_ASSET, cache_dir / Z3_ASSET.name)
+    except ProverToolError:
+        _log_failure("download")
+        raise
+    try:
+        extracted_bytes = _extract_z3(archive, install_dir, binary)
+    except ProverToolError:
+        _log_failure("extract")
+        raise
+    try:
+        _write_marker(marker)
+    except ProverToolError:
+        _log_failure("marker")
+        raise
+    log_event(
+        _LOGGER,
+        "z3.install.complete",
+        version=Z3_VERSION,
+        bytes=extracted_bytes,
+        elapsed_seconds=monotonic() - started,
+    )
     return (
         f"Installed Z3 {Z3_VERSION} at {binary}",
         f"Export VERUS_Z3_PATH={binary}",
     )
 
 
-def _is_installed(binary: Path, marker: Path) -> bool:
-    """Return whether an executable binary and matching marker are present.
+def _log_failure(reason: str) -> None:
+    """Record one bounded installer failure category."""
+    log_event(_LOGGER, "z3.install.failed", reason=reason)
 
-    A missing path means the installation is absent. Any other filesystem
-    failure is reported instead of being treated as absent, so a permission
-    problem cannot look like a fresh install and then fail halfway through.
-    """
+
+def _is_installed(binary: Path, marker: Path) -> bool:
+    """Return whether an executable binary and matching marker are present."""
+    # Only a missing path means "absent"; other OS errors are reported.
     binary_status = _optional_stat(binary)
     if binary_status is None or not stat.S_ISREG(binary_status.st_mode):
         return False
-    if not os.access(binary, os.X_OK):
+    if not _has_execute_bit(binary_status):
         return False
     marker_version = _optional_text(marker)
     return marker_version is not None and marker_version.strip() == Z3_VERSION
+
+
+def _has_execute_bit(status: os.stat_result) -> bool:
+    """Return whether the recorded mode carries any execute bit."""
+    return bool(status.st_mode & _EXECUTE_BITS)
 
 
 def _optional_stat(path: Path) -> os.stat_result | None:
@@ -177,15 +216,15 @@ def _optional_text(path: Path) -> str | None:
         raise ProverToolError(msg) from exc
 
 
-def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> None:
-    """Extract only the pinned `z3` member from the verified archive."""
+def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> int:
+    """Extract the pinned `z3` member and return the bytes written."""
     temporary = install_dir / ".z3.download"
+    written = 0
     try:
         install_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(archive_path) as archive:
             member = _z3_member(archive)
             with archive.open(member) as source, temporary.open("wb") as output:
-                written = 0
                 while chunk := source.read(COPY_CHUNK_SIZE):
                     written += len(chunk)
                     if written > Z3_EXTRACTED_MAX_BYTES:
@@ -202,6 +241,13 @@ def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> None:
         raise ProverToolError(msg) from exc
     finally:
         temporary.unlink(missing_ok=True)
+    log_event(
+        _LOGGER,
+        "z3.extract.complete",
+        asset=Z3_ASSET.name,
+        bytes=written,
+    )
+    return written
 
 
 def _z3_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo:
@@ -234,3 +280,4 @@ def _write_marker(marker: Path) -> None:
         raise ProverToolError(msg) from exc
     finally:
         temporary.unlink(missing_ok=True)
+    log_event(_LOGGER, "z3.marker.recorded", version=Z3_VERSION)

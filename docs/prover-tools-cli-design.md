@@ -61,25 +61,35 @@ x86_64 host check, and `rust_prover_tools.path_resolution` resolves optional
 CLI paths against the repository root.
 
 `rust_prover_tools.downloads` adds digest pinning and the atomic verified
-store. It delegates the network policy to
+store. HTTPS URL policy, including the rejection of embedded credentials, lives
+in `rust_prover_tools.download_url`. The network policy lives in
 `rust_prover_tools.download_transport`, which accepts only HTTPS, follows a
 bounded number of re-validated redirects, rejects an oversized `Content-Length`
 before reading, counts streamed bytes, and enforces one monotonic transfer
 deadline. A pending file is removed on any failure and renamed to the final
 path only after the digest matches. The transport connects directly over HTTPS
 and deliberately does not read proxy environment variables such as
-`HTTPS_PROXY`; a caller that needs a proxy must supply its own transport.
+`HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a proxy-only
+environment has no supported route through this library; a caller that needs a
+proxy cannot be served by the current API.
 
 `rust_prover_tools.observability` defines the opt-in event helper. The
 downloader records `download.start`, `download.complete`, `download.cache_hit`,
 `download.verified`, and `download.failed` with a bounded reason category
-(`redirect_limit`, `content_length`, `size_limit`, `deadline`,
-`incomplete_body`, `transport_error`, `digest_mismatch`, or `store_error`).
-Records carry an `event_data` mapping rather than free text. The library
-installs no handlers, so an application opts in by lowering the
-`rust_prover_tools.downloads` or `rust_prover_tools.download_transport` logger
-level; extraction and installation outcomes remain the user-facing status lines
-and `ProverToolError` messages.
+(`redirect_limit`, `redirect_target`, `redirect_location`, `http_status`,
+`invalid_content_length`, `content_length`, `size_limit`, `deadline`,
+`incomplete_body`, `stream_error`, `transport_error`, `digest_mismatch`, or
+`store_error`). Each installer also records `<tool>.install.start`,
+`<tool>.install.reuse`, `<tool>.install.complete`, and `<tool>.install.failed`
+with a bounded phase, together with the extraction, marker, setup, and
+verification boundaries (`z3.extract.complete`, `z3.marker.recorded`,
+`kani.extract.complete`, `kani.setup.complete`, `kani.verify.complete`,
+`verus.extract.start`, and `verus.extract.complete`). Completion events carry
+the transferred byte count and the elapsed seconds. Records carry an
+`event_data` mapping rather than free text. The library installs no handlers,
+so an application opts in by lowering the level of the relevant
+`rust_prover_tools` module logger. User-facing status lines and
+`ProverToolError` messages remain the primary interface.
 
 ### Verified download sequence
 

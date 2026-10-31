@@ -27,22 +27,30 @@ messages = install_verus(
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import re
 import shutil
+import stat
 import tempfile
+import typing as typ
 from pathlib import Path
+from time import monotonic
 
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.downloads import PinnedAsset, download_pinned, sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.observability import log_event
 from rust_prover_tools.versions import expected_sha256
 from rust_prover_tools.verus.models import (
     VerusArchive,
     VerusInstallOptions,
     default_install_dir,
-    is_executable_file,
     read_verus_version,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 # Verus release archives are large, but a ceiling stops a malicious or broken
 # response from filling the runner's temporary filesystem. The value follows
@@ -58,6 +66,16 @@ ARCHIVE_FILE_NAME = "verus-release.zip"
 # names. Restricting them to a single safe component also prevents a leading
 # dash from being mistaken for an option by a later command.
 RELEASE_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+_LOGGER = logging.getLogger(__name__)
+_EXECUTE_BITS: typ.Final[int] = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+
+# An installer phase can fail with a filesystem error or one of the library's
+# own user-facing errors. Both are recorded under the phase's bounded reason.
+_PHASE_FAILURES: typ.Final[tuple[type[Exception], ...]] = (
+    OSError,
+    ProverToolError,
+)
 
 
 def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
@@ -98,28 +116,81 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
     _require_safe_release_component(options.target, label="target")
     install_dir = options.install_dir or default_install_dir(options.paths, version)
     installed_bin = install_dir / "verus" / "verus"
-    if is_executable_file(installed_bin):
+    started = monotonic()
+    log_event(_LOGGER, "verus.install.start", version=version, target=options.target)
+    with _phase("inspect"):
+        installed = _has_installed_binary(installed_bin)
+    if installed:
+        log_event(_LOGGER, "verus.install.reuse", version=version)
         return (f"Verus {version} already installed at {install_dir / 'verus'}",)
 
-    archive = verus_archive(options, version)
-    install_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        archive_path = download_archive(archive, Path(temporary_directory))
-        run_checked(
-            CommandSpec(("unzip", "-q", str(archive_path), "-d", str(install_dir))),
-        )
+    with _phase("archive"):
+        archive = verus_archive(options, version)
+    with _phase("prepare"):
+        install_dir.mkdir(parents=True, exist_ok=True)
+    with _phase("temporary"):
+        temporary_directory = tempfile.TemporaryDirectory()
+    with temporary_directory as directory:
+        with _phase("download"):
+            archive_path = download_archive(archive, Path(directory))
+        with _phase("extract"):
+            _unzip(archive_path, install_dir, archive.name)
+        with _phase("locate"):
+            extracted_dir = locate_extracted_verus_dir(install_dir, options.target)
 
-    extracted_dir = locate_extracted_verus_dir(install_dir, options.target)
     final_dir = install_dir / "verus"
     # Remove stale partial installs so the final tree is deterministic. This is
     # intentionally non-atomic and assumes the install directory is not shared.
-    if final_dir.exists():
-        shutil.rmtree(final_dir)
-    shutil.move(extracted_dir, final_dir)
+    with _phase("publish"):
+        if final_dir.exists():
+            shutil.rmtree(final_dir)
+        shutil.move(extracted_dir, final_dir)
+    log_event(
+        _LOGGER,
+        "verus.install.complete",
+        version=version,
+        elapsed_seconds=monotonic() - started,
+    )
     return (
         f"Installed Verus {version} in {final_dir}",
         f"Export VERUS_BIN={final_dir / 'verus'}",
     )
+
+
+def _has_installed_binary(binary: Path) -> bool:
+    """Return whether `binary` is an executable regular file.
+
+    A missing path is an ordinary cache miss. Any other inspection failure is
+    reported instead, because treating an unreadable installation as absent
+    would reinstall over a broken environment.
+    """
+    try:
+        status = binary.stat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        msg = f"failed to inspect Verus installation at '{binary}': {exc}"
+        raise ProverToolError(msg) from exc
+    return stat.S_ISREG(status.st_mode) and bool(status.st_mode & _EXECUTE_BITS)
+
+
+@contextlib.contextmanager
+def _phase(reason: str) -> cabc.Generator[None]:
+    """Record one bounded installer failure category for the enclosed step."""
+    try:
+        yield
+    except _PHASE_FAILURES:
+        log_event(_LOGGER, "verus.install.failed", reason=reason)
+        raise
+
+
+def _unzip(archive_path: Path, install_dir: Path, asset_name: str) -> None:
+    """Extract a verified archive with `unzip`, recording the boundary."""
+    log_event(_LOGGER, "verus.extract.start", asset=asset_name)
+    run_checked(
+        CommandSpec(("unzip", "-q", str(archive_path), "-d", str(install_dir))),
+    )
+    log_event(_LOGGER, "verus.extract.complete", asset=asset_name)
 
 
 def verus_archive(options: VerusInstallOptions, version: str) -> VerusArchive:

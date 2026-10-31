@@ -9,10 +9,14 @@ opt-in `--compile` fallback in `rust_prover_tools.kani`.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
+import logging
 import os
 import tarfile
+import typing as typ
 from pathlib import Path
+from time import monotonic
 
 from rust_prover_tools.binary_assets import (
     COPY_CHUNK_SIZE,
@@ -25,8 +29,12 @@ from rust_prover_tools.binary_assets import (
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.downloads import download_pinned
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.observability import log_event
 from rust_prover_tools.path_resolution import resolve_configured_path
 from rust_prover_tools.platforms import require_linux_x86_64
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 __all__ = (
     "KaniBinaryInstallOptions",
@@ -34,6 +42,8 @@ __all__ = (
     "default_kani_install_dir",
     "install_kani_binary",
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -147,24 +157,47 @@ def install_kani_binary(options: KaniBinaryInstallOptions) -> tuple[str, ...]:
         default_kani_cache_dir(options.repo_root),
     )
     source = f"from {options.version_file}" if not options.is_override else "(override)"
+    started = monotonic()
+    log_event(_LOGGER, "kani.install.start", version=options.version)
     lines = [f"Installing Kani {options.version} prebuilt binaries {source}."]
-    frontend, bundle = _download_assets(cache_dir)
+    with _phase("download"):
+        frontend, bundle = _download_assets(cache_dir)
     lines.append(
         f"Extracting Kani {options.version} binaries into {install_dir}.",
     )
-    _extract_frontend(frontend, install_dir)
+    with _phase("extract"):
+        extracted_bytes = _extract_frontend(frontend, install_dir)
 
     if options.should_setup:
         lines.append(f"Running cargo kani setup for Kani {options.version}.")
-        _run_setup(install_dir, bundle)
+        with _phase("setup"):
+            _run_setup(install_dir, bundle)
 
     if options.should_verify:
         lines.append("Verifying cargo kani is callable.")
-        verifier_output = _run_verify(install_dir)
+        with _phase("verify"):
+            verifier_output = _run_verify(install_dir)
         if verifier_output:
             lines.append(verifier_output)
 
+    log_event(
+        _LOGGER,
+        "kani.install.complete",
+        version=options.version,
+        bytes=extracted_bytes,
+        elapsed_seconds=monotonic() - started,
+    )
     return tuple(lines)
+
+
+@contextlib.contextmanager
+def _phase(reason: str) -> cabc.Generator[None]:
+    """Record one bounded installer failure category for the enclosed step."""
+    try:
+        yield
+    except ProverToolError:
+        log_event(_LOGGER, "kani.install.failed", reason=reason)
+        raise
 
 
 def _download_assets(cache_dir: Path) -> tuple[Path, Path]:
@@ -180,9 +213,10 @@ def _download_assets(cache_dir: Path) -> tuple[Path, Path]:
     return frontend, bundle
 
 
-def _extract_frontend(archive_path: Path, install_dir: Path) -> None:
-    """Extract the two Kani frontend executables atomically."""
+def _extract_frontend(archive_path: Path, install_dir: Path) -> int:
+    """Extract the two Kani frontend executables and return the bytes written."""
     pending: list[tuple[Path, Path]] = []
+    written = 0
     try:
         install_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive_path, "r:gz") as archive:
@@ -190,7 +224,7 @@ def _extract_frontend(archive_path: Path, install_dir: Path) -> None:
                 for name in KANI_FRONTEND_MEMBERS:
                     member = _regular_member(archive, name)
                     temporary = install_dir / f".{name}.download"
-                    _copy_member(archive, member, temporary)
+                    written += _copy_member(archive, member, temporary)
                     pending.append((temporary, install_dir / name))
                 for temporary, target in pending:
                     temporary.replace(target)
@@ -200,6 +234,14 @@ def _extract_frontend(archive_path: Path, install_dir: Path) -> None:
     except (OSError, tarfile.TarError) as exc:
         msg = f"failed to extract prebuilt Kani archive '{archive_path}': {exc}"
         raise ProverToolError(msg) from exc
+    log_event(
+        _LOGGER,
+        "kani.extract.complete",
+        asset=KANI_FRONTEND_ASSET.name,
+        members=len(KANI_FRONTEND_MEMBERS),
+        bytes=written,
+    )
+    return written
 
 
 def _regular_member(archive: tarfile.TarFile, name: str) -> tarfile.TarInfo:
@@ -225,8 +267,8 @@ def _copy_member(
     archive: tarfile.TarFile,
     member: tarfile.TarInfo,
     target: Path,
-) -> None:
-    """Copy one archive member to `target` with executable permissions."""
+) -> int:
+    """Copy one archive member to `target` and return the bytes written."""
     source = archive.extractfile(member)
     if source is None:
         msg = f"prebuilt Kani archive entry {member.name} has no data"
@@ -247,6 +289,7 @@ def _copy_member(
     except OSError as exc:
         msg = f"failed to extract {member.name} to '{target}': {exc}"
         raise ProverToolError(msg) from exc
+    return written
 
 
 def _path_env(install_dir: Path) -> dict[str, str]:
@@ -272,6 +315,7 @@ def _run_setup(install_dir: Path, bundle: Path) -> None:
             env=_path_env(install_dir),
         ),
     )
+    log_event(_LOGGER, "kani.setup.complete", asset=KANI_BUNDLE_ASSET.name)
 
 
 def _run_verify(install_dir: Path) -> str:
@@ -282,4 +326,5 @@ def _run_verify(install_dir: Path) -> str:
             env=_path_env(install_dir),
         ),
     )
+    log_event(_LOGGER, "kani.verify.complete")
     return result.stdout.strip()

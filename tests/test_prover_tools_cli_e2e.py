@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
 import typing as typ
@@ -22,6 +23,11 @@ from tests.support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
+
+requires_linux_x86_64 = pytest.mark.skipif(
+    platform.system() != "Linux" or platform.machine() != "x86_64",
+    reason="Z3 installation supports only Linux x86_64",
+)
 
 
 def test_kani_install_compile_is_an_opt_in_cli_fallback(tmp_path: Path) -> None:
@@ -82,6 +88,7 @@ def test_kani_install_compile_is_an_opt_in_cli_fallback(tmp_path: Path) -> None:
     ], "the compile fallback should run the expected Cargo sequence"
 
 
+@requires_linux_x86_64
 def test_z3_install_cli_reuses_a_marked_installation(tmp_path: Path) -> None:
     """The public CLI reports an existing marked Z3 installation."""
     install_dir = tmp_path / ".cache" / "z3" / Z3_VERSION
@@ -90,6 +97,11 @@ def test_z3_install_cli_reuses_a_marked_installation(tmp_path: Path) -> None:
     binary.write_bytes(b"z3-binary")
     binary.chmod(0o755)
     (install_dir / ".z3-version").write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+    # The CLI honours the unprefixed overrides, so strip any inherited values
+    # that would point the subprocess away from the temporary repository root.
+    environment = sanitized_subprocess_env()
+    environment.pop("Z3_INSTALL_DIR", None)
+    environment.pop("Z3_CACHE_DIR", None)
 
     completed = subprocess.run(
         [
@@ -104,7 +116,7 @@ def test_z3_install_cli_reuses_a_marked_installation(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
-        env=sanitized_subprocess_env(),
+        env=environment,
     )
 
     assert completed.returncode == 0, (
@@ -119,6 +131,7 @@ def test_z3_install_cli_reuses_a_marked_installation(tmp_path: Path) -> None:
     )
 
 
+@requires_linux_x86_64
 def test_z3_install_cli_reports_installation_errors(tmp_path: Path) -> None:
     """A filesystem failure becomes a clean CLI error, not a traceback."""
     blocker = tmp_path / "blocker"
