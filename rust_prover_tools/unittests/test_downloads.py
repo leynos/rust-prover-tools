@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import pathlib
 import typing as typ
 
 import pytest
@@ -533,3 +534,201 @@ def test_download_pinned_removes_pending_file_when_stream_is_stopped(
     assert not destination.with_name("asset.bin.download").exists(), (
         "a stopped download must remove the pending file"
     )
+
+
+def test_download_pinned_reports_a_directory_creation_failure(
+    tmp_path: Path,
+) -> None:
+    """A destination whose parent cannot be created is reported."""
+    blocker = tmp_path / "cache"
+    blocker.write_text("not a directory", encoding="utf-8")
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256="0" * 64,
+        max_bytes=100,
+    )
+
+    with pytest.raises(ProverToolError, match="failed to create download directory"):
+        download_pinned(asset, blocker / "asset.bin")
+
+
+def test_download_pinned_reports_a_store_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A verified download that cannot be published is reported."""
+    payload = b"verified"
+    destination = tmp_path / "asset.bin"
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        max_bytes=100,
+    )
+
+    def write_payload(
+        url: str,
+        target: Path,
+        max_bytes: int,
+        limits: DownloadLimits,
+    ) -> None:
+        del url, max_bytes, limits
+        target.write_bytes(payload)
+
+    monkeypatch.setattr(downloads, "_download", write_payload)
+    original_replace = pathlib.Path.replace
+
+    def deny_publish(
+        path: pathlib.Path,
+        target: pathlib.Path,
+    ) -> pathlib.Path:
+        if path.name == "asset.bin.download":
+            raise PermissionError(13, "permission denied", str(path))
+        return original_replace(path, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", deny_publish)
+
+    with pytest.raises(ProverToolError, match="failed to store"):
+        download_pinned(asset, destination)
+
+
+def test_sha256_file_reports_an_unreadable_path(tmp_path: Path) -> None:
+    """A path that cannot be read as a file is reported."""
+    with pytest.raises(ProverToolError, match="failed to read"):
+        sha256_file(tmp_path)
+
+
+def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
+    """A filesystem error while writing the body is reported."""
+    destination = tmp_path / "asset.bin"
+    destination.mkdir()
+    response = FakeResponse(chunks=(b"payload",))
+
+    with pytest.raises(ProverToolError, match="failed to download"):
+        download_transport._stream(
+            response,
+            destination,
+            max_bytes=100,
+            deadline=NO_DEADLINE,
+        )
+
+
+def test_open_requests_the_validated_path_with_identity_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The transport requests the resource path and asks for an identity body."""
+    response = FakeResponse(chunks=(b"payload",))
+    captured: dict[str, object] = {}
+
+    class FakeConnection:
+        def __init__(
+            self,
+            host: str,
+            port: int | None,
+            *,
+            timeout: float,
+        ) -> None:
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def request(
+            self,
+            method: str,
+            target: str,
+            *,
+            headers: dict[str, str],
+        ) -> None:
+            captured["method"] = method
+            captured["target"] = target
+            captured["headers"] = headers
+
+        def getresponse(self) -> FakeResponse:
+            return response
+
+        def close(self) -> None:
+            captured["closed"] = True
+
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        FakeConnection,
+    )
+
+    returned_response, connection = download_transport._open(
+        "https://example.test:8443/asset.bin?token=abc",
+        DownloadLimits(connect_timeout_seconds=5.0),
+        download_transport.monotonic() + 60.0,
+    )
+
+    assert returned_response is response, "the response must be returned"
+    assert isinstance(connection, FakeConnection), "the connection must be returned"
+    assert captured["host"] == "example.test", "the host must come from the URL"
+    assert captured["port"] == 8443, "the port must come from the URL"
+    assert captured["target"] == "/asset.bin?token=abc", (
+        "the path and query must be requested"
+    )
+    assert captured["method"] == "GET", "the request must be a GET"
+    assert captured["headers"] == {
+        "Accept-Encoding": "identity",
+        "User-Agent": download_transport.USER_AGENT,
+    }, "the request must ask for an identity body"
+
+
+def test_open_reports_a_failed_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connection error is reported and the connection is closed."""
+
+    class FailingConnection:
+        def __init__(
+            self,
+            host: str,
+            port: int | None,
+            *,
+            timeout: float,
+        ) -> None:
+            del host, port, timeout
+            self.closed = False
+            connections.append(self)
+
+        def request(
+            self,
+            method: str,
+            target: str,
+            *,
+            headers: dict[str, str],
+        ) -> None:
+            del method, target, headers
+            msg = "connection refused"
+            raise OSError(msg)
+
+        def close(self) -> None:
+            self.closed = True
+
+    connections: list[FailingConnection] = []
+
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        FailingConnection,
+    )
+
+    with pytest.raises(ProverToolError, match="failed to download"):
+        download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(),
+            download_transport.monotonic() + 60.0,
+        )
+
+    assert len(connections) == 1, "the transport should open one connection"
+    assert connections[0].closed, "the failed connection must close"
+
+
+def test_open_rejects_an_expired_deadline() -> None:
+    """A deadline already in the past stops before opening a connection."""
+    with pytest.raises(ProverToolError, match="exceeded the transfer deadline"):
+        download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(),
+            download_transport.monotonic() - 1.0,
+        )

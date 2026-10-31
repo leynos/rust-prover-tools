@@ -200,6 +200,144 @@ def test_install_z3_reports_a_marker_read_failure(
         )
 
 
+def test_install_z3_reinstalls_when_the_binary_is_not_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-executable binary is replaced even when its marker matches."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"stale")
+    binary.chmod(0o644)
+    (install_dir / ".z3-version").write_text(Z3_VERSION, encoding="utf-8")
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+
+    lines = install_z3(
+        Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}", (
+        "a non-executable binary must be reinstalled"
+    )
+    assert os.access(binary, os.X_OK), "the reinstalled binary must be executable"
+
+
+def test_install_z3_reports_a_binary_inspection_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A filesystem error while inspecting the binary is not treated as absent."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"z3-binary")
+    binary.chmod(0o755)
+    original_stat = pathlib.Path.stat
+
+    def deny_stat(
+        path: pathlib.Path,
+        *,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        if path == binary:
+            raise PermissionError(13, "permission denied", str(path))
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(pathlib.Path, "stat", deny_stat)
+
+    with pytest.raises(ProverToolError, match="failed to inspect Z3 installation"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=install_dir,
+                cache_dir=tmp_path / "cache",
+            ),
+        )
+
+
+def test_install_z3_reports_a_corrupt_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An archive that is not a zip file is reported, not extracted."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    archive = cache_dir / Z3_ASSET.name
+    archive.write_bytes(b"not a zip archive")
+    monkeypatch.setattr(
+        z3_module,
+        "download_pinned",
+        lambda asset, destination: archive,
+    )
+
+    with pytest.raises(ProverToolError, match="failed to extract Z3 archive"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=tmp_path / "install",
+                cache_dir=cache_dir,
+            ),
+        )
+
+    assert not (tmp_path / "install" / "z3").exists(), (
+        "a corrupt archive must not publish a z3 binary"
+    )
+
+
+def test_install_z3_reports_a_marker_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure to record the version marker is reported."""
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+    original_write_text = pathlib.Path.write_text
+
+    def deny_write(
+        path: pathlib.Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path.name.endswith(".z3-version.download"):
+            raise PermissionError(13, "permission denied", str(path))
+        return original_write_text(
+            path,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(pathlib.Path, "write_text", deny_write)
+
+    with pytest.raises(ProverToolError, match="failed to record Z3 installation"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=tmp_path / "install",
+                cache_dir=cache_dir,
+            ),
+        )
+
+
 def test_install_z3_rejects_a_missing_member(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
