@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 import typing as typ
 import zipfile
 
@@ -123,6 +124,80 @@ def test_install_z3_reuses_a_marked_installation(
         f"Z3 {Z3_VERSION} already installed at {binary}",
         f"Export VERUS_Z3_PATH={binary}",
     ), "a marked installation should report reuse rather than reinstalling"
+
+
+def test_install_z3_reinstalls_when_the_marker_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An executable without a marker is rebuilt from the verified archive."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"stale")
+    binary.chmod(0o755)
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+
+    lines = install_z3(
+        Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}", (
+        "a missing marker must force a fresh installation"
+    )
+    assert binary.read_bytes() == b"z3-binary", (
+        "the reinstalled binary should be replaced from the archive"
+    )
+
+
+def test_install_z3_reports_a_marker_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A filesystem error while reading the marker is not treated as absent."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"z3-binary")
+    binary.chmod(0o755)
+    (install_dir / ".z3-version").write_text(Z3_VERSION, encoding="utf-8")
+    original_read_text = pathlib.Path.read_text
+
+    def deny_marker(
+        path: pathlib.Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> str:
+        if path.name == ".z3-version":
+            raise PermissionError(13, "permission denied", str(path))
+        return original_read_text(
+            path,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(pathlib.Path, "read_text", deny_marker)
+
+    with pytest.raises(ProverToolError, match="installation state"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=install_dir,
+                cache_dir=tmp_path / "cache",
+            ),
+        )
 
 
 def test_install_z3_rejects_a_missing_member(

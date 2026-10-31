@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import dataclasses as dc
 import http.client
+import logging
 import typing as typ
 import urllib.parse
 from time import monotonic
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -36,6 +38,8 @@ HTTP_OK: typ.Final[int] = 200
 READ_CHUNK_SIZE: typ.Final[int] = 64 * 1024
 REDIRECT_STATUSES: typ.Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
 USER_AGENT: typ.Final[str] = "rust-prover-tools"
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class HTTPResponseLike(typ.Protocol):
@@ -102,21 +106,32 @@ def _download(
     """Fetch `url` into `destination`, following bounded redirects."""
     deadline = monotonic() + limits.transfer_timeout_seconds
     current = _validate_url(url)
+    log_event(_LOGGER, "download.start", asset=destination.name, max_bytes=max_bytes)
     for hop in range(limits.max_redirects + 1):
         response, connection = _open(current, limits, deadline)
         try:
             location = _redirect_location(response, current)
             if location is not None:
                 if hop >= limits.max_redirects:
+                    log_event(
+                        _LOGGER,
+                        "download.failed",
+                        asset=destination.name,
+                        reason="redirect_limit",
+                    )
                     msg = f"too many redirects while downloading {url}"
                     raise ProverToolError(msg)
                 current = _validate_url(urllib.parse.urljoin(current, location))
                 continue
             _require_success(response, current)
             _stream(response, destination, max_bytes, deadline)
+            log_event(_LOGGER, "download.complete", asset=destination.name)
             return
         finally:
             connection.close()
+    log_event(
+        _LOGGER, "download.failed", asset=destination.name, reason="redirect_limit"
+    )
     msg = f"too many redirects while downloading {url}"
     raise ProverToolError(msg)
 
@@ -153,6 +168,7 @@ def _open(
         response = connection.getresponse()
     except (OSError, http.client.HTTPException) as exc:
         connection.close()
+        log_event(_LOGGER, "download.failed", reason="transport_error")
         msg = f"failed to download {url}: {exc}"
         raise ProverToolError(msg) from exc
     return response, connection
@@ -284,6 +300,14 @@ def _reject_declared_oversize(
     """Reject a `Content-Length` above the ceiling before reading the body."""
     if declared is None or declared <= limits.max_bytes:
         return
+    log_event(
+        _LOGGER,
+        "download.failed",
+        asset=limits.name,
+        reason="content_length",
+        declared=declared,
+        max_bytes=limits.max_bytes,
+    )
     msg = (
         f"refusing to download {limits.name}: "
         f"Content-Length {declared} exceeds the {limits.max_bytes}-byte limit"
@@ -300,6 +324,13 @@ def _copy_body(
     written = 0
     while True:
         if monotonic() > limits.deadline:
+            log_event(
+                _LOGGER,
+                "download.failed",
+                asset=limits.name,
+                reason="deadline",
+                written=written,
+            )
             msg = f"download of {limits.name} exceeded the transfer deadline"
             raise ProverToolError(msg)
         chunk = response.read(READ_CHUNK_SIZE)
@@ -307,6 +338,14 @@ def _copy_body(
             return written
         written += len(chunk)
         if written > limits.max_bytes:
+            log_event(
+                _LOGGER,
+                "download.failed",
+                asset=limits.name,
+                reason="size_limit",
+                written=written,
+                max_bytes=limits.max_bytes,
+            )
             msg = (
                 f"refusing to download {limits.name}: "
                 f"streamed size exceeded the {limits.max_bytes}-byte limit"
@@ -323,6 +362,14 @@ def _require_complete_body(
     """Reject a body shorter than its declared `Content-Length`."""
     if expected is None or written == expected:
         return
+    log_event(
+        _LOGGER,
+        "download.failed",
+        asset=limits.name,
+        reason="incomplete_body",
+        written=written,
+        expected=expected,
+    )
     msg = (
         f"incomplete download of {limits.name}: "
         f"received {written} bytes, expected {expected}"

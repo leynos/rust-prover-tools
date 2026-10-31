@@ -18,6 +18,41 @@
   
   '''
 # ---
+# name: test_kani_install_help_snapshot
+  '''
+  Usage: prover-tools kani install [OPTIONS]
+  
+  Install the pinned Kani verifier.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ --repo-root PATH        Repository root used to resolve default tool pin     │
+  │                         paths. [env var: INPUT_REPO_ROOT, INPUT_REPO_ROOT]   │
+  │ --version-file PATH     Optional Kani version pin override. [env var:        │
+  │                         INPUT_VERSION_FILE, INPUT_KANI_VERSION_FILE,         │
+  │                         INPUT_VERSION_FILE]                                  │
+  │ --version STR           Optional semantic version override. [env var:        │
+  │                         INPUT_VERSION, INPUT_VERSION]                        │
+  │ --setup --no-setup      Whether to run `cargo kani setup` after              │
+  │                         installation. [env var: INPUT_SETUP] [default: True] │
+  │ --verify --no-verify    Whether to run `cargo kani --version` after          │
+  │                         installation. [env var: INPUT_VERIFY] [default:      │
+  │                         True]                                                │
+  │ --compile --no-compile  Whether to compile Kani from source instead of       │
+  │                         installing the pinned                                │
+  │                         prebuilt release. [env var: INPUT_KANI_COMPILE,      │
+  │                         INPUT_COMPILE] [default: False]                      │
+  │ --install-dir PATH      Directory for prebuilt Kani executables. Defaults to │
+  │                         Cargo's binary                                       │
+  │                         directory. [env var: KANI_INSTALL_DIR,               │
+  │                         INPUT_KANI_INSTALL_DIR, INPUT_INSTALL_DIR]           │
+  │ --cache-dir PATH        Directory for verified Kani archives. Defaults to    │
+  │                         `.cache/kani` below                                  │
+  │                         the repository root. [env var: KANI_CACHE_DIR,       │
+  │                         INPUT_KANI_CACHE_DIR, INPUT_CACHE_DIR]               │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
 # name: test_top_level_help_snapshot
   '''
   Usage: prover-tools COMMAND
@@ -28,6 +63,27 @@
   │ z3           Install the pinned Z3 solver used by Verus                      │
   │ --help (-h)  Display this message and exit.                                  │
   │ --version    Display application version.                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_z3_install_help_snapshot
+  '''
+  Usage: prover-tools z3 install [OPTIONS]
+  
+  Install the pinned Z3 solver used by Verus.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ --repo-root PATH    Repository root used to resolve default install paths.   │
+  │                     [env var: INPUT_REPO_ROOT, INPUT_REPO_ROOT]              │
+  │ --install-dir PATH  Directory for the `z3` binary. Defaults to               │
+  │                     `.cache/z3/<version>` below                              │
+  │                     the repository root. [env var: Z3_INSTALL_DIR,           │
+  │                     INPUT_Z3_INSTALL_DIR, INPUT_INSTALL_DIR]                 │
+  │ --cache-dir PATH    Directory for verified Z3 archives. Defaults to          │
+  │                     `.cache/z3` below the                                    │
+  │                     repository root. [env var: Z3_CACHE_DIR,                 │
+  │                     INPUT_Z3_CACHE_DIR, INPUT_CACHE_DIR]                     │
   ╰──────────────────────────────────────────────────────────────────────────────╯
   
   '''

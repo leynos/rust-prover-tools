@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import typing as typ
 
 import pytest
@@ -120,6 +121,76 @@ def test_stream_stops_at_byte_ceiling_without_length_header(
     assert response.read_count == 2, "the offending chunk should stop the read"
     assert destination.read_bytes() == b"123456", (
         "the destination must not receive the offending chunk"
+    )
+
+
+def test_stream_emits_a_size_limit_event_at_debug_level(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The size-limit boundary is observable when the logger opts in."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(chunks=(b"123456", b"7890"))
+
+    with pytest.raises(ProverToolError, match="streamed size exceeded"):
+        download_transport._stream(
+            response, destination, max_bytes=8, deadline=NO_DEADLINE
+        )
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert any(
+        event["event"] == "download.failed" and event["reason"] == "size_limit"
+        for event in events
+    ), "a rejected stream should report its limit category"
+
+
+def test_stream_is_silent_without_debug_logging(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The default configuration produces no download events."""
+    caplog.set_level(logging.WARNING, logger="rust_prover_tools.download_transport")
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(chunks=(b"payload",))
+
+    download_transport._stream(
+        response, destination, max_bytes=100, deadline=NO_DEADLINE
+    )
+
+    assert not caplog.records, "download events must be opt-in"
+
+
+def test_download_pinned_emits_a_cache_hit_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cache hit is observable when the logger opts in."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.downloads")
+    payload = b"cached"
+    destination = tmp_path / "asset.bin"
+    destination.write_bytes(payload)
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256=sha256_file(destination),
+        max_bytes=100,
+    )
+
+    download_pinned(asset, destination)
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert {"event": "download.cache_hit", "asset": "asset.bin"} in events, (
+        "a cache hit should report the asset name"
     )
 
 

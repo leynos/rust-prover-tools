@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import os
+import stat
 import typing as typ
 import zipfile
 
@@ -139,13 +140,41 @@ def install_z3(options: Z3InstallOptions) -> tuple[str, ...]:
 
 
 def _is_installed(binary: Path, marker: Path) -> bool:
-    """Return whether the binary and its version marker are present."""
-    if not binary.is_file() or not os.access(binary, os.X_OK):
+    """Return whether an executable binary and matching marker are present.
+
+    A missing path means the installation is absent. Any other filesystem
+    failure is reported instead of being treated as absent, so a permission
+    problem cannot look like a fresh install and then fail halfway through.
+    """
+    binary_status = _optional_stat(binary)
+    if binary_status is None or not stat.S_ISREG(binary_status.st_mode):
         return False
+    if not os.access(binary, os.X_OK):
+        return False
+    marker_version = _optional_text(marker)
+    return marker_version is not None and marker_version.strip() == Z3_VERSION
+
+
+def _optional_stat(path: Path) -> os.stat_result | None:
+    """Return the status of `path`, or `None` when it does not exist."""
     try:
-        return marker.read_text(encoding="utf-8").strip() == Z3_VERSION
-    except OSError:
-        return False
+        return path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        msg = f"failed to inspect Z3 installation at '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def _optional_text(path: Path) -> str | None:
+    """Return the text of `path`, or `None` when it does not exist."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        msg = f"failed to read Z3 installation state '{path}': {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> None:

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import hashlib
+import logging
 import typing as typ
 
 from rust_prover_tools.download_transport import (
@@ -42,6 +43,7 @@ from rust_prover_tools.download_transport import (
     _download,
 )
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -53,6 +55,8 @@ __all__ = (
     "download_pinned",
     "sha256_file",
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -111,6 +115,7 @@ def download_pinned(
     _ensure_parent_directory(destination)
 
     if _has_verified_copy(asset, destination):
+        log_event(_LOGGER, "download.cache_hit", asset=asset.name)
         return destination
 
     pending = destination.with_name(f"{destination.name}.download")
@@ -119,6 +124,7 @@ def download_pinned(
         _publish_verified(asset, pending, destination)
     finally:
         pending.unlink(missing_ok=True)
+    log_event(_LOGGER, "download.verified", asset=asset.name)
     return destination
 
 
@@ -145,6 +151,9 @@ def _download_verified(
     _download(asset.url, pending, asset.max_bytes, limits)
     actual = sha256_file(pending)
     if actual != asset.sha256:
+        log_event(
+            _LOGGER, "download.failed", asset=asset.name, reason="digest_mismatch"
+        )
         msg = (
             f"SHA-256 mismatch for {asset.name}.\n"
             f"Expected: {asset.sha256}\n"
@@ -158,6 +167,7 @@ def _publish_verified(asset: PinnedAsset, pending: Path, destination: Path) -> N
     try:
         pending.replace(destination)
     except OSError as exc:
+        log_event(_LOGGER, "download.failed", asset=asset.name, reason="store_error")
         msg = f"failed to store {asset.name} at '{destination}': {exc}"
         raise ProverToolError(msg) from exc
 
