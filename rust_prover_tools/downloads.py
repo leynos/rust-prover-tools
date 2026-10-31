@@ -108,35 +108,58 @@ def download_pinned(
         Raised when the URL, transfer, limits, digest, or filesystem operations
         fail.
     """
+    _ensure_parent_directory(destination)
+
+    if _has_verified_copy(asset, destination):
+        return destination
+
+    pending = destination.with_name(f"{destination.name}.download")
+    try:
+        _download_verified(asset, pending, limits)
+        _publish_verified(asset, pending, destination)
+    finally:
+        pending.unlink(missing_ok=True)
+    return destination
+
+
+def _ensure_parent_directory(destination: Path) -> None:
+    """Create the destination's parent directory, reporting OS errors."""
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         msg = f"failed to create download directory '{destination.parent}': {exc}"
         raise ProverToolError(msg) from exc
 
-    if destination.is_file() and sha256_file(destination) == asset.sha256:
-        return destination
 
-    pending = destination.with_name(f"{destination.name}.download")
-    pending.unlink(missing_ok=True)
+def _has_verified_copy(asset: PinnedAsset, destination: Path) -> bool:
+    """Return whether `destination` already holds the expected asset."""
+    return destination.is_file() and sha256_file(destination) == asset.sha256
+
+
+def _download_verified(
+    asset: PinnedAsset,
+    pending: Path,
+    limits: DownloadLimits,
+) -> None:
+    """Download into `pending` and reject a digest that does not match."""
+    _download(asset.url, pending, asset.max_bytes, limits)
+    actual = sha256_file(pending)
+    if actual != asset.sha256:
+        msg = (
+            f"SHA-256 mismatch for {asset.name}.\n"
+            f"Expected: {asset.sha256}\n"
+            f"Actual:   {actual}"
+        )
+        raise ProverToolError(msg)
+
+
+def _publish_verified(asset: PinnedAsset, pending: Path, destination: Path) -> None:
+    """Atomically move a verified pending file to its final path."""
     try:
-        _download(asset.url, pending, asset.max_bytes, limits)
-        actual = sha256_file(pending)
-        if actual != asset.sha256:
-            msg = (
-                f"SHA-256 mismatch for {asset.name}.\n"
-                f"Expected: {asset.sha256}\n"
-                f"Actual:   {actual}"
-            )
-            raise ProverToolError(msg)
-        try:
-            pending.replace(destination)
-        except OSError as exc:
-            msg = f"failed to store {asset.name} at '{destination}': {exc}"
-            raise ProverToolError(msg) from exc
-    finally:
-        pending.unlink(missing_ok=True)
-    return destination
+        pending.replace(destination)
+    except OSError as exc:
+        msg = f"failed to store {asset.name} at '{destination}': {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def sha256_file(path: Path) -> str:

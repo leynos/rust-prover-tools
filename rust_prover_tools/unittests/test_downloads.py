@@ -264,23 +264,32 @@ def test_download_rejects_excess_redirects(
     assert connection.closed, "the rejected redirect connection must close"
 
 
-def test_download_rejects_redirect_to_plain_http(
+@pytest.mark.parametrize(
+    ("status", "headers", "match"),
+    [
+        (302, {"Location": "http://example.test/asset"}, "must use https"),
+        (302, None, "no Location"),
+        (404, None, "HTTP status 404"),
+    ],
+    ids=["downgrade", "missing-location", "non-success"],
+)
+def test_download_rejects_invalid_response(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    headers: dict[str, str] | None,
+    match: str,
 ) -> None:
-    """A redirect cannot downgrade the transfer to plain HTTP."""
+    """A failed response is reported and its connection is closed."""
     connection = FakeConnection()
-    response = FakeResponse(
-        status=302,
-        headers={"Location": "http://example.test/asset"},
-    )
+    response = FakeResponse(status=status, headers=headers)
     monkeypatch.setattr(
         download_transport,
         "_open",
         lambda url, limits, deadline: (response, connection),
     )
 
-    with pytest.raises(ProverToolError, match="must use https"):
+    with pytest.raises(ProverToolError, match=match):
         download_transport._download(
             "https://example.test/asset",
             tmp_path / "asset.bin",
@@ -288,51 +297,7 @@ def test_download_rejects_redirect_to_plain_http(
             limits=DownloadLimits(),
         )
 
-    assert connection.closed
-
-
-def test_download_rejects_redirect_without_location(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A redirect response without Location is a failed transfer."""
-    connection = FakeConnection()
-    response = FakeResponse(status=302)
-    monkeypatch.setattr(
-        download_transport,
-        "_open",
-        lambda url, limits, deadline: (response, connection),
-    )
-
-    with pytest.raises(ProverToolError, match="no Location"):
-        download_transport._download(
-            "https://example.test/asset",
-            tmp_path / "asset.bin",
-            max_bytes=100,
-            limits=DownloadLimits(),
-        )
-
-
-def test_download_rejects_non_success_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A non-200 final response is reported as a failure."""
-    connection = FakeConnection()
-    response = FakeResponse(status=404)
-    monkeypatch.setattr(
-        download_transport,
-        "_open",
-        lambda url, limits, deadline: (response, connection),
-    )
-
-    with pytest.raises(ProverToolError, match="HTTP status 404"):
-        download_transport._download(
-            "https://example.test/asset",
-            tmp_path / "asset.bin",
-            max_bytes=100,
-            limits=DownloadLimits(),
-        )
+    assert connection.closed, "the failed connection must close"
 
 
 @pytest.mark.parametrize(

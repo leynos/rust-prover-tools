@@ -60,19 +60,8 @@ class Z3InstallOptions:
 
 
 def default_z3_install_dir(repo_root: Path) -> Path:
-    """Return the default Z3 installation directory.
-
-    Parameters
-    ----------
-    repo_root : Path
-        Repository root.
-
-    Returns
-    -------
-    Path
-        `.cache/z3/<version>` below the repository root.
-    """
-    return repo_root / ".cache" / "z3" / Z3_VERSION
+    """Return the versioned directory that holds the `z3` executable."""
+    return default_z3_cache_dir(repo_root) / Z3_VERSION
 
 
 def default_z3_cache_dir(repo_root: Path) -> Path:

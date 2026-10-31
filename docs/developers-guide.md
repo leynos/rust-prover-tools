@@ -392,10 +392,10 @@ files, and both abort the run before any mutant is scored:
   `test_check_kani_version_resolves_relative_version_file_from_repo_root` in
   `test_kani.py` and
   `test_install_verus_resolves_relative_pin_files_from_repo_root` in
-  `test_verus.py`. The marker is per test rather than per module, because both
-  modules otherwise run fine in the sandbox and only these two prove that
-  repository-relative paths resolve against the configured repository rather
-  than the current directory.
+  `test_verus_install.py`. The marker is per test rather than per module,
+  because both modules otherwise run fine in the sandbox and only these two
+  prove that repository-relative paths resolve against the configured
+  repository rather than the current directory.
 - A test that patches `Path.resolve` globally breaks the trampoline's own
   bookkeeping, because the patched method is the one it calls. The symlink-loop
   boundary test therefore creates a real loop instead of monkeypatching the

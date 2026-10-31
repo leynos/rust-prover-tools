@@ -25,6 +25,7 @@ legacy `KANI` and `VERUS_*` variables preserved from the shell scripts.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import sys
 import typing as typ
 from pathlib import Path
@@ -90,39 +91,11 @@ def _error_exit(exc: ProverToolError) -> int:
             return 1
 
 
-@kani_app.command
-# CLI parameter binding needs one explicit parameter per flag/env-var mapping.
-# pylint: disable-next=too-many-arguments
-def install(
-    *,
-    repo_root: typ.Annotated[Path | None, Parameter(env_var="INPUT_REPO_ROOT")] = None,
-    version_file: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("INPUT_VERSION_FILE", "INPUT_KANI_VERSION_FILE")),
-    ] = None,
-    version: typ.Annotated[str | None, Parameter(env_var="INPUT_VERSION")] = None,
-    setup: typ.Annotated[bool, Parameter(negative="--no-setup")] = True,
-    verify: typ.Annotated[bool, Parameter(negative="--no-verify")] = True,
-    compile_from_source: typ.Annotated[
-        bool,
-        Parameter(
-            name="--compile",
-            negative="--no-compile",
-            env_var="INPUT_KANI_COMPILE",
-        ),
-    ] = False,
-    install_dir: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("KANI_INSTALL_DIR", "INPUT_KANI_INSTALL_DIR")),
-    ] = None,
-    cache_dir: typ.Annotated[
-        Path | None,
-        Parameter(env_var=("KANI_CACHE_DIR", "INPUT_KANI_CACHE_DIR")),
-    ] = None,
-) -> int:
-    """Install the pinned Kani verifier.
+@dc.dataclass(frozen=True, slots=True)
+class _KaniInstallFlags:
+    """Flags accepted by `prover-tools kani install`.
 
-    Parameters
+    Attributes
     ----------
     repo_root : Path | None
         Repository root used to resolve default tool pin paths.
@@ -143,6 +116,67 @@ def install(
     cache_dir : Path | None
         Directory for verified Kani archives. Defaults to `.cache/kani` below
         the repository root.
+    """
+
+    repo_root: typ.Annotated[Path | None, Parameter(env_var="INPUT_REPO_ROOT")] = None
+    version_file: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("INPUT_VERSION_FILE", "INPUT_KANI_VERSION_FILE")),
+    ] = None
+    version: typ.Annotated[str | None, Parameter(env_var="INPUT_VERSION")] = None
+    setup: typ.Annotated[bool, Parameter(negative="--no-setup")] = True
+    verify: typ.Annotated[bool, Parameter(negative="--no-verify")] = True
+    compile_from_source: typ.Annotated[
+        bool,
+        Parameter(
+            name="--compile",
+            negative="--no-compile",
+            env_var="INPUT_KANI_COMPILE",
+        ),
+    ] = False
+    install_dir: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("KANI_INSTALL_DIR", "INPUT_KANI_INSTALL_DIR")),
+    ] = None
+    cache_dir: typ.Annotated[
+        Path | None,
+        Parameter(env_var=("KANI_CACHE_DIR", "INPUT_KANI_CACHE_DIR")),
+    ] = None
+
+
+_DEFAULT_KANI_INSTALL_FLAGS: typ.Final[_KaniInstallFlags] = _KaniInstallFlags()
+
+
+def _kani_install_options(flags: _KaniInstallFlags) -> KaniInstallOptions:
+    """Translate parsed CLI flags into installer options."""
+    return KaniInstallOptions(
+        paths=KaniPaths(
+            repo_root=_repo_root(flags.repo_root),
+            version_file=flags.version_file,
+        ),
+        version=flags.version,
+        should_setup=flags.setup,
+        should_verify=flags.verify,
+        should_compile=flags.compile_from_source,
+        install_dir=flags.install_dir,
+        cache_dir=flags.cache_dir,
+    )
+
+
+@kani_app.command
+def install(
+    *,
+    options: typ.Annotated[
+        _KaniInstallFlags,
+        Parameter(name="*"),
+    ] = _DEFAULT_KANI_INSTALL_FLAGS,
+) -> int:
+    """Install the pinned Kani verifier.
+
+    Parameters
+    ----------
+    options : _KaniInstallFlags
+        Flags and environment bindings for the installation.
 
     Returns
     -------
@@ -155,19 +189,7 @@ def install(
         Handled internally and translated to a non-zero exit code.
     """
     try:
-        lines = install_kani(
-            KaniInstallOptions(
-                paths=KaniPaths(
-                    repo_root=_repo_root(repo_root), version_file=version_file
-                ),
-                version=version,
-                should_setup=setup,
-                should_verify=verify,
-                should_compile=compile_from_source,
-                install_dir=install_dir,
-                cache_dir=cache_dir,
-            ),
-        )
+        lines = install_kani(_kani_install_options(options))
     except ProverToolError as exc:
         return _error_exit(exc)
     print_lines(lines)
