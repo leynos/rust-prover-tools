@@ -68,6 +68,49 @@ before reading, counts streamed bytes, and enforces one monotonic transfer
 deadline. A pending file is removed on any failure and renamed to the final
 path only after the digest matches.
 
+### Verified download sequence
+
+Figure: the shared downloader bounds and verifies every archive before an
+installer can use it.
+
+```mermaid
+sequenceDiagram
+    accTitle: Bounded verified download sequence
+    accDescr {
+      The installer asks the downloader for a pinned asset. The transport
+      validates the HTTPS URL, requests it, and rejects a declared length
+      above the byte ceiling. Otherwise it streams the body under one
+      deadline and the byte ceiling into a pending file. The downloader
+      hashes that file and replaces the destination only when the digest
+      matches. Any failure, including a digest mismatch, removes the
+      pending file.
+    }
+
+    participant Installer
+    participant Downloads
+    participant Transport
+    participant Response
+    participant Cache
+
+    Installer->>Downloads: download_pinned
+    Downloads->>Transport: _download(url, max_bytes, limits)
+    Transport->>Transport: _validate_url
+    Transport->>Response: HTTPS GET
+    Response-->>Transport: status, headers, body
+    alt Content-Length exceeds limit
+        Transport-->>Downloads: ProverToolError
+    else Body is accepted
+        Transport->>Transport: _copy_body with deadline and byte ceiling
+        Transport->>Downloads: completed pending file
+        Downloads->>Downloads: sha256_file
+        alt Digest matches
+            Downloads->>Cache: pending.replace(destination)
+        else Digest mismatch or failure
+            Downloads->>Cache: remove pending file
+        end
+    end
+```
+
 `rust_prover_tools.verus` is a public package facade. Its implementation is
 split into:
 
