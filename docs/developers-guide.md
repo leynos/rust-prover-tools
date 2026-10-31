@@ -114,6 +114,8 @@ Feature modules should own workflow behaviour:
   default route delegates to `rust_prover_tools.kani_binary`; `--compile`
   selects the source-build route in `kani` itself.
 - `rust_prover_tools.kani_binary` for the verified prebuilt Kani install.
+- `rust_prover_tools.kani_archive` for extracting and transactionally
+  publishing the Kani frontend executables.
 - `rust_prover_tools.z3` for the pinned Z3 solver install.
 - `rust_prover_tools.verus.install` for Verus release installation.
 - `rust_prover_tools.verus.run` for Verus binary resolution and toolchain

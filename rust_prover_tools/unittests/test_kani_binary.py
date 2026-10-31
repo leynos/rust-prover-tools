@@ -11,7 +11,7 @@ import typing as typ
 
 import pytest
 
-from rust_prover_tools import kani_binary, platforms
+from rust_prover_tools import kani_archive, kani_binary, platforms
 from rust_prover_tools.binary_assets import (
     KANI_BUNDLE_ASSET,
     KANI_FRONTEND_ASSET,
@@ -221,7 +221,7 @@ def test_extract_frontend_rejects_a_missing_member(
     archive = write_tar(tmp_path / "frontend.tar.gz", {"cargo-kani": b"one"})
 
     with pytest.raises(ProverToolError, match="missing kani"):
-        kani_binary._extract_frontend(archive, tmp_path / "bin")
+        kani_archive.extract_frontend(archive, tmp_path / "bin")
 
 
 def test_extract_frontend_rejects_an_oversized_member(
@@ -233,10 +233,10 @@ def test_extract_frontend_rejects_an_oversized_member(
         tmp_path / "frontend.tar.gz",
         {"cargo-kani": b"12345", "kani": b"12345"},
     )
-    monkeypatch.setattr(kani_binary, "KANI_FRONTEND_MEMBER_MAX_BYTES", 4)
+    monkeypatch.setattr(kani_archive, "KANI_FRONTEND_MEMBER_MAX_BYTES", 4)
 
     with pytest.raises(ProverToolError, match="extraction limit"):
-        kani_binary._extract_frontend(archive, tmp_path / "bin")
+        kani_archive.extract_frontend(archive, tmp_path / "bin")
 
     assert not (tmp_path / "bin" / "cargo-kani").exists(), (
         "an oversized member must not be extracted"
@@ -264,10 +264,10 @@ def test_extract_frontend_removes_a_partial_member(
         msg = "disk full"
         raise OSError(msg)
 
-    monkeypatch.setattr(kani_binary, "_copy_member", fail_copy)
+    monkeypatch.setattr(kani_archive, "_copy_member", fail_copy)
 
     with pytest.raises(ProverToolError, match="failed to extract"):
-        kani_binary._extract_frontend(archive, install_dir)
+        kani_archive.extract_frontend(archive, install_dir)
 
     assert not (install_dir / ".cargo-kani.download").exists(), (
         "a partial pending member must be removed"
@@ -306,7 +306,7 @@ def test_extract_frontend_restores_previous_executables(
     deny_kani_replacement(monkeypatch)
 
     with pytest.raises(ProverToolError, match="failed to extract"):
-        kani_binary._extract_frontend(archive, install_dir)
+        kani_archive.extract_frontend(archive, install_dir)
 
     assert previous.read_bytes() == b"old-cargo-kani", (
         "the first executable must be restored"
@@ -336,10 +336,221 @@ def test_extract_frontend_removes_new_executables_on_failure(
     deny_kani_replacement(monkeypatch)
 
     with pytest.raises(ProverToolError, match="failed to extract"):
-        kani_binary._extract_frontend(archive, install_dir)
+        kani_archive.extract_frontend(archive, install_dir)
 
     assert not (install_dir / "cargo-kani").exists(), (
         "a newly published executable must be removed on rollback"
+    )
+
+
+def deny_replacements(
+    monkeypatch: pytest.MonkeyPatch,
+    blocked: set[tuple[str, str]],
+) -> None:
+    """Make the listed source-to-target path replacements fail."""
+    original_replace = pathlib.Path.replace
+
+    def replace(
+        self: pathlib.Path,
+        target: pathlib.Path,
+    ) -> pathlib.Path:
+        if (self.name, target.name) in blocked:
+            raise PermissionError(13, "permission denied", str(self))
+        return original_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", replace)
+
+
+def deny_unlink(
+    monkeypatch: pytest.MonkeyPatch,
+    blocked_name: str,
+) -> None:
+    """Make removing the named path fail."""
+    original_unlink = pathlib.Path.unlink
+
+    def unlink(self: pathlib.Path, *, missing_ok: bool = False) -> None:
+        if self.name == blocked_name:
+            raise PermissionError(13, "permission denied", str(self))
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", unlink)
+
+
+def fail_second_member_copy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make copying the `kani` member fail after its pending file registers."""
+    original_copy = kani_archive._copy_member
+
+    def copy(
+        archive: tarfile.TarFile,
+        member: tarfile.TarInfo,
+        target: Path,
+    ) -> int:
+        if member.name == "kani":
+            target.write_bytes(b"partial")
+            msg = "disk full"
+            raise OSError(msg)
+        return original_copy(archive, member, target)
+
+    monkeypatch.setattr(kani_archive, "_copy_member", copy)
+
+
+def test_extract_frontend_preserves_the_primary_failure_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed removal is reported without replacing the extraction error."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_archive")
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"one", "kani": b"two"},
+    )
+    install_dir = tmp_path / "bin"
+    fail_second_member_copy(monkeypatch)
+    deny_unlink(monkeypatch, ".cargo-kani.download")
+
+    with pytest.raises(ProverToolError, match="failed to extract"):
+        kani_archive.extract_frontend(archive, install_dir)
+
+    assert (install_dir / ".cargo-kani.download").exists(), (
+        "a pending file whose removal failed must be retained"
+    )
+    assert not (install_dir / ".kani.download").exists(), (
+        "every registered removal must be attempted after an earlier failure"
+    )
+    assert events_from(caplog) == [
+        {"event": "kani.cleanup_failed", "reason": "cleanup_error"},
+    ], "the secondary cleanup failure must be recorded once"
+
+
+def test_extract_frontend_reports_a_failed_backup_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A restore that fails leaves the new executable and records the rollback."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_archive")
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"new-cargo-kani", "kani": b"new-kani"},
+    )
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    (install_dir / "cargo-kani").write_bytes(b"old-cargo-kani")
+    (install_dir / "kani").write_bytes(b"old-kani")
+    deny_replacements(
+        monkeypatch,
+        {(".kani.download", "kani"), (".cargo-kani.previous", "cargo-kani")},
+    )
+
+    with pytest.raises(ProverToolError, match="failed to extract"):
+        kani_archive.extract_frontend(archive, install_dir)
+
+    assert (install_dir / "cargo-kani").read_bytes() == b"new-cargo-kani", (
+        "a failed restore leaves the new executable in place"
+    )
+    assert (install_dir / ".cargo-kani.previous").read_bytes() == b"old-cargo-kani", (
+        "a failed restore retains the backup for recovery"
+    )
+    assert (install_dir / "kani").read_bytes() == b"old-kani", (
+        "the untouched executable keeps its previous content"
+    )
+    assert events_from(caplog) == [
+        {"event": "kani.cleanup_failed", "reason": "rollback_error"},
+    ], "the failed restore must be recorded once as a rollback failure"
+
+
+def test_extract_frontend_reports_a_failed_rollback_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A new executable that cannot be removed is recorded and retained."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_archive")
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"new-cargo-kani", "kani": b"new-kani"},
+    )
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    deny_kani_replacement(monkeypatch)
+    deny_unlink(monkeypatch, "cargo-kani")
+
+    with pytest.raises(ProverToolError, match="failed to extract"):
+        kani_archive.extract_frontend(archive, install_dir)
+
+    assert (install_dir / "cargo-kani").read_bytes() == b"new-cargo-kani", (
+        "a failed rollback removal leaves the new executable in place"
+    )
+    assert events_from(caplog) == [
+        {"event": "kani.cleanup_failed", "reason": "rollback_error"},
+    ], "the failed rollback removal must be recorded once"
+
+
+def test_extract_frontend_fails_when_a_backup_cannot_be_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A standalone backup removal failure fails the extraction step."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_archive")
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"new-cargo-kani", "kani": b"new-kani"},
+    )
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    (install_dir / "cargo-kani").write_bytes(b"old-cargo-kani")
+    (install_dir / "kani").write_bytes(b"old-kani")
+    deny_unlink(monkeypatch, ".cargo-kani.previous")
+
+    with pytest.raises(ProverToolError, match="backup"):
+        kani_archive.extract_frontend(archive, install_dir)
+
+    assert (install_dir / "cargo-kani").read_bytes() == b"new-cargo-kani", (
+        "a publication that succeeded must be kept"
+    )
+    assert (install_dir / ".cargo-kani.previous").read_bytes() == b"old-cargo-kani", (
+        "the backup must remain when its removal failed"
+    )
+    assert events_from(caplog) == [
+        {"event": "kani.cleanup_failed", "reason": "backup_error"},
+    ], "a standalone backup failure must be recorded before it is raised"
+    assert all(
+        event["event"] != "kani.extract.complete" for event in events_from(caplog)
+    ), "a failed cleanup must not report a completed extraction"
+
+
+def test_install_kani_binary_fails_on_a_backup_removal_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A backup removal failure fails the install without reporting completion."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+    frontend = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"cargo-kani", "kani": b"kani"},
+    )
+    bundle = tmp_path / "bundle.tar.gz"
+    bundle.write_bytes(b"bundle")
+    stub_downloads(monkeypatch, frontend, bundle)
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    (install_dir / "cargo-kani").write_bytes(b"old-cargo-kani")
+    (install_dir / "kani").write_bytes(b"old-kani")
+    deny_unlink(monkeypatch, ".cargo-kani.previous")
+
+    with pytest.raises(ProverToolError, match="backup"):
+        install_kani_binary(kani_options(tmp_path))
+
+    events = events_from(caplog)
+    assert [
+        event
+        for event in events
+        if event["event"] in {"kani.install.failed", "kani.install.complete"}
+    ] == [{"event": "kani.install.failed", "reason": "extract"}], (
+        "the installer must report exactly one phase failure and no completion"
     )
 
 
@@ -390,6 +601,7 @@ def test_install_kani_binary_reports_each_boundary_event(
 ) -> None:
     """A successful install records extraction, setup, verification, and totals."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_archive")
     frontend = write_tar(
         tmp_path / "frontend.tar.gz",
         {"cargo-kani": b"cargo-kani", "kani": b"kani"},

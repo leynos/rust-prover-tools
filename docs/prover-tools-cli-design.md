@@ -47,7 +47,8 @@ toolchain parsing.
 `rust_prover_tools.kani` owns Kani installation and installed-version checks.
 It keeps command strings shell-free by parsing overrides with `shlex.split`.
 Installation defaults to the pinned prebuilt release and delegates to
-`rust_prover_tools.kani_binary`; `--compile` selects the older source build in
+`rust_prover_tools.kani_binary`, which extracts the frontend through
+`rust_prover_tools.kani_archive`; `--compile` selects the older source build in
 the same module.
 
 `rust_prover_tools.z3` installs the pinned Z3 solver used by Verus. It
@@ -89,12 +90,20 @@ marker, setup, and verification boundaries (`z3.extract.complete`,
 When removing a temporary file fails while another failure is in flight, the
 cleanup failure is recorded as `download.cleanup_failed` or
 `<tool>.cleanup_failed` and the primary failure is preserved; a cleanup failure
-on its own is reported as the download or installer failure instead. Completion
-events carry the transferred byte count and the elapsed seconds. Records carry
-an `event_data` mapping rather than free text. The library installs no
-handlers, so an application opts in by lowering the level of the relevant
-`rust_prover_tools` module logger. User-facing status lines and
-`ProverToolError` messages remain the primary interface.
+on its own is reported as the download or installer failure instead. Kani names
+its cleanup reasons explicitly: `cleanup_error` for a pending extraction file
+that could not be removed, `rollback_error` for a backup that could not be
+restored or a published executable that could not be removed during rollback,
+and `backup_error` for a backup that could not be removed after both
+executables were published. A `rollback_error` is always secondary to the
+extraction failure it accompanies, so it is recorded and the extraction error
+is re-raised. A `backup_error` is standalone: it is recorded and then raised, so
+`kani.install.complete` is never reported. Completion events carry the
+transferred byte count and the elapsed seconds. Records carry an `event_data`
+mapping rather than free text. The library installs no handlers, so an
+application opts in by lowering the level of the relevant `rust_prover_tools`
+module logger. User-facing status lines and `ProverToolError` messages remain
+the primary interface.
 
 ### Verified download sequence
 
