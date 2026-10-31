@@ -52,6 +52,27 @@ def download_request(
     )
 
 
+def events_from(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    """Return the structured events captured during a test."""
+    return [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+
+
+def deny_pending_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make removing a pending download fail as an unwritable directory would."""
+    original_unlink = pathlib.Path.unlink
+
+    def deny_unlink(self: pathlib.Path, *, missing_ok: bool = False) -> None:
+        if self.name.endswith(".download"):
+            raise PermissionError(13, "permission denied", str(self))
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", deny_unlink)
+
+
 class FakeClock:
     """A deterministic monotonic clock."""
 
@@ -502,6 +523,126 @@ def test_download_pinned_removes_pending_file_on_digest_mismatch(
     assert not destination.with_name("asset.bin.download").exists(), (
         "a digest mismatch must remove the pending file"
     )
+
+
+def test_download_pinned_reports_a_digest_read_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure to hash the pending file is one bounded download failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.downloads")
+    destination = tmp_path / "asset.bin"
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256="0" * 64,
+        max_bytes=100,
+    )
+
+    def write_payload(
+        request: download_transport._DownloadRequest,
+        limits: DownloadLimits,
+    ) -> None:
+        del limits
+        request.destination.write_bytes(b"payload")
+
+    def fail_to_hash(path: Path) -> str:
+        msg = f"failed to read '{path}': permission denied"
+        raise ProverToolError(msg)
+
+    monkeypatch.setattr(downloads, "_download", write_payload)
+    monkeypatch.setattr(downloads, "sha256_file", fail_to_hash)
+
+    with pytest.raises(ProverToolError, match="failed to read"):
+        download_pinned(asset, destination)
+
+    assert [event for event in events_from(caplog) if "failed" in str(event)] == [
+        {"event": "download.failed", "asset": "asset.bin", "reason": "digest_read"}
+    ], "a digest read failure must report exactly one bounded reason"
+    assert not destination.exists(), "an unverified response must not be published"
+    assert not destination.with_name("asset.bin.download").exists(), (
+        "a digest read failure must still remove the pending file"
+    )
+
+
+def test_download_pinned_reports_a_pending_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cleanup failure after a verified store is a bounded failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.downloads")
+    payload = b"verified"
+    destination = tmp_path / "asset.bin"
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256=hashlib.sha256(payload).hexdigest(),
+        max_bytes=100,
+    )
+
+    def write_payload(
+        request: download_transport._DownloadRequest,
+        limits: DownloadLimits,
+    ) -> None:
+        del limits
+        request.destination.write_bytes(payload)
+
+    monkeypatch.setattr(downloads, "_download", write_payload)
+    deny_pending_cleanup(monkeypatch)
+
+    with pytest.raises(ProverToolError, match="failed to remove pending download"):
+        download_pinned(asset, destination)
+
+    assert [event for event in events_from(caplog) if "failed" in str(event)] == [
+        {"event": "download.failed", "asset": "asset.bin", "reason": "cleanup_error"}
+    ], "a cleanup failure must report exactly one bounded reason"
+    assert not any(
+        event.get("event") == "download.verified" for event in events_from(caplog)
+    ), "a failed cleanup must not report a completed verification"
+    assert destination.read_bytes() == payload, (
+        "the verified asset stays published even when cleanup fails"
+    )
+
+
+def test_download_pinned_keeps_the_primary_failure_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cleanup failure must not replace the digest mismatch that caused it."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.downloads")
+    destination = tmp_path / "asset.bin"
+    asset = PinnedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        sha256="0" * 64,
+        max_bytes=100,
+    )
+
+    def write_wrong_payload(
+        request: download_transport._DownloadRequest,
+        limits: DownloadLimits,
+    ) -> None:
+        del limits
+        request.destination.write_bytes(b"wrong")
+
+    monkeypatch.setattr(downloads, "_download", write_wrong_payload)
+    deny_pending_cleanup(monkeypatch)
+
+    with pytest.raises(ProverToolError, match="SHA-256 mismatch"):
+        download_pinned(asset, destination)
+
+    events = events_from(caplog)
+    assert [event for event in events if event.get("event") == "download.failed"] == [
+        {"event": "download.failed", "asset": "asset.bin", "reason": "digest_mismatch"}
+    ], "the primary failure must remain the only download failure event"
+    assert {
+        "event": "download.cleanup_failed",
+        "asset": "asset.bin",
+        "reason": "cleanup_error",
+    } in events, "a masked cleanup failure should still be observable"
 
 
 def test_download_pinned_stores_a_verified_asset(

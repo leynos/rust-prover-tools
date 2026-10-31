@@ -31,6 +31,7 @@ download_pinned(asset, Path(".cache/tool.tar.gz"))
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import hashlib
 import logging
@@ -48,6 +49,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
 __all__ = (
@@ -121,13 +123,45 @@ def download_pinned(
         return destination
 
     pending = destination.with_name(f"{destination.name}.download")
-    try:
+    with _pending_download(pending, asset.name):
         _download_verified(asset, pending, limits)
         _publish_verified(asset, pending, destination)
-    finally:
-        pending.unlink(missing_ok=True)
     log_event(_LOGGER, "download.verified", asset=asset.name)
     return destination
+
+
+@contextlib.contextmanager
+def _pending_download(path: Path, asset: str) -> cabc.Generator[None]:
+    """Remove a pending download, preserving an earlier failure.
+
+    A cleanup failure after a successful block is raised because the caller
+    should know the temporary file remains. If the block is already failing,
+    the cleanup error is recorded and suppressed so it cannot hide the cause.
+    """
+    try:
+        yield
+    except BaseException:
+        _discard_pending(path, asset, has_prior_failure=True)
+        raise
+    _discard_pending(path, asset, has_prior_failure=False)
+
+
+def _discard_pending(path: Path, asset: str, *, has_prior_failure: bool) -> None:
+    """Remove a pending file and report a cleanup failure at the right level."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        if has_prior_failure:
+            log_event(
+                _LOGGER,
+                "download.cleanup_failed",
+                asset=asset,
+                reason="cleanup_error",
+            )
+            return
+        log_event(_LOGGER, "download.failed", asset=asset, reason="cleanup_error")
+        msg = f"failed to remove pending download '{path}': {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def _ensure_parent_directory(destination: Path) -> None:
@@ -178,7 +212,11 @@ def _download_verified(
         ),
         limits,
     )
-    actual = sha256_file(pending)
+    try:
+        actual = sha256_file(pending)
+    except ProverToolError:
+        log_event(_LOGGER, "download.failed", asset=asset.name, reason="digest_read")
+        raise
     if actual != asset.sha256:
         log_event(
             _LOGGER, "download.failed", asset=asset.name, reason="digest_mismatch"

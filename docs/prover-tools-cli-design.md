@@ -78,16 +78,20 @@ downloader records `download.start`, `download.complete`, `download.cache_hit`,
 `download.verified`, and `download.failed` with a bounded reason category
 (`redirect_limit`, `redirect_target`, `redirect_location`, `http_status`,
 `invalid_content_length`, `content_length`, `size_limit`, `deadline`,
-`incomplete_body`, `stream_error`, `transport_error`, `digest_mismatch`, or
-`store_error`). Each installer also records `<tool>.install.start`,
-`<tool>.install.reuse`, `<tool>.install.complete`, and `<tool>.install.failed`
-with a bounded phase, together with the extraction, marker, setup, and
-verification boundaries (`z3.extract.complete`, `z3.marker.recorded`,
-`kani.extract.complete`, `kani.setup.complete`, `kani.verify.complete`,
-`verus.extract.start`, and `verus.extract.complete`). Completion events carry
-the transferred byte count and the elapsed seconds. Records carry an
-`event_data` mapping rather than free text. The library installs no handlers,
-so an application opts in by lowering the level of the relevant
+`incomplete_body`, `stream_error`, `transport_error`, `digest_mismatch`,
+`digest_read`, `store_error`, or `cleanup_error`). Each installer also records
+`<tool>.install.start`, `<tool>.install.reuse`, `<tool>.install.complete`, and
+`<tool>.install.failed` with a bounded phase, together with the extraction,
+marker, setup, and verification boundaries (`z3.extract.complete`,
+`z3.marker.recorded`, `kani.extract.complete`, `kani.setup.complete`,
+`kani.verify.complete`, `verus.extract.start`, and `verus.extract.complete`).
+When removing a temporary file fails while another failure is in flight, the
+cleanup loss is recorded as `download.cleanup_failed` or
+`<tool>.cleanup_failed` and the primary failure is preserved; a cleanup failure
+on its own is reported as the download or installer failure instead. Completion
+events carry the transferred byte count and the elapsed seconds. Records carry
+an `event_data` mapping rather than free text. The library installs no
+handlers, so an application opts in by lowering the level of the relevant
 `rust_prover_tools` module logger. User-facing status lines and
 `ProverToolError` messages remain the primary interface.
 

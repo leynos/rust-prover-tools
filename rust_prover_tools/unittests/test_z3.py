@@ -64,6 +64,21 @@ def events_from(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
     ]
 
 
+def deny_temporary_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    *names: str,
+) -> None:
+    """Make removing the named temporary files fail."""
+    original_unlink = pathlib.Path.unlink
+
+    def deny_unlink(self: pathlib.Path, *, missing_ok: bool = False) -> None:
+        if any(self.name.endswith(name) for name in names):
+            raise PermissionError(13, "permission denied", str(self))
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", deny_unlink)
+
+
 def test_install_z3_extracts_only_the_pinned_binary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -622,3 +637,157 @@ def test_install_z3_reports_a_marker_failure_event(
         "event": "z3.install.failed",
         "reason": "marker",
     }, "a marker failure must report its own reason"
+
+
+def test_install_z3_reports_an_extraction_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cleanup failure after extraction is one bounded extract failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+    deny_temporary_cleanup(monkeypatch, ".z3.download")
+
+    with pytest.raises(ProverToolError, match="failed to remove temporary Z3 file"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=tmp_path / "install",
+                cache_dir=cache_dir,
+            ),
+        )
+
+    assert events_from(caplog)[-1] == {
+        "event": "z3.install.failed",
+        "reason": "extract",
+    }, "an extraction cleanup failure must report the extract reason"
+
+
+def test_install_z3_keeps_an_extraction_failure_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cleanup failure must not replace the corrupt-archive failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    archive = cache_dir / Z3_ASSET.name
+    archive.write_bytes(b"not a zip archive")
+    monkeypatch.setattr(
+        z3_module,
+        "download_pinned",
+        lambda asset, destination: archive,
+    )
+    deny_temporary_cleanup(monkeypatch, ".z3.download")
+
+    with pytest.raises(ProverToolError, match="failed to extract Z3 archive"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=tmp_path / "install",
+                cache_dir=cache_dir,
+            ),
+        )
+
+    events = events_from(caplog)
+    assert {
+        "event": "z3.cleanup_failed",
+        "reason": "cleanup_error",
+    } in events, "a masked cleanup failure should still be observable"
+    assert [event for event in events if event.get("event") == "z3.install.failed"] == [
+        {"event": "z3.install.failed", "reason": "extract"}
+    ], "the primary failure must remain the only installer failure event"
+
+
+def test_install_z3_reports_a_marker_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cleanup failure after writing the marker is one bounded failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+    deny_temporary_cleanup(monkeypatch, ".z3-version.download")
+
+    with pytest.raises(ProverToolError, match="failed to remove temporary Z3 file"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=tmp_path / "install",
+                cache_dir=cache_dir,
+            ),
+        )
+
+    assert events_from(caplog)[-1] == {
+        "event": "z3.install.failed",
+        "reason": "marker",
+    }, "a marker cleanup failure must report the marker reason"
+
+
+def test_install_z3_keeps_a_marker_failure_when_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A cleanup failure must not replace the marker write failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+    original_write_text = pathlib.Path.write_text
+
+    def deny_write(
+        path: pathlib.Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path.name.endswith(".z3-version.download"):
+            raise PermissionError(13, "permission denied", str(path))
+        return original_write_text(
+            path,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(pathlib.Path, "write_text", deny_write)
+    deny_temporary_cleanup(monkeypatch, ".z3-version.download")
+
+    with pytest.raises(ProverToolError, match="failed to record Z3 installation"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=tmp_path / "install",
+                cache_dir=cache_dir,
+            ),
+        )
+
+    events = events_from(caplog)
+    assert {
+        "event": "z3.cleanup_failed",
+        "reason": "cleanup_error",
+    } in events, "a masked cleanup failure should still be observable"
+    assert [event for event in events if event.get("event") == "z3.install.failed"] == [
+        {"event": "z3.install.failed", "reason": "marker"}
+    ], "the primary failure must remain the only installer failure event"

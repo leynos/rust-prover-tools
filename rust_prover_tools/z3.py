@@ -8,6 +8,7 @@ the installed version so repeated CI runs can reuse the binary.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import logging
 import stat
@@ -29,6 +30,7 @@ from rust_prover_tools.path_resolution import resolve_configured_path
 from rust_prover_tools.platforms import require_linux_x86_64
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import os
     from pathlib import Path
 
@@ -216,9 +218,56 @@ def _optional_text(path: Path) -> str | None:
         raise ProverToolError(msg) from exc
 
 
+@contextlib.contextmanager
+def _temporary_file(path: Path) -> cabc.Generator[None]:
+    """Remove a temporary file without replacing an earlier failure.
+
+    A cleanup failure after a successful block is raised so the installer
+    records a bounded failure. If the block already failed, the cleanup loss
+    is recorded and suppressed because replacing the primary error would hide
+    the real cause.
+    """
+    try:
+        yield
+    except BaseException:
+        _discard_temporary(path, has_prior_failure=True)
+        raise
+    _discard_temporary(path, has_prior_failure=False)
+
+
+def _discard_temporary(path: Path, *, has_prior_failure: bool) -> None:
+    """Remove a temporary file and report a cleanup failure at the right level."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        if has_prior_failure:
+            log_event(_LOGGER, "z3.cleanup_failed", reason="cleanup_error")
+            return
+        msg = f"failed to remove temporary Z3 file '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
 def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> int:
     """Extract the pinned `z3` member and return the bytes written."""
     temporary = install_dir / ".z3.download"
+    with _temporary_file(temporary):
+        written = _write_z3_member(archive_path, install_dir, temporary, binary)
+    log_event(
+        _LOGGER,
+        "z3.extract.complete",
+        asset=Z3_ASSET.name,
+        bytes=written,
+    )
+    return written
+
+
+def _write_z3_member(
+    archive_path: Path,
+    install_dir: Path,
+    temporary: Path,
+    binary: Path,
+) -> int:
+    """Write the bounded member to `temporary` and install it as `binary`."""
     written = 0
     try:
         install_dir.mkdir(parents=True, exist_ok=True)
@@ -239,14 +288,6 @@ def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> int:
     except (OSError, zipfile.BadZipFile) as exc:
         msg = f"failed to extract Z3 archive '{archive_path}': {exc}"
         raise ProverToolError(msg) from exc
-    finally:
-        temporary.unlink(missing_ok=True)
-    log_event(
-        _LOGGER,
-        "z3.extract.complete",
-        asset=Z3_ASSET.name,
-        bytes=written,
-    )
     return written
 
 
@@ -272,12 +313,11 @@ def _z3_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo:
 def _write_marker(marker: Path) -> None:
     """Record the installed version beside the binary."""
     temporary = marker.with_name(f".{marker.name}.download")
-    try:
-        temporary.write_text(f"{Z3_VERSION}\n", encoding="utf-8")
-        temporary.replace(marker)
-    except OSError as exc:
-        msg = f"failed to record Z3 installation in '{marker}': {exc}"
-        raise ProverToolError(msg) from exc
-    finally:
-        temporary.unlink(missing_ok=True)
+    with _temporary_file(temporary):
+        try:
+            temporary.write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+            temporary.replace(marker)
+        except OSError as exc:
+            msg = f"failed to record Z3 installation in '{marker}': {exc}"
+            raise ProverToolError(msg) from exc
     log_event(_LOGGER, "z3.marker.recorded", version=Z3_VERSION)
