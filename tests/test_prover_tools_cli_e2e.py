@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
 import typing as typ
 
 import pytest
 
+from rust_prover_tools.binary_assets import Z3_VERSION
 from tests.conftest import FakeVerusBinarySpec
 from tests.support import (
     CHILD_TIMEOUT,
@@ -21,6 +23,148 @@ from tests.support import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
+
+requires_linux_x86_64 = pytest.mark.skipif(
+    platform.system() != "Linux" or platform.machine() != "x86_64",
+    reason="Z3 installation supports only Linux x86_64",
+)
+
+
+def test_kani_install_compile_is_an_opt_in_cli_fallback(tmp_path: Path) -> None:
+    """The public CLI compiles Kani only when --compile is requested."""
+    version_file = tmp_path / "tools" / "kani" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("0.61.0\n", encoding="utf-8")
+    cargo_log = tmp_path / "cargo.log"
+    cargo = tmp_path / "bin" / "cargo"
+    cargo.parent.mkdir()
+    cargo.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$*" >> "$CARGO_LOG"\n'
+        'if [ "$1" = "kani" ] && [ "$2" = "--version" ]; then\n'
+        "  printf 'kani 0.61.0\\n'\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    cargo.chmod(0o755)
+    environment = sanitized_subprocess_env()
+    environment["PATH"] = os.pathsep.join(
+        (str(cargo.parent), os.environ.get("PATH", "")),
+    )
+    environment["CARGO_LOG"] = str(cargo_log)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rust_prover_tools.cli",
+            "kani",
+            "install",
+            "--repo-root",
+            str(tmp_path),
+            "--compile",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, (
+        f"expected zero returncode, got {completed.returncode}; "
+        f"stdout: {completed.stdout}; stderr: {completed.stderr}"
+    )
+    assert "Installing kani-verifier 0.61.0" in completed.stdout, (
+        f"the installer banner is missing; stdout: {completed.stdout}"
+    )
+    assert "kani 0.61.0" in completed.stdout, (
+        f"the verified version output is missing; stdout: {completed.stdout}"
+    )
+    assert cargo_log.read_text(encoding="utf-8").splitlines() == [
+        "install --locked kani-verifier --version 0.61.0",
+        "kani setup",
+        "kani --version",
+    ], "the compile fallback should run the expected Cargo sequence"
+
+
+@requires_linux_x86_64
+def test_z3_install_cli_reuses_a_marked_installation(tmp_path: Path) -> None:
+    """The public CLI reports an existing marked Z3 installation."""
+    install_dir = tmp_path / ".cache" / "z3" / Z3_VERSION
+    install_dir.mkdir(parents=True)
+    binary = install_dir / "z3"
+    binary.write_bytes(b"z3-binary")
+    binary.chmod(0o755)
+    (install_dir / ".z3-version").write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+    # The CLI honours the unprefixed overrides, so strip any inherited values
+    # that would point the subprocess away from the temporary repository root.
+    environment = sanitized_subprocess_env()
+    environment.pop("Z3_INSTALL_DIR", None)
+    environment.pop("Z3_CACHE_DIR", None)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rust_prover_tools.cli",
+            "z3",
+            "install",
+            "--repo-root",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, (
+        f"expected zero returncode, got {completed.returncode}; "
+        f"stdout: {completed.stdout}; stderr: {completed.stderr}"
+    )
+    assert f"Z3 {Z3_VERSION} already installed at {binary}" in completed.stdout, (
+        f"the reuse status line is missing; stdout: {completed.stdout}"
+    )
+    assert f"Export VERUS_Z3_PATH={binary}" in completed.stdout, (
+        f"the export instruction is missing; stdout: {completed.stdout}"
+    )
+
+
+@requires_linux_x86_64
+def test_z3_install_cli_reports_installation_errors(tmp_path: Path) -> None:
+    """A filesystem failure becomes a clean CLI error, not a traceback."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "rust_prover_tools.cli",
+            "z3",
+            "install",
+            "--repo-root",
+            str(tmp_path),
+            "--install-dir",
+            str(blocker / "z3-install"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=sanitized_subprocess_env(),
+    )
+
+    assert completed.returncode == 1, (
+        f"expected exit status 1, got {completed.returncode}; "
+        f"stdout: {completed.stdout}; stderr: {completed.stderr}"
+    )
+    assert "failed to inspect Z3 installation" in completed.stderr, (
+        f"the installation error is missing; stderr: {completed.stderr}"
+    )
+    assert "Traceback" not in completed.stderr, (
+        f"the CLI must not leak a traceback; stderr: {completed.stderr}"
+    )
 
 
 def test_verus_run_cli_accepts_indented_toolchain_output(

@@ -29,3 +29,23 @@ def test_kani_exec_help_snapshot(
     app(["kani", "exec", "--help"], exit_on_error=False)
     captured = capsys.readouterr()
     assert captured.out == snapshot, "Kani exec help output does not match snapshot"
+
+
+def test_kani_install_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Kani installation exposes the prebuilt route and its override flags."""
+    app(["kani", "install", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Kani install help does not match snapshot"
+
+
+def test_z3_install_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Z3 installation exposes stable documented CLI options."""
+    app(["z3", "install", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Z3 install help does not match snapshot"

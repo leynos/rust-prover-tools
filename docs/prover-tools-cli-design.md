@@ -46,13 +46,116 @@ toolchain parsing.
 
 `rust_prover_tools.kani` owns Kani installation and installed-version checks.
 It keeps command strings shell-free by parsing overrides with `shlex.split`.
+Installation defaults to the pinned prebuilt release and delegates to
+`rust_prover_tools.kani_binary`, which extracts the frontend through
+`rust_prover_tools.kani_archive`; `--compile` selects the older source build in
+the same module.
+
+`rust_prover_tools.z3` installs the pinned Z3 solver used by Verus. It
+downloads the official release archive, extracts only the pinned `z3` binary,
+and records a version marker so later runs reuse the installation.
+
+`rust_prover_tools.binary_assets` is the manifest of pinned release artefacts:
+names, HTTPS URLs, SHA-256 digests, per-asset byte ceilings, archive members,
+and extraction ceilings. `rust_prover_tools.platforms` holds the shared Linux
+x86_64 host check, and `rust_prover_tools.path_resolution` resolves optional
+CLI paths against the repository root.
+
+`rust_prover_tools.downloads` adds digest pinning and the atomic verified
+store. HTTPS URL policy, including the rejection of embedded credentials, lives
+in `rust_prover_tools.download_url`. Connection and redirect policy lives in
+`rust_prover_tools.download_transport`, which accepts only HTTPS and follows a
+bounded number of re-validated redirects. Body limits live in
+`rust_prover_tools.download_stream`, which rejects an oversized
+`Content-Length` before reading, counts streamed bytes, and enforces one
+monotonic transfer deadline. A pending file is removed on any failure and
+renamed to the final path only after the digest matches. The transport connects
+directly over HTTPS and deliberately does not read proxy environment variables
+such as `HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a
+proxy-only environment has no supported route through this library; a caller
+that needs a proxy cannot be served by the current API.
+
+`rust_prover_tools.observability` defines the opt-in event helper. The
+downloader records `download.start`, `download.complete`, `download.cache_hit`,
+`download.verified`, and `download.failed` with a bounded reason category
+(`redirect_limit`, `redirect_target`, `redirect_location`, `http_status`,
+`invalid_content_length`, `content_length`, `size_limit`, `deadline`,
+`incomplete_body`, `stream_error`, `transport_error`, `digest_mismatch`,
+`digest_read`, `store_error`, or `cleanup_error`). Each installer also records
+`<tool>.install.start`, `<tool>.install.reuse`, `<tool>.install.complete`, and
+`<tool>.install.failed` with a bounded phase, together with the extraction,
+marker, setup, and verification boundaries (`z3.extract.complete`,
+`z3.marker.recorded`, `kani.extract.complete`, `kani.setup.complete`,
+`kani.verify.complete`, `verus.extract.start`, and `verus.extract.complete`).
+When removing a temporary file fails while another failure is in flight, the
+cleanup failure is recorded as `download.cleanup_failed` or
+`<tool>.cleanup_failed` and the primary failure is preserved; a cleanup failure
+on its own is reported as the download or installer failure instead. Kani names
+its cleanup reasons explicitly: `cleanup_error` for a pending extraction file
+that could not be removed, `rollback_error` for a backup that could not be
+restored or a published executable that could not be removed during rollback,
+and `backup_error` for a backup that could not be removed after both
+executables were published. A `rollback_error` is always secondary to the
+extraction failure it accompanies, so it is recorded and the extraction error
+is re-raised. A `backup_error` is standalone: it is recorded and then raised, so
+`kani.install.complete` is never reported. Completion events carry the
+transferred byte count and the elapsed seconds. Records carry an `event_data`
+mapping rather than free text. The library installs no handlers, so an
+application opts in by lowering the level of the relevant `rust_prover_tools`
+module logger. User-facing status lines and `ProverToolError` messages remain
+the primary interface.
+
+### Verified download sequence
+
+Figure: the shared downloader bounds and verifies every archive before an
+installer can use it.
+
+```mermaid
+sequenceDiagram
+    accTitle: Bounded verified download sequence
+    accDescr {
+      The installer asks the downloader for a pinned asset. The transport
+      validates the HTTPS URL and requests it. The stream helper rejects a
+      declared length above the byte ceiling; otherwise it copies the body
+      under one deadline and the byte ceiling into a pending file. The
+      downloader hashes that file and replaces the destination only when
+      the digest matches. Any failure, including a digest mismatch,
+      removes the pending file.
+    }
+
+    participant Installer
+    participant Downloads
+    participant Transport
+    participant Stream
+    participant Response
+    participant Cache
+
+    Installer->>Downloads: download_pinned
+    Downloads->>Transport: _download(url, max_bytes, limits)
+    Transport->>Transport: _validate_url
+    Transport->>Response: HTTPS GET
+    Response-->>Transport: status, headers, body
+    Transport->>Stream: _stream(response, pending, limits)
+    alt Content-Length exceeds limit
+        Stream-->>Downloads: ProverToolError
+    else Body is accepted
+        Stream->>Stream: copy under deadline and byte ceiling
+        Stream->>Downloads: completed pending file
+        Downloads->>Downloads: sha256_file
+        alt Digest matches
+            Downloads->>Cache: pending.replace(destination)
+        else Digest mismatch or failure
+            Downloads->>Cache: remove pending file
+        end
+    end
+```
 
 `rust_prover_tools.verus` is a public package facade. Its implementation is
 split into:
 
 - `rust_prover_tools.verus.models`: dataclasses, constants, and path helpers.
-- `rust_prover_tools.verus.install`: release archive download, checksum
-  verification, extraction, and directory normalization.
+- `rust_prover_tools.verus.install`: release archive download through the
+  shared verified store, extraction, and directory normalization.
 - `rust_prover_tools.verus.run`: binary resolution and toolchain management.
 - `rust_prover_tools.verus.batch`: ordered per-file proof execution, partial
   failure reporting, and bounded telemetry.
@@ -191,8 +294,13 @@ enable `pipefail` or inspect `${PIPESTATUS[0]}` to read the producer's status.
 ## Test strategy
 
 Unit tests cover pure helpers and command orchestration. They use cmd-mox to
-intercept external commands on `PATH`, including `cargo`, `curl`, `sha256sum`,
-`shasum`, `unzip`, and `rustup`.
+intercept external commands on `PATH`, including `cargo`, `unzip`, and
+`rustup`. Download tests replace the HTTPS connection with an in-memory
+response so byte ceilings, deadlines, redirects, digest mismatches, and
+pending-file cleanup are deterministic and never touch the network. Kani and Z3
+tests build small local archives and stub only the verified-download step.
+Verus install tests stub the same verified-download step and assert the pinned
+asset request, so no network access or external downloader is involved.
 
 Behavioural tests use `pytest-bdd` to verify public CLI scenarios for matching
 and mismatched Kani versions, successful Verus proof execution, and missing
@@ -273,7 +381,25 @@ version probe fails with a parseable missing-toolchain message and automatic
 toolchain installation is enabled.
 
 The Verus installer keeps the original checksum validation and extraction
-contract, but adds bounded `curl` timeouts to avoid indefinite network hangs.
+contract, but obtains its archive through the shared bounded HTTPS downloader
+rather than `curl`. The pinned SHA-256 digest from `SHA256SUMS` becomes the
+`PinnedAsset` digest, and the 2 GiB archive ceiling becomes its byte limit, so
+the installer inherits the same redirect cap, deadline, streamed byte counting,
+and atomic verified store as the Kani and Z3 installers. Because a repository
+pin must not choose a local path, the archive is written under a fixed local
+name and the version and target are validated as single safe path components.
+
+Kani and Z3 binaries do not come from a user-managed checksum file. Their
+pinned names, URLs, digests, and byte ceilings live in
+`rust_prover_tools.binary_assets`, because these are fixed release artefacts
+that every consumer must install identically. The downloader streams through a
+pending file with a monotonic deadline and a byte ceiling rather than relying
+on the server's declared length, and it removes that pending file on any
+failure. Kani's prebuilt route is the default because a binary install is the
+whole point of the shared tooling; `--compile` remains an explicit fallback for
+hosts or versions the pinned release does not cover. Extraction is restricted
+to named archive members with their own size ceilings, so a verified archive
+still cannot write arbitrary paths.
 
 ## Operational notes
 

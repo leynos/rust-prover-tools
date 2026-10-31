@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from rust_prover_tools.unittests import conftest, test_kani, test_verus
+from rust_prover_tools.unittests import conftest, test_kani, test_verus_install
 
 if typ.TYPE_CHECKING:
     import types
@@ -66,7 +66,7 @@ GUARDED_TESTS: typ.Final[tuple[tuple[types.ModuleType, str], ...]] = (
         "test_check_kani_version_resolves_relative_version_file_from_repo_root",
     ),
     (
-        test_verus,
+        test_verus_install,
         "test_install_verus_resolves_relative_pin_files_from_repo_root",
     ),
 )

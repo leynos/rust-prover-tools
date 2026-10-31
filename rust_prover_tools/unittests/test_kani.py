@@ -33,11 +33,11 @@ if typ.TYPE_CHECKING:
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
 
-def test_install_kani_runs_install_setup_and_verify(
+def test_install_kani_compile_runs_install_setup_and_verify(
     tmp_path: Path,
     cmd_mox: CmdMox,
 ) -> None:
-    """Kani installation preserves the shell script command sequence."""
+    """The opt-in compile route preserves the shell script command sequence."""
     version_file = tmp_path / "tools" / "kani" / "VERSION"
     version_file.parent.mkdir(parents=True)
     version_file.write_text("0.61.0\n", encoding="utf-8")
@@ -49,7 +49,12 @@ def test_install_kani_runs_install_setup_and_verify(
 
     cmd_mox.stub("cargo").runs(cargo_handler)
 
-    lines = install_kani(KaniInstallOptions(paths=KaniPaths(repo_root=tmp_path)))
+    lines = install_kani(
+        KaniInstallOptions(
+            paths=KaniPaths(repo_root=tmp_path),
+            should_compile=True,
+        ),
+    )
 
     assert lines == (
         f"Installing kani-verifier 0.61.0 from {version_file}.",
@@ -142,6 +147,7 @@ def test_install_kani_can_skip_setup_and_verify(
             paths=KaniPaths(repo_root=tmp_path),
             should_setup=False,
             should_verify=False,
+            should_compile=True,
         ),
     )
 
@@ -172,6 +178,7 @@ def test_install_kani_reports_version_override_source(
             version="0.61.0",
             should_setup=False,
             should_verify=False,
+            should_compile=True,
         ),
     )
 
@@ -246,7 +253,12 @@ def test_install_kani_propagates_failed_cargo_install(
     ).returns(stderr="install failed\n", exit_code=2)
 
     with pytest.raises(CommandFailedError, match="command failed"):
-        install_kani(KaniInstallOptions(paths=KaniPaths(repo_root=tmp_path)))
+        install_kani(
+            KaniInstallOptions(
+                paths=KaniPaths(repo_root=tmp_path),
+                should_compile=True,
+            ),
+        )
 
 
 def test_check_kani_version_propagates_failed_version_command(
