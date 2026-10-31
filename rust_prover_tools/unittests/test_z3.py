@@ -115,6 +115,34 @@ def test_install_z3_extracts_only_the_pinned_binary(
     ), "the version marker should record the pinned Z3 version"
 
 
+def test_install_z3_resolves_relative_paths_below_the_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relative install and cache paths are created below the repository root."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    expected_cache = repo_root / "relative" / "cache" / Z3_ASSET.name
+    archive = write_z3_zip(tmp_path / "archive" / Z3_ASSET.name)
+    stub_download(monkeypatch, archive, expected_destination=expected_cache)
+
+    install_z3(
+        Z3InstallOptions(
+            repo_root=repo_root,
+            install_dir=pathlib.Path("relative/install"),
+            cache_dir=pathlib.Path("relative/cache"),
+        ),
+    )
+
+    binary = repo_root / "relative" / "install" / "z3"
+    assert binary.read_bytes() == b"z3-binary", (
+        "the binary must be installed below the repository root"
+    )
+    assert (repo_root / "relative" / "install" / ".z3-version").is_file(), (
+        "the marker must be installed below the repository root"
+    )
+
+
 def test_install_z3_reuses_a_marked_installation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -487,11 +515,11 @@ def test_install_z3_reports_extraction_marker_and_completion_events(
         "z3.install.complete",
     ], "each install boundary should record one event in order"
     extract, marker, complete = events[1:]
-    assert extract["asset"] == Z3_ASSET.name
-    assert extract["bytes"] == len(b"z3-binary")
-    assert marker["version"] == Z3_VERSION
-    assert complete["version"] == Z3_VERSION
-    assert complete["bytes"] == len(b"z3-binary")
+    assert extract["asset"] == Z3_ASSET.name, "extraction names the pinned asset"
+    assert extract["bytes"] == len(b"z3-binary"), "extraction reports bytes written"
+    assert marker["version"] == Z3_VERSION, "the marker event reports the version"
+    assert complete["version"] == Z3_VERSION, "completion reports the version"
+    assert complete["bytes"] == len(b"z3-binary"), "completion reports bytes written"
     elapsed = complete["elapsed_seconds"]
     assert isinstance(elapsed, float), "completion must carry a float duration"
     assert elapsed >= 0.0, "completion must carry a non-negative duration"

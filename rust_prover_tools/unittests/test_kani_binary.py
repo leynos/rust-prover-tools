@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import pathlib
 import tarfile
 import typing as typ
 
@@ -242,6 +243,106 @@ def test_extract_frontend_rejects_an_oversized_member(
     )
 
 
+def test_extract_frontend_removes_a_partial_member(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A member that fails mid-copy leaves no pending file behind."""
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"one", "kani": b"two"},
+    )
+    install_dir = tmp_path / "bin"
+
+    def fail_copy(
+        archive_file: tarfile.TarFile,
+        member: tarfile.TarInfo,
+        target: Path,
+    ) -> int:
+        del archive_file, member
+        target.write_bytes(b"partial")
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr(kani_binary, "_copy_member", fail_copy)
+
+    with pytest.raises(ProverToolError, match="failed to extract"):
+        kani_binary._extract_frontend(archive, install_dir)
+
+    assert not (install_dir / ".cargo-kani.download").exists(), (
+        "a partial pending member must be removed"
+    )
+
+
+def deny_kani_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make publishing the second frontend executable fail."""
+    original_replace = pathlib.Path.replace
+
+    def replace(
+        self: pathlib.Path,
+        target: pathlib.Path,
+    ) -> pathlib.Path:
+        if self.name.endswith(".download") and target.name == "kani":
+            raise PermissionError(13, "permission denied", str(self))
+        return original_replace(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "replace", replace)
+
+
+def test_extract_frontend_restores_previous_executables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed second replacement restores the executable published first."""
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"new-cargo-kani", "kani": b"new-kani"},
+    )
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    previous = install_dir / "cargo-kani"
+    previous.write_bytes(b"old-cargo-kani")
+    (install_dir / "kani").write_bytes(b"old-kani")
+    deny_kani_replacement(monkeypatch)
+
+    with pytest.raises(ProverToolError, match="failed to extract"):
+        kani_binary._extract_frontend(archive, install_dir)
+
+    assert previous.read_bytes() == b"old-cargo-kani", (
+        "the first executable must be restored"
+    )
+    assert (install_dir / "kani").read_bytes() == b"old-kani", (
+        "the second executable must keep its previous content"
+    )
+    assert not (install_dir / ".cargo-kani.previous").exists(), (
+        "the backup must not remain after rollback"
+    )
+    assert not (install_dir / ".cargo-kani.download").exists(), (
+        "the pending member must be removed"
+    )
+
+
+def test_extract_frontend_removes_new_executables_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rollback removes an executable that had no previous installation."""
+    archive = write_tar(
+        tmp_path / "frontend.tar.gz",
+        {"cargo-kani": b"new-cargo-kani", "kani": b"new-kani"},
+    )
+    install_dir = tmp_path / "bin"
+    install_dir.mkdir()
+    deny_kani_replacement(monkeypatch)
+
+    with pytest.raises(ProverToolError, match="failed to extract"):
+        kani_binary._extract_frontend(archive, install_dir)
+
+    assert not (install_dir / "cargo-kani").exists(), (
+        "a newly published executable must be removed on rollback"
+    )
+
+
 def test_path_env_puts_the_install_directory_first(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -309,13 +410,17 @@ def test_install_kani_binary_reports_each_boundary_event(
         "kani.install.complete",
     ], "each install boundary should record one event in order"
     extract = events[1]
-    assert extract["asset"] == KANI_FRONTEND_ASSET.name
-    assert extract["members"] == 2
-    assert extract["bytes"] == len(b"cargo-kani") + len(b"kani")
-    assert events[2]["asset"] == KANI_BUNDLE_ASSET.name
+    assert extract["asset"] == KANI_FRONTEND_ASSET.name, "extraction names the frontend"
+    assert extract["members"] == 2, "extraction reports both members"
+    assert extract["bytes"] == len(b"cargo-kani") + len(b"kani"), (
+        "extraction reports the bytes written"
+    )
+    assert events[2]["asset"] == KANI_BUNDLE_ASSET.name, "setup names the bundle"
     complete = events[4]
-    assert complete["version"] == "0.67.0"
-    assert complete["bytes"] == len(b"cargo-kani") + len(b"kani")
+    assert complete["version"] == "0.67.0", "completion reports the version"
+    assert complete["bytes"] == len(b"cargo-kani") + len(b"kani"), (
+        "completion reports the bytes written"
+    )
     elapsed = complete["elapsed_seconds"]
     assert isinstance(elapsed, float), "completion must carry a float duration"
     assert elapsed >= 0.0, "completion must carry a non-negative duration"

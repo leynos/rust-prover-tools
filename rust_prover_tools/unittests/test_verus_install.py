@@ -372,12 +372,12 @@ def test_install_verus_reports_extraction_and_completion_events(
         "verus.extract.complete",
         "verus.install.complete",
     ], "each install boundary should record one event in order"
-    assert events[0]["version"] == "2025.01.01"
-    assert events[0]["target"] == "x86-linux"
-    assert events[1]["asset"] == asset_name
-    assert events[2]["asset"] == asset_name
+    assert events[0]["version"] == "2025.01.01", "start reports the version"
+    assert events[0]["target"] == "x86-linux", "start reports the target"
+    assert events[1]["asset"] == asset_name, "extraction start names the asset"
+    assert events[2]["asset"] == asset_name, "extraction completion names the asset"
     complete = events[3]
-    assert complete["version"] == "2025.01.01"
+    assert complete["version"] == "2025.01.01", "completion reports the version"
     elapsed = complete["elapsed_seconds"]
     assert isinstance(elapsed, float), "completion must carry a float duration"
     assert elapsed >= 0.0, "completion must carry a non-negative duration"
@@ -478,7 +478,7 @@ def test_install_verus_reports_an_extract_failure_event(
         "verus.extract.start",
         "verus.install.failed",
     ], "a failed extraction should record its start and one failure reason"
-    assert events[-1]["reason"] == "extract"
+    assert events[-1]["reason"] == "extract", "the failure reason must be extract"
 
 
 def test_install_verus_reports_an_inspection_failure_event(

@@ -13,7 +13,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from rust_prover_tools import download_transport
+from rust_prover_tools import download_stream, download_transport
 from rust_prover_tools.download_transport import DownloadLimits
 from rust_prover_tools.errors import ProverToolError
 
@@ -98,10 +98,10 @@ def test_stream_never_writes_past_the_byte_ceiling(
     response = ChunkResponse(tuple(chunks))
 
     try:
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
-            download_transport._StreamLimits(
+            download_stream._StreamLimits(
                 destination.name,
                 max_bytes,
                 NO_DEADLINE,

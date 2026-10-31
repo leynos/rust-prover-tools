@@ -224,10 +224,10 @@ def _extract_frontend(archive_path: Path, install_dir: Path) -> int:
                 for name in KANI_FRONTEND_MEMBERS:
                     member = _regular_member(archive, name)
                     temporary = install_dir / f".{name}.download"
-                    written += _copy_member(archive, member, temporary)
+                    # Register before writing so a partial copy is still removed.
                     pending.append((temporary, install_dir / name))
-                for temporary, target in pending:
-                    temporary.replace(target)
+                    written += _copy_member(archive, member, temporary)
+                _publish_frontend(pending)
             finally:
                 for temporary, _ in pending:
                     temporary.unlink(missing_ok=True)
@@ -242,6 +242,68 @@ def _extract_frontend(archive_path: Path, install_dir: Path) -> int:
         bytes=written,
     )
     return written
+
+
+def _publish_frontend(pending: list[tuple[Path, Path]]) -> None:
+    """Publish both executables together, rolling back a partial replacement."""
+    published: list[tuple[Path, Path | None]] = []
+    try:
+        for temporary, target in pending:
+            backup = _move_original_aside(target)
+            try:
+                temporary.replace(target)
+            except OSError:
+                # A failed replace leaves the destination untouched, so only
+                # this member's move aside must be undone here.
+                _restore_backup(target, backup)
+                raise
+            published.append((target, backup))
+    except OSError:
+        _roll_back(published)
+        raise
+    for _, backup in published:
+        if backup is not None:
+            _discard_backup(backup)
+
+
+def _move_original_aside(target: Path) -> Path | None:
+    """Move an existing executable to a backup path, or report none existed."""
+    if not target.exists():
+        return None
+    backup = target.with_name(f".{target.name}.previous")
+    target.replace(backup)
+    return backup
+
+
+def _restore_backup(target: Path, backup: Path | None) -> None:
+    """Put a moved executable back after its replacement failed."""
+    if backup is None:
+        return
+    try:
+        backup.replace(target)
+    except OSError:
+        log_event(_LOGGER, "kani.cleanup_failed", reason="rollback_error")
+
+
+def _roll_back(published: list[tuple[Path, Path | None]]) -> None:
+    """Restore every executable published before a later replacement failed."""
+    for target, backup in reversed(published):
+        if backup is None:
+            # This target did not exist before the extract, so remove the new file.
+            try:
+                target.unlink(missing_ok=True)
+            except OSError:
+                log_event(_LOGGER, "kani.cleanup_failed", reason="rollback_error")
+            continue
+        _restore_backup(target, backup)
+
+
+def _discard_backup(backup: Path) -> None:
+    """Remove a backup after both executables were published."""
+    try:
+        backup.unlink(missing_ok=True)
+    except OSError:
+        log_event(_LOGGER, "kani.cleanup_failed", reason="backup_error")
 
 
 def _regular_member(archive: tarfile.TarFile, name: str) -> tarfile.TarInfo:

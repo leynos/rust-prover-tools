@@ -9,7 +9,7 @@ import typing as typ
 
 import pytest
 
-from rust_prover_tools import download_transport, downloads
+from rust_prover_tools import download_stream, download_transport, downloads
 from rust_prover_tools.downloads import (
     DownloadLimits,
     PinnedAsset,
@@ -31,9 +31,9 @@ def stream_limits(
     deadline: float,
     *,
     name: str = "asset.bin",
-) -> download_transport._StreamLimits:
+) -> download_stream._StreamLimits:
     """Return stream limits for a test asset."""
-    return download_transport._StreamLimits(name, max_bytes, deadline)
+    return download_stream._StreamLimits(name, max_bytes, deadline)
 
 
 def download_request(
@@ -136,6 +136,17 @@ class FakeConnection:
         self.closed = True
 
 
+class FakeSocket:
+    """A socket double that records the timeouts it is given."""
+
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        """Record a requested timeout."""
+        self.timeouts.append(value)
+
+
 def test_stream_rejects_oversized_content_length_before_reading(
     tmp_path: Path,
 ) -> None:
@@ -147,7 +158,7 @@ def test_stream_rejects_oversized_content_length_before_reading(
     )
 
     with pytest.raises(ProverToolError, match="Content-Length 100 exceeds"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(10, NO_DEADLINE),
@@ -165,7 +176,7 @@ def test_stream_stops_at_byte_ceiling_without_length_header(
     response = FakeResponse(chunks=(b"123456", b"7890"))
 
     with pytest.raises(ProverToolError, match="streamed size exceeded"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(8, NO_DEADLINE),
@@ -182,12 +193,12 @@ def test_stream_emits_a_size_limit_event_at_debug_level(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The size-limit boundary is observable when the logger opts in."""
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
     destination = tmp_path / "asset.bin"
     response = FakeResponse(chunks=(b"123456", b"7890"))
 
     with pytest.raises(ProverToolError, match="streamed size exceeded"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(8, NO_DEADLINE),
@@ -209,11 +220,11 @@ def test_stream_is_silent_without_debug_logging(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The default configuration produces no download events."""
-    caplog.set_level(logging.WARNING, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.WARNING, logger="rust_prover_tools.download_stream")
     destination = tmp_path / "asset.bin"
     response = FakeResponse(chunks=(b"payload",))
 
-    download_transport._stream(
+    download_stream._stream(
         response,
         destination,
         stream_limits(100, NO_DEADLINE),
@@ -257,12 +268,12 @@ def test_stream_stops_when_total_deadline_expires(
 ) -> None:
     """A slow stream is stopped by the overall transfer deadline."""
     clock = FakeClock()
-    monkeypatch.setattr(download_transport, "monotonic", clock.monotonic)
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
     destination = tmp_path / "asset.bin"
     response = FakeResponse(chunks=(b"a", b"b"), clock=clock)
 
     with pytest.raises(ProverToolError, match="transfer deadline"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(100, 0.0),
@@ -272,6 +283,123 @@ def test_stream_stops_when_total_deadline_expires(
     assert destination.read_bytes() == b"a", (
         "the bytes read before the deadline must be kept"
     )
+
+
+def test_deadline_response_bounds_each_read_by_the_remaining_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every body read resets the socket timeout to the remaining deadline."""
+    clock = FakeClock()
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+    sock = FakeSocket()
+    response = download_stream._DeadlineResponse(
+        FakeResponse(chunks=(b"a", b"b")),
+        deadline=10.0,
+        read_timeout_seconds=15.0,
+        sock=sock,
+    )
+
+    assert response.read(1) == b"a", "the wrapper must forward the first chunk"
+    clock.advance(4.0)
+    assert response.read(1) == b"b", "the wrapper must forward later chunks"
+    assert sock.timeouts == [10.0, 6.0], (
+        "each read must wait no longer than the remaining deadline"
+    )
+
+
+def test_deadline_response_uses_the_configured_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short socket timeout still caps a read inside a longer deadline."""
+    clock = FakeClock()
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+    sock = FakeSocket()
+    response = download_stream._DeadlineResponse(
+        FakeResponse(chunks=(b"a",)),
+        deadline=300.0,
+        read_timeout_seconds=15.0,
+        sock=sock,
+    )
+
+    response.read(1)
+
+    assert sock.timeouts == [15.0], "the configured read timeout must bound the wait"
+
+
+def test_deadline_response_skips_the_timeout_without_a_socket() -> None:
+    """A response without a socket still forwards its body."""
+    response = download_stream._DeadlineResponse(
+        FakeResponse(chunks=(b"body",)),
+        deadline=10.0,
+        read_timeout_seconds=15.0,
+    )
+
+    assert response.read(4) == b"body", "the wrapper must forward the body"
+
+
+def test_stream_reports_a_read_timeout_at_the_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A read timeout at the deadline is reported as a deadline failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    clock = FakeClock()
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+
+    class TimingOutResponse(FakeResponse):
+        def read(self, amt: int | None = None) -> bytes:
+            """Advance past the deadline and time out."""
+            del amt
+            clock.advance(2.0)
+            msg = "timed out"
+            raise TimeoutError(msg)
+
+    with pytest.raises(ProverToolError, match="transfer deadline"):
+        download_stream._stream(
+            TimingOutResponse(),
+            tmp_path / "asset.bin",
+            stream_limits(10, 1.0),
+        )
+
+    assert events_from(caplog)[-1] == {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "deadline",
+        "written": 0,
+    }, "a read timeout at the deadline must report the deadline"
+
+
+def test_stream_reports_an_early_read_timeout_as_a_stream_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A read timeout before the deadline remains a transport failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    clock = FakeClock()
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+
+    class TimingOutResponse(FakeResponse):
+        def read(self, amt: int | None = None) -> bytes:
+            """Time out without reaching the deadline."""
+            del amt
+            clock.advance(0.1)
+            msg = "timed out"
+            raise TimeoutError(msg)
+
+    with pytest.raises(ProverToolError, match="failed to download"):
+        download_stream._stream(
+            TimingOutResponse(),
+            tmp_path / "asset.bin",
+            stream_limits(10, 10.0),
+        )
+
+    assert events_from(caplog)[-1] == {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "stream_error",
+    }, "an early read timeout must not be reported as the deadline"
 
 
 def test_stream_accepts_a_complete_body_matching_content_length(
@@ -284,7 +412,7 @@ def test_stream_accepts_a_complete_body_matching_content_length(
         chunks=(b"abc", b"def"),
     )
 
-    download_transport._stream(response, destination, stream_limits(10, NO_DEADLINE))
+    download_stream._stream(response, destination, stream_limits(10, NO_DEADLINE))
 
     assert destination.read_bytes() == b"abcdef", "the complete body must be written"
 
@@ -298,7 +426,7 @@ def test_stream_rejects_an_incomplete_body(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ProverToolError, match="incomplete download"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(20, NO_DEADLINE),
@@ -315,7 +443,7 @@ def test_stream_rejects_invalid_content_length(
     response = FakeResponse(headers={"Content-Length": value})
 
     with pytest.raises(ProverToolError, match="Content-Length"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(10, NO_DEADLINE),
@@ -786,7 +914,7 @@ def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
     response = FakeResponse(chunks=(b"payload",))
 
     with pytest.raises(ProverToolError, match="failed to download"):
-        download_transport._stream(
+        download_stream._stream(
             response,
             destination,
             stream_limits(100, NO_DEADLINE),
@@ -798,6 +926,7 @@ def test_open_requests_the_validated_path_with_identity_encoding(
 ) -> None:
     """The transport requests the resource path and asks for an identity body."""
     response = FakeResponse(chunks=(b"payload",))
+    sock = FakeSocket()
     captured: dict[str, object] = {}
 
     class FakeConnection:
@@ -811,6 +940,7 @@ def test_open_requests_the_validated_path_with_identity_encoding(
             captured["host"] = host
             captured["port"] = port
             captured["timeout"] = timeout
+            self.sock = sock
 
         def request(
             self,
@@ -842,7 +972,9 @@ def test_open_requests_the_validated_path_with_identity_encoding(
         asset_name="asset.bin",
     )
 
-    assert returned_response is response, "the response must be returned"
+    assert returned_response.status == 200, "the response status must be returned"
+    assert returned_response.read(7) == b"payload", "the response body must be readable"
+    assert sock.timeouts == [5.0], "the read must use the configured socket timeout"
     assert isinstance(connection, FakeConnection), "the connection must be returned"
     assert captured["host"] == "example.test", "the host must come from the URL"
     assert captured["port"] == 8443, "the port must come from the URL"
@@ -1069,10 +1201,10 @@ def test_download_reports_a_stream_error(
             msg = "connection reset"
             raise OSError(msg)
 
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
 
     with pytest.raises(ProverToolError, match=r"failed to download asset\.bin"):
-        download_transport._stream(
+        download_stream._stream(
             FailingResponse(),
             tmp_path / "asset.bin",
             stream_limits(100, NO_DEADLINE),

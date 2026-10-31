@@ -123,10 +123,23 @@ Feature modules should own workflow behaviour:
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified
-  store, with HTTPS URL policy in `rust_prover_tools.download_url` and network
-  policy in `rust_prover_tools.download_transport`.
+  store, with HTTPS URL policy in `rust_prover_tools.download_url`, connection
+  and redirect policy in `rust_prover_tools.download_transport`, and body
+  limits in `rust_prover_tools.download_stream`.
 - `rust_prover_tools.platforms` and `rust_prover_tools.path_resolution` for the
   shared host check and CLI path resolution.
+- `rust_prover_tools.observability` for the shared opt-in event helper.
+
+Installer and download boundaries report through
+`log_event(logger, event, **fields)` in `rust_prover_tools.observability`. The
+helper emits one DEBUG record whose payload is an `event_data` mapping. Event
+names are stable identifiers such as `download.start` or
+`kani.install.complete`, and their fields stay bounded to counts, durations,
+phase names, and asset names. Never include URLs, filesystem paths,
+credentials, digests, or payloads. The library installs no handlers, so an
+application opts in by lowering the level of the relevant `rust_prover_tools`
+module logger. `docs/prover-tools-cli-design.md` owns the system-design record
+for the event vocabulary.
 
 When adding a pinned asset, update `binary_assets` with the exact URL, digest,
 byte ceiling, and archive member, and add a test that builds a local archive of

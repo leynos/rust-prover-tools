@@ -9,7 +9,8 @@ renamed only after the pinned SHA-256 digest matches, so a caller never sees a
 partial asset at the final path.
 
 The network-facing half of this policy lives in
-`rust_prover_tools.download_transport`; this module adds digest pinning and the
+`rust_prover_tools.download_transport`, with body limits in
+`rust_prover_tools.download_stream`; this module adds digest pinning and the
 atomic verified store.
 
 Example
@@ -38,9 +39,9 @@ import logging
 import stat
 import typing as typ
 
+from rust_prover_tools.download_stream import READ_CHUNK_SIZE
 from rust_prover_tools.download_transport import (
     DEFAULT_DOWNLOAD_LIMITS,
-    READ_CHUNK_SIZE,
     DownloadLimits,
     _download,
     _DownloadRequest,
@@ -132,12 +133,11 @@ def download_pinned(
 
 @contextlib.contextmanager
 def _pending_download(path: Path, asset: str) -> cabc.Generator[None]:
-    """Remove a pending download, preserving an earlier failure.
-
-    A cleanup failure after a successful block is raised because the caller
-    should know the temporary file remains. If the block is already failing,
-    the cleanup error is recorded and suppressed so it cannot hide the cause.
-    """
+    """Remove a pending download, preserving an earlier failure."""
+    # A cleanup failure after a successful block is raised because the caller
+    # should know the temporary file remains. While the block is already
+    # failing, the cleanup error is recorded and suppressed so it cannot hide
+    # the primary cause.
     try:
         yield
     except BaseException:
@@ -181,12 +181,10 @@ def _has_verified_copy(asset: PinnedAsset, destination: Path) -> bool:
 
 
 def _is_regular_file(path: Path) -> bool:
-    """Return whether `path` names an existing regular file.
-
-    A missing entry is an ordinary cache miss. Any other inspection failure is
-    reported instead, because treating an unreadable cache entry as absent
-    would silently replace an asset over a broken environment.
-    """
+    """Return whether `path` names an existing regular file."""
+    # A missing entry is an ordinary cache miss. Any other inspection failure is
+    # reported instead, because treating an unreadable cache entry as absent
+    # would silently replace an asset over a broken environment.
     try:
         status = path.stat()
     except FileNotFoundError:

@@ -220,13 +220,11 @@ def _optional_text(path: Path) -> str | None:
 
 @contextlib.contextmanager
 def _temporary_file(path: Path) -> cabc.Generator[None]:
-    """Remove a temporary file without replacing an earlier failure.
-
-    A cleanup failure after a successful block is raised so the installer
-    records a bounded failure. If the block already failed, the cleanup loss
-    is recorded and suppressed because replacing the primary error would hide
-    the real cause.
-    """
+    """Remove a temporary file without replacing an earlier failure."""
+    # A cleanup failure after a successful block is raised so the installer
+    # records a bounded failure. If the block already failed, the cleanup
+    # failure is recorded and suppressed because replacing the primary error
+    # would hide the real cause.
     try:
         yield
     except BaseException:

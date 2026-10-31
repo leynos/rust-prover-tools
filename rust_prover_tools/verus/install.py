@@ -158,12 +158,10 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
 
 
 def _has_installed_binary(binary: Path) -> bool:
-    """Return whether `binary` is an executable regular file.
-
-    A missing path is an ordinary cache miss. Any other inspection failure is
-    reported instead, because treating an unreadable installation as absent
-    would reinstall over a broken environment.
-    """
+    """Return whether `binary` is an executable regular file."""
+    # A missing path is an ordinary cache miss. Any other inspection failure is
+    # reported instead, because treating an unreadable installation as absent
+    # would reinstall over a broken environment.
     try:
         status = binary.stat()
     except FileNotFoundError:

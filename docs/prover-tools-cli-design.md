@@ -62,16 +62,17 @@ CLI paths against the repository root.
 
 `rust_prover_tools.downloads` adds digest pinning and the atomic verified
 store. HTTPS URL policy, including the rejection of embedded credentials, lives
-in `rust_prover_tools.download_url`. The network policy lives in
-`rust_prover_tools.download_transport`, which accepts only HTTPS, follows a
-bounded number of re-validated redirects, rejects an oversized `Content-Length`
-before reading, counts streamed bytes, and enforces one monotonic transfer
-deadline. A pending file is removed on any failure and renamed to the final
-path only after the digest matches. The transport connects directly over HTTPS
-and deliberately does not read proxy environment variables such as
-`HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a proxy-only
-environment has no supported route through this library; a caller that needs a
-proxy cannot be served by the current API.
+in `rust_prover_tools.download_url`. Connection and redirect policy lives in
+`rust_prover_tools.download_transport`, which accepts only HTTPS and follows a
+bounded number of re-validated redirects. Body limits live in
+`rust_prover_tools.download_stream`, which rejects an oversized
+`Content-Length` before reading, counts streamed bytes, and enforces one
+monotonic transfer deadline. A pending file is removed on any failure and
+renamed to the final path only after the digest matches. The transport connects
+directly over HTTPS and deliberately does not read proxy environment variables
+such as `HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a
+proxy-only environment has no supported route through this library; a caller
+that needs a proxy cannot be served by the current API.
 
 `rust_prover_tools.observability` defines the opt-in event helper. The
 downloader records `download.start`, `download.complete`, `download.cache_hit`,
@@ -86,7 +87,7 @@ marker, setup, and verification boundaries (`z3.extract.complete`,
 `z3.marker.recorded`, `kani.extract.complete`, `kani.setup.complete`,
 `kani.verify.complete`, `verus.extract.start`, and `verus.extract.complete`).
 When removing a temporary file fails while another failure is in flight, the
-cleanup loss is recorded as `download.cleanup_failed` or
+cleanup failure is recorded as `download.cleanup_failed` or
 `<tool>.cleanup_failed` and the primary failure is preserved; a cleanup failure
 on its own is reported as the download or installer failure instead. Completion
 events carry the transferred byte count and the elapsed seconds. Records carry
@@ -105,17 +106,18 @@ sequenceDiagram
     accTitle: Bounded verified download sequence
     accDescr {
       The installer asks the downloader for a pinned asset. The transport
-      validates the HTTPS URL, requests it, and rejects a declared length
-      above the byte ceiling. Otherwise it streams the body under one
-      deadline and the byte ceiling into a pending file. The downloader
-      hashes that file and replaces the destination only when the digest
-      matches. Any failure, including a digest mismatch, removes the
-      pending file.
+      validates the HTTPS URL and requests it. The stream helper rejects a
+      declared length above the byte ceiling; otherwise it copies the body
+      under one deadline and the byte ceiling into a pending file. The
+      downloader hashes that file and replaces the destination only when
+      the digest matches. Any failure, including a digest mismatch,
+      removes the pending file.
     }
 
     participant Installer
     participant Downloads
     participant Transport
+    participant Stream
     participant Response
     participant Cache
 
@@ -124,11 +126,12 @@ sequenceDiagram
     Transport->>Transport: _validate_url
     Transport->>Response: HTTPS GET
     Response-->>Transport: status, headers, body
+    Transport->>Stream: _stream(response, pending, limits)
     alt Content-Length exceeds limit
-        Transport-->>Downloads: ProverToolError
+        Stream-->>Downloads: ProverToolError
     else Body is accepted
-        Transport->>Transport: _copy_body with deadline and byte ceiling
-        Transport->>Downloads: completed pending file
+        Stream->>Stream: copy under deadline and byte ceiling
+        Stream->>Downloads: completed pending file
         Downloads->>Downloads: sha256_file
         alt Digest matches
             Downloads->>Cache: pending.replace(destination)
