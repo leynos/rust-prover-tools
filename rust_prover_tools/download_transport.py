@@ -38,9 +38,6 @@ REDIRECT_STATUSES: typ.Final[frozenset[int]] = frozenset({301, 302, 303, 307, 30
 USER_AGENT: typ.Final[str] = "rust-prover-tools"
 
 
-_HeaderDefault = typ.TypeVar("_HeaderDefault")
-
-
 class HTTPResponseLike(typ.Protocol):
     """The response surface used by the streaming helpers.
 
@@ -54,7 +51,7 @@ class HTTPResponseLike(typ.Protocol):
     def getheader(self, name: str) -> str | None: ...
 
     @typ.overload
-    def getheader(self, name: str, default: _HeaderDefault) -> str | _HeaderDefault: ...
+    def getheader[T](self, name: str, default: T) -> str | T: ...
 
     def read(self, amt: int | None = None) -> bytes:
         """Read up to `amt` response bytes."""

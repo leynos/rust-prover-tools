@@ -24,6 +24,10 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.downloads import PinnedAsset
 
+# The happy-path installer tests must pass on any contributor host; the
+# unsupported-host test overrides the fixture's platform attributes itself.
+pytestmark = pytest.mark.usefixtures("linux_x86_64_host")
+
 
 def write_z3_zip(path: Path, *, payload: bytes = b"z3-binary") -> Path:
     """Write a minimal Z3-shaped zip archive."""
@@ -75,12 +79,14 @@ def test_install_z3_extracts_only_the_pinned_binary(
     assert lines == (
         f"Installed Z3 {Z3_VERSION} at {binary}",
         f"Export VERUS_Z3_PATH={binary}",
+    ), "the installer should report the install path and export line"
+    assert binary.read_bytes() == b"z3-binary", (
+        "the pinned archive member should be extracted verbatim"
     )
-    assert binary.read_bytes() == b"z3-binary"
     assert os.access(binary, os.X_OK), "z3 must be executable"
     assert (install_dir / ".z3-version").read_text(encoding="utf-8").strip() == (
         Z3_VERSION
-    )
+    ), "the version marker should record the pinned Z3 version"
 
 
 def test_install_z3_reuses_a_marked_installation(
@@ -116,7 +122,7 @@ def test_install_z3_reuses_a_marked_installation(
     assert lines == (
         f"Z3 {Z3_VERSION} already installed at {binary}",
         f"Export VERUS_Z3_PATH={binary}",
-    )
+    ), "a marked installation should report reuse rather than reinstalling"
 
 
 def test_install_z3_rejects_a_missing_member(
@@ -144,7 +150,9 @@ def test_install_z3_rejects_a_missing_member(
             ),
         )
 
-    assert not (tmp_path / "install" / "z3").exists()
+    assert not (tmp_path / "install" / "z3").exists(), (
+        "a rejected archive must not publish a z3 binary"
+    )
 
 
 def test_install_z3_rejects_an_oversized_member(
@@ -170,7 +178,9 @@ def test_install_z3_rejects_an_oversized_member(
             ),
         )
 
-    assert not (tmp_path / "install" / "z3").exists()
+    assert not (tmp_path / "install" / "z3").exists(), (
+        "an oversized member must not be extracted"
+    )
 
 
 def test_install_z3_rejects_unsupported_hosts(
@@ -187,5 +197,9 @@ def test_install_z3_rejects_unsupported_hosts(
 
 def test_default_z3_paths_are_repository_local(tmp_path: Path) -> None:
     """Default cache and install directories stay below the repository root."""
-    assert default_z3_cache_dir(tmp_path) == tmp_path / ".cache" / "z3"
-    assert default_z3_install_dir(tmp_path) == (tmp_path / ".cache" / "z3" / Z3_VERSION)
+    assert default_z3_cache_dir(tmp_path) == tmp_path / ".cache" / "z3", (
+        "the default cache directory should live under the repository"
+    )
+    assert default_z3_install_dir(tmp_path) == (
+        tmp_path / ".cache" / "z3" / Z3_VERSION
+    ), "the install directory should be versioned inside the cache"

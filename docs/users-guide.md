@@ -45,7 +45,9 @@ setup, and `--no-verify` to skip the final version probe. Use `--install-dir`
 to place the extracted binaries elsewhere, and `--cache-dir` to choose where
 verified archives are cached (default `.cache/kani` below the repository root).
 The `KANI_INSTALL_DIR` and `KANI_CACHE_DIR` environment variables, with
-`INPUT_`-prefixed forms, provide the same bindings.
+`INPUT_`-prefixed forms, provide the same bindings. The `INPUT_KANI_COMPILE`
+environment variable turns on the compile fallback just like `--compile`; pass
+`--no-compile` to force the prebuilt route when that variable is set.
 
 `prover-tools kani check-version` reads the expected version, runs the Kani
 command with `--version`, parses the first semantic version from the output,
@@ -303,6 +305,9 @@ Useful options are:
   is `.cache/z3/<version>` below the repository root.
 - `--cache-dir PATH`: select the verified archive cache. The default is
   `.cache/z3` below the repository root.
+
+The `Z3_INSTALL_DIR` and `Z3_CACHE_DIR` environment variables, with
+`INPUT_`-prefixed forms, provide the same install and cache bindings.
 
 ### Download safeguards
 

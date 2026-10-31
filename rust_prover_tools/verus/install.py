@@ -3,7 +3,7 @@
 This module owns the network and archive steps for installing a pinned Verus
 release. It turns repository pins into a `VerusArchive`, downloads that archive
 with the shared bounded HTTPS downloader, verifies its pinned SHA-256 digest,
-unzips it, and normalises the extracted directory to the `verus` layout
+unzips it, and normalizes the extracted directory to the `verus` layout
 expected by `prover-tools verus run`.
 
 Import `install_verus` when a caller needs the full installation workflow, and
@@ -125,6 +125,19 @@ def install_verus(options: VerusInstallOptions) -> tuple[str, ...]:
 def verus_archive(options: VerusInstallOptions, version: str) -> VerusArchive:
     """Build the Verus release archive request.
 
+    Parameters
+    ----------
+    options : VerusInstallOptions
+        Repository pins supplying the target, download base URL, and checksum
+        file.
+    version : str
+        Verus release version to request.
+
+    Returns
+    -------
+    VerusArchive
+        The archive name, download URL, and pinned SHA-256 digest.
+
     Raises
     ------
     ProverToolError
@@ -147,6 +160,18 @@ def download_archive(archive: VerusArchive, temporary_directory: Path) -> Path:
     The archive is written under a fixed local name. The release name comes
     from repository pins, so it must never select a path outside
     `temporary_directory`.
+
+    Parameters
+    ----------
+    archive : VerusArchive
+        Archive request built by `verus_archive`.
+    temporary_directory : Path
+        Directory that receives the downloaded archive.
+
+    Returns
+    -------
+    Path
+        The verified archive file inside `temporary_directory`.
 
     Raises
     ------
@@ -188,6 +213,16 @@ def verify_archive_sha(archive: VerusArchive, archive_path: Path) -> None:
 
 def calculate_sha256(path: Path) -> str:
     """Return the lowercase SHA-256 digest of a file.
+
+    Parameters
+    ----------
+    path : Path
+        File whose digest is calculated.
+
+    Returns
+    -------
+    str
+        Lowercase hexadecimal SHA-256 digest.
 
     Raises
     ------

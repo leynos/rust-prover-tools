@@ -55,7 +55,7 @@ def test_resolve_verus_bin_accepts_supported_directory_layouts(
     )
 
 
-def test_install_verus_requests_pinned_archive_and_normalises_it(
+def test_install_verus_requests_pinned_archive_and_normalizes_it(
     tmp_path: Path,
     cmd_mox: CmdMox,
     monkeypatch: pytest.MonkeyPatch,
@@ -101,7 +101,7 @@ def test_install_verus_requests_pinned_archive_and_normalises_it(
         str(install_dir),
     ], "unzip should extract the downloaded archive to install_dir"
     assert (install_dir / "verus" / "verus").exists(), (
-        "Install should normalise final binary path"
+        "Install should normalize final binary path"
     )
 
 

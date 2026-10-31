@@ -68,8 +68,12 @@ def test_kani_install_compile_is_an_opt_in_cli_fallback(tmp_path: Path) -> None:
         f"expected zero returncode, got {completed.returncode}; "
         f"stdout: {completed.stdout}; stderr: {completed.stderr}"
     )
-    assert "Installing kani-verifier 0.61.0" in completed.stdout
-    assert "kani 0.61.0" in completed.stdout
+    assert "Installing kani-verifier 0.61.0" in completed.stdout, (
+        f"the installer banner is missing; stdout: {completed.stdout}"
+    )
+    assert "kani 0.61.0" in completed.stdout, (
+        f"the verified version output is missing; stdout: {completed.stdout}"
+    )
     assert cargo_log.read_text(encoding="utf-8").splitlines() == [
         "install --locked kani-verifier --version 0.61.0",
         "kani setup",

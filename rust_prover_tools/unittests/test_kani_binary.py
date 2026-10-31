@@ -31,6 +31,10 @@ if typ.TYPE_CHECKING:
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
+# The happy-path installer tests must pass on any contributor host; the
+# unsupported-host test overrides the fixture's platform attributes itself.
+pytestmark = pytest.mark.usefixtures("linux_x86_64_host")
+
 
 def write_tar(path: Path, members: dict[str, bytes]) -> Path:
     """Write a gzip-compressed tar archive with executable members."""
@@ -115,7 +119,7 @@ def test_install_kani_binary_extracts_and_sets_up(
         "Running cargo kani setup for Kani 0.67.0.",
         "Verifying cargo kani is callable.",
         "kani 0.67.0",
-    )
+    ), "the installer should report each completed step"
     assert [call.args for call in cmd_mox.journal] == [
         ["kani", "setup", "--use-local-bundle", str(bundle)],
         ["kani", "--version"],
@@ -124,7 +128,9 @@ def test_install_kani_binary_extracts_and_sets_up(
         extracted = install_dir / name
         assert extracted.is_file(), f"{name} should be extracted"
         assert os.access(extracted, os.X_OK), f"{name} should be executable"
-        assert extracted.read_bytes() == name.encode()
+        assert extracted.read_bytes() == name.encode(), (
+            f"{name} should contain the archive payload"
+        )
 
 
 def test_install_kani_binary_can_skip_setup_and_verify(
@@ -156,8 +162,10 @@ def test_install_kani_binary_can_skip_setup_and_verify(
     assert lines == (
         f"Installing Kani 0.67.0 prebuilt binaries from {tmp_path / 'VERSION'}.",
         f"Extracting Kani 0.67.0 binaries into {install_dir}.",
+    ), "skipping setup should report only installation and extraction"
+    assert (install_dir / "kani").is_file(), (
+        "the extracted kani binary should be present"
     )
-    assert (install_dir / "kani").is_file()
 
 
 def test_install_kani_binary_rejects_an_unpinned_version(
@@ -190,7 +198,9 @@ def test_install_kani_binary_rejects_unsupported_hosts(
             ),
         )
 
-    assert "--compile" in str(excinfo.value)
+    assert "--compile" in str(excinfo.value), (
+        "the host error should point at the compile fallback"
+    )
 
 
 def test_extract_frontend_rejects_a_missing_member(
@@ -217,7 +227,9 @@ def test_extract_frontend_rejects_an_oversized_member(
     with pytest.raises(ProverToolError, match="extraction limit"):
         kani_binary._extract_frontend(archive, tmp_path / "bin")
 
-    assert not (tmp_path / "bin" / "cargo-kani").exists()
+    assert not (tmp_path / "bin" / "cargo-kani").exists(), (
+        "an oversized member must not be extracted"
+    )
 
 
 def test_path_env_puts_the_install_directory_first(
@@ -230,7 +242,9 @@ def test_path_env_puts_the_install_directory_first(
 
     env = kani_binary._path_env(install_dir)
 
-    assert env["PATH"].split(os.pathsep)[0] == str(install_dir)
+    assert env["PATH"].split(os.pathsep)[0] == str(install_dir), (
+        "the install directory should come first on PATH"
+    )
 
 
 def test_default_install_dir_honours_cargo_home(
@@ -241,4 +255,6 @@ def test_default_install_dir_honours_cargo_home(
     cargo_home = tmp_path / "cargo-home"
     monkeypatch.setenv("CARGO_HOME", str(cargo_home))
 
-    assert default_kani_install_dir() == cargo_home / "bin"
+    assert default_kani_install_dir() == cargo_home / "bin", (
+        "CARGO_HOME must select the default binary directory"
+    )

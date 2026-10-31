@@ -60,7 +60,18 @@ class Z3InstallOptions:
 
 
 def default_z3_install_dir(repo_root: Path) -> Path:
-    """Return the versioned directory that holds the `z3` executable."""
+    """Return the versioned directory that holds the `z3` executable.
+
+    Parameters
+    ----------
+    repo_root : Path
+        Repository whose cache tree receives the binary.
+
+    Returns
+    -------
+    Path
+        The versioned install directory below the repository's cache tree.
+    """
     return default_z3_cache_dir(repo_root) / Z3_VERSION
 
 

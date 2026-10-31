@@ -137,7 +137,9 @@ def test_stream_stops_when_total_deadline_expires(
         download_transport._stream(response, destination, max_bytes=100, deadline=0.0)
 
     assert response.read_count == 1, "the deadline should stop further reads"
-    assert destination.read_bytes() == b"a"
+    assert destination.read_bytes() == b"a", (
+        "the bytes read before the deadline must be kept"
+    )
 
 
 def test_stream_accepts_a_complete_body_matching_content_length(
@@ -154,7 +156,7 @@ def test_stream_accepts_a_complete_body_matching_content_length(
         response, destination, max_bytes=10, deadline=NO_DEADLINE
     )
 
-    assert destination.read_bytes() == b"abcdef"
+    assert destination.read_bytes() == b"abcdef", "the complete body must be written"
 
 
 def test_stream_rejects_an_incomplete_body(tmp_path: Path) -> None:
@@ -227,7 +229,9 @@ def test_download_follows_a_bounded_https_redirect(
         limits=DownloadLimits(max_redirects=1),
     )
 
-    assert destination.read_bytes() == b"payload"
+    assert destination.read_bytes() == b"payload", (
+        "the final body must be written to the destination"
+    )
     assert first_connection.closed, "the redirect connection must close"
     assert second_connection.closed, "the final connection must close"
 
@@ -342,8 +346,12 @@ def test_download_pinned_reuses_a_matching_cache_file(
 
     monkeypatch.setattr(downloads, "_download", fail_download)
 
-    assert download_pinned(asset, destination) == destination
-    assert destination.read_bytes() == payload
+    assert download_pinned(asset, destination) == destination, (
+        "a cache hit must return the destination path"
+    )
+    assert destination.read_bytes() == payload, (
+        "a cache hit must keep the verified bytes"
+    )
 
 
 def test_download_pinned_removes_pending_file_on_digest_mismatch(
@@ -373,8 +381,12 @@ def test_download_pinned_removes_pending_file_on_digest_mismatch(
     with pytest.raises(ProverToolError, match="SHA-256 mismatch"):
         download_pinned(asset, destination)
 
-    assert not destination.exists()
-    assert not destination.with_name("asset.bin.download").exists()
+    assert not destination.exists(), (
+        "a digest mismatch must not publish the destination"
+    )
+    assert not destination.with_name("asset.bin.download").exists(), (
+        "a digest mismatch must remove the pending file"
+    )
 
 
 def test_download_pinned_stores_a_verified_asset(
@@ -402,9 +414,15 @@ def test_download_pinned_stores_a_verified_asset(
 
     monkeypatch.setattr(downloads, "_download", write_payload)
 
-    assert download_pinned(asset, destination) == destination
-    assert destination.read_bytes() == payload
-    assert not destination.with_name("asset.bin.download").exists()
+    assert download_pinned(asset, destination) == destination, (
+        "a verified download must return the destination path"
+    )
+    assert destination.read_bytes() == payload, (
+        "the published file must contain the verified payload"
+    )
+    assert not destination.with_name("asset.bin.download").exists(), (
+        "the pending file must be renamed, not left behind"
+    )
 
 
 def test_download_pinned_removes_pending_file_when_stream_is_stopped(
@@ -438,5 +456,9 @@ def test_download_pinned_removes_pending_file_when_stream_is_stopped(
             DownloadLimits(transfer_timeout_seconds=60.0),
         )
 
-    assert not destination.exists()
-    assert not destination.with_name("asset.bin.download").exists()
+    assert not destination.exists(), (
+        "a stopped download must not publish the destination"
+    )
+    assert not destination.with_name("asset.bin.download").exists(), (
+        "a stopped download must remove the pending file"
+    )
