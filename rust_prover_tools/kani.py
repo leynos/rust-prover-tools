@@ -2,10 +2,11 @@
 
 This module installs the pinned Kani verifier and checks that an installed
 Kani command matches the repository pin. `install_kani` reads or accepts a
-semantic version, runs the Cargo installation sequence, optionally runs
-`cargo kani setup`, and optionally verifies the command. `check_kani_version`
-runs the configured Kani command with `--version`, parses the first semantic
-version, and compares it with the pin.
+semantic version and, by default, installs the pinned prebuilt release from
+verified archives. The opt-in `should_compile` route compiles Kani with Cargo
+instead. Both routes optionally run `cargo kani setup` and verify the command.
+`check_kani_version` runs the configured Kani command with `--version`, parses
+the first semantic version, and compares it with the pin.
 
 Example
 -------
@@ -22,6 +23,10 @@ from pathlib import Path
 
 from rust_prover_tools.commands import CommandSpec, run_checked, split_command
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_binary import (
+    KaniBinaryInstallOptions,
+    install_kani_binary,
+)
 from rust_prover_tools.versions import (
     parse_tool_version,
     read_version_pin,
@@ -81,12 +86,24 @@ class KaniInstallOptions:
         Whether to run `cargo kani setup`. Defaults to `True`.
     should_verify : bool
         Whether to run `cargo kani --version`. Defaults to `True`.
+    should_compile : bool
+        Whether to compile Kani from source with `cargo install` instead of
+        installing the pinned prebuilt release. Defaults to `False`.
+    install_dir : Path | None
+        Directory for prebuilt `cargo-kani` and `kani` executables. Defaults to
+        Cargo's binary directory.
+    cache_dir : Path | None
+        Directory for verified prebuilt archives. Defaults to `.cache/kani`
+        below the repository root.
     """
 
     paths: KaniPaths
     version: str | None = None
     should_setup: bool = True
     should_verify: bool = True
+    should_compile: bool = False
+    install_dir: Path | None = None
+    cache_dir: Path | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -156,6 +173,28 @@ def install_kani(options: KaniInstallOptions) -> tuple[str, ...]:
     """
     version_file = options.paths.resolved_version_file()
     version = resolve_kani_version(options.paths, options.version)
+    if not options.should_compile:
+        return install_kani_binary(
+            KaniBinaryInstallOptions(
+                repo_root=options.paths.repo_root,
+                version=version,
+                version_file=version_file,
+                is_override=options.version is not None,
+                install_dir=options.install_dir,
+                cache_dir=options.cache_dir,
+                should_setup=options.should_setup,
+                should_verify=options.should_verify,
+            ),
+        )
+    return _install_kani_from_source(options, version, version_file)
+
+
+def _install_kani_from_source(
+    options: KaniInstallOptions,
+    version: str,
+    version_file: Path,
+) -> tuple[str, ...]:
+    """Compile Kani from source with the opt-in Cargo fallback."""
     source = f"from {version_file}" if options.version is None else "(override)"
     lines = [f"Installing kani-verifier {version} {source}."]
     run_checked(

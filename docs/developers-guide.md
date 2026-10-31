@@ -110,13 +110,28 @@ variables, output printing, and exit-code mapping:
 
 Feature modules should own workflow behaviour:
 
-- `rust_prover_tools.kani` for Kani installation and version checks.
+- `rust_prover_tools.kani` for Kani installation and version checks. The
+  default route delegates to `rust_prover_tools.kani_binary`; `--compile`
+  selects the source-build route in `kani` itself.
+- `rust_prover_tools.kani_binary` for the verified prebuilt Kani install.
+- `rust_prover_tools.z3` for the pinned Z3 solver install.
 - `rust_prover_tools.verus.install` for Verus release installation.
 - `rust_prover_tools.verus.run` for Verus binary resolution and toolchain
   checks.
 - `rust_prover_tools.verus.batch` for the ordered, fail-fast proof-file loop,
   its partial-failure reporting, and its bounded telemetry.
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
+- `rust_prover_tools.binary_assets` for pinned asset manifests.
+- `rust_prover_tools.downloads` for digest pinning and the atomic verified
+  store, with HTTPS URL policy in `rust_prover_tools.download_url` and network
+  policy in `rust_prover_tools.download_transport`.
+- `rust_prover_tools.platforms` and `rust_prover_tools.path_resolution` for the
+  shared host check and CLI path resolution.
+
+When adding a pinned asset, update `binary_assets` with the exact URL, digest,
+byte ceiling, and archive member, and add a test that builds a local archive of
+the expected shape. Never let a download path skip `download_pinned`, and do
+not extract archive members that are not named in the manifest.
 
 Public helpers exported from `rust_prover_tools.verus` should keep structured
 NumPy-style docstrings. That package is the stable import facade for tests and
@@ -378,10 +393,10 @@ files, and both abort the run before any mutant is scored:
   `test_check_kani_version_resolves_relative_version_file_from_repo_root` in
   `test_kani.py` and
   `test_install_verus_resolves_relative_pin_files_from_repo_root` in
-  `test_verus.py`. The marker is per test rather than per module, because both
-  modules otherwise run fine in the sandbox and only these two prove that
-  repository-relative paths resolve against the configured repository rather
-  than the current directory.
+  `test_verus_install.py`. The marker is per test rather than per module,
+  because both modules otherwise run fine in the sandbox and only these two
+  prove that repository-relative paths resolve against the configured
+  repository rather than the current directory.
 - A test that patches `Path.resolve` globally breaks the trampoline's own
   bookkeeping, because the patched method is the one it calls. The symlink-loop
   boundary test therefore creates a real loop instead of monkeypatching the

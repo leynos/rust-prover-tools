@@ -16,6 +16,8 @@ import typing as typ
 
 import pytest
 
+from rust_prover_tools import platforms
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
@@ -61,6 +63,20 @@ SKIP_CHDIR_UNDER_MUTMUT = pytest.mark.skipif(
         "working directory, so a test that chdirs fails inside its sandbox"
     ),
 )
+
+
+@pytest.fixture
+def linux_x86_64_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pretend the host is Linux x86_64 so installer tests are portable.
+
+    The prebuilt installers reject every other host before they touch the
+    network or the filesystem. Tests that exercise the happy path must not
+    inherit a contributor's real host check, or they fail on macOS and on
+    Linux arm64. Tests for unsupported hosts override these attributes with
+    their own ``monkeypatch`` calls.
+    """
+    monkeypatch.setattr(platforms.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platforms.platform, "machine", lambda: "x86_64")
 
 
 @pytest.fixture
