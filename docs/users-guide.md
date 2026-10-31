@@ -324,7 +324,11 @@ exhaust disk space or hang a CI job:
 - bytes are written to a pending file that is removed on any failure, and the
   final path appears only after the pinned digest matches.
 - downloads connect directly over HTTPS; proxy environment variables such as
-  `HTTPS_PROXY` are not read.
+  `HTTPS_PROXY` are not read;
+- opt-in structured events are available through Python logging at debug level
+  for download start, completion, cache hits, verification, and bounded failure
+  categories. The library installs no handlers, so output is unchanged unless
+  your application lowers the `rust_prover_tools` logger level.
 
 ### GitHub Actions inputs
 

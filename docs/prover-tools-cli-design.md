@@ -66,7 +66,20 @@ store. It delegates the network policy to
 bounded number of re-validated redirects, rejects an oversized `Content-Length`
 before reading, counts streamed bytes, and enforces one monotonic transfer
 deadline. A pending file is removed on any failure and renamed to the final
-path only after the digest matches.
+path only after the digest matches. The transport connects directly over HTTPS
+and deliberately does not read proxy environment variables such as
+`HTTPS_PROXY`; a caller that needs a proxy must supply its own transport.
+
+`rust_prover_tools.observability` defines the opt-in event helper. The
+downloader records `download.start`, `download.complete`, `download.cache_hit`,
+`download.verified`, and `download.failed` with a bounded reason category
+(`redirect_limit`, `content_length`, `size_limit`, `deadline`,
+`incomplete_body`, `transport_error`, `digest_mismatch`, or `store_error`).
+Records carry an `event_data` mapping rather than free text. The library
+installs no handlers, so an application opts in by lowering the
+`rust_prover_tools.downloads` or `rust_prover_tools.download_transport` logger
+level; extraction and installation outcomes remain the user-facing status lines
+and `ProverToolError` messages.
 
 ### Verified download sequence
 

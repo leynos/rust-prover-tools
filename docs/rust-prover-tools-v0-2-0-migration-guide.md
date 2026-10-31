@@ -77,3 +77,30 @@ A successful run means the selected release compiled with its own backend. The
 opt-in measurement module explains how to confirm that mechanism directly
 against the bundled Cargo; see the
 [developers' guide](developers-guide.md#legacy-kani-release-boundary).
+
+## Binary installer changes
+
+`kani install` now installs the pinned prebuilt release by default. It runs on
+Linux x86_64, verifies both archives against their pinned SHA-256 digests, and
+extracts only `cargo-kani` and `kani` before running `cargo kani setup`. Use
+`--compile` to keep the previous source build, or set `INPUT_KANI_COMPILE` for
+the same effect; `--no-compile` forces the prebuilt route when the variable is
+set. A version without a pinned prebuilt manifest is refused with a message
+that names `--compile`.
+
+The new `prover-tools z3 install` command downloads the pinned Z3 release used
+by Verus, verifies its digest, extracts only `bin/z3`, and records a version
+marker so later runs reuse the installation. `--install-dir` and `--cache-dir`
+select the binary and archive locations; `Z3_INSTALL_DIR`, `Z3_CACHE_DIR`, and
+their `INPUT_`-prefixed forms provide the same bindings.
+
+Every archive now goes through the shared bounded HTTPS downloader. It accepts
+only `https`, follows a capped number of re-validated redirects, rejects an
+oversized `Content-Length` before reading, counts streamed bytes against a
+per-asset ceiling, and applies one monotonic deadline. It connects directly and
+does not read proxy environment variables such as `HTTPS_PROXY`, which differs
+from the external `curl` command the Verus installer used previously.
+
+No action is needed for existing `kani exec` callers. Repositories that relied
+on the old `cargo install` route only for `kani install` should either accept
+the pinned prebuilt release or add `--compile` to keep building from source.
