@@ -46,17 +46,11 @@ PREPARE_TARGETS: tuple[str, ...] = ("prepare",)
 # Every Makefile line that mentions uv without going through the helper. A new
 # mention fails the test until it is reviewed and added here.
 ALLOWED_UV_LINES: tuple[str, ...] = (
-    "$(error UV=$(UV) is not an executable file)",
-    "$(error UV=$(UV) must be named uv)",
-    "$(error UV=$(UV) must be uv or a path to an executable file named uv)",
     '@command -v $(UV) >/dev/null 2>&1 || { printf "Error: uv is required, but \'%s\' was not found or is not executable\\n" "$(UV)" >&2; exit 1; }',  # ruff: ignore[line-too-long]
     'TYPOS_CONFIG_BUILDER = $(UV) tool run --python 3.14 --from "git+https://github.com/leynos/typos-config-builder.git@$(TYPOS_CONFIG_BUILDER_VERSION)" typos-config-builder',  # ruff: ignore[line-too-long]
     "UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' \"$$HOME\")",
+    "UV_SELECTION_CHECK := $(if $(filter command line environment,$(origin UV)),$(if $(filter uv,$(UV)),,$(if $(findstring /,$(UV)),$(if $(shell test -f '$(UV)' -a -x '$(UV)' && printf y),$(if $(filter uv,$(notdir $(UV))),,$(error UV=$(UV) must be named uv)),$(error UV=$(UV) is not an executable file)),$(error UV=$(UV) must be uv or a path to an executable file named uv))))",  # ruff: ignore[line-too-long]
     "export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)",
-    "ifeq ($(findstring /,$(UV)),)",
-    "ifeq ($(shell test -f '$(UV)' -a -x '$(UV)' && printf y),)",
-    "ifneq ($(UV),uv)",
-    "ifneq ($(notdir $(UV)),uv)",
 )
 MAKE = shutil.which("make")
 MARKER = "UV-GATE-MARKER"
