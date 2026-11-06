@@ -63,6 +63,7 @@ def fake_verus_binary_factory() -> cabc.Callable[..., None]:
         *,
         spec: FakeVerusBinarySpec | None = None,
     ) -> None:
+        """Write a fake Verus script with version handling and a configured command."""
         spec = spec or FakeVerusBinarySpec()
         path.parent.mkdir(parents=True, exist_ok=True)
         version_stdout = spec.version_stdout or (

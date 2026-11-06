@@ -35,6 +35,7 @@ class ChunkResponse:
     status = 200
 
     def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        """Store the chunks the response yields, in order."""
         self._chunks = chunks
         self._index = 0
 
@@ -74,6 +75,7 @@ class ClosingConnection:
     """A connection that records whether it was closed."""
 
     def __init__(self) -> None:
+        """Start the connection in the open state."""
         self.closed = False
 
     def close(self) -> None:
@@ -136,6 +138,7 @@ def test_download_never_exceeds_the_redirect_budget(
         *,
         asset_name: str,
     ) -> tuple[RedirectResponse, ClosingConnection]:
+        """Record the requested URL and answer with a redirect."""
         del limits, deadline, asset_name
         opened.append(url)
         return RedirectResponse(), ClosingConnection()

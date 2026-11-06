@@ -43,6 +43,7 @@ def test_install_kani_compile_runs_install_setup_and_verify(
     version_file.write_text("0.61.0\n", encoding="utf-8")
 
     def cargo_handler(invocation: Invocation) -> tuple[str, str, int]:
+        """Answer the version probe with 0.61.0 and succeed for other cargo calls."""
         if invocation.args == ["kani", "--version"]:
             return ("kani 0.61.0\n", "", 0)
         return ("", "", 0)

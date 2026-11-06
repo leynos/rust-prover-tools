@@ -336,6 +336,7 @@ def test_failed_redirect_falls_back_to_a_sink_without_raising(
     monkeypatch.setattr(exit_status.sys, "stderr", _OpenStream())
 
     def refuse_open(*_args: object, **_kwargs: object) -> int:
+        """Refuse every `os.open` call with an out-of-descriptors error."""
         raise OSError(_NO_DESCRIPTORS_MESSAGE)
 
     monkeypatch.setattr(exit_status.os, "open", refuse_open)

@@ -59,7 +59,7 @@ PYLINT_TARGETS ?= $(PYTHON_TARGETS)
 PYLINT = $(UV_GATE) tool --managed-python --python $(PYLINT_PYTHON) --from 'pylint==$(PYLINT_VERSION)' -- pylint
 
 
-.PHONY: prepare help all clean build build-release lint lint-python fmt check-fmt \
+.PHONY: prepare help all clean build build-release lint lint-python interrogate fmt check-fmt \
         markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
 
 prepare: ## Install the locked development environment, offline first
@@ -135,7 +135,29 @@ check-fmt: build ## Verify formatting
 
 lint: lint-python ## Run linters
 
-lint-python: build ## Run Python linters
+# Docstring presence for the package and its tests. `scripts/uv_gate.py` is the
+# shared-actions helper, vendored byte for byte and audited against its digest,
+# so it is not edited here. Ruff keeps docstring style.
+INTERROGATE_VERSION ?= 1.7.0
+INTERROGATE_TARGETS ?= rust_prover_tools tests
+INTERROGATE = $(UV_GATE) tool --from 'interrogate==$(INTERROGATE_VERSION)' -- interrogate
+# Level 2 prints a MISSED row per undocumented definition, which the
+# `interrogate` target fails on: the rounded percentage alone passes a lone gap.
+INTERROGATE_FLAGS ?= -vv --fail-under 100
+
+# Interrogate rounds its percentage to one decimal, so `--fail-under 100` alone
+# passes a lone gap in a large repository; fail on any MISSED row as well.
+interrogate: ## Enforce complete Python docstring coverage
+	@report="$$($(INTERROGATE) $(INTERROGATE_FLAGS) $(INTERROGATE_TARGETS))"; \
+	  status=$$?; \
+	  printf '%s\n' "$$report"; \
+	  test "$$status" -eq 0 || exit "$$status"; \
+	  if printf '%s\n' "$$report" | grep -q '| *MISSED *|'; then \
+	    printf '%s\n' 'interrogate: undocumented definitions remain; see the MISSED rows above' >&2; \
+	    exit 1; \
+	  fi
+
+lint-python: build interrogate ## Run Python linters
 	$(UV_GATE) run -- ruff check $(PYTHON_TARGETS)
 	$(PYLINT) $(PYLINT_TARGETS)
 

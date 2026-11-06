@@ -48,6 +48,7 @@ def stub_download(
     """Replace the verified download with a local archive."""
 
     def fake_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Assert the pinned asset and cache path, then return the local archive."""
         assert asset is Z3_ASSET, "the pinned Z3 asset must be requested"
         assert destination == expected_destination, "the cache path must be used"
         return archive
@@ -72,6 +73,7 @@ def deny_temporary_cleanup(
     original_unlink = pathlib.Path.unlink
 
     def deny_unlink(self: pathlib.Path, *, missing_ok: bool = False) -> None:
+        """Raise a permission error when a named temporary file is unlinked."""
         if any(self.name.endswith(name) for name in names):
             raise PermissionError(13, "permission denied", str(self))
         original_unlink(self, missing_ok=missing_ok)
@@ -164,6 +166,7 @@ def test_install_z3_reuses_a_marked_installation(
     install_z3(options)
 
     def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Fail the test if a marked installation is downloaded again."""
         del asset, destination
         msg = "a marked installation must not be downloaded again"
         raise AssertionError(msg)
@@ -232,6 +235,7 @@ def test_install_z3_reports_a_marker_read_failure(
         errors: str | None = None,
         newline: str | None = None,
     ) -> str:
+        """Raise a permission error when the version marker is read."""
         if path.name == ".z3-version":
             raise PermissionError(13, "permission denied", str(path))
         return original_read_text(
@@ -305,11 +309,13 @@ def test_install_z3_reports_a_binary_inspection_failure(
         *,
         follow_symlinks: bool = True,
     ) -> os.stat_result:
+        """Raise a permission error when the Z3 binary is inspected."""
         if path == binary:
             raise PermissionError(13, "permission denied", str(path))
         return original_stat(path, follow_symlinks=follow_symlinks)
 
     def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Fail the test if an unreadable installation is downloaded again."""
         del asset, destination
         msg = "an unreadable installation must not be downloaded again"
         raise AssertionError(msg)
@@ -382,6 +388,7 @@ def test_install_z3_reports_a_marker_write_failure(
         errors: str | None = None,
         newline: str | None = None,
     ) -> int:
+        """Raise a permission error when the pending marker is written."""
         if path.name.endswith(".z3-version.download"):
             raise PermissionError(13, "permission denied", str(path))
         return original_write_text(
@@ -564,6 +571,7 @@ def test_install_z3_reports_a_download_failure_event(
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
 
     def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Raise a digest mismatch in place of downloading the archive."""
         del asset, destination
         msg = "digest mismatch"
         raise ProverToolError(msg)
@@ -640,6 +648,7 @@ def test_install_z3_reports_a_marker_failure_event(
         errors: str | None = None,
         newline: str | None = None,
     ) -> int:
+        """Raise a permission error when the pending marker is written."""
         if path.name.endswith(".z3-version.download"):
             raise PermissionError(13, "permission denied", str(path))
         return original_write_text(
@@ -789,6 +798,7 @@ def test_install_z3_keeps_a_marker_failure_when_cleanup_fails(
         errors: str | None = None,
         newline: str | None = None,
     ) -> int:
+        """Raise a permission error when the pending marker is written."""
         if path.name.endswith(".z3-version.download"):
             raise PermissionError(13, "permission denied", str(path))
         return original_write_text(

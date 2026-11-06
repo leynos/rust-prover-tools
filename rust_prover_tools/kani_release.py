@@ -181,6 +181,7 @@ def _runtime_search_path(runtime: Path, inherited: str) -> str:
     """Retain release-proxy hygiene while adding the matching runtime first."""
 
     def compatible(entry: str) -> bool:
+        """Return whether the path lacks a toolchains/<name>/lib suffix."""
         parts = Path(entry).parts
         return not (
             len(parts) >= _RUSTUP_LIBRARY_SUFFIX_DEPTH

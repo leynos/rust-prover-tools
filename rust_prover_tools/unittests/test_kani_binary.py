@@ -61,6 +61,7 @@ def stub_downloads(
     }
 
     def fake_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Return the local archive standing in for the requested asset."""
         del destination
         return paths[asset.name]
 
@@ -110,6 +111,7 @@ def test_install_kani_binary_extracts_and_sets_up(
     stub_downloads(monkeypatch, frontend, bundle)
 
     def cargo_handler(invocation: Invocation) -> tuple[str, str, int]:
+        """Answer the version probe with 0.67.0 and succeed for other cargo calls."""
         if invocation.args == ["kani", "--version"]:
             return ("kani 0.67.0\n", "", 0)
         return ("", "", 0)
@@ -259,6 +261,7 @@ def test_extract_frontend_removes_a_partial_member(
         member: tarfile.TarInfo,
         target: Path,
     ) -> int:
+        """Write a partial member and then fail the copy with a disk error."""
         del archive_file, member
         target.write_bytes(b"partial")
         msg = "disk full"
@@ -282,6 +285,7 @@ def deny_kani_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
         self: pathlib.Path,
         target: pathlib.Path,
     ) -> pathlib.Path:
+        """Raise a permission error when publishing the `kani` executable."""
         if self.name.endswith(".download") and target.name == "kani":
             raise PermissionError(13, "permission denied", str(self))
         return original_replace(self, target)
@@ -354,6 +358,7 @@ def deny_replacements(
         self: pathlib.Path,
         target: pathlib.Path,
     ) -> pathlib.Path:
+        """Raise a permission error for each blocked source-to-target pair."""
         if (self.name, target.name) in blocked:
             raise PermissionError(13, "permission denied", str(self))
         return original_replace(self, target)
@@ -369,6 +374,7 @@ def deny_unlink(
     original_unlink = pathlib.Path.unlink
 
     def unlink(self: pathlib.Path, *, missing_ok: bool = False) -> None:
+        """Raise a permission error when the named path is removed."""
         if self.name == blocked_name:
             raise PermissionError(13, "permission denied", str(self))
         original_unlink(self, missing_ok=missing_ok)
@@ -385,6 +391,7 @@ def fail_second_member_copy(monkeypatch: pytest.MonkeyPatch) -> None:
         member: tarfile.TarInfo,
         target: Path,
     ) -> int:
+        """Write a partial `kani` member, then fail the copy with a disk error."""
         if member.name == "kani":
             target.write_bytes(b"partial")
             msg = "disk full"
@@ -647,6 +654,7 @@ def test_install_kani_binary_reports_a_download_failure_event(
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.kani_binary")
 
     def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Raise a digest mismatch in place of downloading the asset."""
         del asset, destination
         msg = "digest mismatch"
         raise ProverToolError(msg)
@@ -726,6 +734,7 @@ def test_install_kani_binary_reports_a_verify_failure_event(
     stub_downloads(monkeypatch, frontend, bundle)
 
     def cargo_handler(invocation: Invocation) -> tuple[str, str, int]:
+        """Fail the version probe as an uncallable binary and succeed otherwise."""
         if invocation.args == ["kani", "--version"]:
             return ("", "not callable\n", 1)
         return ("", "", 0)

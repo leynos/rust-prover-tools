@@ -426,6 +426,7 @@ def test_install_verus_reports_a_download_failure_event(
     write_verus_pins(tmp_path)
 
     def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Raise a digest mismatch in place of downloading the archive."""
         del asset, destination
         msg = "digest mismatch"
         raise ProverToolError(msg)
@@ -498,6 +499,7 @@ def test_install_verus_reports_an_inspection_failure_event(
         *,
         follow_symlinks: bool = True,
     ) -> os.stat_result:
+        """Raise a permission error when the installed binary is inspected."""
         if path == installed_bin:
             raise PermissionError(13, "permission denied", str(path))
         return original_stat(path, follow_symlinks=follow_symlinks)

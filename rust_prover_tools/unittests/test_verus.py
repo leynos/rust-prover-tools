@@ -80,6 +80,7 @@ def test_run_verus_installs_missing_toolchain(
     )
 
     def rustup_handler(invocation: Invocation) -> tuple[str, str, int]:
+        """Reject the toolchain probe and accept the install that follows it."""
         if invocation.args == ["which", "--toolchain", "nightly-missing", "rustc"]:
             return ("", "", 1)
         if invocation.args == ["toolchain", "install", "nightly-missing"]:
@@ -322,6 +323,7 @@ def test_verus_run_options_rejects_bare_path_as_proof_files(
     bare_path = typ.cast("tuple[pathlib.Path, ...]", path)
 
     def build() -> None:
+        """Build the options with a bare Path in the proof-files slot."""
         if use_positional:
             # The former third positional slot was `install_dir`.
             VerusRunOptions(VerusPaths(repo_root=tmp_path), None, bare_path)

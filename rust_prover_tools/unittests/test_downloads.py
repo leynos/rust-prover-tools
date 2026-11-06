@@ -66,6 +66,7 @@ def deny_pending_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
     original_unlink = pathlib.Path.unlink
 
     def deny_unlink(self: pathlib.Path, *, missing_ok: bool = False) -> None:
+        """Raise a permission error when a pending download is unlinked."""
         if self.name.endswith(".download"):
             raise PermissionError(13, "permission denied", str(self))
         original_unlink(self, missing_ok=missing_ok)
@@ -77,6 +78,7 @@ class FakeClock:
     """A deterministic monotonic clock."""
 
     def __init__(self, now: float = 0.0) -> None:
+        """Start the fake clock at `now` seconds."""
         self.now = now
 
     def monotonic(self) -> float:
@@ -99,6 +101,7 @@ class FakeResponse:
         chunks: tuple[bytes, ...] = (),
         clock: FakeClock | None = None,
     ) -> None:
+        """Store the canned status, headers, body chunks, and optional clock."""
         self.status = status
         self.headers = headers or {}
         self.chunks = chunks
@@ -129,6 +132,7 @@ class FakeConnection:
     """A connection object that records whether it was closed."""
 
     def __init__(self) -> None:
+        """Start the connection in the open state."""
         self.closed = False
 
     def close(self) -> None:
@@ -140,6 +144,7 @@ class FakeSocket:
     """A socket double that records the timeouts it is given."""
 
     def __init__(self) -> None:
+        """Start with no recorded timeouts."""
         self.timeouts: list[float] = []
 
     def settimeout(self, value: float) -> None:
@@ -348,6 +353,8 @@ def test_stream_reports_a_read_timeout_at_the_deadline(
     monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
 
     class TimingOutResponse(FakeResponse):
+        """A response whose read runs past the deadline and then times out."""
+
         def read(self, amt: int | None = None) -> bytes:
             """Advance past the deadline and time out."""
             del amt
@@ -381,6 +388,8 @@ def test_stream_reports_an_early_read_timeout_as_a_stream_error(
     monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
 
     class TimingOutResponse(FakeResponse):
+        """A response whose read times out before the deadline is reached."""
+
         def read(self, amt: int | None = None) -> bytes:
             """Time out without reaching the deadline."""
             del amt
@@ -480,6 +489,7 @@ def test_download_follows_a_bounded_https_redirect(
         *,
         asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
+        """Return the next scripted response and its connection."""
         del url, limits, deadline, asset_name
         return next(responses)
 
@@ -516,6 +526,7 @@ def test_download_rejects_excess_redirects(
         *,
         asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
+        """Return the redirecting response and its connection."""
         del url, limits, deadline, asset_name
         return response, connection
 
@@ -606,6 +617,7 @@ def test_download_pinned_reuses_a_matching_cache_file(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Fail the test if a cache hit falls back to the network."""
         del request, limits
         msg = "network must not be used for a cache hit"
         raise AssertionError(msg)
@@ -637,6 +649,7 @@ def test_download_pinned_removes_pending_file_on_digest_mismatch(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Write bytes whose digest cannot match the pinned asset."""
         del limits
         request.destination.write_bytes(b"wrong")
 
@@ -672,10 +685,12 @@ def test_download_pinned_reports_a_digest_read_failure(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Write the pending payload that the digest check then fails to read."""
         del limits
         request.destination.write_bytes(b"payload")
 
     def fail_to_hash(path: Path) -> str:
+        """Raise a bounded read error instead of hashing the pending file."""
         msg = f"failed to read '{path}': permission denied"
         raise ProverToolError(msg)
 
@@ -714,6 +729,7 @@ def test_download_pinned_reports_a_pending_cleanup_failure(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Write the verified payload to the pending download path."""
         del limits
         request.destination.write_bytes(payload)
 
@@ -753,6 +769,7 @@ def test_download_pinned_keeps_the_primary_failure_when_cleanup_fails(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Write bytes whose digest cannot match the pinned asset."""
         del limits
         request.destination.write_bytes(b"wrong")
 
@@ -791,6 +808,7 @@ def test_download_pinned_stores_a_verified_asset(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Write the verified payload to the pending download path."""
         del limits
         request.destination.write_bytes(payload)
 
@@ -881,6 +899,7 @@ def test_download_pinned_reports_a_store_failure(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Write the verified payload to the pending download path."""
         del limits
         request.destination.write_bytes(payload)
 
@@ -891,6 +910,7 @@ def test_download_pinned_reports_a_store_failure(
         path: pathlib.Path,
         target: pathlib.Path,
     ) -> pathlib.Path:
+        """Raise a permission error when the pending file is published."""
         if path.name == "asset.bin.download":
             raise PermissionError(13, "permission denied", str(path))
         return original_replace(path, target)
@@ -930,6 +950,8 @@ def test_open_requests_the_validated_path_with_identity_encoding(
     captured: dict[str, object] = {}
 
     class FakeConnection:
+        """A connection double that records the request and serves a response."""
+
         def __init__(
             self,
             host: str,
@@ -937,6 +959,7 @@ def test_open_requests_the_validated_path_with_identity_encoding(
             *,
             timeout: float,
         ) -> None:
+            """Record the connection target and bind the fake socket."""
             captured["host"] = host
             captured["port"] = port
             captured["timeout"] = timeout
@@ -949,14 +972,17 @@ def test_open_requests_the_validated_path_with_identity_encoding(
             *,
             headers: dict[str, str],
         ) -> None:
+            """Record the method, target, and headers of the request."""
             captured["method"] = method
             captured["target"] = target
             captured["headers"] = headers
 
         def getresponse(self) -> FakeResponse:
+            """Return the canned response."""
             return response
 
         def close(self) -> None:
+            """Record that the connection was closed."""
             captured["closed"] = True
 
     monkeypatch.setattr(
@@ -996,6 +1022,8 @@ def test_open_reports_a_failed_request(
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
 
     class FailingConnection:
+        """A connection whose every request fails with a connection error."""
+
         def __init__(
             self,
             host: str,
@@ -1003,6 +1031,7 @@ def test_open_reports_a_failed_request(
             *,
             timeout: float,
         ) -> None:
+            """Track this connection so the test can check it was closed."""
             del host, port, timeout
             self.closed = False
             connections.append(self)
@@ -1014,11 +1043,13 @@ def test_open_reports_a_failed_request(
             *,
             headers: dict[str, str],
         ) -> None:
+            """Raise a connection error for every request."""
             del method, target, headers
             msg = "connection refused"
             raise OSError(msg)
 
         def close(self) -> None:
+            """Record that the connection was closed."""
             self.closed = True
 
     connections: list[FailingConnection] = []
@@ -1196,7 +1227,10 @@ def test_download_reports_a_stream_error(
     """A transport error while reading the body is reported once."""
 
     class FailingResponse(FakeResponse):
+        """A response whose body read fails with a connection reset."""
+
         def read(self, amt: int | None = None) -> bytes:
+            """Fail every body read with a connection reset."""
             del amt
             msg = "connection reset"
             raise OSError(msg)
@@ -1241,6 +1275,7 @@ def test_download_pinned_passes_the_logical_asset_to_the_transport(
         request: download_transport._DownloadRequest,
         limits: DownloadLimits,
     ) -> None:
+        """Record the logical asset name and write the verified payload."""
         del limits
         captured["asset_name"] = request.asset_name
         request.destination.write_bytes(payload)
@@ -1264,21 +1299,26 @@ def test_download_pinned_reports_an_unreadable_cache_entry(
         """A destination whose `stat` reports an environmental failure."""
 
         def __init__(self, path: Path) -> None:
+            """Wrap the path whose metadata lookups will fail."""
             self._path = path
 
         @property
         def parent(self) -> Path:
+            """The parent directory of the wrapped path."""
             return self._path.parent
 
         def stat(self) -> os.stat_result:
+            """Raise a permission error for every metadata lookup."""
             raise PermissionError(13, "permission denied", str(self._path))
 
         def __getattr__(self, name: str) -> object:
+            """Forward every other attribute lookup to the wrapped path."""
             return getattr(self._path, name)
 
     calls: list[tuple[object, object]] = []
 
     def record_download(*args: object, **kwargs: object) -> None:
+        """Record the download call without performing any transfer."""
         calls.append((args, kwargs))
 
     monkeypatch.setattr(downloads, "_download", record_download)
