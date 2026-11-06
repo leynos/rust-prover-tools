@@ -180,7 +180,7 @@ def test_execution_logs_bounded_stage_fields_without_payloads(
     caplog.set_level(logging.INFO, logger="rust_prover_tools.kani_release")
 
     def capture(spec: CommandSpec) -> CommandResult:
-        """Return private proof output for the proof and identity probes."""
+        """Return version identities for probes and private output for proof runs."""
         if spec.argv[-1] != "--version":
             return CommandResult("private-proof-output", "private-proof-error", status)
         identity = (

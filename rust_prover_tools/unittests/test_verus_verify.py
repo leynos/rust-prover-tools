@@ -33,7 +33,7 @@ def test_verify_proof_files_keeps_partial_result_when_invocation_fails(
     unstartable_file = tmp_path / "unstartable.rs"
 
     def fake_run_command(spec: CommandSpec) -> CommandResult:
-        """Prove the first file and fail to start any other one."""
+        """Simulate success for proved_file and fail to start any other file."""
         if spec.argv[1] == str(proved_file):
             return CommandResult(stdout="", stderr="", exit_code=0)
         msg = "verifier disappeared"
