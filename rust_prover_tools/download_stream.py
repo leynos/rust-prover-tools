@@ -13,9 +13,12 @@ response was obtained.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import http.client
 import logging
+import socket
+import threading
 import typing as typ
 from time import monotonic
 
@@ -61,6 +64,73 @@ class _TimeoutSocket(typ.Protocol):
         ...
 
 
+class _ShutdownSocket(typ.Protocol):
+    """The socket operation needed to interrupt a blocked read."""
+
+    def shutdown(self, how: int) -> None:
+        """Shut down one or both directions of the socket."""
+        ...
+
+
+class _Watchdog(typ.Protocol):
+    """A deadline watchdog that can be stopped before its socket closes."""
+
+    def cancel(self) -> None:
+        """Stop the watchdog if it has not already fired."""
+        ...
+
+
+class _DeadlineWatchdog:
+    """Interrupt a blocked socket read when the transfer deadline expires.
+
+    A per-receive socket timeout cannot bound a response whose bytes trickle
+    steadily, and `http.client` parses headers with blocking reads that no
+    per-read timeout covers in aggregate. A timer thread shuts the socket down
+    at the deadline so both phases return instead of running unbounded.
+    """
+
+    def __init__(
+        self,
+        sock: _ShutdownSocket | None,
+        deadline: float,
+    ) -> None:
+        """Start watching `sock` until `deadline` or `cancel`."""
+        self._sock = sock
+        self._deadline = deadline
+        self._cancelled = threading.Event()
+        self._lock = threading.Lock()
+        self._fired = False
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    @property
+    def fired(self) -> bool:
+        """Whether the watchdog shut the socket down."""
+        return self._fired
+
+    def _watch(self) -> None:
+        """Wait for the deadline, then shut the socket down."""
+        remaining = self._deadline - monotonic()
+        if remaining > 0 and self._cancelled.wait(remaining):
+            return
+        with self._lock:
+            if self._cancelled.is_set():
+                return
+            self._fired = True
+        if self._sock is None:
+            return
+        # The connection may have closed between the deadline and the
+        # shutdown; there is nothing left to interrupt in that case.
+        with contextlib.suppress(OSError):
+            self._sock.shutdown(socket.SHUT_RDWR)
+
+    def cancel(self) -> None:
+        """Stop the watchdog before the socket is closed."""
+        with self._lock:
+            self._cancelled.set()
+        self._thread.join(timeout=1.0)
+
+
 @dc.dataclass(slots=True)
 class _DeadlineResponse:
     """A response that bounds each body read by the remaining time."""
@@ -69,6 +139,7 @@ class _DeadlineResponse:
     deadline: float
     read_timeout_seconds: float
     sock: _TimeoutSocket | None = None
+    watchdog: _Watchdog | None = None
 
     @property
     def status(self) -> int:
@@ -93,6 +164,11 @@ class _DeadlineResponse:
                 # The connection's original timeout may outlast the deadline.
                 self.sock.settimeout(min(self.read_timeout_seconds, remaining))
         return self.response.read(amt)
+
+    def cancel(self) -> None:
+        """Stop the deadline watchdog once the body is no longer read."""
+        if self.watchdog is not None:
+            self.watchdog.cancel()
 
 
 def _log_failure(
@@ -193,13 +269,18 @@ def _copy_body(
             _raise_deadline(limits, written)
         try:
             chunk = response.read(READ_CHUNK_SIZE)
-        except TimeoutError as exc:
-            # The response bounds each read by the remaining time, so a timeout
-            # at the deadline is the deadline expiring, not a transport fault.
+        except OSError as exc:
+            # The response bounds each read by the remaining time, and the
+            # watchdog shuts the socket down at the deadline, so either failure
+            # at that point is the deadline expiring, not a transport fault.
             if monotonic() < limits.deadline:
                 raise
             _raise_deadline(limits, written, cause=exc)
         if not chunk:
+            # A watchdog shutdown ends the body early. An empty read after the
+            # deadline is an expired transfer, not a complete body.
+            if monotonic() > limits.deadline:
+                _raise_deadline(limits, written)
             return written
         written += len(chunk)
         if written > limits.max_bytes:

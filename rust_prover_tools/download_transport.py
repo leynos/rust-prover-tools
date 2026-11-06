@@ -21,7 +21,9 @@ from time import monotonic
 from rust_prover_tools.download_stream import (
     HTTPResponseLike,
     _DeadlineResponse,
+    _DeadlineWatchdog,
     _log_failure,
+    _ShutdownSocket,
     _stream,
     _StreamLimits,
     _TimeoutSocket,
@@ -134,6 +136,7 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
             )
             return
         finally:
+            _cancel_watchdog(response)
             connection.close()
     _log_failure(_LOGGER, name, "redirect_limit")
     msg = f"too many redirects while downloading {request.url}"
@@ -151,9 +154,7 @@ def _open(
     parsed = _parse_https_url(url)
     remaining = deadline - monotonic()
     if remaining <= 0:
-        _log_failure(_LOGGER, asset_name, "deadline")
-        msg = f"download of {url} exceeded the transfer deadline"
-        raise ProverToolError(msg)
+        _raise_deadline(url, asset_name)
     timeout = min(limits.connect_timeout_seconds, remaining)
     connection = http.client.HTTPSConnection(
         parsed.host,
@@ -163,6 +164,7 @@ def _open(
     target = urllib.parse.urlunsplit(
         ("", "", parsed.path or "/", parsed.query, ""),
     )
+    watchdog: _DeadlineWatchdog | None = None
     try:
         connection.request(
             "GET",
@@ -176,21 +178,54 @@ def _open(
         # reused closes the connection and clears `connection.sock`, although
         # the response still reads from the same socket.
         sock = typ.cast("_TimeoutSocket | None", getattr(connection, "sock", None))
+        # The connect phase is bounded by the socket timeout; the watchdog
+        # bounds header parsing and the body, which that timeout cannot.
+        watchdog = _DeadlineWatchdog(
+            typ.cast("_ShutdownSocket | None", sock),
+            deadline,
+        )
         response = connection.getresponse()
     except (OSError, http.client.HTTPException) as exc:
+        if watchdog is not None:
+            watchdog.cancel()
         connection.close()
+        if watchdog is not None and watchdog.fired:
+            _raise_deadline(url, asset_name, cause=exc)
         _log_failure(_LOGGER, asset_name, "transport_error")
         msg = f"failed to download {url}: {exc}"
         raise ProverToolError(msg) from exc
+    if watchdog.fired:
+        watchdog.cancel()
+        connection.close()
+        _raise_deadline(url, asset_name)
     return (
         _DeadlineResponse(
             response,
             deadline=deadline,
             read_timeout_seconds=limits.connect_timeout_seconds,
             sock=sock,
+            watchdog=watchdog,
         ),
         connection,
     )
+
+
+def _raise_deadline(
+    url: str,
+    asset_name: str,
+    *,
+    cause: BaseException | None = None,
+) -> typ.NoReturn:
+    """Report an expired transfer deadline for `url`."""
+    _log_failure(_LOGGER, asset_name, "deadline")
+    msg = f"download of {url} exceeded the transfer deadline"
+    raise ProverToolError(msg) from cause
+
+
+def _cancel_watchdog(response: HTTPResponseLike) -> None:
+    """Stop a response's deadline watchdog before its connection closes."""
+    if isinstance(response, _DeadlineResponse):
+        response.cancel()
 
 
 def _redirect_location(

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import pathlib
+import socket
+import threading
 import typing as typ
 
 import pytest
@@ -150,6 +152,32 @@ class FakeSocket:
     def settimeout(self, value: float) -> None:
         """Record a requested timeout."""
         self.timeouts.append(value)
+
+
+class ShutdownSocket:
+    """A socket double that records shutdown calls and releases waiters."""
+
+    def __init__(self) -> None:
+        """Start with no recorded shutdown."""
+        self.shutdowns: list[int] = []
+        self.was_shut_down = threading.Event()
+
+    def shutdown(self, how: int) -> None:
+        """Record the shutdown direction and release any blocked reader."""
+        self.shutdowns.append(how)
+        self.was_shut_down.set()
+
+
+class RecordingWatchdog:
+    """A watchdog double that records cancellation."""
+
+    def __init__(self) -> None:
+        """Start uncancelled."""
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        """Record cancellation."""
+        self.cancelled = True
 
 
 def test_stream_rejects_oversized_content_length_before_reading(
@@ -409,6 +437,65 @@ def test_stream_reports_an_early_read_timeout_as_a_stream_error(
         "asset": "asset.bin",
         "reason": "stream_error",
     }, "an early read timeout must not be reported as the deadline"
+
+
+def test_deadline_watchdog_shuts_the_socket_down_at_the_deadline() -> None:
+    """A trickling read is interrupted when the transfer deadline expires."""
+    sock = ShutdownSocket()
+    watchdog = download_stream._DeadlineWatchdog(
+        sock,
+        download_stream.monotonic() + 0.05,
+    )
+
+    try:
+        assert sock.was_shut_down.wait(2.0), "the watchdog must fire at the deadline"
+    finally:
+        watchdog.cancel()
+
+    assert watchdog.fired, "the watchdog must record that it fired"
+    assert sock.shutdowns == [socket.SHUT_RDWR], (
+        "both directions must be shut down so a blocked read returns"
+    )
+
+
+def test_deadline_watchdog_cancel_leaves_the_socket_open() -> None:
+    """Cancelling before the deadline must not shut the socket down."""
+    sock = ShutdownSocket()
+    watchdog = download_stream._DeadlineWatchdog(
+        sock,
+        download_stream.monotonic() + 60.0,
+    )
+
+    watchdog.cancel()
+
+    assert not watchdog.fired, "a cancelled watchdog must not report firing"
+    assert sock.shutdowns == [], "a cancelled watchdog must not touch the socket"
+
+
+def test_stream_reports_deadline_when_the_body_ends_after_the_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An empty read after the deadline is an expired transfer, not EOF."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    clock = FakeClock()
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+    response = FakeResponse(chunks=(), clock=clock)
+
+    with pytest.raises(ProverToolError, match="transfer deadline"):
+        download_stream._stream(
+            response,
+            tmp_path / "asset.bin",
+            stream_limits(100, 0.5),
+        )
+
+    assert events_from(caplog)[-1] == {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "deadline",
+        "written": 0,
+    }, "an empty read after the deadline must report the deadline"
 
 
 def test_stream_accepts_a_complete_body_matching_content_length(
@@ -1091,6 +1178,110 @@ def test_open_rejects_an_expired_deadline() -> None:
             download_transport.monotonic() - 1.0,
             asset_name="asset.bin",
         )
+
+
+def test_open_maps_a_watchdog_shutdown_to_a_deadline_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A header read interrupted by the watchdog reports the deadline."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    closed_connections: list[bool] = []
+
+    class BlockingHeaderConnection:
+        """A connection whose response headers arrive only at the deadline."""
+
+        def __init__(
+            self,
+            host: str,
+            port: int | None,
+            *,
+            timeout: float,
+        ) -> None:
+            """Bind the blocking socket and record this connection."""
+            del host, port, timeout
+            self.sock = ShutdownSocket()
+            self.index = len(closed_connections)
+            closed_connections.append(False)
+
+        def request(
+            self,
+            method: str,
+            target: str,
+            *,
+            headers: dict[str, str],
+        ) -> None:
+            """Accept the request without contacting a server."""
+            del method, target, headers
+
+        def getresponse(self) -> FakeResponse:
+            """Block until the watchdog shuts the socket down."""
+            if not self.sock.was_shut_down.wait(5.0):
+                msg = "the watchdog did not interrupt the header read"
+                raise AssertionError(msg)
+            msg = "remote closed the connection"
+            raise download_transport.http.client.RemoteDisconnected(msg)
+
+        def close(self) -> None:
+            """Record closure."""
+            closed_connections[self.index] = True
+
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        BlockingHeaderConnection,
+    )
+
+    with pytest.raises(ProverToolError, match="exceeded the transfer deadline"):
+        download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(
+                connect_timeout_seconds=5.0,
+                transfer_timeout_seconds=0.2,
+            ),
+            download_transport.monotonic() + 0.2,
+            asset_name="asset.bin",
+        )
+
+    assert closed_connections == [True], "the interrupted connection must close"
+    assert events_from(caplog)[-1] == {
+        "event": "download.failed",
+        "asset": "asset.bin",
+        "reason": "deadline",
+    }, "a watchdog shutdown must report the deadline"
+
+
+def test_download_stops_the_deadline_watchdog(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completed download stops its watchdog before closing the socket."""
+    watchdog = RecordingWatchdog()
+    response = download_stream._DeadlineResponse(
+        FakeResponse(chunks=(b"payload",)),
+        deadline=download_stream.monotonic() + 60.0,
+        read_timeout_seconds=5.0,
+        watchdog=watchdog,
+    )
+    connection = FakeConnection()
+    monkeypatch.setattr(
+        download_transport,
+        "_open",
+        lambda url, limits, deadline, *, asset_name: (response, connection),
+    )
+
+    download_transport._download(
+        download_request(
+            "https://example.test/asset.bin",
+            tmp_path / "asset.bin.download",
+            max_bytes=100,
+            asset_name="asset.bin",
+        ),
+        DownloadLimits(),
+    )
+
+    assert watchdog.cancelled, "the watchdog must stop when the body is complete"
+    assert connection.closed, "the connection must still close"
 
 
 def test_download_complete_event_reports_bytes_elapsed_and_asset(
