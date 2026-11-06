@@ -103,6 +103,7 @@ def read_until_the_reader_goes_away(
         expired = threading.Event()
 
         def abandon_the_run() -> None:
+            """Mark the run expired and kill the child, unblocking any pending read."""
             # Killing the child is what unblocks a read that would otherwise
             # wait forever for output the CLI never writes.
             expired.set()

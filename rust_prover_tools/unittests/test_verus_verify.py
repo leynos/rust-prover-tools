@@ -33,6 +33,7 @@ def test_verify_proof_files_keeps_partial_result_when_invocation_fails(
     unstartable_file = tmp_path / "unstartable.rs"
 
     def fake_run_command(spec: CommandSpec) -> CommandResult:
+        """Prove the first file and fail to start any other one."""
         if spec.argv[1] == str(proved_file):
             return CommandResult(stdout="", stderr="", exit_code=0)
         msg = "verifier disappeared"
@@ -84,6 +85,7 @@ def test_verify_proof_files_emits_bounded_events(
     proof_files = (pathlib.Path("first.rs"), pathlib.Path("second.rs"))
 
     def fake_run_command(_spec: object) -> CommandResult:
+        """Report a successful verifier run for every proof file."""
         return CommandResult(stdout="", stderr="", exit_code=0)
 
     monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
@@ -128,6 +130,7 @@ def test_verify_proof_files_uses_injected_clock(
     ticks = iter([0.0, 1.0, 2.0, 3.0, 5.0, 6.0])
 
     def fake_run_command(_spec: object) -> CommandResult:
+        """Report a successful verifier run for every proof file."""
         return CommandResult(stdout="", stderr="", exit_code=0)
 
     monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
@@ -168,6 +171,7 @@ def test_verify_proof_files_reports_unexpected_failure(
     proof_files = (pathlib.Path("first.rs"),)
 
     def fake_run_command(_spec: object) -> CommandResult:
+        """Raise an unexpected runtime error in place of running the verifier."""
         msg = "verifier wrapper crashed"
         raise RuntimeError(msg)
 
@@ -238,6 +242,7 @@ def _fake_verifier(
     """Return a verifier stub that records calls and fails at one index."""
 
     def fake_run_command(spec: CommandSpec) -> CommandResult:
+        """Record the invocation and fail the file at the configured index."""
         invocations.append(spec.argv)
         proof_file = pathlib.Path(spec.argv[1])
         exit_code = (

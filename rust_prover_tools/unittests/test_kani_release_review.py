@@ -58,6 +58,7 @@ def test_unsupported_linux_architecture_stops_before_any_child(
     monkeypatch.setattr(kani_release.platform, "machine", lambda: machine)
 
     def unexpected(_spec: CommandSpec) -> CommandResult:
+        """Fail the test if an unsupported host reaches a child command."""
         pytest.fail("unsupported architecture reached a child command")
 
     monkeypatch.setattr(kani_release, "run_command", unexpected)
@@ -79,6 +80,7 @@ def test_suffixed_verifier_identity_never_reaches_proof(
     seen: list[CommandSpec] = []
 
     def capture(spec: CommandSpec) -> CommandResult:
+        """Record each command and report a suffixed verifier identity."""
         seen.append(spec)
         assert spec.argv[-1] == "--version", "proof must not start"
         identity = (
@@ -110,6 +112,7 @@ def test_invalid_proof_directory_stops_before_any_child(
         cwd.touch()
 
     def unexpected(_spec: CommandSpec) -> CommandResult:
+        """Fail the test if an invalid working directory reaches a child command."""
         pytest.fail("invalid working directory reached a child command")
 
     monkeypatch.setattr(kani_release, "run_command", unexpected)
@@ -177,6 +180,7 @@ def test_execution_logs_bounded_stage_fields_without_payloads(
     caplog.set_level(logging.INFO, logger="rust_prover_tools.kani_release")
 
     def capture(spec: CommandSpec) -> CommandResult:
+        """Return private proof output for the proof and identity probes."""
         if spec.argv[-1] != "--version":
             return CommandResult("private-proof-output", "private-proof-error", status)
         identity = (
@@ -254,6 +258,7 @@ def test_identity_signal_logs_one_failure_without_diagnostic_payload(
     caplog.set_level(logging.INFO, logger="rust_prover_tools.kani_release")
 
     def capture(_spec: CommandSpec) -> CommandResult:
+        """Fail every command with a signal and private diagnostic output."""
         return CommandResult("", "private-identity-error", -15)
 
     monkeypatch.setattr(kani_release, "run_command", capture)

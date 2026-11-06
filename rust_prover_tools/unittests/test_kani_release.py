@@ -26,6 +26,7 @@ def owned_config_discovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     from rust_prover_tools.kani_release_config import check_verification_config
 
     def validate(cwd: Path, environment: cabc.Mapping[str, str]) -> VerificationConfig:
+        """Check the config with discovery limited to the test's temporary root."""
         return check_verification_config(cwd, environment, search_roots=(tmp_path,))
 
     monkeypatch.setattr(kani_release, "check_verification_config", validate)
@@ -520,6 +521,7 @@ def test_public_cli_converts_literal_path_arguments(
     seen: list[KaniExecOptions] = []
 
     def record(options: KaniExecOptions, _environment: cabc.Mapping[str, str]) -> int:
+        """Record the parsed options and return the verifier status 23."""
         seen.append(options)
         return 23
 
@@ -574,6 +576,7 @@ def test_public_cli_preserves_optional_compiler_wrappers(
     seen: list[CommandSpec] = []
 
     def capture(spec: CommandSpec) -> CommandResult:
+        """Record each command, answering identity probes and failing the proof run."""
         seen.append(spec)
         if spec.argv[-1] != "--version":
             return CommandResult("proof-output", "proof-error", 23)

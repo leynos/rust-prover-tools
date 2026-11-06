@@ -56,6 +56,7 @@ def test_read_required_file_wraps_os_errors(
     version_file.write_text("1.2.3\n", encoding="utf-8")
 
     def fail_read_text(*_args: object, **_kwargs: object) -> str:
+        """Raise a permission error in place of reading the version file."""
         raise PermissionError
 
     monkeypatch.setattr(type(version_file), "read_text", fail_read_text)

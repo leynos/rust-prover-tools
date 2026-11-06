@@ -325,3 +325,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rust_prover_tools"]
+
+[tool.interrogate]
+# Overload signatures share the implementation's docstring; Ruff (D418) forbids one
+# on each stub. interrogate recognises `@overload` and `@typing.overload` but not an
+# aliased `typ.overload`, so the overloaded `getheader` is ignored by name; its
+# implementation is documented.
+ignore-overloaded-functions = true
+ignore-regex = ["^getheader$"]

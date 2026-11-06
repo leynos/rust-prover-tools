@@ -91,6 +91,7 @@ def cargo_profile_project(tmp_path: Path) -> cabc.Callable[..., dict[str, str]]:
     """
 
     def create(*profiles: str) -> dict[str, str]:
+        """Write Cranelift profile overrides and return the Cargo environment."""
         config = tmp_path / ".cargo"
         config.mkdir(parents=True, exist_ok=True)
         tables = ["[unstable]\ncodegen-backend = true"]

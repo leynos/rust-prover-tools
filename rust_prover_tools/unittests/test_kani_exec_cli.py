@@ -34,6 +34,7 @@ def test_adapter_preserves_exit_and_signal_status(
     """No output or exception is invented for a completed verifier child."""
 
     def run(_options: KaniExecOptions, _environment: cabc.Mapping[str, str]) -> int:
+        """Return the verifier status without writing any output."""
         return status
 
     monkeypatch.setattr(kani_exec_cli, "exec_kani", run)
@@ -55,6 +56,7 @@ def test_adapter_prints_one_command_failure_and_preserves_status(
     error = CommandFailedError("selected-tool", status, "identity failed")
 
     def run(_options: KaniExecOptions, _environment: cabc.Mapping[str, str]) -> int:
+        """Raise the identity command failure for the adapter to report."""
         raise error
 
     monkeypatch.setattr(kani_exec_cli, "exec_kani", run)
@@ -72,6 +74,7 @@ def test_adapter_prints_one_typed_validation_error(
     """Expected validation failures remain actionable CLI errors with status one."""
 
     def run(_options: KaniExecOptions, _environment: cabc.Mapping[str, str]) -> int:
+        """Raise a validation error for the adapter to report."""
         msg = "invalid selected release"
         raise ProverToolError(msg)
 
@@ -100,6 +103,7 @@ def test_closed_diagnostic_pipe_preserves_the_computed_status(
     monkeypatch.setattr(kani_exec_cli.sys, "stderr", _BrokenPipeStream())
 
     def run(_options: KaniExecOptions, _environment: cabc.Mapping[str, str]) -> int:
+        """Raise the configured failure so the adapter computes the status."""
         raise error
 
     monkeypatch.setattr(kani_exec_cli, "exec_kani", run)

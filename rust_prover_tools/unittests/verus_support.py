@@ -45,6 +45,7 @@ def stub_archive_download(
     captured: list[tuple[PinnedAsset, Path]] = []
 
     def fake_download_pinned(asset: PinnedAsset, destination: Path) -> Path:
+        """Record the asset request and write a placeholder archive."""
         captured.append((asset, destination))
         destination.write_bytes(b"archive")
         return destination

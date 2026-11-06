@@ -32,6 +32,7 @@ def test_cargo_discovery_never_treats_probe_errors_as_missing(
     original = Path.stat
 
     def inspect(path: Path, *, follow_symlinks: bool = True) -> stat_result:
+        """Raise the injected error when the config file is probed."""
         if path == target:
             raise OSError(error, "injected filesystem failure")
         return original(path, follow_symlinks=follow_symlinks)
@@ -54,6 +55,7 @@ def test_only_missing_components_are_absent(
     """Both forms of nonexistent path terminate a filesystem lookup safely."""
 
     def inspect(_path: Path, *, follow_symlinks: bool = True) -> stat_result:
+        """Raise the injected missing-path error for every stat call."""
         raise OSError(error, "injected missing component")
 
     monkeypatch.setattr(Path, "stat", inspect)
@@ -90,6 +92,7 @@ def test_unreadable_cargo_file_is_a_typed_validation_error(
     def read(
         _path: Path, encoding: str | None = None, errors: str | None = None
     ) -> str:
+        """Raise the injected read failure for every config read."""
         raise failure
 
     monkeypatch.setattr(Path, "read_text", read)
@@ -110,6 +113,7 @@ def test_injected_home_selection_never_reads_host_home(
     """Even a present injected HOME must not evaluate an ambient fallback."""
 
     def host_home() -> Path:
+        """Fail the test if the ambient host home is ever consulted."""
         pytest.fail("the host home is not part of the injected environment")
 
     monkeypatch.setattr(Path, "home", host_home)
