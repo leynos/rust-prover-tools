@@ -135,11 +135,12 @@ check-fmt: build ## Verify formatting
 
 lint: lint-python ## Run linters
 
-# Docstring presence for the package and its tests. `scripts/uv_gate.py` is the
-# shared-actions helper, vendored byte for byte and audited against its digest,
-# so it is not edited here. Ruff keeps docstring style.
+# Docstring presence for the package, its tests and the scripts.
+# `scripts/uv_gate.py` is the shared-actions helper, vendored byte for byte, so
+# it is not edited here; it ships with complete docstrings, so the gate covers it.
+# Ruff keeps docstring style.
 INTERROGATE_VERSION ?= 1.7.0
-INTERROGATE_TARGETS ?= rust_prover_tools tests
+INTERROGATE_TARGETS ?= rust_prover_tools tests scripts
 INTERROGATE = $(UV_GATE) tool --from 'interrogate==$(INTERROGATE_VERSION)' -- interrogate
 # Level 2 prints a MISSED row per undocumented definition, which the
 # `interrogate` target fails on: the rounded percentage alone passes a lone gap.
