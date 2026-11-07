@@ -12,8 +12,10 @@ The one overloaded method name is excluded in `pyproject.toml`, because
 interrogate does not recognize this repository's `typ.overload` alias. The
 exclusion is held to that name, and every definition of the name that is not an
 overload stub is held to a docstring.
-The vendored `scripts/uv_gate.py` stays outside the gate: it is audited by
-digest and is not edited here.
+The gate covers `scripts` too. `scripts/uv_gate.py` is the vendored helper and
+is not edited here; it ships with complete docstrings, so the real tool passes
+over it, and the end-to-end tests below prove a documented script passes and an
+undocumented one fails.
 
 Run via ``make test``.
 """
@@ -35,7 +37,6 @@ ROOT = Path(__file__).resolve().parents[1]
 MAKEFILE = ROOT / "Makefile"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 OVERLOADED = "getheader"
-VENDORED = (Path("scripts"),)
 
 
 def _makefile_text() -> str:
@@ -125,7 +126,6 @@ def test_every_python_directory_is_a_target() -> None:
         str(directory)
         for directory in sorted(directories)
         if not any(directory.is_relative_to(target) for target in targets)
-        and directory not in VENDORED
     ]
     assert not uncovered, f"add these to INTERROGATE_TARGETS: {uncovered}"
 
@@ -203,6 +203,50 @@ def _run_target(tmp_path: Path, script: str) -> subprocess.CompletedProcess[str]
         text=True,
         check=False,
     )
+
+
+def test_scripts_is_a_target() -> None:
+    """The scripts directory is measured, so removing it from the targets fails."""
+    targets = _variable("INTERROGATE_TARGETS").split()
+    assert "scripts" in targets, f"scripts must be an interrogate target: {targets}"
+
+
+def _run_real_tool(tmp_path: Path, source: str) -> subprocess.CompletedProcess[str]:
+    """Run `make interrogate` with the real pinned tool over one generated script.
+
+    Returns
+    -------
+    subprocess.CompletedProcess[str]
+        The finished `make` process with its captured output.
+    """
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "tool.py").write_text(source, encoding="utf-8")
+    make = shutil.which("make")
+    assert make, "make must be on the path"
+    return subprocess.run(
+        [make, "-C", str(ROOT), "interrogate", f"INTERROGATE_TARGETS={scripts}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_a_documented_script_passes_the_real_gate(tmp_path: Path) -> None:
+    """A script whose module and function carry docstrings passes."""
+    result = _run_real_tool(
+        tmp_path, '"""A script."""\n\n\ndef main() -> None:\n    """Run it."""\n'
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_an_undocumented_script_fails_the_real_gate(tmp_path: Path) -> None:
+    """A script with one undocumented function fails and reports a MISSED row."""
+    result = _run_real_tool(
+        tmp_path, '"""A script."""\n\n\ndef main() -> None:\n    pass\n'
+    )
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "MISSED" in result.stdout, result.stdout
 
 
 def test_the_target_passes_when_the_tool_reports_no_gap(tmp_path: Path) -> None:
