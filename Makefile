@@ -138,7 +138,7 @@ lint: lint-python ## Run linters
 # Docstring presence for the package, its tests and the scripts.
 # `scripts/uv_gate.py` is the shared-actions helper, vendored byte for byte, so
 # it is not edited here; it ships with complete docstrings, so the gate covers it.
-# Ruff keeps docstring style.
+# Ruff checks docstring style for the package and its tests only (`PYTHON_TARGETS`).
 INTERROGATE_VERSION ?= 1.7.0
 INTERROGATE_TARGETS ?= rust_prover_tools tests scripts
 INTERROGATE = $(UV_GATE) tool --from 'interrogate==$(INTERROGATE_VERSION)' -- interrogate

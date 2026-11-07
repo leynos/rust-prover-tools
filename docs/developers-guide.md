@@ -421,6 +421,17 @@ files, and both abort the run before any mutant is scored:
 predicate directly, so a lost guard fails an ordinary pull request rather than
 waiting for the next scheduled mutation run.
 
+## Docstring coverage
+
+`make lint-python` first runs `make interrogate`, which needs `uv` and fails on
+any Python definition it scans under `rust_prover_tools`, `tests` and `scripts`
+without a docstring, and on any `MISSED` row. `scripts/uv_gate.py` is the
+vendored shared-actions helper; it is not edited here, and it ships with
+complete docstrings. Ruff checks docstring style for `PYTHON_TARGETS` only, so
+`scripts` is held to presence, not style. Add a new Python directory to
+`INTERROGATE_TARGETS`; `tests/test_interrogate_gate.py` asserts the wiring and
+runs the real pinned tool over a generated documented and undocumented script.
+
 ## Running uv through the helper
 
 Every `uv` call in the Makefile goes through `scripts/uv_gate.py`, a copy of
