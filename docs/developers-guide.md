@@ -423,14 +423,18 @@ waiting for the next scheduled mutation run.
 
 ## Docstring coverage
 
-`make lint-python` first runs `make interrogate`, which needs `uv` and fails on
-any Python definition it scans under `rust_prover_tools`, `tests` and `scripts`
-without a docstring, and on any `MISSED` row. `scripts/uv_gate.py` is the
-vendored shared-actions helper; it is not edited here, and it ships with
-complete docstrings. Ruff checks docstring style for `PYTHON_TARGETS` only, so
-`scripts` is held to presence, not style. Add a new Python directory to
-`INTERROGATE_TARGETS`; `tests/test_interrogate_gate.py` asserts the wiring and
-runs the real pinned tool over a generated documented and undocumented script.
+`make lint-python` depends on `build` and on `make interrogate`, which needs
+`uv` and fails on any Python definition it scans under `rust_prover_tools`,
+`tests` and `scripts` without a docstring, and on any `MISSED` row. The
+configured exclusions are the recognised `@overload` stubs (a docstring on each
+is forbidden by Ruff) and the name `getheader`, held by the contract test to
+its overloads: every non-overload definition of that name must carry a
+docstring. `scripts/uv_gate.py` is the vendored shared-actions helper; it is
+not edited here, and it ships with complete docstrings. Ruff checks docstring
+style for `PYTHON_TARGETS` only, so `scripts` is held to presence, not style.
+Add a new Python directory to `INTERROGATE_TARGETS`;
+`tests/test_interrogate_gate.py` asserts the wiring and runs the real pinned
+tool over a generated documented and undocumented script.
 
 ## Running uv through the helper
 

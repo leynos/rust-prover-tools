@@ -241,7 +241,7 @@ def test_a_documented_script_passes_the_real_gate(tmp_path: Path) -> None:
 
 
 def test_an_undocumented_script_fails_the_real_gate(tmp_path: Path) -> None:
-    """A script with one undocumented function fails and names it as MISSED."""
+    """A script with one undocumented function fails and reports a MISSED row."""
     result = _run_real_tool(
         tmp_path, '"""A script."""\n\n\ndef main() -> None:\n    pass\n'
     )
