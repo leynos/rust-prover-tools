@@ -1,7 +1,7 @@
 # Kani snapshot distribution design
 
 Status: Proposed; explicit plan approval is required before implementation.
-Revision: 3, 2026-09-27. Scope: `leynos/rust-prover-tools` only.
+Revision: 4, 2026-11-08. Scope: `leynos/rust-prover-tools` only.
 
 ## Purpose and boundaries
 
@@ -27,8 +27,12 @@ capability from the independently authorized first publication.
 
 Existing `prover-tools kani install`, `prover-tools kani check-version`,
 `tools/kani/VERSION`, options, environment bindings, output, and release
-installation behaviour retain their contracts. Add these proposed commands;
-they are not existing APIs:
+installation behaviour retain their contracts. Main now defaults to bounded
+prebuilt release installation, with source installation only under `--compile`.
+Preserve its existing release-qualified `kani exec` API as well. Its 0.67.0
+qualification does not demonstrate the snapshot compiler floor. Snapshot
+installation never enters either release installer fallback. Add these proposed
+commands; they are not existing APIs:
 
 ```bash
 prover-tools kani snapshot install --pin tools/kani/snapshot.toml
@@ -216,18 +220,30 @@ adapter. No feature imports CLI or Verus implementation. Reuse
 use it for exact-byte manifest verification. The permissive legacy checksum
 lookup and first-semantic-version parser cannot enforce snapshot integrity.
 
-All external commands use `rust_prover_tools.commands` and Cuprum. Extend that
-adapter for explicitly tested process deadlines, environment replacement and
-variable removal without global environment mutation, descendant cleanup on
-timeout/cancellation, and streaming output with bounded capture. Keep stdout
-and stderr separate. Use status inspection for proof execution and explicit CLI
-exit mapping rather than the generic error-to-1 path. Exercise tiny real
-processes for these contracts before relying on cmd-mox. Cuprum support is a
-feasibility condition; do not bypass it or add dependencies silently.
-Standard-library HTTP/file/archive operations are permitted; no new runtime
-Python dependency is proposed. The package's actual Python floor is 3.14. Older
-generic guidance mentioning Python 3.13 and Plumbum yields to the package
-metadata and feature-specific Cuprum contract.
+Consider reusable seams in main's `downloads`, `download_transport`,
+`download_stream`, `platforms` and `path_resolution` helpers. The existing
+transport accepts arbitrary HTTPS hosts, so add D4's narrower host policy
+through a tested boundary; release checksums do not replace attestation.
+`kani_archive.extract_frontend` handles two regular files only and cannot
+validate the backend graph. The version-keyed global installer cannot provide
+snapshot generations. Reuse `kani_release_config`/`kani_release_flags` pure
+helpers where applicable without importing fixed release compiler/LLVM values.
+
+All external commands use `rust_prover_tools.commands` and pinned Cuprum
+`0.2.0b2`. Preserve its best-effort echo and the CLI's closed-pipe exit-status
+guard. `ExecutionContext.env` currently overlays inherited values; do not
+mistake it for environment replacement. Read the bundled Cuprum migration
+guide. Extend that adapter for explicitly tested process deadlines, environment
+replacement and variable removal without global environment mutation,
+descendant cleanup on timeout/cancellation, and streaming output with bounded
+capture. Keep stdout and stderr separate. Use status inspection for proof
+execution and explicit CLI exit mapping rather than the generic error-to-1
+path. Exercise tiny real processes for these contracts before relying on
+cmd-mox. Cuprum support is a feasibility condition; do not bypass it or add
+dependencies silently. Standard-library HTTP/file/archive operations are
+permitted; no new runtime Python dependency is proposed. The package's actual
+Python floor is 3.14. Older generic guidance mentioning Python 3.13 and Plumbum
+yields to the package metadata and feature-specific Cuprum contract.
 
 For remote installs allow HTTPS only, `github.com` release URLs for the pinned
 repository/tag, and explicit documented GitHub asset redirect hosts. Validate
@@ -294,7 +310,13 @@ Resolve launchers to absolute paths, force generation-private homes, select the
 exact toolchain and backend, and remove conflicting inherited Kani/Rust
 selection variables. Include `RUSTC`, `RUSTC_WRAPPER`,
 `RUSTC_WORKSPACE_WRAPPER`, `RUSTUP_TOOLCHAIN`, and `RUSTFLAGS` in environment
-contract tests. Preserve ordinary verifier output, split stdout/stderr and exit
+contract tests. Retain valid configured admission wrappers and `RUSTDOC`
+through compiler probes and proofs; never disable them to obtain isolation.
+Reject malformed or unproved routes. Preserve main's child-only Cargo backend
+profile overrides and exact coverage-flag filtering, including rejected
+package-scoped backends and unresolved includes. Wrappers absent on hosted
+runners remain optional; arbitrary wrappers are not evidence of compiler
+identity. Preserve ordinary verifier output, split stdout/stderr and exit
 status; do not invoke a shell. The snapshot wrapper must reject forwarded
 setup/update and any upstream option that would replace its backend or
 compiler. Record that finite selector list from upstream source and test it.
@@ -347,11 +369,13 @@ artefacts by exact same-run IDs, never by an arbitrary name in another run. Do
 not unpack payload archives in the privileged job or import Python modules from
 artefact directories.
 
-Reuse the strict loader and trigger/job readers in `tests/workflow_contracts/`
-for new workflow contracts; reject duplicate keys and malformed or empty
-subjects. Follow main's pure-rule and refusal-fixture pattern. Preserve its
-CodeScene environment and main-only coverage publisher; snapshot jobs neither
-receive those credentials nor publish coverage.
+The local CV-005 readers were removed in favour of pinned shared
+`cv005-contracts`; run `make test-workflow-contracts` without resurrecting
+those modules. New snapshot contracts require strict parsing, duplicate-key
+refusal and malformed/empty-subject tests at their own boundary. Preserve
+main's CodeScene environment, coverage interpreter consistency and mutation
+caller selection; snapshot jobs neither receive those credentials nor publish
+coverage.
 
 Use full 40-hex Action/reusable-workflow pins; contract tests assert paths and
 pin shape rather than today's values. Proposed runner is the existing hosted
@@ -500,3 +524,15 @@ change or publication is authorized by this document's proposed status.
 [^4]: [Rustup environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
 [^5]: [GitHub workflow concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 [^6]: [Rust slice ArrayWindows](https://doc.rust-lang.org/std/slice/struct.ArrayWindows.html).
+
+Revision 4 integration note (2026-11-08): the execution plan records main's new
+prebuilt release installer, `kani exec`, Cuprum 0.2 and shared validation
+boundaries. Future Python and test helpers require complete interrogate
+docstrings; use the vendored uv gate and current Makefile targets. This remains
+proposed design pending explicit implementation approval.
+
+Cuprum 0.2 exposes `EnvMode.REPLACE`, `UNSET` and run-level timeouts. Extend
+the typed command adapter using those supported primitives, not custom
+environment emulation. Its documented termination targets the direct child;
+process-group ownership and descendant cleanup still require the EP-M1
+experiment and real child-process tests before adoption.

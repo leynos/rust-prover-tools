@@ -1,7 +1,7 @@
 # Add monthly Kani snapshot distributions
 
 Status: DRAFT — awaiting explicit approval before implementation. Date:
-2026-09-27. Design revision: 3.
+2026-09-27. Design revision: 4 (updated 2026-11-08).
 
 This execution plan is a living document. Keep its constraints, tolerances,
 risks, progress, discoveries, decisions, verification evidence and outcomes
@@ -211,42 +211,92 @@ Main's dependency manifest and lockfile were retained without conflict or
 regeneration. Its release action version changed, but publish-before-upload
 ordering remains.
 
-Reuse main's `tests/workflow_contracts/loading.py::load_workflow` and
-`reading.py` trigger/job readers for snapshot workflow tests. They reject
-duplicate keys, handle both YAML spellings of `on`, and refuse malformed or
-empty subjects rather than allowing vacuous success. Follow the existing pure
-rule, repository assertion and mutated-refusal-fixture pattern. Preserve
-coverage publication exclusively through main's CodeScene environment and
-existing mutation-testing contracts; snapshot workflows must not acquire those
-credentials or become another coverage publisher.
+The current rebase target is `be04803d22a5e76677609b740b488fcda40f78b7`
+(2026-11-08). Both existing planning commits were replayed. The CLI design's
+append conflict was resolved by preserving main's complete implemented
+`kani exec` section and the separate proposed snapshot link. Weave 0.5.1 and
+its matching driver were inspected; no changed path selects that driver, so
+Git's native `zdiff3` merge handled the conflict. Semantic `sem` diffs and Git
+range/target diffs distinguish this documentation change from main's
+implemented features. Main's manifest and lockfile are retained unchanged;
+there was no lockfile conflict requiring regeneration.
 
-Main now runs `mdtablefix --check --git --include-untracked` inside
-`make check-fmt`; `make fmt` applies the same tracked/unignored-file selection.
-Use those targets rather than the former `mdformat-all` helper. Pylint runs
-through uv-managed PyPy 3.12 with pinned Pylint 4.0.9 and `syntax-error`
-enabled, not the retired shim. Keep new Python syntax parseable by that gate
-without suppressions; the package runtime remains Python 3.14. Recheck current
-pins through the Makefile when implementation starts.
+The previous local CV-005 loader/readers were removed in favour of the pinned
+shared `cv005-contracts` package. Run `make test-workflow-contracts`; preserve
+`.github/cv005.toml`, coverage environment isolation, matching coverage Python
+versions and mutation caller interpreter selection. Do not resurrect removed
+`loading.py` or `reading.py` modules. New snapshot-specific contract tests
+should follow existing pure-rule/refusal-fixture conventions and use a
+supported strict parser boundary, testing duplicate keys and YAML `on` forms;
+shared CV-005 coverage checks do not establish snapshot publication safety.
 
-`rust_prover_tools/cli.py` constructs the Cyclopts apps. `install` and
-`check_version` build `KaniInstallOptions` and `KaniCheckOptions` and map
-`ProverToolError` to exit 1. `rust_prover_tools/kani.py::install_kani` runs
-`cargo install --locked kani-verifier --version`, `cargo kani setup`, then a
-version probe. `check_kani_version` compares only the first semantic version.
-`rust_prover_tools/versions.py` supplies pure pin and version helpers; its
-checksum lookup is intentionally too permissive for authenticated snapshots.
+Main routes Makefile uv invocations through `scripts/uv_gate.py`, using the
+shared cache and offline-first bounded fallback. Use `make prepare` and that
+helper for focused Python commands; do not edit the vendored helper or
+reintroduce the removed hash test. Spelling is the documented direct-uv
+exception: `make spelling` runs pinned `typos-config-builder gate`, which may
+regenerate `typos.toml`; old `spelling-config` and helper-test targets are
+gone. Never hand-edit generated policy or weaken spelling. Review any
+regeneration separately and keep unrelated dictionary changes outside this
+planning patch.
 
-`rust_prover_tools/commands.py::run_command` wraps Cuprum with `CommandSpec`
-containing tuple arguments, environment, working directory and echo selection.
-`run_checked` raises on nonzero exit. Confirm real environment removal and
-timeout semantics before extending it; do not bypass this sole process boundary.
-`rust_prover_tools/verus/install.py` has bounded curl downloads but a
-non-atomic delete/move and unchecked unzip path; do not reuse these as the
-snapshot safety contract.
+`make check-fmt` checks tracked/unignored Markdown with `mdtablefix`; Pylint
+remains pinned on managed PyPy 3.12 with syntax errors enabled. `make lint`
+also runs interrogate 1.7.0 over package, tests and scripts: require docstrings
+for every module, class and function, 100 percent coverage and no `MISSED`
+rows. New tests and build helpers must satisfy this gate too. Runtime Python
+remains 3.14; use the current named Ruff rule selections without suppressions.
+
+`rust_prover_tools/cli.py` constructs the Cyclopts apps. Release installation
+now defaults to pinned prebuilt Kani 0.67.0 frontend and backend assets through
+`kani_binary.install_kani_binary`; `--compile` explicitly selects the older
+Cargo source installation. Preserve both release behaviours, `VERSION` and
+existing help/environment contracts. The snapshot commands remain additive and
+must never enter the release source-build fallback. `check_kani_version` still
+compares semantic versions and is not snapshot identity verification.
+
+`kani exec` is an existing release-qualified API, implemented through
+`kani_exec_cli.py`, `kani_release.py`, `kani_release_config.py` and
+`kani_release_flags.py`. It selects an explicit installation, validates release
+metadata/runtime paths, probes the effective compiler, retains configured
+admission wrappers and isolates supported Cargo backend and coverage flags. It
+does not install. Its initial 0.67.0/Linux qualification is not evidence for
+the snapshot Rust 1.94 floor. Preserve it while adding snapshot-only
+`kani run`. Reuse tested pure configuration/flag/path helpers where their
+contracts fit; do not import fixed release compiler strings or LLVM ABI
+assumptions into snapshot identity. Snapshot probes and proof execution must
+retain configured `RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and `RUSTDOC`
+admission routes, rejecting malformed or unprovable routes rather than
+disabling them. Preserve main's child-only profile backend overrides,
+package/include rejection and exact coverage-flag filtering without mutating
+the parent environment.
+
+`commands.run_command` uses pinned Cuprum `0.2.0b2`, `ExecutionContext` and
+`RunOutputOptions` with best-effort echo. `CommandSpec.env` remains an overlay;
+replacement/removal, deadlines, descendant cleanup and bounded capture are
+still explicit snapshot adapter work. Read the bundled Cuprum 0.2 migration and
+user guides, and preserve `exit_status.guard_shutdown_flush`, safe
+`print_lines` and closed-pipe status tests when extending handlers. Best-effort
+echo must not turn a successful proof into failure or hide a verifier failure.
+
+`binary_assets.PinnedAsset`, `downloads.download_pinned`, `download_url`,
+`download_transport` and `download_stream` provide bounded HTTPS transfer,
+redirect checks, digest validation and verified cache reuse. Extend these seams
+with a tested snapshot-specific host/redirect policy where useful: current
+HTTPS policy allows arbitrary hosts and is not D4's allowlist. Fixed release
+pins are not manifest authentication. `kani_archive.extract_frontend` supports
+only two regular launcher files and rollback of that pair; it is not backend
+link-graph extraction or concurrency-safe generation activation. The global
+Cargo-bin/version-keyed installer cannot serve as the snapshot install store.
+Use shared `platforms`, `path_resolution` and safe observability helpers where
+appropriate, without inheriting release-only limits or Verus assumptions.
 
 Unit tests live in `rust_prover_tools/unittests/`; relevant files are
-`test_kani.py`, `test_versions.py`, and command adapter tests. Public behaviour
-uses `tests/features/prover_tools_cli.feature` and
+`test_kani.py`, `test_kani_binary.py`, the `test_kani_release*` suites,
+`test_kani_exec_cli.py`, download tests and command adapter tests. Preserve
+`tests/test_kani_exec_codegen_backend.py`, best-effort echo, closed-pipe CLI
+exit-status and multi-file Verus regressions when extending shared adapters.
+Public behaviour uses `tests/features/prover_tools_cli.feature` and
 `tests/steps/test_prover_tools_cli_steps.py`; Syrupy output is in
 `tests/test_prover_tools_snapshots.py`. `tests/test_workflow_contract.py`
 establishes full-SHA shape assertions. The existing development group includes
@@ -266,7 +316,7 @@ and delivery instructions dated 2026-09-27, summarized here as U1 (identity,
 compatibility and provenance), U2 (upstream packaging), U3 (consumer safety),
 U4 (workflow/publication), U5 (verification) and U6 (documentation/delivery).
 There is no separate approved Terms of Reference or snapshot ADR. The proposed
-technical design is `docs/kani-snapshot-distribution-design.md`, revision 3,
+technical design is `docs/kani-snapshot-distribution-design.md`, revision 4,
 D1–D6. Plan approval ratifies both this revision and those concrete contracts;
 future departures require a recorded decision and explicit acceptance.
 
@@ -384,9 +434,9 @@ regardless of pin location. Verify actual Cuprum environment
 replacement/removal without mutating global environment, bounded
 capture/streaming, separate streams, deadline propagation and descendant
 cleanup. Tiny real child-process tests must establish these properties before
-the snapshot adapter relies on them. `uv.lock` currently resolves Cuprum 0.1.0;
-supported semantics are unverified. A dependency change or bypass requires
-deviation approval.
+the snapshot adapter relies on them. `uv.lock` now resolves Cuprum `0.2.0b2`;
+the required expanded adapter guarantees still need real-process evidence. A
+dependency change or bypass requires deviation approval.
 
 Preflight trusted prebuilt GitHub CLI/Rustup and linker/runtime packages.
 Rustup's distribution transport must use official authenticated endpoints, with
@@ -427,7 +477,8 @@ semantic-version equality alone does not. Add
 `rust_prover_tools/unittests/test_kani_snapshot_pins.py` and
 `test_kani_snapshot_manifest.py`. Use finite pytest partitions for versions,
 keys, types, hosts and targets, and Hypothesis construction-based round trips
-and field mutations. Run `uv run pytest -q -k kani_snapshot_pins` and the
+and field mutations. Run
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_pins` and the
 manifest equivalent. Include two valid same-semantic-version pins with
 different full SHAs and tags; changing any identity field must change the key.
 Record generated valid/invalid classifications and avoid filters hiding edge
@@ -443,12 +494,12 @@ to the reviewed pin, within the local-owner trust assumption. Add
 `test_kani_snapshot_integrity.py` with cmd-mox ordering, malformed JSON,
 duplicate keys, changed byte/newline, wrong signer/source/ref/run, missing
 asset, tampered checksum, hostile redirect and bounded streaming cases. Run
-`uv run pytest -q -k kani_snapshot_integrity`. Use a valid signed fixture
-through a faithfully modelled CLI response plus EP-M5's real verifier boundary.
-Include wrong Rustup mirror/component bytes and missing-toolchain cases; assert
-no compiler probe or auto-install can occur. A negative control that skips
-signature/hash validation must reach a forbidden execution spy and fail. Mocked
-signature success does not prove real signing.
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_integrity`. Use a
+valid signed fixture through a faithfully modelled CLI response plus EP-M5's
+real verifier boundary. Include wrong Rustup mirror/component bytes and
+missing-toolchain cases; assert no compiler probe or auto-install can occur. A
+negative control that skips signature/hash validation must reach a forbidden
+execution spy and fail. Mocked signature success does not prove real signing.
 
 ### V3: Extraction stays contained
 
@@ -459,7 +510,7 @@ materialization prevents a link member redirecting later writes. Add
 `test_kani_snapshot_archive.py`; combine named tar fixtures and Hypothesis
 member graphs (up to 30 members and 16 link hops), with an independent
 expected-path oracle and actual filesystem assertions. Run
-`uv run pytest -q -k kani_snapshot_archive --hypothesis-show-statistics`.
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_archive --hypothesis-show-statistics`.
 Witness regular files, contained hard/symbolic links and executables. Negative
 controls include parent traversal, link-chain escapes, cycle, duplicate path,
 special file, huge declared size and actual stream overrun. Apply effective
@@ -480,12 +531,14 @@ readers retain stable generation paths. Add `test_kani_snapshot_install.py` and
 identities, two actors and up to 30 operations (download, stage, fail,
 validate, activate, corrupt, retry). Real two-process tests use barriers, not
 arbitrary sleeps, to force overlapping installs, a killed staging owner and
-lock timeout. Run `uv run pytest -q -k kani_snapshot_install` and
-`uv run pytest -q tests/test_kani_snapshot_concurrency.py`. Both first-install
-failure and repair with an old working generation must be reachable. A seeded
-premature pointer write or post-setup directory move must fail; otherwise the
-model is insufficient. POSIX locking/rename durability and private cache
-ownership are axioms tested at the integration boundary, not formally proven.
+lock timeout. Run
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_install` and
+`python scripts/uv_gate.py run -- pytest -q tests/test_kani_snapshot_concurrency.py`.
+Both first-install failure and repair with an old working generation must be
+reachable. A seeded premature pointer write or post-setup directory move must
+fail; otherwise the model is insufficient. POSIX locking/rename durability and
+private cache ownership are axioms tested at the integration boundary, not
+formally proven.
 
 ### V5: Execution selects the exact distribution
 
@@ -496,13 +549,14 @@ stdout/stderr/status survive. Add `test_kani_snapshot_run.py`,
 `tests/test_prover_tools_snapshots.py` variants. Use cmd-mox and real CLI fake
 executables with spaces, shell metacharacters, conflicting environment,
 identical upstream semantic versions, wrong compiler/backend, missing setup
-state and distinct child statuses. Run `uv run pytest -q -k kani_snapshot`.
-Assert no `cargo install`, source checkout, solver build or implicit
-installation command during install/check; forbid unwanted PATH Kani via an
-executable sentinel. Include real environment removal, cwd, streaming and
-descendant timeout cleanup tests. Normalize temporary directory prefixes only
-in Syrupy; retain SHAs, digests, target, compiler and differing failure output.
-Switching to PATH or masking a nonzero verifier status must fail named tests.
+state and distinct child statuses. Run
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot`. Assert no
+`cargo install`, source checkout, solver build or implicit installation command
+during install/check; forbid unwanted PATH Kani via an executable sentinel.
+Include real environment removal, cwd, streaming and descendant timeout cleanup
+tests. Normalize temporary directory prefixes only in Syrupy; retain SHAs,
+digests, target, compiler and differing failure output. Switching to PATH or
+masking a nonzero verifier status must fail named tests.
 
 ### V6: The recipe uses one upstream identity
 
@@ -511,11 +565,12 @@ unchanged locks/toolchain pins and recorded recursive submodules. Add
 `test_kani_snapshot_build.py` for command sequencing, immutable resolution,
 malicious manual inputs, unchanged HEAD with changed recipe, missing/failed
 upstream checks, runtime/licence completeness and resource-limit rejection. Run
-`uv run pytest -q -k kani_snapshot_build`; compare before/after source status
-and input hashes in the opt-in EP-M1/EP-M5 experiment. The negative control
-resolves a different SHA at a later phase or drops a submodule record; the
-recipe must reject it. A mock cannot establish upstream bundling support; real
-clean setup and smoke evidence discharge that external boundary.
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_build`; compare
+before/after source status and input hashes in the opt-in EP-M1/EP-M5
+experiment. The negative control resolves a different SHA at a later phase or
+drops a submodule record; the recipe must reject it. A mock cannot establish
+upstream bundling support; real clean setup and smoke evidence discharge that
+external boundary.
 
 ### V7: Only complete validated releases become public
 
@@ -528,14 +583,20 @@ assets are absent, mismatched or unverified. Add
 release adapter with failure injection before/after each API operation,
 including publish timeout, asset collision, extra assets, wrong tag and retry.
 Model absent/draft/complete/published/conflict states with up to 30 generated
-operations and named transition witnesses. Run
-`uv run pytest -q -k 'kani_snapshot_publish or workflow_contract or python_release'`.
-A seeded publish-before-upload or accepting cross-run receipt must fail.
-Assert trigger namespace, scheduled disable default, dispatch validation,
-permissions, SHA pin shape, no PR/fork writes, timeout/cache/concurrency
-contracts and unchanged Python wheel namespace. Run actionlint and optional act
-per EP-M4; real GitHub permissions/signing and immutable enforcement remain
-hosted-only assumptions.
+operations and named transition witnesses. Run the focused publication
+contracts:
+
+```bash
+python scripts/uv_gate.py run -- pytest -q \
+  -k 'kani_snapshot_publish or workflow_contract or python_release'
+```
+
+A seeded publish-before-upload or accepting cross-run receipt must fail. Assert
+trigger namespace, scheduled disable default, dispatch validation, permissions,
+SHA pin shape, no PR/fork writes, timeout/cache/concurrency contracts and
+unchanged Python wheel namespace. Run actionlint and optional act per EP-M4;
+real GitHub permissions/signing and immutable enforcement remain hosted-only
+assumptions.
 
 ### V8: Successful verification means harnesses ran
 
@@ -785,24 +846,25 @@ make markdownlint
 make nixie
 mbake validate Makefile
 make workflow-check
+make test-workflow-contracts
 ```
 
-`make markdownlint` includes spelling and generated-config drift checks.
-`make fmt` is required after Markdown edits; inspect formatter changes before
-staging. Do not weaken gates or modify generated spelling configuration.
-Makefile/workflow checks apply when those surfaces change; record absence of
-optional local tools honestly. Planning-only gates are `make fmt`,
-`make markdownlint` and `make nixie`, plus `git diff --check`; no runtime code
-or workflow is added in this invocation.
+`make markdownlint` includes the shared spelling gate and generated policy
+regeneration; inspect resulting diffs. `make fmt` is required after Markdown
+edits; inspect formatter changes before staging. Do not weaken gates or
+hand-edit generated spelling configuration. Makefile/workflow checks apply when
+those surfaces change; record absence of optional local tools honestly.
+Planning-only gates are `make fmt`, `make markdownlint` and `make nixie`, plus
+`git diff --check`; no runtime code or workflow is added in this invocation.
 
 Focused acceptance examples after their test files exist:
 
 ```bash
-uv run pytest -q rust_prover_tools/unittests/test_kani.py
-uv run pytest -q -k kani_snapshot --hypothesis-show-statistics
-uv run pytest -q tests/steps/test_kani_snapshot_steps.py
-uv run pytest -q tests/test_prover_tools_snapshots.py
-uv run pytest -q tests/test_kani_workflow_contract.py tests/test_python_release_contract.py
+python scripts/uv_gate.py run -- pytest -q rust_prover_tools/unittests/test_kani.py
+python scripts/uv_gate.py run -- pytest -q -k kani_snapshot --hypothesis-show-statistics
+python scripts/uv_gate.py run -- pytest -q tests/steps/test_kani_snapshot_steps.py
+python scripts/uv_gate.py run -- pytest -q tests/test_prover_tools_snapshots.py
+python scripts/uv_gate.py run -- pytest -q tests/test_kani_workflow_contract.py tests/test_python_release_contract.py
 act workflow_dispatch -W .github/workflows/kani-monthly.yml --list
 ```
 
@@ -983,3 +1045,17 @@ spelling-helper tests), `make nixie` and `git diff --check`. No source,
 dependency, workflow or gate configuration was changed to obtain these results.
 The follow-up documentation commit records main's integration requirements; PR
 131 remains a draft awaiting explicit implementation approval.
+
+2026-11-08: revision 4 rebases onto `be04803`, preserves the implemented
+release CLI and adds explicit reuse boundaries for binary downloads, release
+execution and Cuprum 0.2. It replaces removed local CV-005 references with the
+shared gate and adopts uv-gate, interrogate and current spelling conventions.
+Admission wrappers remain active through compiler probes and proofs. Historic
+September gate results above are not validation of this new candidate; current
+rebase results are recorded in the planning PR. No implementation is approved.
+
+Cuprum 0.2 exposes `EnvMode.REPLACE`, `UNSET` and run-level timeouts. Extend
+the typed command adapter using those supported primitives, not custom
+environment emulation. Its documented termination targets the direct child;
+process-group ownership and descendant cleanup still require the EP-M1
+experiment and real child-process tests before adoption.
