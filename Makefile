@@ -21,19 +21,8 @@ UV ?= $(shell command -v uv 2>/dev/null || printf '%s/.local/bin/uv' "$$HOME")
 export PATH := $(if $(findstring /,$(UV)),$(patsubst %/,%,$(dir $(UV))):)$(PATH)
 # A UV given on the command line or in the environment must be uv itself or an executable
 # file named uv: the helper finds uv on PATH by that name and would otherwise use another.
-ifneq ($(filter command line environment,$(origin UV)),)
-ifneq ($(UV),uv)
-ifeq ($(findstring /,$(UV)),)
-$(error UV=$(UV) must be uv or a path to an executable file named uv)
-endif
-ifeq ($(shell test -f '$(UV)' -a -x '$(UV)' && printf y),)
-$(error UV=$(UV) is not an executable file)
-endif
-ifneq ($(notdir $(UV)),uv)
-$(error UV=$(UV) must be named uv)
-endif
-endif
-endif
+UV_SELECTION_CHECK := $(if $(filter command line environment,$(origin UV)),$(if $(filter uv,$(UV)),,$(if $(findstring /,$(UV)),$(if $(shell test -f '$(UV)' -a -x '$(UV)' && printf y),$(if $(filter uv,$(notdir $(UV))),,$(error UV=$(UV) must be named uv)),$(error UV=$(UV) is not an executable file)),$(error UV=$(UV) must be uv or a path to an executable file named uv))))
+
 USER_CARGO := $(HOME)/.cargo/bin/cargo
 USER_WHITAKER := $(HOME)/.local/bin/whitaker
 USER_BIN_PATH := $(HOME)/.cargo/bin:$(HOME)/.local/bin:$(HOME)/.bun/bin
