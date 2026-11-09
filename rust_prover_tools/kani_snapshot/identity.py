@@ -12,6 +12,8 @@ import dataclasses as dc
 import os
 import typing as typ
 
+from cuprum.context import UNSET, UnsetType
+
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotLayout,
@@ -55,16 +57,6 @@ _REMOVED_VARIABLES: typ.Final[tuple[str, ...]] = (
     "RUSTUP_DIST_ROOT",
 )
 
-#: Variables always replaced with generation-private values.
-_REPLACED_VARIABLES: typ.Final[tuple[str, ...]] = (
-    "KANI_HOME",
-    "RUSTUP_HOME",
-    "CARGO_HOME",
-    "RUSTUP_TOOLCHAIN",
-    "RUSTUP_AUTO_INSTALL",
-    "PATH",
-    "PYTHONPATH",
-)
 
 #: Setup-only launcher flags. Their presence means setup would run again.
 _SETUP_FLAGS: typ.Final[tuple[str, ...]] = (
@@ -150,28 +142,37 @@ def build_identity_report(
 
 def execution_environment(
     runtime: SnapshotRuntime,
-    base: cabc.Mapping[str, str],
-) -> dict[str, str]:
-    """Return a child environment that selects only this generation.
+    base: cabc.Mapping[str, str | UnsetType],
+) -> dict[str, str | UnsetType]:
+    """Return a child environment overlay that selects only this generation.
 
-    The host environment is copied so no global mutation occurs. Compiler and
-    distribution selectors are removed; generation homes, the exact toolchain
-    and auto-install suppression are set. Admission wrappers and `RUSTDOC` are
-    deliberately preserved.
+    The result is a Cuprum environment *overlay*, not a replacement mapping.
+    Variables the child must not inherit are therefore mapped to
+    `cuprum.UNSET`, which removes them from the child without mutating the
+    caller's environment. Copying `base` and deleting keys would leave the
+    host values active, because an overlay only ever adds or replaces values.
+
+    Compiler and distribution selectors are removed; generation homes, the
+    exact toolchain and auto-install suppression are set. Admission wrappers
+    and `RUSTDOC` are deliberately preserved.
     """
-    env = dict(base)
-    for key in (*_REMOVED_VARIABLES, *_REPLACED_VARIABLES):
-        env.pop(key, None)
+    env: dict[str, str | UnsetType] = dict.fromkeys(_REMOVED_VARIABLES, UNSET)
     env.update({
         "KANI_HOME": str(runtime.layout.kani_home),
         "RUSTUP_HOME": str(runtime.layout.rustup_home),
         "CARGO_HOME": str(runtime.layout.cargo_home),
         "RUSTUP_TOOLCHAIN": runtime.toolchain,
         "RUSTUP_AUTO_INSTALL": "0",
+        "PATH": _prefixed_path(_text_value(base, "PATH"), runtime),
+        "PYTHONPATH": _python_path(_text_value(base, "PYTHONPATH"), runtime),
     })
-    env["PATH"] = _prefixed_path(base.get("PATH", ""), runtime)
-    env["PYTHONPATH"] = _python_path(base.get("PYTHONPATH", ""), runtime)
     return env
+
+
+def _text_value(base: cabc.Mapping[str, str | UnsetType], name: str) -> str:
+    """Return an inherited path-list value, treating markers as absent."""
+    value = base.get(name)
+    return value if isinstance(value, str) else ""
 
 
 def _prefixed_path(existing: str, runtime: SnapshotRuntime) -> str:

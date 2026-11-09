@@ -11,6 +11,8 @@ import os
 import time
 import typing as typ
 
+from cuprum.context import UNSET
+
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import execution_environment
@@ -57,7 +59,9 @@ def run_local_bundle_setup(
     launcher = runtime.layout.launcher_dir / "bin" / "cargo-kani"
     env = execution_environment(runtime, os.environ)
     for name in _INHERITED_EXTRACTION_VARIABLES:
-        env.pop(name, None)
+        # The environment is an overlay, so removal must be spelled as a
+        # Cuprum `UNSET` marker rather than by deleting a copied key.
+        env[name] = UNSET
     run_checked(
         CommandSpec(
             (

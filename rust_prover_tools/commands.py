@@ -34,6 +34,7 @@ from cuprum import (
     current_context,
     sh,
 )
+from cuprum.context import EnvMode, UnsetType
 
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 
@@ -70,8 +71,16 @@ class CommandSpec:
         Program and arguments to execute.
     cwd : Path | None
         Working directory for the child process.
-    env : collections.abc.Mapping[str, str] | None
-        Environment overlay for the child process.
+    env : collections.abc.Mapping[str, str | UnsetType] | None
+        Environment policy for the child process, interpreted according to
+        `env_mode`. A `cuprum.UNSET` value removes an inherited variable
+        without mutating this process's environment.
+    env_mode : cuprum.EnvMode
+        How `env` relates to the child's inherited environment. The default
+        `OVERLAY` layers the mapping over the live environment; `REPLACE`
+        starts from an empty environment. Callers that must not pass a host
+        selector to the child need `OVERLAY` with `UNSET` markers or
+        `REPLACE`; an overlay alone cannot remove a variable.
     echo : bool
         Mirror the child's output to the caller's streams while capturing it.
     timeout_seconds : float | None
@@ -84,7 +93,8 @@ class CommandSpec:
 
     argv: tuple[str, ...]
     cwd: Path | None = None
-    env: cabc.Mapping[str, str] | None = None
+    env: cabc.Mapping[str, str | UnsetType] | None = None
+    env_mode: EnvMode = EnvMode.OVERLAY
     echo: bool = False
     timeout_seconds: float | None = None
 
@@ -178,6 +188,7 @@ def run_command(spec: CommandSpec) -> CommandResult:
         effective_timeout = current_context().timeout
     context = ExecutionContext(
         env=spec.env,
+        env_mode=spec.env_mode,
         cwd=spec.cwd,
         timeout=effective_timeout,
         # Only a bounded command needs its descendants terminated with it;

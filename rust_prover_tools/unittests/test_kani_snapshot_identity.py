@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import os
+import sys
 import typing as typ
 
 import pytest
+from cuprum.context import UNSET
 
+from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.cache_key import identity_key
 from rust_prover_tools.kani_snapshot.identity import (
@@ -193,11 +198,14 @@ def test_execution_environment_replaces_selection_and_keeps_wrappers(
     assert env["CARGO_HOME"] == str(layout.cargo_home)
     assert env["RUSTUP_TOOLCHAIN"] == "nightly-2026-09-23"
     assert env["RUSTUP_AUTO_INSTALL"] == "0"
-    assert env["UNRELATED"] == "kept"
-    assert env["HOME"] == "/home/example"
-    assert env["RUSTC_WRAPPER"] == "/usr/local/bin/sccache"
-    assert env["RUSTC_WORKSPACE_WRAPPER"] == "/usr/local/bin/build-limits-rustc"
-    assert env["RUSTDOC"] == "/usr/local/bin/rustdoc-wrapper"
+    # The result is an overlay: unrelated inherited values are simply absent
+    # from it and keep flowing to the child through Cuprum.
+    assert "UNRELATED" not in env
+    assert "HOME" not in env
+    # Admission wrappers and `RUSTDOC` are not mentioned, so the overlay
+    # leaves them inherited rather than removing them from the child.
+    for preserved in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTDOC"):
+        assert preserved not in env, f"{preserved} was removed from the child"
     for removed in (
         "RUSTC",
         "RUSTFLAGS",
@@ -205,12 +213,61 @@ def test_execution_environment_replaces_selection_and_keeps_wrappers(
         "RUSTUP_UPDATE_ROOT",
         "RUSTUP_DIST_ROOT",
     ):
-        assert removed not in env
-    assert env["PATH"].split(":")[:2] == [
+        assert env[removed] is UNSET, f"{removed} would still be inherited"
+    child_path = env["PATH"]
+    assert isinstance(child_path, str)
+    assert child_path.split(":")[:2] == [
         str(runtime.kani_dir / "bin"),
         str(runtime.kani_dir / "pyroot" / "bin"),
     ]
-    assert env["PATH"].endswith(":/usr/bin:/bin")
+    assert child_path.endswith(":/usr/bin:/bin")
+
+
+def test_execution_environment_removes_selectors_from_a_real_child(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The actual child process cannot see an inherited distribution selector."""
+    layout = snapshot_layout(_pin(), cache_home=tmp_path, generation="g1")
+    runtime = runtime_for(layout, _manifest())
+    removed = (
+        "RUSTC",
+        "RUSTFLAGS",
+        "RUSTUP_DIST_SERVER",
+        "RUSTUP_UPDATE_ROOT",
+        "RUSTUP_DIST_ROOT",
+    )
+    for name in removed:
+        monkeypatch.setenv(name, f"host-{name}")
+    preserved = {
+        "RUSTC_WRAPPER": "/usr/local/bin/sccache",
+        "RUSTC_WORKSPACE_WRAPPER": "/usr/local/bin/build-limits-rustc",
+        "RUSTDOC": "/usr/local/bin/rustdoc-wrapper",
+    }
+    for name, value in preserved.items():
+        monkeypatch.setenv(name, value)
+    env = execution_environment(runtime, os.environ)
+    wanted = (*removed, *preserved, "KANI_HOME", "RUSTUP_TOOLCHAIN")
+    script = (
+        "import json, os; "
+        f"names = {wanted!r}; "
+        "print(json.dumps({name: os.environ.get(name) for name in names}))"
+    )
+
+    result = run_command(CommandSpec((sys.executable, "-I", "-c", script), env=env))
+    observed = json.loads(result.stdout)
+
+    assert all(observed[name] is None for name in removed), (
+        "a host compiler or distribution selector reached the child"
+    )
+    assert all(observed[name] == value for name, value in preserved.items()), (
+        "a preserved admission wrapper did not reach the child"
+    )
+    assert observed["KANI_HOME"] == str(layout.kani_home)
+    assert observed["RUSTUP_TOOLCHAIN"] == "nightly-2026-09-23"
+    assert all(os.environ[name] == f"host-{name}" for name in removed), (
+        "the parent environment was mutated"
+    )
 
 
 def test_execution_environment_does_not_duplicate_its_own_entries(

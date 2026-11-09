@@ -89,9 +89,9 @@ def test_runtime_path_wrappers_flags_and_literal_arguments(
     )
     for key in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTDOC"):
         assert spec.env[key] == environment[key]
-    assert spec.env["PATH"].split(os.pathsep)[0] == str(
-        installed_release / "toolchain/bin"
-    )
+    child_path = spec.env["PATH"]
+    assert isinstance(child_path, str)
+    assert child_path.split(os.pathsep)[0] == str(installed_release / "toolchain/bin")
     assert spec.env["RUSTFLAGS"] == "-D warnings"
     assert spec.env["CARGO_ENCODED_RUSTFLAGS"] == "-D\x1fwarnings"
     assert environment == before

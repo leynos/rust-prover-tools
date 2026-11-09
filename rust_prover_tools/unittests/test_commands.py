@@ -12,6 +12,7 @@ from pathlib import Path
 
 import cuprum
 import pytest
+from cuprum.context import UNSET, EnvMode
 
 from rust_prover_tools.commands import (
     CommandSpec,
@@ -70,6 +71,46 @@ def test_run_checked_passes_environment_to_command(cmd_mox: CmdMox) -> None:
     result = run_checked(CommandSpec(("envcheck",), env={"RPT_SENTINEL": "1"}))
 
     assert result.stdout == "ok\n", "Command should receive environment overlay"
+
+
+def test_unset_marker_removes_an_inherited_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Removal reaches the real child without mutating the parent environment."""
+    monkeypatch.setenv("RPT_INHERITED", "host-value")
+    script = "import os; print(os.environ.get('RPT_INHERITED', '<absent>'))"
+
+    result = run_command(
+        CommandSpec(
+            (sys.executable, "-I", "-c", script),
+            env={"RPT_INHERITED": UNSET},
+        )
+    )
+
+    assert result.stdout.strip() == "<absent>", "child inherited a removed variable"
+    assert os.environ["RPT_INHERITED"] == "host-value", "parent environment changed"
+
+
+def test_replace_mode_starts_from_an_empty_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replacing context keeps the host environment out of the child."""
+    monkeypatch.setenv("RPT_INHERITED", "host-value")
+    script = (
+        "import os; print('RPT_INHERITED' in os.environ, os.environ.get('RPT_ONLY'))"
+    )
+
+    result = run_command(
+        CommandSpec(
+            (sys.executable, "-I", "-c", script),
+            env={"RPT_ONLY": "child-value"},
+            env_mode=EnvMode.REPLACE,
+        )
+    )
+
+    assert result.stdout.split() == ["False", "child-value"], (
+        "replace mode did not start from an empty child environment"
+    )
 
 
 def test_run_checked_echoes_output_when_requested(
