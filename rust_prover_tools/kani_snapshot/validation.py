@@ -18,7 +18,6 @@ from rust_prover_tools.kani_snapshot.models import REPOSITORY, SUPPORTED_TARGET
 __all__ = (
     "FULL_SHA_PATTERN",
     "SHA256_PATTERN",
-    "reject_unknown_keys",
     "require_full_sha",
     "require_int",
     "require_mapping",
@@ -220,7 +219,13 @@ def require_number(value: object, field: str) -> float:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail(f"snapshot {field} must be a number")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        # A JSON integer can exceed the float range; that is a finite-looking
+        # input that cannot be recorded as a measurement.
+        msg = f"snapshot {field} must be finite"
+        raise ProverToolError(msg) from exc
     if not math.isfinite(number):
         _fail(f"snapshot {field} must be finite")
     return number
@@ -350,29 +355,3 @@ def validate_target(value: object) -> str:
     if text != SUPPORTED_TARGET:
         _fail(f"snapshot target must be {SUPPORTED_TARGET}")
     return text
-
-
-def reject_unknown_keys(
-    document: dict[str, object],
-    allowed: frozenset[str],
-    field: str,
-) -> None:
-    """Reject every key outside `allowed`.
-
-    Parameters
-    ----------
-    document : dict[str, object]
-        Parsed object.
-    allowed : frozenset[str]
-        Exact permitted key set.
-    field : str
-        Object name used in the error message.
-
-    Raises
-    ------
-    ProverToolError
-        Raised when an unknown key is present.
-    """
-    unknown = sorted(set(document) - allowed)
-    if unknown:
-        _fail(f"snapshot {field} has unknown keys: {', '.join(unknown)}")

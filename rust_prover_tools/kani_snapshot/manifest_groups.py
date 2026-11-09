@@ -22,8 +22,11 @@ from rust_prover_tools.kani_snapshot.models import (
     ToolchainIdentity,
     WorkflowIdentity,
 )
-from rust_prover_tools.kani_snapshot.validation import (
+from rust_prover_tools.kani_snapshot.policy import (
+    is_safe_asset_name,
     reject_unknown_keys,
+)
+from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
     require_mapping,
     require_non_negative_int,
@@ -78,6 +81,9 @@ _RESOURCE_KEYS = frozenset({
     "asset_bytes",
 })
 _ASSET_KEYS = frozenset({"role", "name", "media_type", "size", "sha256"})
+
+#: Names the release itself publishes for the manifest and its checksums.
+_RESERVED_ASSET_NAMES = frozenset({"manifest.json", "SHA256SUMS"})
 
 
 def _string_array(value: object, field: str) -> tuple[str, ...]:
@@ -341,9 +347,13 @@ def _parse_asset(document: object) -> AssetRecord:
     if role not in ASSET_ROLES:
         msg = f"snapshot asset role must be one of {', '.join(ASSET_ROLES)}"
         raise ProverToolError(msg)
+    name = require_truthy_text(mapping.get("name"), "asset name")
+    if not is_safe_asset_name(name) or name in _RESERVED_ASSET_NAMES:
+        msg = f"snapshot asset name '{name}' is not a safe release asset name"
+        raise ProverToolError(msg)
     return AssetRecord(
         role=role,
-        name=require_truthy_text(mapping.get("name"), "asset name"),
+        name=name,
         media_type=require_truthy_text(mapping.get("media_type"), "asset media_type"),
         size=require_non_negative_int(mapping.get("size"), "asset size"),
         sha256=require_sha256(mapping.get("sha256"), "asset sha256"),

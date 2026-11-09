@@ -129,7 +129,7 @@ EP-O1 assigns responsibility and records live evidence.
   within the stated tolerances. EP-O1 stays separately authorized.
 - [ ] EP-M1: upstream feasibility and compatibility recipe.
 - [x] (2026-11-09) EP-M2: authenticated pin/manifest contracts. Added
-  `rust_prover_tools/kani_snapshot/{models,pins,manifest,validation,integrity}.py`
+  `rust_prover_tools/kani_snapshot/{models,cache_key,pins,manifest,manifest_groups,render,validation,tags,strict_json,policy,integrity}.py`
   and the tests `test_kani_snapshot_{pins,manifest,integrity}.py` plus
   `tests/kani_snapshot_fixtures.py`. `ruff check`/`ruff format --check` are
   clean and the three focused suites pass (72 tests). Evidence covers V1 round

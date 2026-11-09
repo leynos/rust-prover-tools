@@ -30,6 +30,10 @@ def _render(value: object) -> str:
     """Render one TOML scalar."""
     if isinstance(value, str):
         return f'"{value}"'
+    if isinstance(value, bool):
+        # TOML booleans are lowercase; `repr(True)` would be a syntax error
+        # and would not exercise the integer type check at all.
+        return "true" if value else "false"
     return repr(value)
 
 
@@ -107,6 +111,12 @@ def test_unknown_missing_or_malformed_pins_fail(text: str) -> None:
     """Unknown keys, missing keys and malformed TOML are rejected."""
     with pytest.raises(ProverToolError):
         parse_pin(text.encode())
+
+
+def test_boolean_schema_version_is_rejected_as_a_type_error() -> None:
+    """A TOML boolean is not an integer, although Python's `bool` is an `int`."""
+    with pytest.raises(ProverToolError, match="schema_version must be an integer"):
+        parse_pin(_document(schema_version=True).encode())
 
 
 def test_non_utf8_pin_is_rejected() -> None:

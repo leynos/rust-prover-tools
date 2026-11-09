@@ -68,3 +68,8 @@ def strict_json_loads(data: bytes, field: str) -> object:
     except json.JSONDecodeError as exc:
         msg = f"snapshot {field} is not valid JSON: {exc.msg}"
         raise ProverToolError(msg) from exc
+    except (RecursionError, ValueError) as exc:
+        # `json` also enforces an integer-string digit limit and a nesting
+        # depth; both raise outside JSONDecodeError on hostile input.
+        msg = f"snapshot {field} is not valid JSON: {exc}"
+        raise ProverToolError(msg) from exc

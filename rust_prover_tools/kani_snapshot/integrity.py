@@ -17,6 +17,7 @@ import typing as typ
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.policy import is_safe_asset_name
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -70,14 +71,16 @@ class AttestationPolicy:
         Repository the attestation must be linked with.
     signer_workflow : str
         `owner/repo/path` of the signing workflow.
+    source_digest : str
+        Builder commit enforced as the source digest. Required: an empty value
+        would silently weaken the provenance binding.
+    signer_digest : str
+        Builder commit enforced as the signer workflow digest. Required for the
+        same reason.
     certificate_issuer : str
         OIDC issuer enforced on the signing certificate.
     source_ref : str
         Source ref enforced on the provenance statement.
-    source_digest : str
-        Builder commit enforced as the source digest.
-    signer_digest : str
-        Builder commit enforced as the signer workflow digest.
     predicate_type : str
         Required provenance predicate type.
     trust_root : Path | None
@@ -86,10 +89,10 @@ class AttestationPolicy:
 
     repository: str
     signer_workflow: str
+    source_digest: str
+    signer_digest: str
     certificate_issuer: str = GITHUB_OIDC_ISSUER
     source_ref: str = TRUSTED_SOURCE_REF
-    source_digest: str = ""
-    signer_digest: str = ""
     predicate_type: str = ATTESTATION_PREDICATE
     trust_root: Path | None = None
 
@@ -225,13 +228,6 @@ def verify_checksums(
             raise ProverToolError(msg)
 
 
-def _is_unsafe_name(name: str) -> bool:
-    """Return whether a checksum name could escape the asset directory."""
-    if name in {"", ".", ".."}:
-        return True
-    return "/" in name or "\\" in name
-
-
 def _checksum_row(line: str, path: Path) -> tuple[str, str]:
     """Parse one checksum row, rejecting malformed or unsafe names."""
     fields = line.split()
@@ -244,7 +240,7 @@ def _checksum_row(line: str, path: Path) -> tuple[str, str]:
     ):
         msg = f"snapshot checksum row for '{name}' has an invalid digest"
         raise ProverToolError(msg)
-    if _is_unsafe_name(name):
+    if not is_safe_asset_name(name):
         msg = f"snapshot checksum row has an unsafe asset name '{name}'"
         raise ProverToolError(msg)
     return digest, name

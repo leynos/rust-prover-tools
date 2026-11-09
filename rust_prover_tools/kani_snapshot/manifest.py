@@ -30,11 +30,11 @@ from rust_prover_tools.kani_snapshot.models import (
     SnapshotManifest,
     SnapshotPin,
 )
+from rust_prover_tools.kani_snapshot.policy import reject_unknown_keys
 from rust_prover_tools.kani_snapshot.render import manifest_to_json
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.tags import validate_tag
 from rust_prover_tools.kani_snapshot.validation import (
-    reject_unknown_keys,
     require_full_sha,
     require_int,
     require_mapping,

@@ -181,6 +181,40 @@ def test_invalid_json_is_rejected() -> None:
         parse_manifest(b"{")
 
 
+def test_oversized_integer_measurement_fails_cleanly() -> None:
+    """An integer beyond the float range is a diagnostic, not a traceback."""
+    document = _valid_document()
+    typ.cast("dict[str, typ.Any]", document["resources"])["wall_seconds"] = 10**400
+    with pytest.raises(ProverToolError, match="must be finite"):
+        parse_manifest(_encode(document))
+
+
+def test_over_limit_integer_digits_are_reported() -> None:
+    """CPython's integer-digit guard is converted into a clean failure."""
+    data = b'{"value": ' + b"9" * 5000 + b"}"
+    with pytest.raises(ProverToolError, match="not valid JSON"):
+        parse_manifest(data)
+
+
+def test_deeply_nested_json_is_reported() -> None:
+    """Hostile nesting depth becomes a clean failure, not a traceback."""
+    nested = b"[" * 100_000 + b"]" * 100_000
+    with pytest.raises(ProverToolError, match="not valid JSON"):
+        parse_manifest(nested)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["../backend.tar.gz", "a/b", ".", "manifest.json", "SHA256SUMS"],
+)
+def test_unsafe_asset_names_are_rejected(name: str) -> None:
+    """Asset names must be plain basenames that do not shadow release files."""
+    document = _valid_document()
+    typ.cast("list[dict[str, object]]", document["assets"])[0]["name"] = name
+    with pytest.raises(ProverToolError, match="not a safe release asset name"):
+        parse_manifest(_encode(document))
+
+
 def test_digest_covers_exact_bytes_including_newline() -> None:
     """A trailing-byte change changes the manifest digest."""
     data = manifest_bytes(make_manifest())

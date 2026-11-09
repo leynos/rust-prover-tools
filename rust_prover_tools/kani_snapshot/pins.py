@@ -13,9 +13,9 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION, SnapshotPin
+from rust_prover_tools.kani_snapshot.policy import reject_unknown_keys
 from rust_prover_tools.kani_snapshot.tags import validate_tag
 from rust_prover_tools.kani_snapshot.validation import (
-    reject_unknown_keys,
     require_full_sha,
     require_int,
     require_sha256,
