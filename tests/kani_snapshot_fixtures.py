@@ -31,7 +31,7 @@ from rust_prover_tools.kani_snapshot.pins import pin_to_toml
 
 UPSTREAM_COMMIT: typ.Final[str] = "a" * 40
 BUILDER_COMMIT: typ.Final[str] = "b" * 40
-BACKEND_REVISION: typ.Final[str] = "d" * 40
+BACKEND_REVISION: typ.Final[str] = UPSTREAM_COMMIT
 MANIFEST_SHA256: typ.Final[str] = "c" * 64
 TAG: typ.Final[str] = "kani-snapshot-2026-09-aaaaaaaaaaaa-r1"
 #: A second, distinct identity that reports the same upstream version.

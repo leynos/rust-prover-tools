@@ -221,3 +221,13 @@ def validate_binding(pin: SnapshotPin, manifest: SnapshotManifest) -> None:
                 f"pin has {pinned}, manifest has {described}"
             )
             raise ProverToolError(msg)
+    # A backend built from any other commit is not the snapshot's Kani, even
+    # when its version string matches. Treating a contradiction as valid would
+    # let a manifest describe two different upstream identities at once.
+    if manifest.backend.revision != manifest.upstream_commit:
+        msg = (
+            "snapshot manifest backend revision does not name the upstream "
+            f"commit: upstream has {manifest.upstream_commit}, "
+            f"backend has {manifest.backend.revision}"
+        )
+        raise ProverToolError(msg)

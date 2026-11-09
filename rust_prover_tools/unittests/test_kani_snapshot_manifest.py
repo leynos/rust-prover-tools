@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import json
 import typing as typ
 
@@ -268,4 +269,13 @@ def test_binding_rejects_a_different_identity(field: str, value: str) -> None:
     """Any identity disagreement is refused."""
     manifest = make_manifest(**{field: value})
     with pytest.raises(ProverToolError, match="does not match"):
+        validate_binding(make_pin(), manifest)
+
+
+def test_binding_rejects_a_backend_revision_that_is_not_upstream() -> None:
+    """A backend built from another commit contradicts the snapshot identity."""
+    backend = dc.replace(make_manifest().backend, revision="d" * 40)
+    manifest = make_manifest(backend=backend)
+
+    with pytest.raises(ProverToolError, match="backend revision"):
         validate_binding(make_pin(), manifest)
