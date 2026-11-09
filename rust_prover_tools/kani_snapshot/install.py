@@ -22,6 +22,7 @@ from rust_prover_tools.kani_snapshot.identity import (
     runtime_for,
     snapshot_layout,
 )
+from rust_prover_tools.kani_snapshot.install_cache import validate_installed_tree
 from rust_prover_tools.kani_snapshot.install_model import (
     InstallHooks,
     InstallOptions,
@@ -230,6 +231,7 @@ def _install_generation(
     context.hooks.setup(runtime, backend, context.deadline.remaining())
     context.deadline.check("setup")
     _install_launcher_binaries(runtime, layout)
+    validate_installed_tree(layout, manifest, runtime)
     evidence = context.hooks.probe(runtime, context.deadline.remaining())
     _require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)

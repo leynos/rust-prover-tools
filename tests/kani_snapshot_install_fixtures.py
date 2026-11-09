@@ -12,8 +12,10 @@ import dataclasses as dc
 import json
 import typing as typ
 
+from rust_prover_tools.kani_snapshot.archive import extract_archive
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install_model import InstallHooks, InstallOptions
+from rust_prover_tools.kani_snapshot.install_transport import bundle_policy
 from rust_prover_tools.kani_snapshot.receipt_model import (
     ObservedToolchain,
     SetupEvidence,
@@ -86,12 +88,13 @@ def install_hooks(
         calls.append(bundle)
         runtime.layout.kani_home.mkdir(parents=True, exist_ok=True)
         kani = runtime.kani_dir
-        bin_dir = kani / "bin"
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        (bin_dir / "kani-driver").write_bytes(b"driver")
-        (bin_dir / "kani-compiler").write_bytes(b"compiler")
-        (bin_dir / "kani-driver").chmod(0o755)
-        (bin_dir / "kani-compiler").chmod(0o755)
+        # Real setup consumes the verified bundle, so the double extracts the
+        # same archive the production installer hands it.
+        extract_archive(
+            bundle,
+            kani,
+            policy=bundle_policy(runtime.backend_version),
+        )
         (kani / "pyroot").mkdir()
         target = runtime.layout.rustup_home / "toolchains" / runtime.toolchain
         (target / "bin").mkdir(parents=True)

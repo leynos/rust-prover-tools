@@ -372,3 +372,45 @@ def test_install_enforces_the_inventory_transport_ceiling(
 
     with pytest.raises(ProverToolError, match=r"inventory.*transport limit"):
         install_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_tampered_installed_backend_bytes(tmp_path: Path) -> None:
+    """An installed backend file that no longer matches the inventory fails."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    installed = identity.launcher.parent.parent / "share" / "data.txt"
+    installed.write_bytes(b"DATA")
+
+    with pytest.raises(ProverToolError, match=r"wrong digest"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_tampered_installed_launcher_bytes(tmp_path: Path) -> None:
+    """The installed launcher must still be the verified archive's bytes."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    identity.launcher.write_bytes(b"#!/bin/sh\necho tampered\n")
+
+    with pytest.raises(ProverToolError, match=r"launcher"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_install_rejects_setup_that_loses_a_backend_member(
+    tmp_path: Path,
+) -> None:
+    """Activation requires the installed tree to contain every member."""
+    case = make_case(tmp_path)
+    base = install_hooks(case)
+
+    def lossy_setup(
+        runtime: SnapshotRuntime,
+        bundle: Path,
+        timeout_seconds: float | None,
+    ) -> None:
+        """Run the normal setup, then drop one recorded member."""
+        base.setup(runtime, bundle, timeout_seconds)
+        (runtime.kani_dir / "share" / "data.txt").unlink()
+
+    hooks = dc.replace(base, setup=lossy_setup)
+    with pytest.raises(ProverToolError, match=r"missing recorded"):
+        install_snapshot(install_options(case), hooks)

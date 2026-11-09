@@ -17,23 +17,20 @@ import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.archive_read import read_archive
 from rust_prover_tools.kani_snapshot.identity import (
     SnapshotIdentity,
     build_identity_report,
     identity_directory,
     runtime_for,
 )
+from rust_prover_tools.kani_snapshot.install_cache import (
+    validate_cached_payloads,
+    validate_installed_tree,
+)
 from rust_prover_tools.kani_snapshot.install_model import (
     MANIFEST_ASSET_NAME,
     InstallOptions,
     ProbeRunner,
-)
-from rust_prover_tools.kani_snapshot.install_transport import bundle_policy
-from rust_prover_tools.kani_snapshot.integrity import verify_asset
-from rust_prover_tools.kani_snapshot.inventory import (
-    load_inventory,
-    validate_archive_inventory,
 )
 from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
@@ -61,7 +58,6 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.models import (
-        AssetRecord,
         SnapshotManifest,
         SnapshotPin,
     )
@@ -86,10 +82,6 @@ _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 _LOCK_POLL_SECONDS: typ.Final[float] = 0.05
 _EXECUTABLE_BITS: typ.Final[int] = 0o111
-_FULLY_VERIFIED_ROLES: typ.Final[frozenset[str]] = frozenset({
-    "inventory",
-    "launcher",
-})
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -293,6 +285,7 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     _require_runtime_files(runtime)
     _check_toolchain_link(runtime, receipt.toolchain_link_target)
     validate_cached_payloads(layout, manifest)
+    validate_installed_tree(layout, manifest, runtime)
     budget = None if remaining_budget is None else remaining_budget()
     evidence = probe(runtime, budget)
     _check_evidence(evidence, manifest, runtime)
@@ -358,40 +351,3 @@ def _check_evidence(
         if actual != wanted:
             msg = f"snapshot {name} identity does not match the manifest"
             raise ProverToolError(msg)
-
-
-def validate_cached_payloads(
-    layout: SnapshotLayout,
-    manifest: SnapshotManifest,
-) -> None:
-    """Recheck cached sizes, small payload digests and the backend inventory."""
-    downloads = layout.downloads_dir
-    for asset in manifest.assets:
-        path = downloads / asset.name
-        if not _is_regular(path):
-            msg = f"snapshot cache is missing asset '{asset.name}'"
-            raise ProverToolError(msg)
-        if path.stat().st_size != asset.size:
-            msg = f"snapshot cached asset '{asset.name}' has the wrong size"
-            raise ProverToolError(msg)
-        if asset.role in _FULLY_VERIFIED_ROLES:
-            verify_asset(path, asset)
-    inventory_asset, backend_asset = _payload_assets(manifest)
-    inventory = load_inventory(downloads / inventory_asset.name)
-    policy = bundle_policy(manifest.backend.version)
-    entries = read_archive(downloads / backend_asset.name, policy=policy)
-    validate_archive_inventory(entries, inventory)
-
-
-def _payload_assets(manifest: SnapshotManifest) -> tuple[AssetRecord, AssetRecord]:
-    """Return the inventory and backend records."""
-    by_role = {asset.role: asset for asset in manifest.assets}
-    return by_role["inventory"], by_role["backend"]
-
-
-def _is_regular(path: Path) -> bool:
-    """Return whether a path is an existing regular file."""
-    try:
-        return path.is_file()
-    except OSError:
-        return False

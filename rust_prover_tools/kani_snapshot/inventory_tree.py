@@ -27,6 +27,9 @@ from rust_prover_tools.kani_snapshot.inventory_model import (
     SnapshotInventory,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 __all__ = ("validate_tree",)
 
 _MEMBER_PREVIEW: typ.Final[int] = 5
@@ -37,6 +40,7 @@ def validate_tree(
     root: Path,
     *,
     limits: InventoryLimits = DEFAULT_INVENTORY_LIMITS,
+    allowed_extra: cabc.Collection[str] = (),
 ) -> None:
     """Check an extracted tree against its recorded inventory.
 
@@ -48,6 +52,10 @@ def validate_tree(
         Extracted tree to inspect.
     limits : InventoryLimits
         Entry, byte and path ceilings.
+    allowed_extra : collections.abc.Collection[str]
+        Paths that setup or launcher placement may add on top of the
+        inventory, such as the private home's Python root and the toolchain
+        link. Their implicit parent directories are allowed too.
 
     Raises
     ------
@@ -63,12 +71,21 @@ def validate_tree(
     if missing:
         msg = f"snapshot tree is missing recorded members: {_preview(missing)}"
         raise ProverToolError(msg)
-    extra = sorted(set(scan.observed) - set(recorded))
+    extra = sorted(set(scan.observed) - set(recorded) - _allowed_paths(allowed_extra))
     if extra:
         msg = f"snapshot tree contains members not recorded: {_preview(extra)}"
         raise ProverToolError(msg)
     for entry in inventory.entries:
         _check_member(entry, scan.observed[entry.path], root)
+
+
+def _allowed_paths(allowed_extra: cabc.Collection[str]) -> set[str]:
+    """Return the allowances plus every implicit parent of each one."""
+    allowed: set[str] = set()
+    for path in allowed_extra:
+        parts = path.split("/")
+        allowed.update("/".join(parts[:index]) for index in range(1, len(parts) + 1))
+    return allowed
 
 
 def _preview(paths: list[str]) -> str:
