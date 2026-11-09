@@ -47,6 +47,7 @@ from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotRuntime,
     new_generation_name,
 )
+from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -232,6 +233,8 @@ def _install_generation(
     context.deadline.check("setup")
     _install_launcher_binaries(runtime, layout)
     validate_installed_tree(layout, manifest, runtime)
+    # The probe executes these bytes, so their digests are checked first.
+    verify_toolchain(runtime, manifest)
     evidence = context.hooks.probe(runtime, context.deadline.remaining())
     _require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)

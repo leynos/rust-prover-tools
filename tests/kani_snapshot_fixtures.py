@@ -17,6 +17,8 @@ from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     BuildInputs,
     CacheObservation,
+    ComponentRecord,
+    FileRecord,
     PrerequisiteRecord,
     ResourceObservation,
     RuntimeIdentity,
@@ -120,7 +122,24 @@ def make_manifest(**overrides: object) -> SnapshotManifest:
             identifier="nightly-2026-09-23",
             rustc_vv="rustc 1.100.0-nightly (6bb1652a0 2026-09-22)",
             kani_compiler="kani-compiler 0.67.0",
-            components=("rust-src",),
+            channel_metadata_sha256="4" * 64,
+            components=(
+                ComponentRecord(
+                    name="rust-src",
+                    version="1.100.0-nightly",
+                    url="https://static.rust-lang.org/dist/2026-09-22/rust-src.tar.gz",
+                    size=4096,
+                    sha256="3" * 64,
+                ),
+            ),
+            rustc_sha256="2" * 64,
+            rustup_components_sha256="1" * 64,
+            libraries=(
+                FileRecord(
+                    path="lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd.so",
+                    sha256="0" * 64,
+                ),
+            ),
         ),
         "launcher_package_version": "0.67.0",
         "backend": BackendIdentity(

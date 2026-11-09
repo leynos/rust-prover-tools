@@ -11,6 +11,12 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.kani_snapshot.toolchain_model import (
+    ComponentRecord,
+    FileRecord,
+    ToolchainIdentity,
+)
+
 __all__ = (
     "ASSET_ROLES",
     "REPOSITORY",
@@ -20,6 +26,8 @@ __all__ = (
     "BackendIdentity",
     "BuildInputs",
     "CacheObservation",
+    "ComponentRecord",
+    "FileRecord",
     "PrerequisiteRecord",
     "ResourceObservation",
     "RuntimeIdentity",
@@ -107,28 +115,6 @@ class WorkflowIdentity:
     run_id: int
     run_attempt: int
     run_url: str | None = None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class ToolchainIdentity:
-    """The exact Rust and Kani compiler installed by setup.
-
-    Attributes
-    ----------
-    identifier : str
-        Rust toolchain identifier recorded by the bundle.
-    rustc_vv : str
-        Exact `rustc -vV` identity expected from the effective compiler.
-    kani_compiler : str
-        Exact identity reported by the bundled `kani-compiler`.
-    components : tuple[str, ...]
-        Installed Rust components and their recorded versions.
-    """
-
-    identifier: str
-    rustc_vv: str
-    kani_compiler: str
-    components: tuple[str, ...] = ()
 
 
 @dc.dataclass(frozen=True, slots=True)

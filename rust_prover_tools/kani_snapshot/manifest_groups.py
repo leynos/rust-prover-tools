@@ -1,13 +1,14 @@
 """Field-group parsers for the snapshot manifest schema.
 
-Each parser owns one nested object from the version 1 manifest. They are kept
-together so the accepted key sets, types and cross-field rules for a group can
-be read and changed in one place. Top-level assembly lives in `manifest`.
+Each parser owns one nested object from the version 1 manifest. Top-level
+assembly lives in `manifest`. The toolchain group, which records the compiler
+bytes a probe will execute, has its own module in `manifest_toolchain`.
 """
 
 from __future__ import annotations
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.manifest_toolchain import parse_toolchain
 from rust_prover_tools.kani_snapshot.models import (
     ASSET_ROLES,
     AssetRecord,
@@ -19,7 +20,6 @@ from rust_prover_tools.kani_snapshot.models import (
     RuntimeIdentity,
     SolverRecord,
     SubmoduleRecord,
-    ToolchainIdentity,
     WorkflowIdentity,
 )
 from rust_prover_tools.kani_snapshot.policy import (
@@ -56,12 +56,6 @@ _WORKFLOW_KEYS = frozenset({
     "run_id",
     "run_attempt",
     "run_url",
-})
-_TOOLCHAIN_KEYS = frozenset({
-    "identifier",
-    "rustc_vv",
-    "kani_compiler",
-    "components",
 })
 _BACKEND_KEYS = frozenset({"version", "revision", "solvers"})
 _SOLVER_KEYS = frozenset({"name", "version", "sha256"})
@@ -118,34 +112,6 @@ def parse_workflow(document: dict[str, object], field: str) -> WorkflowIdentity:
             document.get("run_attempt"), f"{field} run_attempt"
         ),
         run_url=_optional_text(run_url, f"{field} run_url"),
-    )
-
-
-def parse_toolchain(document: dict[str, object], field: str) -> ToolchainIdentity:
-    """Parse the toolchain identity group.
-
-    Parameters
-    ----------
-    document : dict[str, object]
-        Untrusted group object.
-    field : str
-        Group name used in error messages.
-
-    Returns
-    -------
-    ToolchainIdentity
-        The validated toolchain identity.
-    """
-    reject_unknown_keys(document, _TOOLCHAIN_KEYS, field)
-    return ToolchainIdentity(
-        identifier=require_truthy_text(
-            document.get("identifier"), f"{field} identifier"
-        ),
-        rustc_vv=require_truthy_text(document.get("rustc_vv"), f"{field} rustc_vv"),
-        kani_compiler=require_truthy_text(
-            document.get("kani_compiler"), f"{field} kani_compiler"
-        ),
-        components=_string_array(document.get("components", []), f"{field} components"),
     )
 
 

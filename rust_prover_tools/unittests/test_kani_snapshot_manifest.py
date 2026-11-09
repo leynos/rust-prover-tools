@@ -90,6 +90,11 @@ def test_missing_top_level_key_is_rejected() -> None:
         ("workflow", "run_id", 0),
         ("workflow", "run_attempt", "1"),
         ("toolchain", "identifier", ""),
+        ("toolchain", "channel_metadata_sha256", "4" * 63),
+        ("toolchain", "rustc_sha256", None),
+        ("toolchain", "rustup_components_sha256", 1),
+        ("toolchain", "components", "rust-src"),
+        ("toolchain", "libraries", {}),
         ("backend", "revision", "d" * 39),
         ("runtime", "glibc_baseline", 2.35),
         ("build", "recipe_digest", "9" * 63),
@@ -279,3 +284,41 @@ def test_binding_rejects_a_backend_revision_that_is_not_upstream() -> None:
 
     with pytest.raises(ProverToolError, match="backend revision"):
         validate_binding(make_pin(), manifest)
+
+
+def _toolchain_document(document: dict[str, typ.Any]) -> dict[str, typ.Any]:
+    """Return the toolchain group of a parsed manifest document."""
+    return typ.cast("dict[str, typ.Any]", document["toolchain"])
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "match"),
+    [
+        ("url", "http://static.rust-lang.org/rustc.tar.gz", "HTTPS URL"),
+        ("sha256", "3" * 63, "64-hex"),
+        ("size", 0, "positive"),
+        ("surprise", "x", "unknown keys"),
+    ],
+)
+def test_malformed_component_records_are_rejected(
+    key: str,
+    value: object,
+    match: str,
+) -> None:
+    """Each rustup component record is parsed strictly."""
+    document = _valid_document()
+    _toolchain_document(document)["components"][0][key] = value
+    with pytest.raises(ProverToolError, match=match):
+        parse_manifest(_encode(document))
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/passwd", "../outside.so", "lib//rustlib/libstd.so"],
+)
+def test_toolchain_library_paths_must_stay_contained(path: str) -> None:
+    """A recorded library path that escapes the toolchain is rejected."""
+    document = _valid_document()
+    _toolchain_document(document)["libraries"][0]["path"] = path
+    with pytest.raises(ProverToolError, match="contained relative path"):
+        parse_manifest(_encode(document))

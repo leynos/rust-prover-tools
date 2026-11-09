@@ -22,6 +22,8 @@ from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     BuildInputs,
     CacheObservation,
+    ComponentRecord,
+    FileRecord,
     ResourceObservation,
     RuntimeIdentity,
     SnapshotManifest,
@@ -37,8 +39,12 @@ __all__ = (
     "ATTESTATION_NAME",
     "CHECKSUMS_NAME",
     "KANI_COMPILER",
+    "LIBRARY_BYTES",
+    "LIBRARY_PATH",
     "MANIFEST_NAME",
+    "RUSTC_BYTES",
     "RUSTC_VV",
+    "RUSTUP_COMPONENTS",
     "TOOLCHAIN",
     "VERSION",
     "LocalSnapshot",
@@ -65,8 +71,34 @@ ATTESTATION_NAME: typ.Final[str] = "manifest.sigstore.jsonl"
 #: role, file name, media type and bytes for one published asset.
 Payload = tuple[str, str, str, bytes]
 
+#: Exact bytes setup installs as `bin/rustc`. The manifest records their
+#: digest, so the fixture compiler is the bytes a probe would execute.
+RUSTC_BYTES: typ.Final[bytes] = f"#!/bin/sh\nprintf '{RUSTC_VV}\\n'\n".encode("ascii")
+#: Installed rustup component list, recorded by digest for reuse checks.
+RUSTUP_COMPONENTS: typ.Final[bytes] = b"cargo\nrust-std\nrustc\n"
+#: One extracted toolchain library, recorded by contained relative path.
+LIBRARY_PATH: typ.Final[str] = (
+    "lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-fixture.so"
+)
+LIBRARY_BYTES: typ.Final[bytes] = b"toolchain library fixture\n"
+#: Channel manifest digest, recorded for audit but not re-derived by install.
+CHANNEL_METADATA_SHA256: typ.Final[str] = hashlib.sha256(
+    b"channel manifest fixture\n"
+).hexdigest()
+
 _LAUNCHER = b"#!/bin/sh\nprintf '%s\\n' \"$@\"\nexit 7\n"
 _COMPILER = f"#!/bin/sh\nprintf '{KANI_COMPILER}\\n'\n".encode("ascii")
+
+
+def _install_toolchain_file(path: str, delimiter: str, data: bytes) -> str:
+    """Return shell lines writing one fixture toolchain file under `$toolchain`."""
+    return (
+        f"cat > \"$toolchain/{path}\" <<'{delimiter}'\n"
+        f"{data.decode('ascii')}"
+        f"{delimiter}\n"
+    )
+
+
 _SETUP = (
     "#!/bin/sh\n"
     "set -eu\n"
@@ -75,13 +107,13 @@ _SETUP = (
     'tar -xzf "$3" -C "$kani" --strip-components=1\n'
     'mkdir -p "$kani/pyroot"\n'
     f'toolchain="$RUSTUP_HOME/toolchains/{TOOLCHAIN}"\n'
-    'mkdir -p "$toolchain/bin"\n'
-    "cat > \"$toolchain/bin/rustc\" <<'RUSTC'\n"
-    "#!/bin/sh\n"
-    f"printf '{RUSTC_VV}\\n'\n"
-    "RUSTC\n"
-    'chmod 755 "$toolchain/bin/rustc"\n'
-    'ln -sfn "$toolchain" "$kani/toolchain"\n'
+    'mkdir -p "$toolchain/bin" "$toolchain/lib/rustlib"\n'
+    'mkdir -p "$toolchain/lib/rustlib/x86_64-unknown-linux-gnu/lib"\n'
+    + _install_toolchain_file("bin/rustc", "RUSTC", RUSTC_BYTES)
+    + 'chmod 755 "$toolchain/bin/rustc"\n'
+    + _install_toolchain_file("lib/rustlib/components", "COMPONENTS", RUSTUP_COMPONENTS)
+    + _install_toolchain_file(LIBRARY_PATH, "LIBRARY", LIBRARY_BYTES)
+    + 'ln -sfn "$toolchain" "$kani/toolchain"\n'
 ).encode("ascii")
 
 
@@ -235,6 +267,21 @@ def manifest_for(assets: tuple[Payload, ...]) -> SnapshotManifest:
             identifier=TOOLCHAIN,
             rustc_vv=RUSTC_VV,
             kani_compiler=KANI_COMPILER,
+            channel_metadata_sha256=CHANNEL_METADATA_SHA256,
+            components=(
+                ComponentRecord(
+                    name="rustc",
+                    version="1.100.0-nightly",
+                    url="https://static.rust-lang.org/dist/2026-09-23/rustc.tar.gz",
+                    size=1024,
+                    sha256=sha256_hex(b"rustc component fixture\n"),
+                ),
+            ),
+            rustc_sha256=sha256_hex(RUSTC_BYTES),
+            rustup_components_sha256=sha256_hex(RUSTUP_COMPONENTS),
+            libraries=(
+                FileRecord(path=LIBRARY_PATH, sha256=sha256_hex(LIBRARY_BYTES)),
+            ),
         ),
         launcher_package_version=VERSION,
         backend=BackendIdentity(version=VERSION, revision="b" * 40),

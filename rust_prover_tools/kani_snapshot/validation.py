@@ -18,6 +18,7 @@ from rust_prover_tools.kani_snapshot.models import REPOSITORY, SUPPORTED_TARGET
 __all__ = (
     "FULL_SHA_PATTERN",
     "SHA256_PATTERN",
+    "is_contained_relative_path",
     "require_full_sha",
     "require_int",
     "require_mapping",
@@ -39,6 +40,24 @@ SHA256_PATTERN: typ.Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
 def _fail(message: str) -> typ.NoReturn:
     """Raise one user-facing validation failure."""
     raise ProverToolError(message)
+
+
+def is_contained_relative_path(value: str) -> bool:
+    """Return whether text names a file strictly below a root directory.
+
+    Parameters
+    ----------
+    value : str
+        Candidate relative path.
+
+    Returns
+    -------
+    bool
+        `True` only for a non-empty relative path with no empty component and
+        no `..` component, so joining it can never leave the root.
+    """
+    parts = value.split("/")
+    return not value.startswith("/") and ".." not in parts and "" not in parts
 
 
 def require_mapping(value: object, field: str) -> dict[str, object]:

@@ -22,10 +22,15 @@ from rust_prover_tools.kani_snapshot.receipt_model import (
 )
 from tests.kani_snapshot_bundles import (
     ATTESTATION_NAME,
+    LIBRARY_BYTES,
+    LIBRARY_PATH,
     MANIFEST_NAME,
+    RUSTC_BYTES,
+    RUSTUP_COMPONENTS,
     build_local_snapshot,
     publish_manifest,
     sha256_hex,
+    write_file,
 )
 
 if typ.TYPE_CHECKING:
@@ -96,10 +101,12 @@ def install_hooks(
             policy=bundle_policy(runtime.backend_version),
         )
         (kani / "pyroot").mkdir()
+        # The toolchain bytes are exactly what the manifest digests describe,
+        # so the double mirrors real setup rather than merely its shape.
         target = runtime.layout.rustup_home / "toolchains" / runtime.toolchain
-        (target / "bin").mkdir(parents=True)
-        (target / "bin" / "rustc").write_text("rustc", encoding="utf-8")
-        (target / "bin" / "rustc").chmod(0o755)
+        write_file(target / "bin" / "rustc", RUSTC_BYTES, 0o755)
+        write_file(target / "lib" / "rustlib" / "components", RUSTUP_COMPONENTS)
+        write_file(target / LIBRARY_PATH, LIBRARY_BYTES)
         (kani / "toolchain").symlink_to(target, target_is_directory=True)
 
     def fake_probe(

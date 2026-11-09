@@ -47,6 +47,7 @@ from rust_prover_tools.kani_snapshot.snapshot_layout import (
     is_safe_generation_name,
 )
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
+from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
 from rust_prover_tools.kani_snapshot.validation import (
     require_int,
     require_mapping,
@@ -286,6 +287,7 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     _check_toolchain_link(runtime, receipt.toolchain_link_target)
     validate_cached_payloads(layout, manifest)
     validate_installed_tree(layout, manifest, runtime)
+    verify_toolchain(runtime, manifest)
     budget = None if remaining_budget is None else remaining_budget()
     evidence = probe(runtime, budget)
     _check_evidence(evidence, manifest, runtime)

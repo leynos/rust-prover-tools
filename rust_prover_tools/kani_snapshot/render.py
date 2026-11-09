@@ -54,7 +54,23 @@ def _document(manifest: SnapshotManifest) -> dict[str, object]:
             "identifier": toolchain.identifier,
             "rustc_vv": toolchain.rustc_vv,
             "kani_compiler": toolchain.kani_compiler,
-            "components": list(toolchain.components),
+            "channel_metadata_sha256": toolchain.channel_metadata_sha256,
+            "components": [
+                {
+                    "name": component.name,
+                    "version": component.version,
+                    "url": component.url,
+                    "size": component.size,
+                    "sha256": component.sha256,
+                }
+                for component in toolchain.components
+            ],
+            "rustc_sha256": toolchain.rustc_sha256,
+            "rustup_components_sha256": toolchain.rustup_components_sha256,
+            "libraries": [
+                {"path": library.path, "sha256": library.sha256}
+                for library in toolchain.libraries
+            ],
         },
         "launcher": {"package_version": manifest.launcher_package_version},
         "backend": {

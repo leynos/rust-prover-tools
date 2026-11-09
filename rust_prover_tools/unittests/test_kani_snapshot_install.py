@@ -20,7 +20,9 @@ from rust_prover_tools.kani_snapshot.install_state import validate_generation
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
 from tests.kani_snapshot_bundles import (
     CHECKSUMS_NAME,
+    LIBRARY_PATH,
     MANIFEST_NAME,
+    RUSTC_BYTES,
     tar_bytes,
     write_file,
 )
@@ -414,3 +416,58 @@ def test_install_rejects_setup_that_loses_a_backend_member(
     hooks = dc.replace(base, setup=lossy_setup)
     with pytest.raises(ProverToolError, match=r"missing recorded"):
         install_snapshot(install_options(case), hooks)
+
+
+def test_install_rejects_a_tampered_toolchain_before_probing(
+    tmp_path: Path,
+) -> None:
+    """Setup that installs different compiler bytes never reaches the probe."""
+    case = make_case(tmp_path)
+    base = install_hooks(case)
+    probed: list[bool] = []
+
+    def tampering_setup(
+        runtime: SnapshotRuntime,
+        bundle: Path,
+        timeout_seconds: float | None,
+    ) -> None:
+        """Install the fixture toolchain, then alter the compiler."""
+        base.setup(runtime, bundle, timeout_seconds)
+        rustc = (
+            runtime.layout.rustup_home
+            / "toolchains"
+            / runtime.toolchain
+            / "bin"
+            / "rustc"
+        )
+        rustc.write_bytes(RUSTC_BYTES.replace(b"printf", b"exec  "))
+
+    def recording_probe(
+        runtime: SnapshotRuntime,
+        timeout_seconds: float | None,
+    ) -> SetupEvidence:
+        """Record that the probe ran, then delegate to the fixture probe."""
+        probed.append(True)
+        return base.probe(runtime, timeout_seconds)
+
+    hooks = dc.replace(base, setup=tampering_setup, probe=recording_probe)
+    with pytest.raises(ProverToolError, match=r"compiler.*does not match"):
+        install_snapshot(install_options(case), hooks)
+    assert not probed, "a rejected toolchain still reached the compiler probe"
+
+
+def test_check_rejects_tampered_installed_toolchain_bytes(tmp_path: Path) -> None:
+    """Reuse re-verifies the compiler the manifest recorded, not just its name."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    toolchain = identity.rustc.parent.parent
+    identity.rustc.write_bytes(RUSTC_BYTES.replace(b"printf", b"exec  "))
+
+    with pytest.raises(ProverToolError, match=r"compiler.*does not match"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+    # A library the compiler loads is held to the same record.
+    identity.rustc.write_bytes(RUSTC_BYTES)
+    (toolchain / LIBRARY_PATH).write_bytes(b"tampered library\n")
+    with pytest.raises(ProverToolError, match=r"library.*does not match"):
+        check_snapshot(install_options(case), install_hooks(case))
