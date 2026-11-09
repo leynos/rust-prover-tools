@@ -14,6 +14,7 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
+from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from tests.kani_snapshot_fixtures import (
     make_manifest,
     make_pin,
@@ -201,6 +202,24 @@ def test_deeply_nested_json_is_reported() -> None:
     nested = b"[" * 100_000 + b"]" * 100_000
     with pytest.raises(ProverToolError, match="not valid JSON"):
         parse_manifest(nested)
+
+
+def test_hostile_nesting_names_the_depth_ceiling() -> None:
+    """The depth failure comes from the document contract, not the interpreter.
+
+    Coverage instrumentation changes when the recursive decoder raises
+    `RecursionError`, so a fixed ceiling keeps the failure deterministic across
+    local and hosted runs.
+    """
+    nested = b"[" * 100 + b"]" * 100
+    with pytest.raises(ProverToolError, match=r"nesting depth exceeds \d+"):
+        parse_manifest(nested)
+
+
+def test_brackets_inside_strings_do_not_count_as_nesting() -> None:
+    """Brackets inside a JSON string are content, not containers."""
+    document = {"text": "[" * 100 + "]" * 100}
+    assert strict_json_loads(_encode(document), "manifest") == document
 
 
 @pytest.mark.parametrize(

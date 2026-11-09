@@ -253,6 +253,17 @@ EP-O1 assigns responsibility and records live evidence.
     treated an absent `/proc` as proof a descendant had exited. The helper
     now falls back to signal 0, which still detects a survivor (though not a
     zombie) when procfs is unavailable.
+  - [x] (2026-11-09) Hosted CI repair after publication. The first hosted run
+    of `da3dc42` (`CI` 42558804172, job `lint-test`) failed one test:
+    `test_deeply_nested_json_is_reported` expected `not valid JSON`, but the
+    coverage-instrumented runner parsed the 100,000-deep document and then
+    reported `snapshot manifest must be an object`. The decoder's nesting
+    failure is a `RecursionError` whose threshold moves with the interpreter
+    build and coverage instrumentation, so `strict_json_loads` now scans the
+    decoded text and rejects container nesting beyond 32 before decoding. Two
+    tests pin the contract: one names the depth ceiling and one proves brackets
+    inside strings are content. Design decision D2 and the surprise above
+    record the reasoning.
   - [x] (2026-11-09) EP-M3 milestone CodeRabbit CLI review. Local CodeRabbit
     CLI 0.9.3 reviewed the committed diff `60df24c..ad9a868` (26 files) as
     `review_completed` with 8 findings (2 major, 3 minor, 3 trivial). All were
@@ -310,6 +321,14 @@ host policy and downloader are already implemented and tested, but the consumer
 command does not yet fetch release assets from GitHub. EP-M4 must connect that
 transport before the workflow can depend on this command, and the current error
 message says so explicitly.
+
+A hostile-nesting test that passes locally can fail in hosted CI without any
+code change. `json`'s depth failure arrives as `RecursionError`, whose
+threshold depends on the interpreter build and on coverage instrumentation; the
+hosted runner under `slipcover` parsed a 100,000-deep document that the local
+interpreter refused, so the assertion saw a later "must be an object" error.
+The strict decoder now owns a fixed container-nesting ceiling, which makes the
+outcome independent of the runner.
 
 ## Decision log
 
@@ -420,6 +439,12 @@ deadline. `run_command` resolves an enclosing Cuprum scope's default timeout
 before choosing process-group ownership, because that timeout also terminates
 the command, and reports the effective timeout from `TimeoutExpired` rather
 than formatting an absent per-spec value.
+
+2026-11-09, implemented D2 nesting ceiling: `strict_json_loads` rejects
+container nesting beyond 32 before decoding, counting brackets outside JSON
+strings. The ceiling is part of the document contract rather than an
+interpreter side effect, so hostile input fails identically on local,
+coverage-instrumented and hosted runners.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline

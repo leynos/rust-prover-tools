@@ -100,10 +100,14 @@ encoding hashed with SHA-256.
 `manifest.json` is UTF-8 JSON with schema version 1. Hash its exact bytes,
 including the final newline; do not parse and reserialize before checking the
 pin. Generation uses deterministic key order and rejects duplicate object keys,
-non-finite numbers, unknown required structures, and malformed UTF-8. A trusted
-pin is reviewed and checked into the consumer repository. Downloads and release
-notes cannot update it. The initial pin must be produced from verified
-publication evidence and reviewed independently of the asset server.
+non-finite numbers, unknown required structures, malformed UTF-8, and container
+nesting beyond a fixed ceiling. The explicit ceiling matters because the JSON
+decoder's own recursion limit moves with the interpreter build and with
+coverage instrumentation, which would otherwise make the same hostile document
+fail one way locally and another way in hosted CI. A trusted pin is reviewed
+and checked into the consumer repository. Downloads and release notes cannot
+update it. The initial pin must be produced from verified publication evidence
+and reviewed independently of the asset server.
 
 The manifest records the publication identity and the full upstream and builder
 commits; recursive source submodule path/commit pairs; source and builder
