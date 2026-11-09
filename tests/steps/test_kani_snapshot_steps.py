@@ -67,9 +67,18 @@ def reviewed_snapshot_pin(tmp_path: Path) -> SnapshotCase:
 
 
 def run_cli(case: SnapshotCase, *argv: str) -> CliRun:
-    """Run the public CLI with the attestation stub first on `PATH`."""
+    """Run the public CLI with the attestation stub first on `PATH`.
+
+    Compiler admission routes are removed from the child. The snapshot probes
+    the installed compiler through the caller's configured wrapper, so leaving
+    a host build supervisor in place would queue every fixture probe behind
+    unrelated compiler work and turn a behavioural test into a load test.
+    """
     environment = {
-        key: value for key, value in os.environ.items() if not key.startswith("INPUT_")
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("INPUT_", "CARGO_BUILD_"))
+        and key not in {"RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTDOC"}
     }
     environment["PATH"] = os.pathsep.join((str(case.shim), environment.get("PATH", "")))
     completed = subprocess.run(
@@ -95,6 +104,8 @@ def install_command(case: SnapshotCase) -> CliRun:
         "install",
         "--pin",
         str(case.pin),
+        "--repo-root",
+        str(case.root),
         "--cache-dir",
         str(case.cache),
         "--asset-dir",
@@ -150,6 +161,8 @@ def user_checks_snapshot(snapshot_case: SnapshotCase) -> CliRun:
         "check",
         "--pin",
         str(snapshot_case.pin),
+        "--repo-root",
+        str(snapshot_case.root),
         "--cache-dir",
         str(snapshot_case.cache),
     )
@@ -163,6 +176,8 @@ def run_launcher(snapshot_case: SnapshotCase, *args: str) -> CliRun:
         "run",
         "--snapshot-pin",
         str(snapshot_case.pin),
+        "--repo-root",
+        str(snapshot_case.root),
         "--cache-dir",
         str(snapshot_case.cache),
         "--",

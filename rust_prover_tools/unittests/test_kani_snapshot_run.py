@@ -87,3 +87,27 @@ def test_run_requires_an_installed_snapshot(tmp_path: Path) -> None:
             RunOptions(pin=case.pin, cache_home=case.cache_home),
             install_hooks(case),
         )
+
+
+def test_run_refuses_unprovable_cargo_routing(
+    installed: tuple[RunOptions, InstallHooks],
+    tmp_path: Path,
+) -> None:
+    """A package backend the child cannot shadow stops the proof first."""
+    options, hooks = installed
+    repository = tmp_path / "repository"
+    (repository / ".cargo").mkdir(parents=True)
+    (repository / ".cargo" / "config.toml").write_text(
+        '[profile.dev.package."*"]\ncodegen-backend = "cranelift"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProverToolError, match=r"package"):
+        run_snapshot(
+            RunOptions(
+                pin=options.pin,
+                cache_home=options.cache_home,
+                cwd=repository,
+            ),
+            hooks,
+        )

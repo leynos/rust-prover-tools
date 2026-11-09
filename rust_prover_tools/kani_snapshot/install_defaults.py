@@ -15,6 +15,7 @@ from cuprum.context import UNSET
 
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_exec_routing import admission_chain
 from rust_prover_tools.kani_snapshot.identity import execution_environment
 from rust_prover_tools.kani_snapshot.receipt_model import (
     ObservedToolchain,
@@ -117,6 +118,10 @@ def probe_generation(
         msg = f"snapshot toolchain link escapes the private toolchains: {target}"
         raise ProverToolError(msg)
     env = execution_environment(runtime, os.environ)
+    # The probe must exercise the same compiler route the proof will use, so a
+    # configured admission wrapper runs outermost and an unusable selection
+    # fails here instead of being silently bypassed.
+    chain = admission_chain(dict(os.environ))
     started = time.monotonic()
 
     def remaining_budget() -> float | None:
@@ -131,14 +136,14 @@ def probe_generation(
 
     rustc = run_checked(
         CommandSpec(
-            (str(runtime.rustc), "-vV"),
+            (*chain, str(runtime.rustc), "-vV"),
             env=env,
             timeout_seconds=remaining_budget(),
         )
     )
     kani_compiler = run_checked(
         CommandSpec(
-            (str(runtime.compiler), "--version"),
+            (*chain, str(runtime.compiler), "--version"),
             env=env,
             timeout_seconds=remaining_budget(),
         )

@@ -2,9 +2,10 @@
 
 Execution never installs, never falls back to a host Kani and never changes the
 user's environment. It revalidates the generation, rejects setup or backend
-selectors, and then runs the pinned launcher with the verifier's arguments
-unchanged, mirroring the launcher's stdout and stderr as they are produced and
-preserving its exit status.
+selectors, isolates the child's Cargo routing so a repository profile cannot
+replace the pinned compiler, and then runs the pinned launcher with the
+verifier's arguments unchanged, mirroring the launcher's stdout and stderr as
+they are produced and preserving its exit status.
 """
 
 from __future__ import annotations
@@ -12,11 +13,11 @@ from __future__ import annotations
 import dataclasses as dc
 import os
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.commands import CommandResult, CommandSpec, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import (
-    execution_environment,
     runtime_for,
     snapshot_layout,
     validate_forwarded_args,
@@ -26,10 +27,9 @@ from rust_prover_tools.kani_snapshot.install_state import (
     active_manifest,
     load_active,
 )
+from rust_prover_tools.kani_snapshot.verification_env import proof_environment
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from rust_prover_tools.kani_snapshot.install_model import InstallHooks
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
@@ -83,7 +83,8 @@ def run_snapshot(
     ------
     ProverToolError
         Raised when the snapshot is not installed, has drifted from its
-        manifest, or the forwarded arguments would replace the backend.
+        manifest, the forwarded arguments would replace the backend, or the
+        repository's Cargo routing cannot be proved safe.
     """
     validate_forwarded_args(options.args)
     check_snapshot(
@@ -102,7 +103,8 @@ def run_snapshot(
     )
     manifest = active_manifest(options.pin, layout)
     runtime = runtime_for(generation, manifest)
-    env = execution_environment(runtime, os.environ)
+    working_directory = Path.cwd() if options.cwd is None else options.cwd
+    env = proof_environment(runtime, os.environ, cwd=working_directory.resolve())
     # `echo=True` mirrors each stream live while still capturing it, so the
     # CLI must not replay the captured copy afterwards.
     return run_command(
