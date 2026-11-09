@@ -5,7 +5,8 @@ user's environment. It revalidates the generation, rejects setup or backend
 selectors, isolates the child's Cargo routing so a repository profile cannot
 replace the pinned compiler, and then runs the pinned launcher with the
 verifier's arguments unchanged, mirroring the launcher's stdout and stderr as
-they are produced and preserving its exit status.
+they are produced, retaining only a bounded tail of each stream and preserving
+its exit status.
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ import os
 import typing as typ
 from pathlib import Path
 
-from rust_prover_tools.commands import CommandResult, CommandSpec, run_command
+from rust_prover_tools.commands import (
+    CommandResult,
+    CommandSpec,
+    TailCapture,
+    run_command,
+)
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import (
     runtime_for,
@@ -75,9 +81,10 @@ def run_snapshot(
     Returns
     -------
     CommandResult
-        Captured stdout, stderr and the launcher's exact exit status. The same
-        output is mirrored to the caller's streams as the launcher writes it,
-        so a long proof is visible while it runs.
+        The launcher's exact exit status with a bounded tail of its stdout and
+        stderr. The same output is mirrored to the caller's streams as the
+        launcher writes it, so a long proof stays visible while it runs
+        without letting its volume size the CLI's memory.
 
     Raises
     ------
@@ -105,13 +112,22 @@ def run_snapshot(
     runtime = runtime_for(generation, manifest)
     working_directory = Path.cwd() if options.cwd is None else options.cwd
     env = proof_environment(runtime, os.environ, cwd=working_directory.resolve())
-    # `echo=True` mirrors each stream live while still capturing it, so the
-    # CLI must not replay the captured copy afterwards.
-    return run_command(
+    # `echo=True` mirrors each stream live, so the CLI must not replay the
+    # result. Capture stays off because a proof log can be arbitrarily large;
+    # the line hook keeps only the tail that explains an outcome.
+    tail = TailCapture()
+    result = run_command(
         CommandSpec(
             (str(runtime.launcher), *options.args),
             cwd=options.cwd,
             env=env,
             echo=True,
+            capture=False,
+            on_line=tail,
         )
+    )
+    return CommandResult(
+        stdout=tail.text("stdout"),
+        stderr=tail.text("stderr"),
+        exit_code=result.exit_code,
     )

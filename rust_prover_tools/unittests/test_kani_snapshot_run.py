@@ -51,6 +51,33 @@ def test_run_forwards_arguments_and_exit_status(
     ], "launcher did not receive the forwarded arguments"
 
 
+def test_run_returns_a_bounded_tail_of_proof_output(
+    installed: tuple[RunOptions, InstallHooks],
+) -> None:
+    """A verbose proof is mirrored but its capture stays bounded.
+
+    The fixture launcher echoes every forwarded argument and exits 7. Enough
+    arguments make its output exceed the retained budget, so the result must
+    hold the newest lines, not everything the launcher wrote.
+    """
+    options, hooks = installed
+    args = tuple(f"arg{index:05d}" for index in range(12000))
+
+    result = run_snapshot(
+        RunOptions(
+            pin=options.pin,
+            args=args,
+            cache_home=options.cache_home,
+        ),
+        hooks,
+    )
+
+    assert result.exit_code == 7, "launcher exit status was not preserved"
+    assert len(result.stdout.encode("utf-8")) <= 64 * 1024, "capture grew unbounded"
+    assert "arg11999" in result.stdout, "bounded capture dropped the newest output"
+    assert "arg00000" not in result.stdout, "bounded capture retained the oldest output"
+
+
 def test_run_rejects_a_setup_command(
     installed: tuple[RunOptions, InstallHooks],
 ) -> None:

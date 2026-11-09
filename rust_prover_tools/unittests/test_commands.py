@@ -16,6 +16,7 @@ from cuprum.context import UNSET, EnvMode
 
 from rust_prover_tools.commands import (
     CommandSpec,
+    TailCapture,
     command_line,
     run_checked,
     run_command,
@@ -111,6 +112,32 @@ def test_replace_mode_starts_from_an_empty_environment(
     assert result.stdout.split() == ["False", "child-value"], (
         "replace mode did not start from an empty child environment"
     )
+
+
+def test_tail_capture_retains_only_the_newest_output() -> None:
+    """A bounded collector keeps the end of a stream, not the whole run."""
+    script = "for i in range(4000): print(f'line-{i:05d}')\n"
+    tail = TailCapture(limit=256)
+
+    result = run_command(
+        CommandSpec(
+            (sys.executable, "-I", "-c", script),
+            capture=False,
+            on_line=tail,
+        )
+    )
+
+    assert result.stdout == "", "capture=False still retained the whole stream"
+    retained = tail.text("stdout")
+    assert len(retained.encode("utf-8")) <= 256, "collector exceeded its limit"
+    assert "line-03999" in retained, "collector dropped the newest output"
+    assert "line-00000" not in retained, "collector retained the oldest output"
+
+
+def test_tail_capture_rejects_a_non_positive_limit() -> None:
+    """A zero budget cannot retain anything, so it is rejected."""
+    with pytest.raises(ValueError, match="positive"):
+        TailCapture(limit=0)
 
 
 def test_run_checked_echoes_output_when_requested(
