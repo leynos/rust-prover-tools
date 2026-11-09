@@ -322,3 +322,35 @@ def test_toolchain_library_paths_must_stay_contained(path: str) -> None:
     _toolchain_document(document)["libraries"][0]["path"] = path
     with pytest.raises(ProverToolError, match="contained relative path"):
         parse_manifest(_encode(document))
+
+
+def test_toolchain_must_record_at_least_one_library() -> None:
+    """An empty library list would leave every installed shared object unverified."""
+    document = _valid_document()
+    _toolchain_document(document)["libraries"] = []
+
+    with pytest.raises(ProverToolError, match="at least one extracted library"):
+        parse_manifest(_encode(document))
+
+
+def test_toolchain_must_not_repeat_a_library_path() -> None:
+    """A duplicate library record would make its digest ambiguous."""
+    document = _valid_document()
+    libraries = _toolchain_document(document)["libraries"]
+    libraries.append(dict(libraries[0]))
+
+    with pytest.raises(ProverToolError, match="path more than once"):
+        parse_manifest(_encode(document))
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["../escape", "/absolute/toolchain", "nightly/../other", "..", "a\\b"],
+)
+def test_toolchain_identifier_must_be_one_plain_name(identifier: str) -> None:
+    """The identifier becomes a path component, so a path is not an identity."""
+    document = _valid_document()
+    _toolchain_document(document)["identifier"] = identifier
+
+    with pytest.raises(ProverToolError, match="one plain toolchain name"):
+        parse_manifest(_encode(document))

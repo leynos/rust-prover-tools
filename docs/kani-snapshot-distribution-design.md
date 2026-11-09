@@ -364,7 +364,26 @@ only when a new generation must be staged. `check` and `run` re-read the cached
 manifest, recheck receipt, cached sizes, the inventory and launcher digests,
 the backend/inventory agreement, executable modes, the absolute toolchain link
 and both probes. A corrupt generation is repaired by creating a new generation;
-the previous directory is never deleted.
+the previous directory is never deleted. Install runs the same runtime-file
+contract as `check` before the probe executes anything, so a launcher archive
+that omits or strips the execute bit from a required binary cannot be activated.
+
+The toolchain identifier is treated as a single path component, not free text:
+the parser and construction boundary reject absolute paths, parent traversal
+and symbolic links that resolve outside the generation's private Rustup home.
+Verification covers the compiler, the component list and every recorded
+library, and rejects any shared object under `<toolchain>/lib` that the
+manifest does not record, because the pinned dynamic-loader path would
+otherwise expose it. The identity probe sets the same `LD_LIBRARY_PATH` as the
+proof, so a host Rustup toolchain cannot shadow the verified libraries while
+the probe reports them.
+
+Installed-tree validation exempts only the documented setup additions. `pyroot`
+is a setup-created directory whose contents the backend inventory cannot
+describe, so its descendants are exempt from inventory matching, but the
+directory itself must be a real directory inside the generation and every link
+beneath it must resolve inside the generation. `bin/cargo-kani` and `bin/kani`
+remain single-file exemptions beside the recorded `bin` inventory.
 
 Per-identity installation is serialized by an advisory `flock` with a bounded
 wait inside a monotonic deadline. Setup executes with the remaining budget and
@@ -373,17 +392,23 @@ command and again immediately before a probe after cache revalidation, so slow
 checks or a slow first command cannot extend the deadline. A bounded command
 runs as its own process group and expiry terminates the whole group, so a
 stalled `rustup` download cannot outlive the deadline or hold the lock past it.
-Reuse is reported only after a final deadline check following the probe. The
-active pointer is written to a private temporary file, fsynced, atomically
-renamed and followed by a directory fsync. A failed stage, extraction, setup or
-probe leaves the previous pointer untouched.
+The same budget supplies checkpoints to local work — payload copying, digest
+hashing, archive extraction and structure validation, launcher placement,
+installed-tree validation and toolchain verification — so each long phase stops
+when the deadline expires instead of only being checked at its boundary. Reuse
+is reported only after a final deadline check following the probe. The active
+pointer is written to a private temporary file, fsynced, atomically renamed and
+followed by a directory fsync. A failed stage, extraction, setup or probe
+leaves the previous pointer untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
-repository root and mirrors its stdout and stderr live. It retains only the
-last 64 KiB of each stream through `commands.TailCapture` rather than buffering
-the whole run, because a proof log is diagnostic context whose size the caller
-does not control. The mirrored output is not replayed, so progress output is
-neither delayed nor rewritten.
+repository root and mirrors its stdout and stderr live. It executes the exact
+generation named by the validation result rather than reading `active.json` a
+second time, so a concurrent repair cannot switch the pointer between the check
+and the launch. It retains only the last 64 KiB of each stream through
+`commands.TailCapture` rather than buffering the whole run, because a proof log
+is diagnostic context whose size the caller does not control. The mirrored
+output is not replayed, so progress output is neither delayed nor rewritten.
 
 Two verification boundaries support this design. Generated archive graphs,
 checked against an independent expected-tree oracle, cover member ordering,
@@ -391,9 +416,11 @@ contained link chains and the refusal cases; they complement the fixed hostile
 fixtures rather than replacing them. A Hypothesis rule-based state machine over
 two identities exercises install, transient failure, corruption and repair
 against the real pipeline, and seeded premature-pointer and post-setup-move
-tests show that validation detects both faults. POSIX locking, rename
-durability and private cache ownership remain axioms tested at the process
-boundary, not formally proven.
+tests show that validation detects both faults. Two-process fault tests kill an
+installer while it stages repair payloads and seed a setup failure while a peer
+waits, showing that neither interruption publishes a pointer and both recover.
+POSIX locking, rename durability and private cache ownership remain axioms
+tested at the process boundary, not formally proven.
 
 ## D5: Workflow and immutable publication
 

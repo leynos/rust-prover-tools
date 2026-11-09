@@ -120,6 +120,59 @@ def test_verify_toolchain_rejects_a_missing_library(tmp_path: Path) -> None:
         verify_toolchain(runtime, _manifest())
 
 
+def test_verify_toolchain_rejects_an_unrecorded_shared_library(
+    tmp_path: Path,
+) -> None:
+    """A shared object the pinned library path exposes must be recorded."""
+    runtime = _runtime(tmp_path)
+    _write(_toolchain_root(runtime) / "lib" / "libextra.so", b"not recorded\n")
+
+    with pytest.raises(ProverToolError, match=r"does not record"):
+        verify_toolchain(runtime, _manifest())
+
+
+def test_verify_toolchain_rejects_a_library_link_that_escapes(
+    tmp_path: Path,
+) -> None:
+    """A recorded-path scan must also reject a link out of the toolchain."""
+    runtime = _runtime(tmp_path)
+    outside = tmp_path / "outside-library.so"
+    outside.write_bytes(b"outside\n")
+    (_toolchain_root(runtime) / "lib" / "liboutside.so").symlink_to(outside)
+
+    with pytest.raises(ProverToolError, match=r"escapes its toolchain"):
+        verify_toolchain(runtime, _manifest())
+
+
+def test_verify_toolchain_rejects_a_toolchain_link_out_of_the_rustup_home(
+    tmp_path: Path,
+) -> None:
+    """The identifier must resolve inside the generation's private rustup home."""
+    runtime = SnapshotRuntime(
+        layout=snapshot_layout(make_pin(), cache_home=tmp_path, generation="gen"),
+        toolchain=TOOLCHAIN,
+        backend_version=VERSION,
+    )
+    outside = tmp_path / "outside-toolchain"
+    outside.mkdir()
+    root = _toolchain_root(runtime)
+    root.parent.mkdir(parents=True)
+    root.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ProverToolError, match=r"escapes the private rustup home"):
+        verify_toolchain(runtime, _manifest())
+
+
+def test_verify_toolchain_rejects_an_identifier_that_is_a_path(
+    tmp_path: Path,
+) -> None:
+    """A revalidated identifier cannot leave the private rustup home."""
+    runtime = dc.replace(_runtime(tmp_path), toolchain="../escape")
+
+    with pytest.raises(ProverToolError, match=r"one plain name"):
+        verify_toolchain(runtime, _manifest())
+
+
 def test_manifest_declares_the_fixture_digests() -> None:
     """The fixture manifest describes the bytes the fixture setup installs."""
     toolchain = manifest_for(payloads()).toolchain

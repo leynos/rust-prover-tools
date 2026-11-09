@@ -9,6 +9,7 @@ receipt is durable and the effective compiler has been observed.
 from __future__ import annotations
 
 import dataclasses as dc
+import functools
 import logging
 import os
 import shutil
@@ -33,6 +34,7 @@ from rust_prover_tools.kani_snapshot.install_state import (
     fsync_directory,
     identity_lock,
     load_active,
+    require_runtime_files,
     validate_generation,
     write_active,
 )
@@ -51,6 +53,8 @@ from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
     from rust_prover_tools.kani_snapshot.receipt_model import SetupEvidence
@@ -90,6 +94,15 @@ class _Deadline:
     def remaining(self) -> float:
         """Return the seconds left, never negative."""
         return max(0.0, self.expires_at - time.monotonic())
+
+    def checkpoint(self, phase: str) -> cabc.Callable[[], None]:
+        """Return a callable that enforces the budget inside `phase`.
+
+        Long local work such as copying, hashing, archive extraction and tree
+        validation calls it repeatedly, so an expired budget stops the phase
+        rather than being noticed only at the next phase boundary.
+        """
+        return functools.partial(self.check, phase)
 
 
 def install_snapshot(
@@ -199,6 +212,7 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             generation,
             context.hooks.probe,
             context.deadline.remaining,
+            checkpoint=context.deadline.checkpoint("active generation validation"),
         )
     except ProverToolError as exc:
         # The exception text can embed filesystem paths, so the event carries
@@ -224,6 +238,7 @@ def _install_generation(
         layout.downloads_dir / asset_by_role(manifest, "launcher").name,
         layout.launcher_dir,
         policy=bundle_policy(manifest.backend.version),
+        checkpoint=context.deadline.checkpoint("launcher extraction"),
     )
     context.deadline.check("setup")
     backend = layout.downloads_dir / asset_by_role(manifest, "backend").name
@@ -231,10 +246,27 @@ def _install_generation(
     # remaining budget rather than merely being checked before and after.
     context.hooks.setup(runtime, backend, context.deadline.remaining())
     context.deadline.check("setup")
-    _install_launcher_binaries(runtime, layout)
-    validate_installed_tree(layout, manifest, runtime)
+    _install_launcher_binaries(
+        runtime,
+        layout,
+        checkpoint=context.deadline.checkpoint("launcher placement"),
+    )
+    validate_installed_tree(
+        layout,
+        manifest,
+        runtime,
+        checkpoint=context.deadline.checkpoint("installed tree validation"),
+    )
+    # Activation must not publish executables the next check would reject, so
+    # the same runtime-file contract `validate_generation` enforces is applied
+    # here too, before the probe executes them.
+    require_runtime_files(runtime)
     # The probe executes these bytes, so their digests are checked first.
-    verify_toolchain(runtime, manifest)
+    verify_toolchain(
+        runtime,
+        manifest,
+        checkpoint=context.deadline.checkpoint("toolchain verification"),
+    )
     evidence = context.hooks.probe(runtime, context.deadline.remaining())
     _require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)
@@ -253,12 +285,16 @@ def _install_generation(
 def _install_launcher_binaries(
     runtime: SnapshotRuntime,
     layout: SnapshotLayout,
+    *,
+    checkpoint: cabc.Callable[[], None] | None = None,
 ) -> None:
     """Place the packaged launcher beside the backend binaries."""
     source = layout.launcher_dir / "bin"
     target = runtime.kani_dir / "bin"
     target.mkdir(parents=True, exist_ok=True)
     for entry in sorted(source.iterdir()):
+        if checkpoint is not None:
+            checkpoint()
         destination = target / entry.name
         if destination.exists():
             continue

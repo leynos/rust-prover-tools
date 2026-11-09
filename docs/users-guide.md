@@ -163,7 +163,13 @@ backend archive's members with `inventory.json` and runs the packaged launcher's
 `setup --use-local-bundle` with generation-private `KANI_HOME`, `RUSTUP_HOME`
 and `CARGO_HOME`. Only after the installed `rustc -vV` and
 `kani-compiler --version` match the manifest does the command switch the active
-pointer.
+pointer. The same check that `snapshot check` performs runs first: every
+runtime file the launcher needs must be present and executable, `pyroot` must
+be a real directory whose links stay inside the generation, and the recorded
+toolchain's shared libraries must live inside the private rustup home with no
+unrecorded library beside them. The compiler probes load the verified
+toolchain's `lib` directory first, so an inherited `LD_LIBRARY_PATH` cannot
+shadow it.
 
 `prover-tools kani snapshot check` revalidates the active generation without
 running setup:
@@ -185,7 +191,9 @@ becomes the command's exit status. A long proof therefore reports progress as
 it runs rather than only on completion. Because a proof log can be arbitrarily
 large, the command retains only the last 64 KiB of each stream for diagnostics
 instead of buffering the whole run in memory. `run` revalidates the generation
-first, so a changed payload or compiler stops the proof. It refuses `setup`,
+first, so a changed payload or compiler stops the proof, and then executes
+exactly the generation it validated: a concurrent change to the active pointer
+cannot redirect the proof to a different build. It refuses `setup`,
 `--use-local-bundle`, `--use-local-toolchain` and `-Z lean` because they would
 replace the pinned backend.
 
@@ -201,11 +209,12 @@ the previous generation and the active pointer unchanged; a new generation is
 activated only after its receipt is durable and its compiler has been observed.
 Concurrent installs for one identity serialize on an advisory lock with a
 bounded wait (300 seconds) inside an overall 1800-second installation deadline.
-Setup and the compiler probes run with the remaining budget, which the probes
-share and refresh before each command; expiry terminates the whole process
-group, so a stalled setup cannot outlive the deadline or keep another installer
-waiting. A corrupt active generation is repaired by installing a new
-generation, and the old directory is preserved.
+Staging, hashing, extraction, tree validation, setup and the compiler probes
+all run within that budget; the probes share the remaining time and refresh it
+before each command, and expiry terminates the whole process group. A stalled
+setup therefore cannot outlive the deadline or keep another installer waiting.
+A corrupt active generation is repaired by installing a new generation, and the
+old directory is preserved.
 
 Checking and running never repair a generation. If `check` or `run` reports a
 missing, changed or drifted snapshot, run `prover-tools kani snapshot install`

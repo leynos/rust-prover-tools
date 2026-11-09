@@ -17,6 +17,7 @@ from rust_prover_tools.kani_snapshot.toolchain_model import (
     FileRecord,
     ToolchainIdentity,
 )
+from rust_prover_tools.kani_snapshot.toolchain_name import is_safe_toolchain_name
 from rust_prover_tools.kani_snapshot.validation import (
     is_contained_relative_path,
     require_mapping,
@@ -113,10 +114,24 @@ def parse_toolchain(document: dict[str, object], field: str) -> ToolchainIdentit
         )
         for item in require_sequence(document.get("libraries"), f"{field} libraries")
     )
+    # An empty list would make every installed shared library unverified, so a
+    # toolchain that genuinely ships none is not publishable either.
+    if not libraries:
+        msg = f"{field} libraries must record at least one extracted library"
+        raise ProverToolError(msg)
+    paths = [library.path for library in libraries]
+    if len(set(paths)) != len(paths):
+        msg = f"{field} libraries records a path more than once"
+        raise ProverToolError(msg)
+    identifier = require_truthy_text(document.get("identifier"), f"{field} identifier")
+    if not is_safe_toolchain_name(identifier):
+        msg = (
+            f"{field} identifier must be one plain toolchain name, "
+            f"not a path: {identifier!r}"
+        )
+        raise ProverToolError(msg)
     return ToolchainIdentity(
-        identifier=require_truthy_text(
-            document.get("identifier"), f"{field} identifier"
-        ),
+        identifier=identifier,
         rustc_vv=require_truthy_text(document.get("rustc_vv"), f"{field} rustc_vv"),
         kani_compiler=require_truthy_text(
             document.get("kani_compiler"), f"{field} kani_compiler"

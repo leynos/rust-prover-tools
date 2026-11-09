@@ -13,13 +13,15 @@ import dataclasses as dc
 import logging
 import os
 import shutil
-import stat
 import tarfile
-import time
 import typing as typ
 
 from rust_prover_tools.download_stream import READ_CHUNK_SIZE
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.archive_destination import (
+    PRIVATE_DIRECTORY_MODE,
+    prepare_destination,
+)
 from rust_prover_tools.kani_snapshot.archive_graph import (
     DEFAULT_ARCHIVE_LIMITS,
     DEFAULT_ARCHIVE_POLICY,
@@ -35,6 +37,7 @@ from rust_prover_tools.kani_snapshot.archive_read import (
     _entry_from_member,
     read_archive,
 )
+from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -43,10 +46,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("extract_archive",)
 
-_PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _DIRECTORY_MODE: typ.Final[int] = 0o755
-_WORLD_WRITABLE: typ.Final[int] = 0o022
-_STICKY_BIT: typ.Final[int] = stat.S_ISVTX
 _LINK_KINDS: typ.Final[frozenset[str]] = frozenset({KIND_SYMLINK, KIND_HARDLINK})
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,12 +57,14 @@ _TAR_STREAM_ERRORS: typ.Final[tuple[type[BaseException], ...]] = (
 )
 
 
-def extract_archive(
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def extract_archive(  # ruff: ignore[too-many-arguments] - one parameter per archive input
     archive_path: Path,
     destination: Path,
     *,
     limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS,
     policy: ArchivePolicy = DEFAULT_ARCHIVE_POLICY,
+    checkpoint: Progress | None = None,
 ) -> tuple[ArchiveEntry, ...]:
     """Validate and materialize an archive into an empty destination.
 
@@ -76,6 +78,10 @@ def extract_archive(
         Member, size, path and link ceilings.
     policy : ArchivePolicy
         Component stripping and optional required root.
+    checkpoint : Progress | None
+        Called while headers and member bodies are processed, so a caller's
+        deadline bounds extraction rather than only its start and finish.
+        `None` is a no-op.
 
     Returns
     -------
@@ -87,18 +93,26 @@ def extract_archive(
     ProverToolError
         Raised when validation, extraction or publication fails.
     """
-    entries = read_archive(archive_path, limits=limits, policy=policy)
-    _require_absent_or_empty(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    _require_private_ancestors(destination.parent)
-    staging = destination.with_name(
-        f".{destination.name}.extract-{os.getpid()}-{time.monotonic_ns()}"
+    progress = as_checkpoint(checkpoint)
+    entries = read_archive(
+        archive_path,
+        limits=limits,
+        policy=policy,
+        checkpoint=progress,
+    )
+    staging = prepare_destination(destination)
+    extraction = _Extraction(
+        archive_path=archive_path,
+        root=staging,
+        limits=limits,
+        policy=policy,
+        checkpoint=progress,
     )
     try:
-        staging.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=False)
-        _materialize_files(archive_path, staging, limits, policy)
-        _materialize_links(archive_path, staging, limits, policy)
-        _apply_modes(entries, staging)
+        staging.mkdir(mode=PRIVATE_DIRECTORY_MODE, parents=False)
+        _materialize_files(extraction)
+        _materialize_links(extraction)
+        _apply_modes(entries, staging, progress)
         _fsync_directory(staging)
         if destination.exists():
             destination.rmdir()
@@ -120,39 +134,6 @@ def extract_archive(
     return entries
 
 
-def _require_absent_or_empty(destination: Path) -> None:
-    """Reject a destination that would merge with existing content."""
-    try:
-        if not destination.exists():
-            return
-        if not destination.is_dir():
-            msg = f"snapshot extraction destination is not a directory: {destination}"
-            raise ProverToolError(msg)
-        if any(destination.iterdir()):
-            msg = f"snapshot extraction destination must be empty: {destination}"
-            raise ProverToolError(msg)
-    except OSError as exc:
-        msg = f"failed to inspect snapshot extraction destination: {exc}"
-        raise ProverToolError(msg) from exc
-
-
-def _require_private_ancestors(start: Path) -> None:
-    """Reject an attacker-writable ancestor outside a sticky directory."""
-    current = start
-    for parent in (current, *current.parents):
-        try:
-            status = parent.stat()
-        except OSError as exc:
-            msg = f"failed to inspect extraction ancestor '{parent}': {exc}"
-            raise ProverToolError(msg) from exc
-        if not stat.S_ISDIR(status.st_mode):
-            msg = f"snapshot extraction ancestor is not a directory: {parent}"
-            raise ProverToolError(msg)
-        if status.st_mode & _WORLD_WRITABLE and not status.st_mode & _STICKY_BIT:
-            msg = f"snapshot extraction ancestor is attacker-writable: {parent}"
-            raise ProverToolError(msg)
-
-
 @contextlib.contextmanager
 def _open_archive(archive_path: Path) -> cabc.Generator[tarfile.TarFile]:
     """Open an archive for a materialization pass, reporting open failures.
@@ -169,20 +150,27 @@ def _open_archive(archive_path: Path) -> cabc.Generator[tarfile.TarFile]:
         raise ProverToolError(msg) from exc
 
 
-def _materialize_files(
-    archive_path: Path,
-    root: Path,
-    limits: ArchiveLimits,
-    policy: ArchivePolicy,
-) -> None:
+@dc.dataclass(frozen=True, slots=True)
+class _Extraction:
+    """The immutable inputs that materialize one archive into a root."""
+
+    archive_path: Path
+    root: Path
+    limits: ArchiveLimits
+    policy: ArchivePolicy
+    checkpoint: Progress
+
+
+def _materialize_files(extraction: _Extraction) -> None:
     """Create directories and regular files, skipping links."""
     total = 0
-    with _open_archive(archive_path) as archive:
+    with _open_archive(extraction.archive_path) as archive:
         for member in archive:
-            entry = _entry_from_member(member, limits, policy)
+            extraction.checkpoint()
+            entry = _entry_from_member(member, extraction.limits, extraction.policy)
             if entry is None or entry.kind in _LINK_KINDS:
                 continue
-            target = _target_path(root, entry.path)
+            target = _target_path(extraction.root, entry.path)
             if entry.kind == KIND_DIRECTORY:
                 target.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
                 continue
@@ -193,7 +181,12 @@ def _materialize_files(
                 target=target,
                 entry=entry,
             )
-            total += _copy_member(write, total, limits)
+            total += _copy_member(
+                write,
+                total,
+                extraction.limits,
+                extraction.checkpoint,
+            )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -210,6 +203,7 @@ def _copy_member(
     write: _MemberWrite,
     already_written: int,
     limits: ArchiveLimits,
+    checkpoint: Progress,
 ) -> int:
     """Stream one regular file with descriptor and size enforcement."""
     entry = write.entry
@@ -230,6 +224,7 @@ def _copy_member(
     try:
         with os.fdopen(descriptor, "wb") as output, source:
             while chunk := source.read(READ_CHUNK_SIZE):
+                checkpoint()
                 written += len(chunk)
                 if already_written + written > limits.max_total_bytes:
                     msg = "snapshot archive extracted more data than declared"
@@ -252,26 +247,22 @@ def _copy_member(
     return written
 
 
-def _materialize_links(
-    archive_path: Path,
-    root: Path,
-    limits: ArchiveLimits,
-    policy: ArchivePolicy,
-) -> None:
+def _materialize_links(extraction: _Extraction) -> None:
     """Create symbolic links, then hard links to already written files."""
     symbolic: list[ArchiveEntry] = []
     hard: list[ArchiveEntry] = []
-    with _open_archive(archive_path) as archive:
+    with _open_archive(extraction.archive_path) as archive:
         for member in archive:
-            entry = _entry_from_member(member, limits, policy)
+            extraction.checkpoint()
+            entry = _entry_from_member(member, extraction.limits, extraction.policy)
             if entry is None:
                 continue
             if entry.kind == KIND_SYMLINK:
                 symbolic.append(entry)
             elif entry.kind == KIND_HARDLINK:
                 hard.append(entry)
-    _create_symbolic_links(symbolic, root)
-    _create_hard_links(hard, root)
+    _create_symbolic_links(symbolic, extraction.root)
+    _create_hard_links(hard, extraction.root)
 
 
 def _create_symbolic_links(entries: cabc.Sequence[ArchiveEntry], root: Path) -> None:
@@ -328,7 +319,11 @@ def _is_contained_path(relative: str, parts: cabc.Sequence[str]) -> bool:
     return ".." not in parts and "" not in parts
 
 
-def _apply_modes(entries: cabc.Sequence[ArchiveEntry], root: Path) -> None:
+def _apply_modes(
+    entries: cabc.Sequence[ArchiveEntry],
+    root: Path,
+    checkpoint: Progress,
+) -> None:
     """Apply ordinary permission bits to files, then deepest directories.
 
     Files are opened while still private and mode 0600, so even a final mode of
@@ -342,6 +337,7 @@ def _apply_modes(entries: cabc.Sequence[ArchiveEntry], root: Path) -> None:
         reverse=True,
     )
     for entry in (*files, *directories):
+        checkpoint()
         _apply_mode(root, entry, is_directory=entry.kind == KIND_DIRECTORY)
 
 

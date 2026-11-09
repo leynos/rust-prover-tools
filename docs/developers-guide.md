@@ -533,8 +533,12 @@ checked before checksums, checksums before attestation and payload copies, and
 payload digests before archive structure. `validate_archive_inventory` then
 requires two-way path equality and equal kind, mode, size and link target.
 Setup runs only after those checks, and the active pointer moves only after the
-receipt is fsynced and the probes match the manifest. A failure must leave the
-previous pointer and generation intact.
+receipt is fsynced and the probes match the manifest. Activation also runs the
+same runtime-file contract as `check` before probing: launchers must be present
+and executable, `pyroot` a real directory whose resolved links stay inside the
+generation, and the toolchain's recorded shared libraries must be covered with
+no unrecorded `.so` beside them, all inside the private rustup home. A failure
+must leave the previous pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).
@@ -546,9 +550,17 @@ Cache reuse is revalidation, not trust in directory existence.
 `validate_generation` reloads the receipt, checks cached sizes, recomputes the
 digests of the inventory and launcher, re-reads the backend archive against the
 inventory, requires the runtime executables and absolute toolchain link, and
-re-runs the probes. The probe budget is a callable measured after those checks,
-so validation work cannot consume it. A corrupt generation is repaired by
-installing a new one; no code path deletes a previous generation.
+re-runs the probes. The installation budget is passed as a checkpoint callable
+through staging, hashing, extraction, tree validation and toolchain
+verification as well as setup and the probes, so no long local phase can
+outlive the deadline. A corrupt generation is repaired by installing a new one;
+no code path deletes a previous generation.
+
+`run` executes the identity returned by `check_snapshot` rather than re-reading
+`active.json`, so a pointer changed between validation and execution cannot
+redirect a proof. The probe and the proof both route dynamic libraries through
+the verified toolchain's `lib` directory, and a pre-existing `LD_LIBRARY_PATH`
+entry under another Rustup toolchain is dropped rather than inherited.
 
 The snapshot CLI uses `config=()` on its sub-applications so Cyclopts does not
 inherit generic `INPUT_*` bindings. `run` must keep `Path` as a runtime import
@@ -563,9 +575,11 @@ reuse, each rejection edge and repair with injected hooks.
 working `cargo-kani setup` stub, so `tests/steps/test_kani_snapshot_steps.py`
 can install through the real CLI and then run the pinned launcher.
 `tests/test_kani_snapshot_activation.py` drives two identities through a
-Hypothesis rule-based state machine over the real install pipeline, and
+Hypothesis rule-based state machine over the real install pipeline,
 `tests/test_kani_snapshot_concurrency.py` uses real processes for the advisory
-lock, overlapping installs, a killed owner and a bounded timeout.
+lock, overlapping installs, a killed owner and a bounded timeout, and
+`tests/test_kani_snapshot_interruption.py` kills an installer mid-staging and
+seeds a setup fault while a peer waits.
 `rust_prover_tools/unittests/test_kani_snapshot_archive.py` adds generated
 member graphs checked against an independent expected-tree oracle. Keep these
 fixtures structural: they must exercise the production parsers rather than

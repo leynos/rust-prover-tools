@@ -10,6 +10,7 @@ producer described.
 from __future__ import annotations
 
 import dataclasses as dc
+import functools
 import logging
 import os
 import secrets
@@ -45,6 +46,7 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
+from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -75,6 +77,47 @@ class _TransportLimit:
 
     max_bytes: int
     exact_size: int | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _TransportFile:
+    """One local transport file: its asset name and size rule."""
+
+    name: str
+    limit: _TransportLimit
+
+
+def _transport_file(name: str, max_bytes: int) -> _TransportFile:
+    """Return the envelope rule for one fixed-name transport file."""
+    return _TransportFile(name=name, limit=_TransportLimit(max_bytes))
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _Checkpoints:
+    """Deadline checkpoints for the transport's long phases.
+
+    Each phase name is separate so an expiry reports which piece of staging
+    was interrupted; grouping them keeps `stage_assets` below the local-variable
+    ceiling and names the set as one concept.
+    """
+
+    staging: Progress
+    payload: Progress
+    digest: Progress
+    archive: Progress
+
+    @classmethod
+    def for_budget(cls, budget: InstallBudget) -> _Checkpoints:
+        """Bind every phase name to the shared installation budget."""
+        return cls(
+            staging=functools.partial(budget.check, "transport staging"),
+            payload=functools.partial(budget.check, "payload staging"),
+            digest=functools.partial(budget.check, "payload verification"),
+            archive=functools.partial(
+                budget.check,
+                "archive structure validation",
+            ),
+        )
 
 
 def stage_assets(
@@ -119,12 +162,13 @@ def stage_assets(
         raise ProverToolError(msg)
     staging = _new_staging_directory(layout)
     names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
+    checkpoints = _Checkpoints.for_budget(budget)
     try:
         manifest_path = _copy_local(
             source,
             staging,
-            MANIFEST_ASSET_NAME,
-            _TransportLimit(MANIFEST_MAX_BYTES),
+            _transport_file(MANIFEST_ASSET_NAME, MANIFEST_MAX_BYTES),
+            checkpoints.staging,
         )
         budget.check("manifest verification")
         parsed = parse_manifest(manifest_path.read_bytes())
@@ -133,14 +177,14 @@ def stage_assets(
         attestation = _copy_local(
             source,
             staging,
-            ATTESTATION_ASSET_NAME,
-            _TransportLimit(ATTESTATION_MAX_BYTES),
+            _transport_file(ATTESTATION_ASSET_NAME, ATTESTATION_MAX_BYTES),
+            checkpoints.staging,
         )
         checksums = _copy_local(
             source,
             staging,
-            CHECKSUMS_ASSET_NAME,
-            _TransportLimit(CHECKSUMS_MAX_BYTES),
+            _transport_file(CHECKSUMS_ASSET_NAME, CHECKSUMS_MAX_BYTES),
+            checkpoints.staging,
         )
         verify_checksums(checksums, parsed.manifest, parsed.sha256)
         hooks.verify_attestation(
@@ -151,10 +195,14 @@ def stage_assets(
         )
         budget.check("payload verification")
         for asset in parsed.manifest.assets:
-            path = _copy_asset(source, staging, asset)
-            verify_asset(path, asset)
+            path = _copy_asset(source, staging, asset, checkpoints.payload)
+            verify_asset(path, asset, checkpoint=checkpoints.digest)
             names.append(asset.name)
-        _verify_bundle_structures(parsed.manifest, staging)
+        _verify_bundle_structures(
+            parsed.manifest,
+            staging,
+            checkpoint=checkpoints.archive,
+        )
         # Only fully verified evidence is published. A failed repair therefore
         # leaves the previously staged payloads and the active pointer alone.
         _publish_staged(staging, layout.downloads_dir, names)
@@ -174,7 +222,12 @@ def bundle_policy(version: str) -> ArchivePolicy:
     return ArchivePolicy(strip_components=1, required_root=f"kani-{version}")
 
 
-def _copy_asset(source: Path, staging: Path, asset: AssetRecord) -> Path:
+def _copy_asset(
+    source: Path,
+    staging: Path,
+    asset: AssetRecord,
+    checkpoint: Progress | None = None,
+) -> Path:
     """Copy one manifest payload under its design envelope.
 
     The manifest's declared size is exact, but it is not the only bound: the
@@ -185,52 +238,56 @@ def _copy_asset(source: Path, staging: Path, asset: AssetRecord) -> Path:
     return _copy_local(
         source,
         staging,
-        asset.name,
-        _TransportLimit(min(asset.size, envelope), exact_size=asset.size),
+        _TransportFile(
+            name=asset.name,
+            limit=_TransportLimit(min(asset.size, envelope), exact_size=asset.size),
+        ),
+        checkpoint,
     )
 
 
 def _copy_local(
     source: Path,
     destination_dir: Path,
-    name: str,
-    limit: _TransportLimit,
+    file: _TransportFile,
+    checkpoint: Progress | None = None,
 ) -> Path:
     """Copy one local release file into the private downloads directory."""
-    origin = source / name
+    origin = source / file.name
     try:
         status = origin.stat()
     except OSError as exc:
-        msg = f"failed to read snapshot asset '{name}': {exc}"
+        msg = f"failed to read snapshot asset '{file.name}': {exc}"
         raise ProverToolError(msg) from exc
     if not stat.S_ISREG(status.st_mode):
-        msg = f"snapshot asset '{name}' is not a regular file"
+        msg = f"snapshot asset '{file.name}' is not a regular file"
         raise ProverToolError(msg)
-    if status.st_size > limit.max_bytes:
-        msg = f"snapshot asset '{name}' exceeds its transport limit"
+    if status.st_size > file.limit.max_bytes:
+        msg = f"snapshot asset '{file.name}' exceeds its transport limit"
         raise ProverToolError(msg)
-    if limit.exact_size is not None and status.st_size != limit.exact_size:
-        msg = f"snapshot asset '{name}' has the wrong size"
+    exact_size = file.limit.exact_size
+    if exact_size is not None and status.st_size != exact_size:
+        msg = f"snapshot asset '{file.name}' has the wrong size"
         raise ProverToolError(msg)
-    target = destination_dir / name
-    pending = destination_dir / f".{name}.{os.getpid()}.pending"
+    target = destination_dir / file.name
+    pending = destination_dir / f".{file.name}.{os.getpid()}.pending"
     try:
         with origin.open("rb") as reader, pending.open("xb") as writer:
-            written = _stream_bounded(reader, writer, name, limit)
+            written = _stream_bounded(reader, writer, file, checkpoint)
             writer.flush()
             os.fsync(writer.fileno())
         pending.chmod(_PRIVATE_FILE_MODE)
         pending.replace(target)
     except OSError as exc:
         pending.unlink(missing_ok=True)
-        msg = f"failed to stage snapshot asset '{name}': {exc}"
+        msg = f"failed to stage snapshot asset '{file.name}': {exc}"
         raise ProverToolError(msg) from exc
     except ProverToolError:
         pending.unlink(missing_ok=True)
         raise
-    if limit.exact_size is not None and written != limit.exact_size:
+    if exact_size is not None and written != exact_size:
         target.unlink(missing_ok=True)
-        msg = f"snapshot asset '{name}' has the wrong size"
+        msg = f"snapshot asset '{file.name}' has the wrong size"
         raise ProverToolError(msg)
     return target
 
@@ -238,34 +295,46 @@ def _copy_local(
 def _stream_bounded(
     reader: typ.BinaryIO,
     writer: typ.BinaryIO,
-    name: str,
-    limit: _TransportLimit,
+    file: _TransportFile,
+    checkpoint: Progress | None = None,
 ) -> int:
     """Copy until EOF, stopping at the transport bound.
 
     The pre-copy size check is only a fast path: a file that grows while it is
     copied must also stop at the bound instead of filling the cache.
     """
+    progress = as_checkpoint(checkpoint)
     written = 0
     while chunk := reader.read(_READ_CHUNK_SIZE):
+        progress()
         written += len(chunk)
-        if written > limit.max_bytes:
-            msg = f"snapshot asset '{name}' exceeds its transport limit"
+        if written > file.limit.max_bytes:
+            msg = f"snapshot asset '{file.name}' exceeds its transport limit"
             raise ProverToolError(msg)
         writer.write(chunk)
     return written
 
 
-def _verify_bundle_structures(manifest: SnapshotManifest, downloads: Path) -> None:
+def _verify_bundle_structures(
+    manifest: SnapshotManifest,
+    downloads: Path,
+    *,
+    checkpoint: Progress | None = None,
+) -> None:
     """Require the backend archive to match the published inventory."""
     inventory = load_inventory(downloads / asset_by_role(manifest, "inventory").name)
     policy = bundle_policy(manifest.backend.version)
     entries = read_archive(
         downloads / asset_by_role(manifest, "backend").name,
         policy=policy,
+        checkpoint=checkpoint,
     )
     validate_archive_inventory(entries, inventory)
-    read_archive(downloads / asset_by_role(manifest, "launcher").name, policy=policy)
+    read_archive(
+        downloads / asset_by_role(manifest, "launcher").name,
+        policy=policy,
+        checkpoint=checkpoint,
+    )
 
 
 def asset_by_role(manifest: SnapshotManifest, role: str) -> AssetRecord:

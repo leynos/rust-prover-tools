@@ -71,6 +71,7 @@ __all__ = (
     "fsync_directory",
     "identity_lock",
     "load_active",
+    "require_runtime_files",
     "validate_generation",
     "write_active",
 )
@@ -255,6 +256,8 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     layout: SnapshotLayout,
     probe: ProbeRunner,
     remaining_budget: cabc.Callable[[], float] | None = None,
+    *,
+    checkpoint: cabc.Callable[[], None] | None = None,
 ) -> SnapshotIdentity:
     """Return the identity of a generation that still satisfies the manifest.
 
@@ -272,6 +275,9 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
         Called immediately before the probe to obtain the seconds left in
         the installation budget, so slow receipt and cache checks cannot
         spend the probe's share. `None` leaves the probe unbounded.
+    checkpoint : collections.abc.Callable[[], None] | None
+        Called while cached payloads and the installed tree are verified, so an
+        expired budget interrupts a long validation.
 
     Raises
     ------
@@ -283,11 +289,11 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     receipt = load_receipt(layout.receipt_path)
     validate_receipt(receipt, options.pin, manifest, layout)
     runtime = runtime_for(layout, manifest)
-    _require_runtime_files(runtime)
+    require_runtime_files(runtime)
     _check_toolchain_link(runtime, receipt.toolchain_link_target)
-    validate_cached_payloads(layout, manifest)
-    validate_installed_tree(layout, manifest, runtime)
-    verify_toolchain(runtime, manifest)
+    validate_cached_payloads(layout, manifest, checkpoint=checkpoint)
+    validate_installed_tree(layout, manifest, runtime, checkpoint=checkpoint)
+    verify_toolchain(runtime, manifest, checkpoint=checkpoint)
     budget = None if remaining_budget is None else remaining_budget()
     evidence = probe(runtime, budget)
     _check_evidence(evidence, manifest, runtime)
@@ -297,8 +303,13 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     return build_identity_report(options.pin, manifest, runtime)
 
 
-def _require_runtime_files(runtime: SnapshotRuntime) -> None:
-    """Require every executable the runtime will invoke to be present."""
+def require_runtime_files(runtime: SnapshotRuntime) -> None:
+    """Require every executable the runtime will invoke to be present.
+
+    Installation and revalidation both call this before a generation may
+    become active, so a launcher archive that ships `cargo-kani` for setup but
+    omits `kani` cannot be published as usable.
+    """
     paths = (
         ("launcher", runtime.launcher),
         ("driver", runtime.driver),

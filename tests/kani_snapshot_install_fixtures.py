@@ -176,7 +176,8 @@ def active_generation(case: SnapshotCase) -> str:
 
 
 def rewrite_manifest_asset(case: SnapshotCase, name: str, data: bytes) -> None:
-    """Rewrite the manifest, checksums and pin after replacing one asset."""
+    """Rewrite one asset plus the manifest, checksums and pin naming it."""
+    write_file(case.assets_dir / name, data)
     records = tuple(
         dc.replace(asset, size=len(data), sha256=sha256_hex(data))
         if asset.name == name

@@ -247,13 +247,20 @@ def _publish_verified(asset: PinnedAsset, pending: Path, destination: Path) -> N
         raise ProverToolError(msg) from exc
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(
+    path: Path,
+    *,
+    checkpoint: cabc.Callable[[], None] | None = None,
+) -> str:
     """Return the lowercase SHA-256 digest of a file.
 
     Parameters
     ----------
     path : Path
         File to hash.
+    checkpoint : collections.abc.Callable[[], None] | None
+        Called before each chunk so a caller's deadline can interrupt a large
+        file instead of being noticed only after hashing finishes.
 
     Returns
     -------
@@ -269,6 +276,8 @@ def sha256_file(path: Path) -> str:
     try:
         with path.open("rb") as source:
             while chunk := source.read(READ_CHUNK_SIZE):
+                if checkpoint is not None:
+                    checkpoint()
                 digest.update(chunk)
     except OSError as exc:
         msg = f"failed to read '{path}': {exc}"

@@ -20,6 +20,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.policy import is_safe_asset_name
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.manifest import ParsedManifest
@@ -141,7 +142,12 @@ def verify_manifest_digest(parsed: ParsedManifest, pin: SnapshotPin) -> None:
         raise ProverToolError(msg)
 
 
-def verify_asset(path: Path, asset: AssetRecord) -> None:
+def verify_asset(
+    path: Path,
+    asset: AssetRecord,
+    *,
+    checkpoint: cabc.Callable[[], None] | None = None,
+) -> None:
     """Require a payload to match its recorded size and digest.
 
     Parameters
@@ -150,6 +156,9 @@ def verify_asset(path: Path, asset: AssetRecord) -> None:
         Downloaded or local payload.
     asset : AssetRecord
         Manifest record naming the expected bytes.
+    checkpoint : collections.abc.Callable[[], None] | None
+        Called while the digest is computed, so an installation deadline can
+        interrupt a large payload mid-hash.
 
     Raises
     ------
@@ -171,7 +180,7 @@ def verify_asset(path: Path, asset: AssetRecord) -> None:
             f"expected {asset.size}"
         )
         raise ProverToolError(msg)
-    actual = sha256_file(path)
+    actual = sha256_file(path, checkpoint=checkpoint)
     if actual != asset.sha256:
         msg = (
             f"snapshot asset '{asset.name}' digest does not match the manifest: "

@@ -15,12 +15,13 @@ from cuprum.context import UNSET
 
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_exec_routing import admission_chain
+from rust_prover_tools.kani_exec_routing import admission_chain, runtime_search_path
 from rust_prover_tools.kani_snapshot.identity import execution_environment
 from rust_prover_tools.kani_snapshot.receipt_model import (
     ObservedToolchain,
     SetupEvidence,
 )
+from rust_prover_tools.kani_snapshot.toolchain_binding import toolchain_root
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -118,6 +119,14 @@ def probe_generation(
         msg = f"snapshot toolchain link escapes the private toolchains: {target}"
         raise ProverToolError(msg)
     env = execution_environment(runtime, os.environ)
+    # The probe must load the same libraries the proof will load. An inherited
+    # `LD_LIBRARY_PATH` could otherwise shadow the verified toolchain, so the
+    # pinned directory goes first and other Rustup toolchain libraries are
+    # dropped, exactly as `proof_environment` does for the proof itself.
+    env["LD_LIBRARY_PATH"] = runtime_search_path(
+        toolchain_root(runtime) / "lib",
+        os.environ.get("LD_LIBRARY_PATH", ""),
+    )
     # The probe must exercise the same compiler route the proof will use, so a
     # configured admission wrapper runs outermost and an unusable selection
     # fails here instead of being silently bypassed.

@@ -22,17 +22,12 @@ from rust_prover_tools.commands import (
     TailCapture,
     run_command,
 )
-from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import (
-    runtime_for,
+    SnapshotRuntime,
     snapshot_layout,
     validate_forwarded_args,
 )
 from rust_prover_tools.kani_snapshot.install import InstallOptions, check_snapshot
-from rust_prover_tools.kani_snapshot.install_state import (
-    active_manifest,
-    load_active,
-)
 from rust_prover_tools.kani_snapshot.verification_env import proof_environment
 
 if typ.TYPE_CHECKING:
@@ -94,22 +89,24 @@ def run_snapshot(
         repository's Cargo routing cannot be proved safe.
     """
     validate_forwarded_args(options.args)
-    check_snapshot(
+    # The identity names the exact generation that was just validated. Reading
+    # `active.json` again would let a concurrent repair switch the pointer
+    # between the check and the launch, so execution uses the checked identity
+    # rather than a second, unvalidated pointer read.
+    identity = check_snapshot(
         InstallOptions(pin=options.pin, cache_home=options.cache_home),
         hooks,
     )
-    layout = snapshot_layout(options.pin, cache_home=options.cache_home)
-    pointer = load_active(layout)
-    if pointer is None:
-        msg = "snapshot is not installed; run install first"
-        raise ProverToolError(msg)
-    generation = snapshot_layout(
+    layout = snapshot_layout(
         options.pin,
         cache_home=options.cache_home,
-        generation=pointer.generation,
+        generation=identity.generation.name,
     )
-    manifest = active_manifest(options.pin, layout)
-    runtime = runtime_for(generation, manifest)
+    runtime = SnapshotRuntime(
+        layout=layout,
+        toolchain=identity.toolchain,
+        backend_version=identity.backend_version,
+    )
     working_directory = Path.cwd() if options.cwd is None else options.cwd
     env = proof_environment(runtime, os.environ, cwd=working_directory.resolve())
     # `echo=True` mirrors each stream live, so the CLI must not replay the

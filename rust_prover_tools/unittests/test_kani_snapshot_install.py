@@ -3,26 +3,32 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import io
+import tarfile
 import time
 import typing as typ
 
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot import install_state
+from rust_prover_tools.kani_snapshot import install_state, install_transport
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
     check_snapshot,
     install_snapshot,
 )
-from rust_prover_tools.kani_snapshot.install_state import validate_generation
+from rust_prover_tools.kani_snapshot.install_state import (
+    load_active,
+    validate_generation,
+)
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
 from tests.kani_snapshot_bundles import (
     CHECKSUMS_NAME,
     LIBRARY_PATH,
     MANIFEST_NAME,
     RUSTC_BYTES,
+    payloads,
     publish_manifest,
     tar_bytes,
     write_file,
@@ -37,6 +43,7 @@ from tests.kani_snapshot_install_fixtures import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
@@ -357,10 +364,12 @@ def test_validate_generation_measures_the_probe_budget_after_cache_checks(
     def record_payloads(
         layout: SnapshotLayout,
         manifest: SnapshotManifest,
+        *,
+        checkpoint: cabc.Callable[[], None] | None = None,
     ) -> None:
-        """Record the cache revalidation."""
+        """Record the cache revalidation and forward the budget checkpoint."""
         order.append("payloads")
-        real_validate(layout, manifest)
+        real_validate(layout, manifest, checkpoint=checkpoint)
 
     monkeypatch.setattr(install_state, "validate_cached_payloads", record_payloads)
     base = install_hooks(case)
@@ -538,3 +547,121 @@ def test_check_rejects_tampered_installed_toolchain_bytes(tmp_path: Path) -> Non
     (toolchain / LIBRARY_PATH).write_bytes(b"tampered library\n")
     with pytest.raises(ProverToolError, match=r"library.*does not match"):
         check_snapshot(install_options(case), install_hooks(case))
+
+
+def _launcher_files() -> dict[str, tuple[bytes, int]]:
+    """Return the fixture launcher archive's files by relative path."""
+    archive = next(data for role, _, _, data in payloads() if role == "launcher")
+    files: dict[str, tuple[bytes, int]] = {}
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        for member in tar:
+            if not member.isfile():
+                continue
+            handle = tar.extractfile(member)
+            if handle is None:
+                msg = f"fixture launcher member '{member.name}' has no body"
+                raise AssertionError(msg)
+            relative = member.name.split("/", 1)[1]
+            files[relative] = (handle.read(), member.mode)
+    return files
+
+
+def test_install_refuses_a_launcher_archive_without_the_launcher(
+    tmp_path: Path,
+) -> None:
+    """Fresh installation cannot activate a generation it cannot execute."""
+    case = make_case(tmp_path)
+    files = _launcher_files()
+    del files["bin/kani"]
+    rewrite_manifest_asset(case, "launcher.tar.gz", tar_bytes(files))
+
+    with pytest.raises(ProverToolError, match=r"launcher is missing"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, "an unusable generation was activated"
+
+
+def test_install_refuses_a_non_executable_launcher(tmp_path: Path) -> None:
+    """A launcher published without its execute bit is not activatable."""
+    case = make_case(tmp_path)
+    files = _launcher_files()
+    launcher, _ = files["bin/kani"]
+    files["bin/kani"] = (launcher, 0o644)
+    rewrite_manifest_asset(case, "launcher.tar.gz", tar_bytes(files))
+
+    with pytest.raises(
+        ProverToolError,
+        match=r"launcher is not an executable regular file",
+    ):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, "an unusable generation was activated"
+
+
+def test_check_rejects_a_python_root_link_escaping_the_generation(
+    tmp_path: Path,
+) -> None:
+    """A `pyroot` link must not redirect `PYTHONPATH` outside the generation."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    outside = tmp_path / "outside-python"
+    outside.mkdir()
+    (identity.launcher.parent.parent / "pyroot" / "escape").symlink_to(
+        outside,
+        target_is_directory=True,
+    )
+
+    with pytest.raises(ProverToolError, match=r"Python root link escapes"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_a_python_root_that_is_a_symbolic_link(
+    tmp_path: Path,
+) -> None:
+    """The Python root itself must be generation-private real content."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    pyroot = identity.launcher.parent.parent / "pyroot"
+    outside = tmp_path / "outside-python"
+    outside.mkdir()
+    pyroot.rmdir()
+    pyroot.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ProverToolError, match=r"must not be a symbolic link"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_install_deadline_interrupts_payload_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A large copy is stopped by the budget while it is still running."""
+    case = make_case(tmp_path)
+    state = {"expired": False}
+    real_stream = install_transport._stream_bounded
+
+    def expire_during_copy(
+        reader: typ.BinaryIO,
+        writer: typ.BinaryIO,
+        file: install_transport._TransportFile,
+        checkpoint: cabc.Callable[[], None] | None = None,
+    ) -> int:
+        """Mark the budget expired, then let the real copy checkpoint."""
+        state["expired"] = True
+        return real_stream(reader, writer, file, checkpoint)
+
+    def clock() -> float:
+        """Report an expired budget once copying has started."""
+        return 10_000.0 if state["expired"] else 0.0
+
+    monkeypatch.setattr(install_transport, "_stream_bounded", expire_during_copy)
+    monkeypatch.setattr(time, "monotonic", clock)
+    options = dc.replace(install_options(case), deadline_seconds=10.0)
+
+    with pytest.raises(ProverToolError, match=r"deadline expired during"):
+        install_snapshot(options, install_hooks(case))
+
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, "an expired install activated a generation"

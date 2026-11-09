@@ -26,6 +26,7 @@ from rust_prover_tools.kani_snapshot.inventory_model import (
     InventoryLimits,
     SnapshotInventory,
 )
+from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -35,12 +36,14 @@ __all__ = ("validate_tree",)
 _MEMBER_PREVIEW: typ.Final[int] = 5
 
 
-def validate_tree(
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def validate_tree(  # ruff: ignore[too-many-arguments] - one parameter per tree input
     inventory: SnapshotInventory,
     root: Path,
     *,
     limits: InventoryLimits = DEFAULT_INVENTORY_LIMITS,
     allowed_extra: cabc.Collection[str] = (),
+    checkpoint: Progress | None = None,
 ) -> None:
     """Check an extracted tree against its recorded inventory.
 
@@ -55,7 +58,14 @@ def validate_tree(
     allowed_extra : collections.abc.Collection[str]
         Paths that setup or launcher placement may add on top of the
         inventory, such as the private home's Python root and the toolchain
-        link. Their implicit parent directories are allowed too.
+        link. Their implicit parent directories are allowed too. An allowed
+        path's descendants are exempt as well, because setup-created content
+        such as the Python root cannot appear in the backend inventory; the
+        caller is responsible for validating that content separately.
+    checkpoint : Progress | None
+        Called while the tree is walked and while member digests are computed,
+        so a caller's deadline bounds a large installed tree. `None` is a
+        no-op.
 
     Raises
     ------
@@ -64,19 +74,24 @@ def validate_tree(
         or link-target mismatch, a special file, or a limit breach.
     """
     _check_inventory_limits(inventory, limits)
-    scan = _TreeScan(limits=limits)
+    progress = as_checkpoint(checkpoint)
+    scan = _TreeScan(limits=limits, checkpoint=progress)
     _scan_tree(scan, root)
     recorded = {entry.path: entry for entry in inventory.entries}
     missing = sorted(set(recorded) - set(scan.observed))
     if missing:
         msg = f"snapshot tree is missing recorded members: {_preview(missing)}"
         raise ProverToolError(msg)
-    extra = sorted(set(scan.observed) - set(recorded) - _allowed_paths(allowed_extra))
+    extra = sorted(
+        path
+        for path in set(scan.observed) - set(recorded) - _allowed_paths(allowed_extra)
+        if not _within_allowed_subtree(path, allowed_extra)
+    )
     if extra:
         msg = f"snapshot tree contains members not recorded: {_preview(extra)}"
         raise ProverToolError(msg)
     for entry in inventory.entries:
-        _check_member(entry, scan.observed[entry.path], root)
+        _check_member(entry, scan.observed[entry.path], root, progress)
 
 
 def _allowed_paths(allowed_extra: cabc.Collection[str]) -> set[str]:
@@ -86,6 +101,14 @@ def _allowed_paths(allowed_extra: cabc.Collection[str]) -> set[str]:
         parts = path.split("/")
         allowed.update("/".join(parts[:index]) for index in range(1, len(parts) + 1))
     return allowed
+
+
+def _within_allowed_subtree(
+    path: str,
+    allowed_extra: cabc.Collection[str],
+) -> bool:
+    """Return whether `path` sits below one of the allowed extras."""
+    return any(path.startswith(f"{allowed}/") for allowed in allowed_extra)
 
 
 def _preview(paths: list[str]) -> str:
@@ -114,6 +137,7 @@ class _TreeScan:
     """Mutable work state for one bounded directory walk."""
 
     limits: InventoryLimits
+    checkpoint: Progress
     observed: dict[str, os.stat_result] = dc.field(default_factory=dict)
     stack: list[tuple[Path, str]] = dc.field(default_factory=list)
 
@@ -147,6 +171,7 @@ def _scan_directory(scan: _TreeScan, directory: Path, prefix: str) -> None:
 
 def _scan_child(scan: _TreeScan, child: os.DirEntry[str], prefix: str) -> None:
     """Record one directory entry, rejecting unsupported member types."""
+    scan.checkpoint()
     relative = f"{prefix}/{child.name}" if prefix else child.name
     if len(relative.encode("utf-8")) > scan.limits.max_path_length:
         msg = f"snapshot tree path exceeds {scan.limits.max_path_length} bytes"
@@ -160,8 +185,14 @@ def _scan_child(scan: _TreeScan, child: os.DirEntry[str], prefix: str) -> None:
         raise ProverToolError(msg)
 
 
-def _check_member(entry: InventoryEntry, status: os.stat_result, root: Path) -> None:
+def _check_member(
+    entry: InventoryEntry,
+    status: os.stat_result,
+    root: Path,
+    checkpoint: Progress,
+) -> None:
     """Compare one recorded member with its observed filesystem status."""
+    checkpoint()
     _check_mode(entry, status)
     if entry.kind == KIND_DIRECTORY:
         if not stat.S_ISDIR(status.st_mode):
@@ -178,7 +209,7 @@ def _check_member(entry: InventoryEntry, status: os.stat_result, root: Path) -> 
     if status.st_size != entry.size:
         msg = f"snapshot tree member '{entry.path}' has the wrong size"
         raise ProverToolError(msg)
-    if _sha256_file(root / entry.path) != entry.sha256:
+    if _sha256_file(root / entry.path, checkpoint) != entry.sha256:
         msg = f"snapshot tree member '{entry.path}' has the wrong digest"
         raise ProverToolError(msg)
 
@@ -223,12 +254,13 @@ def _fail_kind(entry: InventoryEntry, expected: str) -> typ.NoReturn:
     raise ProverToolError(msg)
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_file(path: Path, checkpoint: Progress) -> str:
     """Return the digest of a file, reporting read failures."""
     digest = hashlib.sha256()
     try:
         with path.open("rb") as source:
             while chunk := source.read(READ_CHUNK_SIZE):
+                checkpoint()
                 digest.update(chunk)
     except OSError as exc:
         msg = f"failed to read snapshot tree member '{path}': {exc}"

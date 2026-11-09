@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import typing as typ
 
 import pytest
@@ -35,13 +36,13 @@ def _runtime(tmp_path: Path) -> SnapshotRuntime:
 
 def _record_commands(
     monkeypatch: pytest.MonkeyPatch,
-) -> list[tuple[str, ...]]:
-    """Replace command execution and record every argument vector."""
-    seen: list[tuple[str, ...]] = []
+) -> list[commands.CommandSpec]:
+    """Replace command execution and record every command spec."""
+    seen: list[commands.CommandSpec] = []
 
     def fake_run_checked(spec: commands.CommandSpec) -> commands.CommandResult:
         """Return the identity matching the probed executable."""
-        seen.append(spec.argv)
+        seen.append(spec)
         program = spec.argv[-2]
         stdout = KANI_COMPILER if program.endswith("kani-compiler") else RUSTC_VV
         return commands.CommandResult(stdout=stdout, stderr="", exit_code=0)
@@ -64,11 +65,45 @@ def test_probe_runs_through_the_configured_admission_wrapper(
     evidence = probe_generation(runtime)
 
     assert evidence.observed.rustc_vv == RUSTC_VV
-    assert [argv[0] for argv in seen] == [wrapper, wrapper]
-    assert [argv[1] for argv in seen] == [
+    assert [spec.argv[0] for spec in seen] == [wrapper, wrapper]
+    assert [spec.argv[1] for spec in seen] == [
         str(runtime.rustc),
         str(runtime.compiler),
     ]
+
+
+def test_probe_loads_the_verified_toolchain_libraries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe must resolve libraries exactly as the proof will.
+
+    An inherited `LD_LIBRARY_PATH` could otherwise shadow the verified
+    toolchain, so the pinned directory goes first and other Rustup toolchain
+    libraries are dropped.
+    """
+    monkeypatch.setenv(
+        "LD_LIBRARY_PATH",
+        os.pathsep.join((
+            str(tmp_path / "inherited" / "toolchains" / "nightly-x" / "lib"),
+            "/opt/extra-libs",
+        )),
+    )
+    seen = _record_commands(monkeypatch)
+    runtime = _runtime(tmp_path)
+
+    probe_generation(runtime)
+
+    expected = os.pathsep.join((
+        str(runtime.layout.rustup_home / "toolchains" / TOOLCHAIN / "lib"),
+        "/opt/extra-libs",
+    ))
+    assert seen, "the probe ran no command"
+    for spec in seen:
+        assert spec.env is not None, "the probe discarded its environment"
+        assert spec.env["LD_LIBRARY_PATH"] == expected, (
+            "the probe did not pin the verified toolchain libraries"
+        )
 
 
 def test_probe_refuses_a_malformed_admission_wrapper(

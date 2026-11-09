@@ -25,6 +25,7 @@ from rust_prover_tools.kani_snapshot.archive_graph import (
     normalize_member_path,
     validate_graph,
 )
+from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -40,6 +41,7 @@ def read_archive(
     *,
     limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS,
     policy: ArchivePolicy = DEFAULT_ARCHIVE_POLICY,
+    checkpoint: Progress | None = None,
 ) -> tuple[ArchiveEntry, ...]:
     """Validate an archive's complete member graph without extracting it.
 
@@ -51,6 +53,9 @@ def read_archive(
         Member, size, path and link ceilings.
     policy : ArchivePolicy
         Component stripping and optional required root.
+    checkpoint : Progress | None
+        Called for each member so a caller's deadline interrupts a large
+        archive while its headers are still being scanned. `None` is a no-op.
 
     Returns
     -------
@@ -63,11 +68,13 @@ def read_archive(
         Raised for malformed archives or any member outside the containment,
         mode, link or resource policy.
     """
+    progress = as_checkpoint(checkpoint)
     entries: list[ArchiveEntry] = []
     total = 0
     try:
         with tarfile.open(archive_path, "r:gz") as archive:
             for count, member in enumerate(archive, start=1):
+                progress()
                 if count > limits.max_members:
                     msg = f"snapshot archive has more than {limits.max_members} members"
                     raise ProverToolError(msg)

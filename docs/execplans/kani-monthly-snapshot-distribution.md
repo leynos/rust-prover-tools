@@ -309,6 +309,22 @@ EP-O1 assigns responsibility and records live evidence.
     controls). One fresh full `make all` after splitting the stateful tests
     into `tests/test_kani_snapshot_activation.py` passed every gate: 1143
     passed, 5 skipped, interrogate 100%, Pylint 10.00/10 and `ty` clean.
+- [x] (2026-11-09) Remediated the candidate-bound EP-M3 re-assessment at
+  `352b53f` (six findings, two evidence gaps). Installation now runs the same
+  runtime-file contract as `check` before activation; `run` executes the
+  generation it validated instead of re-reading the pointer; the manifest
+  requires a non-empty, duplicate-free library list and verification requires
+  two-way shared-object coverage; the identity probe pins the verified
+  toolchain's `LD_LIBRARY_PATH`; `pyroot` is validated as a contained setup
+  addition; toolchain identifiers are revalidated as one contained name; and
+  the installation deadline reaches copying, hashing, extraction, tree
+  validation and toolchain verification. New tests cover each boundary plus a
+  pointer switch during `run`. `tests/test_kani_snapshot_interruption.py` adds
+  two-process evidence for a killed staging installer and a seeded setup fault
+  with a waiting peer. The full sequential gate stack (`fmt`, `check-fmt`,
+  `lint`, `typecheck`, `test`, `markdownlint`, `nixie`) then passed on this
+  candidate: 1163 passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty`
+  clean and every Mermaid diagram valid.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -376,6 +392,24 @@ Killing a child process while it waits in `multiprocessing.Event.wait` leaves
 the shared condition variable's sleeper accounting inconsistent, and the
 parent's next `set()` can block indefinitely. A kill-target worker uses
 `time.sleep` instead of an event wait.
+
+The case that reaches repair in a process test is the identity's cached copy,
+not the source release. Damaging `--asset-dir` leaves reuse working because the
+active generation is validated against the private downloads staged earlier;
+corrupting the cached backend is what forces a new staging attempt while the
+old pointer still names the previous generation.
+
+The backend inventory cannot describe setup-created content, so an allowed
+addition such as `pyroot` must be treated as a subtree rather than one entry.
+Exempting only the directory name made every real Python payload an "unrecorded
+member" failure; exempting its descendants and validating the root and every
+link separately keeps the inventory exhaustive for backend content without
+rejecting what setup is documented to add.
+
+Digest-checking only recorded libraries cannot prove coverage: the proof and
+probe put `<toolchain>/lib` first on `LD_LIBRARY_PATH`, so any unrecorded
+shared object there is loadable. Verification therefore walks that directory,
+follows only contained links and rejects every shared object the manifest omits.
 
 ## Decision log
 
@@ -541,6 +575,32 @@ pointer writes and post-setup directory moves are negative controls that must
 fail validation; POSIX locking and rename durability stay axioms tested at the
 process boundary.
 
+2026-11-09, implemented D4 activation predicate: a fresh installation now runs
+the runtime-file contract that `check` enforces, before the probe executes the
+binaries, and `run` executes the exact generation returned by validation rather
+than re-reading the active pointer. Publishing or launching an unvalidated
+generation is therefore impossible on the install path and unreachable on the
+execution path even while a concurrent repair switches the pointer.
+
+2026-11-09, implemented D4 toolchain containment: the manifest's toolchain
+identifier is one plain name and its resolved path must stay inside the
+generation's private Rustup home. Lifecycle verification requires two-way
+shared-object coverage under `<toolchain>/lib`, and the identity probe applies
+the same pinned `LD_LIBRARY_PATH` as the proof so the probe observes the
+libraries execution will load.
+
+2026-11-09, implemented D4 setup-addition validation: `pyroot` is exempt from
+inventory matching as a subtree because setup creates it, but must be a real
+directory inside the generation whose links all resolve inside it. Inventory
+exhaustiveness continues to cover all backend content, while setup-created
+content is contained rather than merely ignored.
+
+2026-11-09, implemented D4 mid-phase deadlines: the installation budget
+provides checkpoints threaded through transport copying, digest hashing,
+archive extraction and structure validation, launcher placement, installed-tree
+validation and toolchain verification. Each long local phase stops at expiry
+instead of only being checked before it starts and after it ends.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -571,6 +631,21 @@ actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
 operational work. Before status `COMPLETE`, reconcile discoveries with the
 approved design, requirements and every evidence link; do not conceal an
 unresolved deviation.
+
+The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
+and two evidence gaps against the same EP-M3 boundary. All eight are repaired
+in the working tree: activation now runs the runtime-file contract before the
+probe, `run` executes the identity it validated, the toolchain check enforces
+two-way shared-object coverage and the probe routes libraries through the
+verified toolchain, `pyroot` is validated as a contained setup addition, the
+toolchain identifier is confined to one plain name, and deadline checkpoints
+span local copying, hashing, extraction and validation. The evidence gaps are
+closed by two spawn-process tests in
+`tests/test_kani_snapshot_interruption.py`. Focused runs passed 139
+install/manifest/toolchain/probe/run/inventory tests and 11
+concurrency/interruption/activation tests. The full sequential gate stack then
+passed on the same candidate: 1163 passed, 5 skipped, with lint, typecheck,
+spelling, Markdown and Mermaid checks clean.
 
 ## Context and orientation
 
@@ -939,6 +1014,16 @@ overlapping pair reports one generation and passes `check`.
 `test_kani_snapshot_install.py` adds a same-reported-version regression proving
 the two identities' homes and toolchains are disjoint.
 
+Re-assessment evidence (2026-11-09): `tests/test_kani_snapshot_interruption.py`
+kills an installer after it has started staging a repair, then proves the old
+pointer is unchanged, the cached downloads still validate after restoration and
+the next install reuses the preserved generation. A second two-process case
+seeds a `ProverToolError` inside setup while a peer has announced its attempt;
+the faulty actor reports failure, the peer publishes the only active generation
+and `check` accepts it. Both use spawn processes and events rather than sleeps
+for their barriers, so the assertions observe real pipeline state rather than
+timing.
+
 ### V5: Execution selects the exact distribution
 
 Invariant: absolute launcher/backend/toolchain paths correspond to the pinned
@@ -956,6 +1041,17 @@ Include real environment removal, cwd, streaming and descendant timeout cleanup
 tests. Normalize temporary directory prefixes only in Syrupy; retain SHAs,
 digests, target, compiler and differing failure output. Switching to PATH or
 masking a nonzero verifier status must fail named tests.
+
+Re-assessment evidence (2026-11-09): `run_snapshot` now executes the generation
+identity that `check_snapshot` validated, so a pointer rewritten between
+validation and execution cannot redirect a proof.
+`test_kani_snapshot_run.py::test_run_executes_the_generation_it_validated`
+installs a second generation with a differently exiting launcher, switches
+`active.json` from inside the probe hook, and asserts the proof still reports
+the validated generation's status (7). The probe contract also pins
+`LD_LIBRARY_PATH` to the verified toolchain's `lib` directory in
+`test_kani_snapshot_probe.py`, so an inherited Rustup toolchain cannot shadow
+the libraries the toolchain check approved.
 
 ### V6: The recipe uses one upstream identity
 
