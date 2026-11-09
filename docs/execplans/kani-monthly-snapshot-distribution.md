@@ -248,7 +248,11 @@ EP-O1 assigns responsibility and records live evidence.
     on grandchild startup and verifies termination by process state, and the
     install budget test uses a controlled clock to assert each hook receives
     the reduced budget. Documentation was updated in the design decision D4,
-    the users' guide and the developers' guide.
+    the users' guide and the developers' guide. A third CLI pass over
+    `c2f8da0..884edde` reported one minor finding: the process-tree test
+    treated an absent `/proc` as proof a descendant had exited. The helper
+    now falls back to signal 0, which still detects a survivor (though not a
+    zombie) when procfs is unavailable.
   - [x] (2026-11-09) EP-M3 milestone CodeRabbit CLI review. Local CodeRabbit
     CLI 0.9.3 reviewed the committed diff `60df24c..ad9a868` (26 files) as
     `review_completed` with 8 findings (2 major, 3 minor, 3 trivial). All were

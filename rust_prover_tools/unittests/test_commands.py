@@ -128,7 +128,15 @@ def _is_running(pid: int) -> bool:
     try:
         stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
     except OSError:
-        return False
+        # Without procfs, signal 0 cannot see a zombie, but it still detects
+        # a survivor instead of assuming the process has gone.
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
     # Everything after the last `)` starts with the process state character.
     return stat.rsplit(")", 1)[-1].strip()[:1] != "Z"
 
