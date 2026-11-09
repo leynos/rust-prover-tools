@@ -137,6 +137,16 @@ EP-O1 assigns responsibility and records live evidence.
   manifest digest binding, checksum agreement and the explicit
   `gh attestation verify` policy vector. V2 transport-ordering and
   bounded-streaming cases remain with EP-M3 `download.py`.
+- [x] (2026-11-09) EP-M2 milestone review. Local CodeRabbit CLI 0.9.3 reviewed
+  commits `8bc8c85`..`52b926b` against `14ed1f1` in three completed passes. All
+  actionable findings were fixed before advancing: hostile JSON/TOML
+  `ValueError`/`RecursionError` conversion, float-range overflow, mandatory
+  attestation digests, unsafe or reserved asset names (shared through `policy`)
+  and boolean schema-version coverage. The final pass reported only two style
+  preferences (assert messages, loop parametrization) that no repository rule
+  requires; they are recorded, not unresolved defects. All eight gates were
+  re-run after the fixes and passed; `make test` reports 888 passed and 5
+  skipped, and the snapshot CLI tests need `FORCE_COLOR` unset.
 - [ ] EP-M3: isolated installation, identity checking and execution.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
@@ -182,6 +192,14 @@ payload hashing and keep the attestation outside its digest graph.
 2026-09-27, proposed D4: install into a permanent unreferenced generation, then
 activate a small atomic pointer. This preserves setup-created absolute links
 and working generations while allowing recovery without deleting live paths.
+
+2026-11-09, implemented D1/D2: strict version 1 parsers reject unknown and
+duplicate keys, boolean-as-integer coercion, non-finite numbers, over-limit
+integers, hostile nesting, malformed SHAs/tags and unsupported targets. Asset
+names must be printable basenames and may not shadow `manifest.json` or
+`SHA256SUMS`, because consumers build local paths from those names. The cache
+key covers every identity field in canonical JSON, so a shared reported Kani
+version cannot alias two snapshots.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
