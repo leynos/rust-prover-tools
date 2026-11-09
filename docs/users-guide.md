@@ -180,12 +180,14 @@ prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness proof
 ```
 
 Every argument after `--` is forwarded unchanged, stdout and stderr are
-mirrored live to the corresponding streams while they are also captured, and
-the launcher's exit status becomes the command's exit status. A long proof
-therefore reports progress as it runs rather than only on completion. `run`
-revalidates the generation first, so a changed payload or compiler stops the
-proof. It refuses `setup`, `--use-local-bundle`, `--use-local-toolchain` and
-`-Z lean` because they would replace the pinned backend.
+mirrored live to the corresponding streams, and the launcher's exit status
+becomes the command's exit status. A long proof therefore reports progress as
+it runs rather than only on completion. Because a proof log can be arbitrarily
+large, the command retains only the last 64 KiB of each stream for diagnostics
+instead of buffering the whole run in memory. `run` revalidates the generation
+first, so a changed payload or compiler stops the proof. It refuses `setup`,
+`--use-local-bundle`, `--use-local-toolchain` and `-Z lean` because they would
+replace the pinned backend.
 
 Install and check default the pin to `tools/kani/snapshot.toml` and the cache to
 `.kani-snapshots` below the repository root. Both accept `--pin`,

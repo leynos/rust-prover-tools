@@ -379,9 +379,21 @@ renamed and followed by a directory fsync. A failed stage, extraction, setup or
 probe leaves the previous pointer untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
-repository root and mirrors its stdout and stderr live while capturing them.
-The captured copy is not replayed, so progress output is neither delayed nor
-rewritten.
+repository root and mirrors its stdout and stderr live. It retains only the
+last 64 KiB of each stream through `commands.TailCapture` rather than buffering
+the whole run, because a proof log is diagnostic context whose size the caller
+does not control. The mirrored output is not replayed, so progress output is
+neither delayed nor rewritten.
+
+Two verification boundaries support this design. Generated archive graphs,
+checked against an independent expected-tree oracle, cover member ordering,
+contained link chains and the refusal cases; they complement the fixed hostile
+fixtures rather than replacing them. A Hypothesis rule-based state machine over
+two identities exercises install, transient failure, corruption and repair
+against the real pipeline, and seeded premature-pointer and post-setup-move
+tests show that validation detects both faults. POSIX locking, rename
+durability and private cache ownership remain axioms tested at the process
+boundary, not formally proven.
 
 ## D5: Workflow and immutable publication
 

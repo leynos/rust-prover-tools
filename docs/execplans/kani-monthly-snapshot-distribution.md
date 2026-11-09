@@ -100,6 +100,11 @@ payload extraction/execution, validate complete member graphs, and isolate
 build, attestation, validation and publication jobs. Property tests complement
 named attacks and real filesystem/process boundary tests.
 
+Medium impact: child isolation can silently regress because `CommandSpec.env`
+is an overlay, so omitting a key removes nothing. Every selector removal must
+use a Cuprum `UNSET` marker and be checked by a real-child environment test,
+not by inspecting the mapping the caller built.
+
 Medium impact: hosted runner disk/time, runtime libraries, component licences,
 attestation CLI flags and offline trust roots may prevent binary-only setup.
 EP-M1 records actual requirements and a bounded feasibility verdict. No cost or
@@ -280,6 +285,30 @@ EP-O1 assigns responsibility and records live evidence.
     fixtures module. All gates were re-run sequentially: `make fmt`,
     `make check-fmt`, `make lint`, `make typecheck`, `make test` (1075 passed,
     5 skipped), `make markdownlint` and `make nixie`.
+  - [x] (2026-11-09) Remediated the hosted ExecPlan assessment and closed its
+    four evidence gaps. Findings 1–8 were repaired in `304f0b1` (removals use
+    Cuprum `UNSET` markers because `CommandSpec.env` is an overlay, so
+    inherited `RUSTC`/`RUSTFLAGS`/Rustup selectors now really disappear),
+    `bf19e6c` (the backend revision must equal the manifest's upstream
+    commit), `a8c2a82` (links create their implicit parent directories),
+    `66a2452` (transport stages privately, the 2 GiB payload and 64 MiB
+    inventory ceilings are enforced while streaming, and attestation is
+    bounded), `3fcf5fc` (installed backend trees and launcher bytes are
+    compared with the inventory before activation), `6f65381` (toolchain
+    component, metadata and extracted-byte digests are verified before any
+    probe executes them) and `e873379` (snapshot proofs and probes follow the
+    admitted Cargo route, refuse unprovable repository configuration and pin
+    accepted profile backends to LLVM in the child). Evidence gaps were closed
+    in `1bd1f86` (a bounded 64 KiB tail per stream via `CommandSpec.capture`
+    and `on_line`, with `TailCapture` as a tested unit), `ec8dc80` (two
+    identities reporting the same Kani version install into disjoint
+    generations), `ee732f2` (Hypothesis-generated archive member graphs with
+    an independent expected-tree oracle) and `143a968` (a two-identity
+    rule-based state machine, two-process barrier, killed-owner and timeout
+    tests, and seeded premature-pointer and post-setup-move negative
+    controls). One fresh full `make all` after splitting the stateful tests
+    into `tests/test_kani_snapshot_activation.py` passed every gate: 1143
+    passed, 5 skipped, interrogate 100%, Pylint 10.00/10 and `ty` clean.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -329,6 +358,24 @@ hosted runner under `slipcover` parsed a 100,000-deep document that the local
 interpreter refused, so the assertion saw a later "must be an object" error.
 The strict decoder now owns a fixed container-nesting ceiling, which makes the
 outcome independent of the runner.
+
+`CommandSpec.env` is an overlay, not a replacement. Deleting a key from a
+copied mapping removes nothing from the child because the host value is still
+inherited. Removing a selector needs an explicit Cuprum `UNSET` marker, which
+is why an earlier implementation silently kept `RUSTC`, `RUSTFLAGS` and the
+Rustup distribution selectors in snapshot setup, probe and proof children.
+
+Hypothesis `@precondition` predicates receive only the state machine, never a
+rule's drawn arguments. A predicate written as `lambda self, identity: ...`
+fails at initialization. Use an in-body early-return guard when the decision
+depends on a drawn argument. Function- scoped fixtures also persist across
+generated examples, so a generated test that needs a fresh directory must
+create one inside the test.
+
+Killing a child process while it waits in `multiprocessing.Event.wait` leaves
+the shared condition variable's sleeper accounting inconsistent, and the
+parent's next `set()` can block indefinitely. A kill-target worker uses
+`time.sleep` instead of an event wait.
 
 ## Decision log
 
@@ -446,6 +493,54 @@ strings. The ceiling is part of the document contract rather than an
 interpreter side effect, so hostile input fails identically on local,
 coverage-instrumented and hosted runners.
 
+2026-11-09, implemented D4 environment removal: `CommandSpec.env_mode` is
+`OVERLAY` by default, and removing an inherited variable requires a Cuprum
+`UNSET` value rather than omitting or deleting a key from a copied mapping.
+Snapshot setup, probes and proof children unset `RUSTC`, `RUSTFLAGS` in both
+spellings, the Rustup distribution selectors and `TAR_OPTIONS`, while keeping
+`RUSTC_WRAPPER`, `RUSTC_WORKSPACE_WRAPPER` and `RUSTDOC` so admission still
+applies. Tests inspect the real child environment and confirm the parent's
+environment is unchanged.
+
+2026-11-09, implemented D4 toolchain provenance: the manifest's toolchain group
+records each Rustup component archive's name, version, HTTPS URL, length and
+digest, the channel metadata digest, the extracted `rustc` digest, the
+`lib/rustlib/components` digest and the digest of every extracted compiler or
+runtime library at a contained relative path. `verify_toolchain` compares the
+installed tree with those records on both the fresh-install and cache-reuse
+paths before the compiler probe, so a probe can no longer establish only that
+some compiler calls itself the expected version.
+
+2026-11-09, implemented D4 installed-tree verification: validation compares the
+installed `kani-<version>` tree with the published inventory, allowing only the
+documented setup additions, and compares each placed launcher file with the
+digest-pinned launcher archive. Install runs the same check before writing the
+active pointer, so tampered or lost installed bytes are never executed after a
+supposedly successful install.
+
+2026-11-09, implemented D4 admitted execution route: snapshot probes and proofs
+use the same Cargo route as the qualified release path. The configured
+`RUSTC_WRAPPER`/`RUSTC_WORKSPACE_WRAPPER` chain runs every probed executable,
+repository configuration naming an unprovable route is refused, accepted
+profile backends are pinned to LLVM in the child mapping only, inherited
+compiler flags are sanitized into both `RUSTFLAGS` spellings, and
+`LD_LIBRARY_PATH` selects the pinned toolchain's libraries. The shared helpers
+live in `kani_exec_routing` so the release and snapshot paths cannot drift.
+
+2026-11-09, implemented D4 bounded proof output: `CommandSpec` gains `capture`
+and an `on_line` hook, and `run_snapshot` disables capture while `TailCapture`
+retains the newest 64 KiB of each stream. Mirrored output is never replayed and
+the launcher's exit status is preserved, so one verbose proof cannot size the
+CLI's memory.
+
+2026-11-09, implemented V3/V4 evidence shape: generated archive graphs are
+checked against an independent expected-tree oracle and complement the fixed
+hostile fixtures, while a two-identity rule-based state machine drives the real
+install pipeline through failure, corruption and repair. Seeded premature
+pointer writes and post-setup directory moves are negative controls that must
+fail validation; POSIX locking and rename durability stay axioms tested at the
+process boundary.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -455,13 +550,16 @@ Neither a build attestation nor a zero-harness exit is proof success.
 
 Planning review is complete. EP-M2 (authenticated pin and manifest contracts)
 and EP-M3 (isolated install, check and run) are implemented, gated and through
-their milestone CLI review. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
-have not started. The consumer `install` command is deliberately limited to a
-verified local `--asset-dir` until the EP-M4 release transport is connected.
-Independent reviews covered all five requested specialities, with amendments
-recorded in the design and checked by a final testing/consistency review.
-Planning validation passed `make fmt`, `make markdownlint` (including spelling
-and three spelling-helper tests), `make nixie`, and both working/staged
+their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
+eight findings and four evidence gaps; all twelve were repaired or closed as
+recorded in Progress, and the resulting tree passes the full gate with 1143
+tests. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started.
+The consumer `install` command is deliberately limited to a verified local
+`--asset-dir` until the EP-M4 release transport is connected. Independent
+reviews covered all five requested specialities, with amendments recorded in
+the design and checked by a final testing/consistency review. Planning
+validation passed `make fmt`, `make markdownlint` (including spelling and three
+spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the
@@ -798,6 +896,16 @@ containment checks must change an outside sentinel or trigger a forbidden-write
 assertion. Generated cases complement, but do not prove, arbitrary filesystem
 safety.
 
+Evidence (2026-11-09): `test_kani_snapshot_archive.py` now generates contained
+graphs of 2–10 unique paths, one to three components deep, with regular files,
+symbolic and hard links, and asserts the result against an oracle that records
+the expected directories, bytes, modes and link targets. Generated cases cover
+member-order permutations, link chains of 1–16 hops, and the refusal cases for
+parent traversal, escaping symbolic links, cycles, duplicate paths, special
+members, size bombs and truncated bodies, each with an outside sentinel. The
+ten generated tests and the existing named fixtures pass; removing containment
+checks changes the sentinel or fails a forbidden-write assertion.
+
 ### V4: Activation is failure-safe and isolated
 
 Invariant: active state refers only to a complete validated generation;
@@ -817,6 +925,19 @@ reachable. A seeded premature pointer write or post-setup directory move must
 fail; otherwise the model is insufficient. POSIX locking/rename durability and
 private cache ownership are axioms tested at the integration boundary, not
 formally proven.
+
+Evidence (2026-11-09): `tests/test_kani_snapshot_activation.py` runs the
+two-identity state machine for 8 generated examples of 30 operations each and
+asserts after every step that the pointer names only the expected generation. A
+deterministic sequence reaches both required branches: a refused first install
+leaves no pointer, and a later repair after damage publishes a new generation
+while the old directory survives. Seeded negative controls write a premature
+pointer and move the active generation after setup; validation refuses both.
+`tests/test_kani_snapshot_concurrency.py` uses spawn processes and a barrier
+for overlapping installs, a `SIGKILL`ed lock owner and a bounded timeout; the
+overlapping pair reports one generation and passes `check`.
+`test_kani_snapshot_install.py` adds a same-reported-version regression proving
+the two identities' homes and toolchains are disjoint.
 
 ### V5: Execution selects the exact distribution
 

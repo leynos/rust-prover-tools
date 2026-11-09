@@ -536,6 +536,12 @@ Setup runs only after those checks, and the active pointer moves only after the
 receipt is fsynced and the probes match the manifest. A failure must leave the
 previous pointer and generation intact.
 
+Proof execution mirrors the launcher's streams live and retains only a bounded
+tail of each one through `commands.TailCapture` (64 KiB per stream by default).
+The capture ceiling is independent of `CommandSpec.capture`, so `run` never
+buffers a whole proof log in memory while still returning the final lines that
+explain a failure.
+
 Cache reuse is revalidation, not trust in directory existence.
 `validate_generation` reloads the receipt, checks cached sizes, recomputes the
 digests of the inventory and launcher, re-reads the backend archive against the
@@ -556,9 +562,14 @@ reuse, each rejection edge and repair with injected hooks.
 `tests/kani_snapshot_bundles.py` builds complete local releases, including a
 working `cargo-kani setup` stub, so `tests/steps/test_kani_snapshot_steps.py`
 can install through the real CLI and then run the pinned launcher.
+`tests/test_kani_snapshot_activation.py` drives two identities through a
+Hypothesis rule-based state machine over the real install pipeline, and
 `tests/test_kani_snapshot_concurrency.py` uses real processes for the advisory
-lock. Keep these fixtures structural: they must exercise the production parsers
-rather than bypass them.
+lock, overlapping installs, a killed owner and a bounded timeout.
+`rust_prover_tools/unittests/test_kani_snapshot_archive.py` adds generated
+member graphs checked against an independent expected-tree oracle. Keep these
+fixtures structural: they must exercise the production parsers rather than
+bypass them.
 
 Backend classification is positional, not name-based. `kani_release_config`
 walks every discovered Cargo configuration and ancestor manifest and returns a
