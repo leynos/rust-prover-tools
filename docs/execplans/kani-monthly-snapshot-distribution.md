@@ -179,6 +179,15 @@ EP-O1 assigns responsibility and records live evidence.
     directory, applies modes through open descriptors, fsyncs content and
     metadata, rejects attacker-writable ancestors, and publishes by atomic
     rename, so a failed extraction leaves no partial tree. 40 tests pass.
+  - [x] (2026-11-09) Added the snapshot member inventory. `inventory_model.py`
+    defines the four member kinds, the frozen entry and inventory shapes, and
+    the entry/byte/path ceilings; `inventory_parse.py` enforces the exact
+    version 1 document shape, kind-specific key sets, ordinary permission bits,
+    archive-equal path normalization, contained link targets and unique paths;
+    `inventory_tree.py` compares a tree against it in both directions, including
+    exact modes, file size and digest, symbolic-link text, hard-link inode
+    identity, special-file rejection and bounded error previews. 30 focused
+    tests pass; the full suite reports 985 passed and 5 skipped.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -252,6 +261,13 @@ downloader's acceptance of arbitrary HTTPS hosts. The initial request must be
 the exact release URL derived from the reviewed pin, redirects are restricted
 by host and path before they are opened, and only transient transport failures
 are retried. A redirect or integrity failure is never retried.
+
+2026-11-09, implemented D4 inventory binding: the manifest's separately hashed
+`inventory.json` is parsed against one exact version 1 shape and consumed by an
+exhaustive tree comparison. The inventory is never trusted to be a subset: an
+unrecorded member, a special file or a replaced hard link fails the generation,
+so a cache hit is evidence about content rather than only about directory
+existence. Modes are ordinary permission bits only, matching the archive policy.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
