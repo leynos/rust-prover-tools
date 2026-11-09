@@ -165,7 +165,7 @@ and `CARGO_HOME`. Only after the installed `rustc -vV` and
 `kani-compiler --version` match the manifest does the command switch the active
 pointer. The same check that `snapshot check` performs runs first: every
 runtime file the launcher needs must be present and executable, `pyroot` must
-be a real directory whose links stay inside the generation and whose members
+be a real directory whose links resolve inside that directory and whose members
 exactly match the record written after setup, and the recorded toolchain's
 shared libraries must live inside the private rustup home with no unrecorded
 library beside them. The rustup home itself must also resolve inside the

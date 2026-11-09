@@ -364,11 +364,16 @@ only when a new generation must be staged. `check` and `run` re-read the cached
 manifest, recheck receipt, rehash the backend, inventory and launcher payloads
 rather than trusting their recorded sizes, re-read each archive's structure,
 check the backend/inventory agreement, executable modes, the absolute toolchain
-link and both probes. A corrupt generation is repaired by creating a new
-generation; the previous directory is never deleted. Install runs the same
-runtime-file contract as `check` before the probe executes anything, so a
-launcher archive that omits or strips the execute bit from a required binary
-cannot be activated.
+link and both probes. `check` and `run` resolve the pointer and validate the
+generation while holding the same bounded identity lock as installation,
+because a repair publishes its verified payloads file by file under that lock;
+reading without it could validate a half-repaired cache and report a failure
+the running repair is about to resolve. A reader whose bounded wait expires is
+refused rather than waiting indefinitely. A corrupt generation is repaired by
+creating a new generation; the previous directory is never deleted. Install
+runs the same runtime-file contract as `check` before the probe executes
+anything, so a launcher archive that omits or strips the execute bit from a
+required binary cannot be activated.
 
 The toolchain identifier is treated as a single path component, not free text:
 the parser and construction boundary reject absolute paths, parent traversal
@@ -388,10 +393,14 @@ is closed by a generation-local record: after setup, the installer writes
 `pyroot.json`, a canonical JSON document describing every member below the root
 by path, kind, mode, size, digest and link target. Reuse requires the record to
 exist and the tree to match it exactly, so setup nondeterminism and
-post-install drift are both refused rather than silently accepted. The
-directory must still be a real directory inside the generation and every link
-beneath it must resolve inside the generation. `bin/cargo-kani` and `bin/kani`
-remain single-file exemptions beside the recorded `bin` inventory.
+post-install drift are both refused rather than silently accepted. The record
+stores a link's text, not the content it reaches, so the directory must still
+be a real directory inside the generation and every link beneath it must
+resolve inside the Python root itself, not merely inside the generation. A link
+into a sibling generation home would otherwise put content on `PYTHONPATH` that
+the record never describes and whose later changes reuse would not observe.
+`bin/cargo-kani` and `bin/kani` remain single-file exemptions beside the
+recorded `bin` inventory.
 
 Per-identity installation is serialized by an advisory `flock` with a bounded
 wait inside a monotonic deadline. Setup executes with the remaining budget and
@@ -404,11 +413,20 @@ The same budget supplies checkpoints to local work — payload copying, digest
 hashing, archive extraction and structure validation, archive header scanning
 including the bodies it skips, launcher placement in bounded chunks,
 installed-tree validation and toolchain verification — so each long phase stops
-when the deadline expires instead of only being checked at its boundary. Reuse
-is reported only after a final deadline check following the probe. The active
-pointer is written to a private temporary file, fsynced, atomically renamed and
-followed by a directory fsync. A failed stage, extraction, setup or probe
-leaves the previous pointer untouched.
+when the deadline expires instead of only being checked at its boundary. A
+checkpoint is only reached between blocking calls, so local work that transfers
+bytes is additionally supervised: the operation runs in a private daemon thread
+while the installer waits no longer than the remaining budget, and abandons it
+on expiry. That is safe only because publication stays on the calling thread
+and every operation wrapped this way writes to a private staging directory or a
+unreferenced generation; the active-pointer rename is preceded by its own
+budget check after the temporary document is durable. Reuse is reported only
+after a final deadline check following the probe. The active pointer is written
+to a private temporary file, fsynced, checked against the budget, atomically
+renamed and followed by a directory fsync. A stall in that final directory
+flush happens after the rename is already visible, so it is logged as deferred
+durability rather than failing an activation that has occurred. A failed stage,
+extraction, setup or probe leaves the previous pointer untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
 repository root and mirrors its stdout and stderr live. It executes the exact

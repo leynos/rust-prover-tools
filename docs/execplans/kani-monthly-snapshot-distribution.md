@@ -347,6 +347,34 @@ EP-O1 assigns responsibility and records live evidence.
   `typecheck`, `test`, `markdownlint`, `nixie`) passed on this candidate: 1175
   passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty` clean, spelling
   and Mermaid validation clean.
+- [x] (2026-11-10) Remediated the third candidate-bound EP-M3 re-assessment at
+  `5a0dc88` (three findings, one evidence upgrade). (1) A `pyroot` link must
+  now resolve inside the Python root itself, not merely inside the generation:
+  the record stores link text, so a target in a sibling home would put
+  unrecorded, mutable content on `PYTHONPATH`. (2) Blocking local work is
+  supervised, not only checkpointed. `run_within` runs transport staging,
+  payload verification, archive validation, extraction, Python-root recording,
+  tree validation, toolchain verification, launcher placement and generation
+  writes in a private daemon thread and abandons them at the remaining budget;
+  this is safe because those writes are private staging or unreferenced
+  generations and the active-pointer rename follows an explicit
+  `pointer publication` budget check. A post-rename directory flush that times
+  out is logged as deferred durability rather than failing a visible
+  activation. (3) `check` and `run` resolve and validate the pointer while
+  holding the same bounded identity lock as installation, so a reader cannot
+  validate a cache a repair is rewriting. New tests cover a link into a sibling
+  home, a retargeted contained link, a write stalled in `fsync` under a real
+  short budget, an expiry immediately before the pointer rename with no
+  temporary left behind, a barrier-controlled check-versus-repair refusal, and
+  a repair forced by a transient probe failure and killed mid-staging where the
+  previous generation still validates with healthy hooks before recovery. The
+  added code pushed four gated modules past Pylint's 400-line ceiling, so
+  pointer publication, generation-local writes and the bounded copy rule were
+  extracted into `activation`, `install_generation` and `install_copy`, and the
+  spawn-process targets into `tests/kani_snapshot_actors.py`, instead of
+  suppressing the check per file. The full sequential gate stack passed on the
+  working tree: 1181 passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty`
+  clean, spelling, Markdown and Mermaid validation clean.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -642,6 +670,22 @@ refused mid-pipeline and later reuses the owner's generation, and an
 interruption test that repairs from the intact source release after a killed
 partial staged write without restoring the damaged cache.
 
+2026-11-10, implemented D4 supervised work and reader locking: cooperative
+checkpoints cannot interrupt a `read`, `write` or `fsync` stalled on a hung
+filesystem, so `progress.run_within` runs each byte-moving local operation in a
+private daemon thread and the caller waits no longer than the remaining budget.
+Wrapping is safe only where the output is a private staging directory or an
+unreferenced generation; every publication stays on the calling thread and the
+active-pointer rename is preceded by a `pointer publication` budget check after
+the temporary document is durable, so an abandoned worker can never make shared
+state visible. The directory flush after the rename cannot change what is
+published, so its expiry is logged as deferred durability. `check` and `run`
+now hold the bounded identity lock while resolving and validating the pointer,
+matching the design's reader rule, because a repair publishes verified payloads
+file by file under that lock. `pyroot` links must resolve inside the Python
+root because the record describes link text, not reachable content; a target in
+a sibling generation home would be neither recorded nor observed on reuse.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -654,8 +698,13 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started.
-The consumer `install` command is deliberately limited to a verified local
+tests. Two further candidate-bound re-assessments found ten more issues: the
+runtime-file contract before activation, `run` executing the validated
+generation, contained toolchain and Python-root records, rehashed payloads,
+supervised blocking work with a pre-publication budget check, and readers
+holding the identity lock. All are repaired with tests recorded in Progress.
+EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started. The
+consumer `install` command is deliberately limited to a verified local
 `--asset-dir` until the EP-M4 release transport is connected. Independent
 reviews covered all five requested specialities, with amendments recorded in
 the design and checked by a final testing/consistency review. Planning
@@ -1057,13 +1106,26 @@ the two identities' homes and toolchains are disjoint.
 
 Re-assessment evidence (2026-11-09): `tests/test_kani_snapshot_interruption.py`
 kills an installer after it has started staging a repair, then proves the old
-pointer is unchanged, the cached downloads still validate after restoration and
-the next install reuses the preserved generation. A second two-process case
-seeds a `ProverToolError` inside setup while a peer has announced its attempt;
-the faulty actor reports failure, the peer publishes the only active generation
-and `check` accepts it. Both use spawn processes and events rather than sleeps
-for their barriers, so the assertions observe real pipeline state rather than
-timing.
+pointer is unchanged and the next install repairs from the intact source
+release and reuses the preserved generation without restoring the damaged
+cache. A second two-process case seeds a `ProverToolError` inside setup while a
+peer has announced its attempt; the faulty actor reports failure, the peer
+publishes the only active generation and `check` accepts it. Both use spawn
+processes and events rather than sleeps for their barriers, so the assertions
+observe real pipeline state rather than timing.
+
+Re-assessment evidence (2026-11-10): a transient probe failure forces the
+repair path while every artefact of the active generation stays intact; the
+repair is killed after a partial staged write, and `check` with a healthy probe
+validates the previous generation before any recovery runs, so an interrupted
+repair cannot invalidate the evidence it was about to replace. A
+barrier-controlled concurrency case damages the cached backend, stalls the
+repair between payload verification and publication, and shows a reader with a
+short lock timeout is refused by the lock rather than reporting the cache
+damage; after the repair publishes, the same check succeeds. Unit cases bound a
+write stalled in `fsync` under a real 0.5-second budget, and expire the budget
+immediately before the pointer rename, leaving no `active.json` and no
+`.active-*` temporary file.
 
 ### V5: Execution selects the exact distribution
 

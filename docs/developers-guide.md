@@ -540,12 +540,12 @@ the inventory's open-ended `pyroot` exemption, because execution puts the tree
 on `PYTHONPATH` and `pyroot/bin` on `PATH`. Activation also runs the same
 runtime-file contract as `check` before probing: launchers must be present and
 executable, `pyroot` a real directory whose resolved links stay inside the
-generation, the rustup home itself must resolve inside the generation, and the
-toolchain's recorded shared libraries must be covered with no unrecorded `.so`
-beside them inside that home. Cache reuse rehashes the backend, inventory and
-launcher payloads and re-reads each archive's structure, so a size-preserving
-edit is still refused. A failure must leave the previous pointer and generation
-intact.
+Python root itself (the record describes link text, not reachable content), the
+rustup home itself must resolve inside the generation, and the toolchain's
+recorded shared libraries must be covered with no unrecorded `.so` beside them
+inside that home. Cache reuse rehashes the backend, inventory and launcher
+payloads and re-reads each archive's structure, so a size-preserving edit is
+still refused. A failure must leave the previous pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).
