@@ -261,7 +261,7 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     manifest: SnapshotManifest,
     layout: SnapshotLayout,
     probe: ProbeRunner,
-    timeout_seconds: float | None = None,
+    remaining_budget: cabc.Callable[[], float] | None = None,
 ) -> SnapshotIdentity:
     """Return the identity of a generation that still satisfies the manifest.
 
@@ -275,9 +275,10 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
         Generation to validate.
     probe : ProbeRunner
         Compiler identity probe.
-    timeout_seconds : float | None
-        Remaining installation budget for the probe, or `None` when the
-        caller has no deadline.
+    remaining_budget : collections.abc.Callable[[], float] | None
+        Called immediately before the probe to obtain the seconds left in
+        the installation budget, so slow receipt and cache checks cannot
+        spend the probe's share. `None` leaves the probe unbounded.
 
     Raises
     ------
@@ -292,7 +293,8 @@ def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional
     _require_runtime_files(runtime)
     _check_toolchain_link(runtime, receipt.toolchain_link_target)
     validate_cached_payloads(layout, manifest)
-    evidence = probe(runtime, timeout_seconds)
+    budget = None if remaining_budget is None else remaining_budget()
+    evidence = probe(runtime, budget)
     _check_evidence(evidence, manifest, runtime)
     if evidence.observed != receipt.observed:
         msg = "snapshot receipt observation does not match the installed compiler"

@@ -8,6 +8,7 @@ a receipt cannot merely describe paths that no longer hold the pinned binaries.
 from __future__ import annotations
 
 import os
+import time
 import typing as typ
 
 from rust_prover_tools.commands import CommandSpec, run_checked
@@ -82,8 +83,9 @@ def probe_generation(
     runtime : SnapshotRuntime
         Generation to inspect.
     timeout_seconds : float | None
-        Remaining installation budget applied to each identity command.
-        `None` leaves the probes unbounded.
+        Remaining installation budget shared by both identity commands, so
+        the second only receives what the first left behind. `None` leaves
+        the probes unbounded.
 
     Returns
     -------
@@ -111,18 +113,30 @@ def probe_generation(
         msg = f"snapshot toolchain link escapes the private toolchains: {target}"
         raise ProverToolError(msg)
     env = execution_environment(runtime, os.environ)
+    started = time.monotonic()
+
+    def remaining_budget() -> float | None:
+        """Return what is left of the shared probe budget."""
+        if timeout_seconds is None:
+            return None
+        remaining = timeout_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            msg = "snapshot identity probe exceeded the installation budget"
+            raise ProverToolError(msg)
+        return remaining
+
     rustc = run_checked(
         CommandSpec(
             (str(runtime.rustc), "-vV"),
             env=env,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=remaining_budget(),
         )
     )
     kani_compiler = run_checked(
         CommandSpec(
             (str(runtime.compiler), "--version"),
             env=env,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=remaining_budget(),
         )
     )
     return SetupEvidence(

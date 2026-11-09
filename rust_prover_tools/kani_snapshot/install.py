@@ -196,13 +196,16 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             manifest,
             generation,
             context.hooks.probe,
-            context.deadline.remaining(),
+            context.deadline.remaining,
         )
     except ProverToolError as exc:
         # The exception text can embed filesystem paths, so the event carries
         # only the bounded class name as its reason category.
         log_event(_LOGGER, "kani.install.repair", reason=type(exc).__name__)
         return None
+    # The probe was bounded by the budget left when it started, so a probe
+    # that spent all of it must not report a successful reuse.
+    context.deadline.check("active generation reuse")
     log_event(_LOGGER, "kani.install.reuse", generation=pointer.generation)
     return identity
 

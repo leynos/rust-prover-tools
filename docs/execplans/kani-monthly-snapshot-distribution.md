@@ -232,6 +232,23 @@ EP-O1 assigns responsibility and records live evidence.
     module ceiling, so transport staging moved to `install_transport.py` and
     the state helpers became shared. Focused reruns after the repairs kept
     all 30 snapshot tests green.
+  - [x] (2026-11-09) EP-M3 follow-up CodeRabbit CLI review. Local CodeRabbit
+    CLI 0.9.3 reviewed the remediation commit `ad9a868..c2f8da0` (19 files)
+    as `review_completed` with 6 further findings (2 major, 2 minor, 2
+    trivial). All were verified against the source and repaired. Major: the
+    two identity commands shared one stale budget, so the probe now
+    recomputes what the first command left and rejects an expired budget;
+    `validate_generation` measured the probe budget before slow cache
+    revalidation, so it now takes a callable measured immediately before the
+    probe and reuse is reported only after a final deadline check. Minor:
+    `run_command` ignored an enclosing Cuprum scope's default timeout when
+    choosing process-group ownership, and formatted a possibly-`None` budget
+    on timeout; it now resolves the effective timeout once and reports
+    `TimeoutExpired.timeout`. Trivial: the process-tree test now synchronizes
+    on grandchild startup and verifies termination by process state, and the
+    install budget test uses a controlled clock to assert each hook receives
+    the reduced budget. Documentation was updated in the design decision D4,
+    the users' guide and the developers' guide.
   - [x] (2026-11-09) EP-M3 milestone CodeRabbit CLI review. Local CodeRabbit
     CLI 0.9.3 reviewed the committed diff `60df24c..ad9a868` (26 files) as
     `review_completed` with 8 findings (2 major, 3 minor, 3 trivial). All were

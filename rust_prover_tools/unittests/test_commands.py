@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
+import signal
 import sys
 import time
 import typing as typ
+from pathlib import Path
 
+import cuprum
 import pytest
 
 from rust_prover_tools.commands import (
@@ -18,8 +23,6 @@ from rust_prover_tools.commands import (
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from cmd_mox import CmdMox
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
@@ -106,26 +109,67 @@ def test_run_command_enforces_a_timeout() -> None:
     assert time.monotonic() - started < 10, "timeout did not interrupt the command"
 
 
-def test_run_command_terminates_a_timed_out_process_tree(tmp_path: Path) -> None:
+def _run_with_budget(
+    script: str,
+    scope: typ.Literal["explicit", "scoped"],
+    seconds: float,
+) -> None:
+    """Run one script under an explicit or scope-supplied budget."""
+    argv = (sys.executable, "-I", "-c", script)
+    if scope == "explicit":
+        run_command(CommandSpec(argv, timeout_seconds=seconds))
+        return
+    with cuprum.scoped(cuprum.ScopeConfig(timeout=seconds)):
+        run_command(CommandSpec(argv))
+
+
+def _is_running(pid: int) -> bool:
+    """Return whether a process still runs, treating a zombie as finished."""
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    # Everything after the last `)` starts with the process state character.
+    return stat.rsplit(")", 1)[-1].strip()[:1] != "Z"
+
+
+@pytest.mark.parametrize("scope", ["explicit", "scoped"])
+@pytest.mark.timeout(60)
+def test_run_command_terminates_a_timed_out_process_tree(
+    tmp_path: Path,
+    scope: typ.Literal["explicit", "scoped"],
+) -> None:
     """A timed-out command's descendants are terminated with it."""
-    marker = tmp_path / "survivor"
-    # The grandchild writes shortly after the parent's budget expires, so the
-    # marker exists exactly when the group teardown missed it.
+    started = tmp_path / "started"
+    pid_path = tmp_path / "pid"
     grandchild = (
-        "import pathlib, time; time.sleep(1.0); "
-        f"pathlib.Path({str(marker)!r}).write_text('alive')"
+        "import os, pathlib, time; "
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); "
+        f"pathlib.Path({str(started)!r}).write_text('started'); "
+        "time.sleep(60)"
     )
+    # The child waits until the grandchild has definitely started, so the
+    # assertions below cannot pass merely because a survivor had not been
+    # scheduled yet.
     child = (
-        "import subprocess, sys, time; "
-        f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}]); "
-        "time.sleep(30)"
+        "import pathlib, subprocess, sys, time\n"
+        f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}])\n"
+        "limit = time.monotonic() + 1.5\n"
+        f"while not pathlib.Path({str(started)!r}).exists()"
+        " and time.monotonic() < limit:\n"
+        "    time.sleep(0.02)\n"
+        "time.sleep(60)\n"
     )
-    with pytest.raises(ProverToolError, match=r"timed out"):
-        run_command(
-            CommandSpec(
-                (sys.executable, "-I", "-c", child),
-                timeout_seconds=0.3,
-            )
-        )
-    time.sleep(1.5)
-    assert not marker.exists(), "a descendant survived the timed-out command"
+    with pytest.raises(ProverToolError, match=r"timed out after 2\.5 seconds"):
+        _run_with_budget(child, scope, 2.5)
+    assert started.exists(), "the grandchild did not start before the timeout"
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and _is_running(pid):
+            time.sleep(0.05)
+        assert not _is_running(pid), "a descendant survived the timed-out command"
+    finally:
+        if _is_running(pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)

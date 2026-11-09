@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import time
 import typing as typ
 
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot import install_state
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
     check_snapshot,
     install_snapshot,
 )
+from rust_prover_tools.kani_snapshot.install_state import validate_generation
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
 from tests.kani_snapshot_bundles import (
     CHECKSUMS_NAME,
@@ -33,6 +36,8 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
+    from rust_prover_tools.kani_snapshot.models import SnapshotManifest
+    from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 
 def test_install_activates_a_validated_generation(tmp_path: Path) -> None:
@@ -219,12 +224,15 @@ def test_install_rejects_an_oversized_manifest(tmp_path: Path) -> None:
         install_snapshot(install_options(case), install_hooks(case))
 
 
-def test_install_passes_the_remaining_budget_to_setup_and_probe(
+def test_install_shares_the_remaining_budget_between_setup_and_probe(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Setup and the probe receive a positive remaining installation budget."""
+    """Each external step receives the budget left when it starts."""
     case = make_case(tmp_path)
-    budgets: list[float | None] = []
+    clock = {"now": 100.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+    budgets: dict[str, float | None] = {}
     base = install_hooks(case)
 
     def record_setup(
@@ -232,21 +240,82 @@ def test_install_passes_the_remaining_budget_to_setup_and_probe(
         bundle: Path,
         timeout_seconds: float | None,
     ) -> None:
-        """Run the normal fake setup while recording its budget."""
-        budgets.append(timeout_seconds)
+        """Record the setup budget, then spend part of it."""
+        budgets["setup"] = timeout_seconds
+        clock["now"] += 7.5
         base.setup(runtime, bundle, timeout_seconds)
 
     def record_probe(
         runtime: SnapshotRuntime,
         timeout_seconds: float | None,
     ) -> SetupEvidence:
-        """Run the normal fake probe while recording its budget."""
-        budgets.append(timeout_seconds)
+        """Record the probe budget."""
+        budgets["probe"] = timeout_seconds
         return base.probe(runtime, timeout_seconds)
 
     hooks = dc.replace(base, setup=record_setup, probe=record_probe)
-    install_snapshot(install_options(case), hooks)
-    assert len(budgets) == 2, "setup and probe were not both bounded"
-    assert all(budget is not None and budget > 0 for budget in budgets), (
-        "an external step received no positive remaining budget"
+    options = dc.replace(install_options(case), deadline_seconds=30.0)
+    install_snapshot(options, hooks)
+
+    assert budgets.keys() == {"setup", "probe"}, "both steps were not bounded"
+    setup_budget = budgets["setup"]
+    probe_budget = budgets["probe"]
+    assert setup_budget is not None, "setup ran without a budget"
+    assert probe_budget is not None, "probe ran without a budget"
+    assert setup_budget == pytest.approx(30.0), (
+        "setup did not start with the whole installation budget"
+    )
+    assert probe_budget == pytest.approx(setup_budget - 7.5), (
+        "probe did not receive the budget left after setup"
+    )
+
+
+def test_validate_generation_measures_the_probe_budget_after_cache_checks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow receipt and cache checks do not stale the probe's budget."""
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(
+        case.pin,
+        cache_home=tmp_path,
+        generation=active_generation(case),
+    )
+    order: list[str] = []
+    real_validate = install_state.validate_cached_payloads
+
+    def record_payloads(
+        layout: SnapshotLayout,
+        manifest: SnapshotManifest,
+    ) -> None:
+        """Record the cache revalidation."""
+        order.append("payloads")
+        real_validate(layout, manifest)
+
+    monkeypatch.setattr(install_state, "validate_cached_payloads", record_payloads)
+    base = install_hooks(case)
+
+    def record_probe(
+        runtime: SnapshotRuntime,
+        timeout_seconds: float | None,
+    ) -> SetupEvidence:
+        """Record the probe."""
+        order.append("probe")
+        return base.probe(runtime, timeout_seconds)
+
+    def remaining() -> float:
+        """Report a freshly measured probe budget."""
+        order.append("budget")
+        return 5.0
+
+    validate_generation(
+        install_options(case),
+        case.manifest,
+        layout,
+        record_probe,
+        remaining,
+    )
+    assert order == ["payloads", "budget", "probe"], (
+        "the probe budget was measured before the cache checks finished"
     )

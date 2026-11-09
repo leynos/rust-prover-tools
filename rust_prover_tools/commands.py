@@ -31,6 +31,7 @@ from cuprum import (
     ProjectSettings,
     RunOutputOptions,
     TimeoutExpired,
+    current_context,
     sh,
 )
 
@@ -75,8 +76,10 @@ class CommandSpec:
         Mirror the child's output to the caller's streams while capturing it.
     timeout_seconds : float | None
         Wall-clock budget for the whole child process tree. `None` leaves the
-        command unbounded. When set, the child is placed in its own process
-        group so expiry terminates every descendant it started.
+        command unbounded unless an enclosing Cuprum scope supplies a default
+        timeout. Whenever an effective timeout applies, the child is placed in
+        its own process group so expiry terminates every descendant it
+        started.
     """
 
     argv: tuple[str, ...]
@@ -167,15 +170,21 @@ def run_command(spec: CommandSpec) -> CommandResult:
     )
     catalogue = ProgramCatalogue(projects=(project,))
     cmd = sh.make(program, catalogue=catalogue)(*spec.argv[1:])
+    # Cuprum falls back to the enclosing scope's default timeout when the spec
+    # has none. Resolve that here because both the process-group choice and
+    # the user-facing message depend on the timeout that will really apply.
+    effective_timeout = spec.timeout_seconds
+    if effective_timeout is None:
+        effective_timeout = current_context().timeout
     context = ExecutionContext(
         env=spec.env,
         cwd=spec.cwd,
-        timeout=spec.timeout_seconds,
+        timeout=effective_timeout,
         # Only a bounded command needs its descendants terminated with it;
         # unbounded calls keep Cuprum's inherited-group default.
         process_group=(
             ProcessGroupPolicy.OWN_GROUP
-            if spec.timeout_seconds is not None
+            if effective_timeout is not None
             else ProcessGroupPolicy.INHERIT
         ),
     )
@@ -190,8 +199,10 @@ def run_command(spec: CommandSpec) -> CommandResult:
     try:
         result = cmd.run_sync(output=output, context=context)
     except TimeoutExpired as exc:
+        # `exc.timeout` is always the effective budget, so a timeout supplied
+        # by an enclosing scope is reported correctly too.
         msg = (
-            f"command timed out after {spec.timeout_seconds:g} seconds: "
+            f"command timed out after {exc.timeout:g} seconds: "
             f"{command_line(spec.argv)}"
         )
         raise ProverToolError(msg) from exc

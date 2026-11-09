@@ -540,8 +540,9 @@ Cache reuse is revalidation, not trust in directory existence.
 `validate_generation` reloads the receipt, checks cached sizes, recomputes the
 digests of the inventory and launcher, re-reads the backend archive against the
 inventory, requires the runtime executables and absolute toolchain link, and
-re-runs the probes. A corrupt generation is repaired by installing a new one;
-no code path deletes a previous generation.
+re-runs the probes. The probe budget is a callable measured after those checks,
+so validation work cannot consume it. A corrupt generation is repaired by
+installing a new one; no code path deletes a previous generation.
 
 The snapshot CLI uses `config=()` on its sub-applications so Cyclopts does not
 inherit generic `INPUT_*` bindings. `run` must keep `Path` as a runtime import

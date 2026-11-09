@@ -199,10 +199,11 @@ the previous generation and the active pointer unchanged; a new generation is
 activated only after its receipt is durable and its compiler has been observed.
 Concurrent installs for one identity serialize on an advisory lock with a
 bounded wait (300 seconds) inside an overall 1800-second installation deadline.
-Setup and the compiler probes run with the remaining budget, and expiry
-terminates the whole process group, so a stalled setup cannot outlive the
-deadline or keep another installer waiting. A corrupt active generation is
-repaired by installing a new generation, and the old directory is preserved.
+Setup and the compiler probes run with the remaining budget, which the probes
+share and refresh before each command; expiry terminates the whole process
+group, so a stalled setup cannot outlive the deadline or keep another installer
+waiting. A corrupt active generation is repaired by installing a new
+generation, and the old directory is preserved.
 
 Checking and running never repair a generation. If `check` or `run` reports a
 missing, changed or drifted snapshot, run `prover-tools kani snapshot install`

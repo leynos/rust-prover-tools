@@ -363,13 +363,16 @@ and both probes. A corrupt generation is repaired by creating a new generation;
 the previous directory is never deleted.
 
 Per-identity installation is serialized by an advisory `flock` with a bounded
-wait inside a monotonic deadline. Setup and the compiler probes execute with
-the remaining budget; a bounded command runs as its own process group and
-expiry terminates the whole group, so a stalled `rustup` download cannot
-outlive the deadline or hold the lock past it. The active pointer is written to
-a private temporary file, fsynced, atomically renamed and followed by a
-directory fsync. A failed stage, extraction, setup or probe leaves the previous
-pointer untouched.
+wait inside a monotonic deadline. Setup executes with the remaining budget and
+the compiler probes share one budget: it is recomputed before each identity
+command and again immediately before a probe after cache revalidation, so slow
+checks or a slow first command cannot extend the deadline. A bounded command
+runs as its own process group and expiry terminates the whole group, so a
+stalled `rustup` download cannot outlive the deadline or hold the lock past it.
+Reuse is reported only after a final deadline check following the probe. The
+active pointer is written to a private temporary file, fsynced, atomically
+renamed and followed by a directory fsync. A failed stage, extraction, setup or
+probe leaves the previous pointer untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
 repository root and mirrors its stdout and stderr live while capturing them.
