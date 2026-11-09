@@ -19,7 +19,7 @@ import logging
 import typing as typ
 from time import monotonic
 
-from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -137,7 +137,7 @@ def _stream(
     except (OSError, http.client.HTTPException) as exc:
         _log_failure(_LOGGER, name, "stream_error")
         msg = f"failed to download {name}: {exc}"
-        raise ProverToolError(msg) from exc
+        raise TransientDownloadError(msg) from exc
     _require_complete_body(limits, written, expected)
     return written
 

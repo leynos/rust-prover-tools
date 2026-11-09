@@ -53,6 +53,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from rust_prover_tools.download_url import UrlPolicy
+
 __all__ = (
     "DEFAULT_DOWNLOAD_LIMITS",
     "DownloadLimits",
@@ -90,6 +92,8 @@ def download_pinned(
     asset: PinnedAsset,
     destination: Path,
     limits: DownloadLimits = DEFAULT_DOWNLOAD_LIMITS,
+    *,
+    url_policy: UrlPolicy | None = None,
 ) -> Path:
     """Download a pinned asset and verify its SHA-256 digest.
 
@@ -105,6 +109,9 @@ def download_pinned(
         Final path for the verified asset.
     limits : DownloadLimits
         Network limits. Defaults to `DownloadLimits()`.
+    url_policy : UrlPolicy | None
+        Optional policy applied to the initial URL and every redirect before
+        either is opened.
 
     Returns
     -------
@@ -125,7 +132,7 @@ def download_pinned(
 
     pending = destination.with_name(f"{destination.name}.download")
     with _pending_download(pending, asset.name):
-        _download_verified(asset, pending, limits)
+        _download_verified(asset, pending, limits, url_policy=url_policy)
         _publish_verified(asset, pending, destination)
     log_event(_LOGGER, "download.verified", asset=asset.name)
     return destination
@@ -199,6 +206,8 @@ def _download_verified(
     asset: PinnedAsset,
     pending: Path,
     limits: DownloadLimits,
+    *,
+    url_policy: UrlPolicy | None = None,
 ) -> None:
     """Download into `pending` and reject a digest that does not match."""
     _download(
@@ -207,6 +216,7 @@ def _download_verified(
             destination=pending,
             max_bytes=asset.max_bytes,
             asset_name=asset.name,
+            url_policy=url_policy,
         ),
         limits,
     )

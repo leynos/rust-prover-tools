@@ -27,11 +27,13 @@ from rust_prover_tools.download_stream import (
     _TimeoutSocket,
 )
 from rust_prover_tools.download_url import _parse_https_url, _validate_url
-from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
+
+    from rust_prover_tools.download_url import UrlPolicy
 
 __all__ = (
     "DEFAULT_CONNECT_TIMEOUT_SECONDS",
@@ -46,6 +48,9 @@ DEFAULT_TRANSFER_TIMEOUT_SECONDS: typ.Final[float] = 300.0
 DEFAULT_MAX_REDIRECTS: typ.Final[int] = 5
 HTTP_OK: typ.Final[int] = 200
 REDIRECT_STATUSES: typ.Final[frozenset[int]] = frozenset({301, 302, 303, 307, 308})
+#: Failure statuses that commonly describe a temporary service condition.
+_TRANSIENT_STATUSES: typ.Final[frozenset[int]] = frozenset({408, 429})
+_SERVER_ERROR_MIN: typ.Final[int] = 500
 USER_AGENT: typ.Final[str] = "rust-prover-tools"
 
 _LOGGER = logging.getLogger(__name__)
@@ -82,13 +87,15 @@ class _DownloadRequest:
 
     `asset_name` defaults to the destination file name for direct callers;
     `download_pinned` supplies the pinned asset name so transport events join
-    with the downloader's own events.
+    with the downloader's own events. `url_policy` receives the initial URL and
+    every redirect target before either is opened.
     """
 
     url: str
     destination: Path
     max_bytes: int
     asset_name: str | None = None
+    url_policy: UrlPolicy | None = None
 
     @property
     def name(self) -> str:
@@ -102,6 +109,7 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
     started = monotonic()
     deadline = started + limits.transfer_timeout_seconds
     current = _validate_url(request.url)
+    _check_policy(request.url_policy, request.url, asset_name=name, redirect=False)
     log_event(_LOGGER, "download.start", asset=name, max_bytes=request.max_bytes)
     for hop in range(limits.max_redirects + 1):
         response, connection = _open(current, limits, deadline, asset_name=name)
@@ -112,11 +120,19 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
                     _log_failure(_LOGGER, name, "redirect_limit")
                     msg = f"too many redirects while downloading {request.url}"
                     raise ProverToolError(msg)
+                target = urllib.parse.urljoin(current, location)
                 try:
-                    current = _validate_url(urllib.parse.urljoin(current, location))
+                    target = _validate_url(target)
                 except ProverToolError:
                     _log_failure(_LOGGER, name, "redirect_target")
                     raise
+                _check_policy(
+                    request.url_policy,
+                    target,
+                    asset_name=name,
+                    redirect=True,
+                )
+                current = target
                 continue
             _require_success(response, current, asset_name=name)
             written = _stream(
@@ -138,6 +154,26 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
     _log_failure(_LOGGER, name, "redirect_limit")
     msg = f"too many redirects while downloading {request.url}"
     raise ProverToolError(msg)
+
+
+def _check_policy(
+    policy: UrlPolicy | None,
+    url: str,
+    *,
+    asset_name: str,
+    redirect: bool,
+) -> None:
+    """Apply the caller's URL policy and report a refusal as one event."""
+    if policy is None:
+        return
+    try:
+        if redirect:
+            policy.check_redirect(url)
+        else:
+            policy.check_initial(url)
+    except ProverToolError:
+        _log_failure(_LOGGER, asset_name, "url_policy")
+        raise
 
 
 def _open(
@@ -181,7 +217,7 @@ def _open(
         connection.close()
         _log_failure(_LOGGER, asset_name, "transport_error")
         msg = f"failed to download {url}: {exc}"
-        raise ProverToolError(msg) from exc
+        raise TransientDownloadError(msg) from exc
     return (
         _DeadlineResponse(
             response,
@@ -232,4 +268,6 @@ def _require_success(
         status_class=f"{response.status // 100}xx",
     )
     msg = f"download of {url} failed with HTTP status {response.status}"
+    if response.status in _TRANSIENT_STATUSES or response.status >= _SERVER_ERROR_MIN:
+        raise TransientDownloadError(msg)
     raise ProverToolError(msg)

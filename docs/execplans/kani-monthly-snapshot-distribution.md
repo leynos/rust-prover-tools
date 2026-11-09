@@ -148,6 +148,37 @@ EP-O1 assigns responsibility and records live evidence.
   re-run after the fixes and passed; `make test` reports 888 passed and 5
   skipped, and the snapshot CLI tests need `FORCE_COLOR` unset.
 - [ ] EP-M3: isolated installation, identity checking and execution.
+  - [x] (2026-11-09) Established the upstream setup boundary from pinned source
+    `model-checking/kani@4e31125fdb4f01fad95150415cbafe46e0587d66`:
+    `cargo kani setup --use-local-bundle <file>` extracts a `kani-<VERSION>/`
+    bundle with external `tar --strip-components=1` into
+    `$KANI_HOME/kani-<VERSION>`, runs `rustup toolchain install <identifier>`
+    under the effective `RUSTUP_HOME`, and creates an absolute
+    `kani-<VERSION>/toolchain` symlink. The launcher proxy auto-runs setup only
+    when that directory is absent, rewrites `RUSTUP_TOOLCHAIN`, prepends its
+    own `bin`/`pyroot` to `PATH`, and ignores `RUSTUP_AUTO_INSTALL` during
+    setup. These are the boundaries the installer must pre-validate, isolate
+    and re-check.
+  - [x] (2026-11-09) Added the snapshot download seam. `ReleaseUrlPolicy`
+    accepts exactly one `https://github.com/leynos/rust-prover-tools/releases/`
+    `download/<tag>/<asset>` URL and, after redirects, only the documented
+    `objects.githubusercontent.com` and
+    `release-assets.githubusercontent.com` hosts, with no credentials,
+    non-default port, fragment or traversing path. The generic downloader now
+    consults a URL policy before opening the first request and every redirect;
+    `DownloadSettings` bounds transient retries (3 attempts, capped backoff)
+    without retrying integrity, policy or local filesystem failures. 27 focused
+    tests plus the 68 existing download/integrity tests pass.
+  - [x] (2026-11-09) Added safe archive validation and extraction. The complete
+    member graph is checked before materialization: normalized relative paths,
+    effective GNU/PAX headers, duplicate and file/directory collisions, sparse
+    and special members, privileged modes, required-root stripping, symbolic
+    link escapes/dangling links/cycles and the link-hop ceiling, hard links to
+    contained regular files, and the 100,000-member/8 GiB/4 KiB ceilings.
+    Extraction writes files before links into a private sibling staging
+    directory, applies modes through open descriptors, fsyncs content and
+    metadata, rejects attacker-writable ancestors, and publishes by atomic
+    rename, so a failed extraction leaves no partial tree. 40 tests pass.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -200,6 +231,27 @@ names must be printable basenames and may not shadow `manifest.json` or
 `SHA256SUMS`, because consumers build local paths from those names. The cache
 key covers every identity field in canonical JSON, so a shared reported Kani
 version cannot alias two snapshots.
+
+2026-11-09, implemented D4 setup boundary: installation passes only verified
+archive bytes to the upstream launcher, sets `KANI_HOME`, `RUSTUP_HOME` and
+`CARGO_HOME` inside the generation, removes inherited mirror/selection
+variables, and re-validates the setup-created tree and compiler identities
+before activation. `check`/`run` never invoke setup and set
+`RUSTUP_AUTO_INSTALL=0` so a missing toolchain fails without network repair.
+
+2026-11-09, implemented D4 archive safety: the archive reader owns a stricter
+policy than `tarfile`'s extraction filters. It validates the whole member graph
+before writing, treats PAX/GNU sparse metadata and privileged mode bits as
+hostile, strips exactly the configured bundle root, and refuses any symbolic
+link that escapes, dangles, cycles or exceeds 16 hops. Extraction never merges
+with existing content, writes only through `O_EXCL|O_NOFOLLOW` descriptors,
+creates links only after files, and publishes a staging tree by atomic rename.
+
+2026-11-09, implemented D4 download policy: snapshot assets bypass the generic
+downloader's acceptance of arbitrary HTTPS hosts. The initial request must be
+the exact release URL derived from the reviewed pin, redirects are restricted
+by host and path before they are opened, and only transient transport failures
+are retried. A redirect or integrity failure is never retried.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
