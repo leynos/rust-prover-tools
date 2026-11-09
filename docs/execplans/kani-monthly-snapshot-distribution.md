@@ -188,6 +188,20 @@ EP-O1 assigns responsibility and records live evidence.
     exact modes, file size and digest, symbolic-link text, hard-link inode
     identity, special-file rejection and bounded error previews. 30 focused
     tests pass; the full suite reports 985 passed and 5 skipped.
+  - [x] (2026-11-09) Added the generation layout, execution environment and
+    local receipt. `snapshot_layout.py` derives an absolute identity directory
+    from the cache key and a uniquely named generation with private
+    `KANI_HOME`, `RUSTUP_HOME` and `CARGO_HOME`. `identity.py` replaces those
+    homes, pins `RUSTUP_TOOLCHAIN`, suppresses auto-install, removes inherited
+    compiler/distribution selectors while preserving `RUSTC_WRAPPER`,
+    `RUSTC_WORKSPACE_WRAPPER` and `RUSTDOC`, and refuses forwarded `setup`,
+    `--use-local-bundle`, `--use-local-toolchain` and `-Z lean` (the finite
+    upstream selector list confirmed from pinned launcher and argument source).
+    `receipt.py` renders and strictly parses a canonical receipt binding the
+    pin, manifest, observed `rustc -vV`/compiler text, complete asset set,
+    generation paths and setup's absolute toolchain link, then validates it
+    against the layout. 54 focused tests pass; the full suite reports 1039
+    passed and 5 skipped.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -268,6 +282,15 @@ exhaustive tree comparison. The inventory is never trusted to be a subset: an
 unrecorded member, a special file or a replaced hard link fails the generation,
 so a cache hit is evidence about content rather than only about directory
 existence. Modes are ordinary permission bits only, matching the archive policy.
+
+2026-11-09, implemented D4 execution isolation: identity directories are keyed
+by the complete pin, generations are uniquely named at their permanent
+location, and proofs receive generation-private Kani/Rustup/Cargo homes with
+the exact toolchain selected. Inherited `RUSTC`, `RUSTFLAGS` and Rust
+distribution overrides are removed; admission wrappers and `RUSTDOC` are kept.
+The forwarded-argument refusal list is finite and evidence-based: upstream's
+proxy accepts only `setup` with `--use-local-bundle`/`--use-local-toolchain`,
+and pinned driver source exposes `-Z lean` as the backend switch.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
