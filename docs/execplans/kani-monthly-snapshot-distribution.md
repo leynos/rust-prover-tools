@@ -1,7 +1,7 @@
 # Add monthly Kani snapshot distributions
 
-Status: DRAFT — awaiting explicit approval before implementation. Date:
-2026-09-27. Design revision: 4 (updated 2026-11-08).
+Status: APPROVED for implementation (2026-11-09). Date: 2026-09-27. Design
+revision: 4 (updated 2026-11-08).
 
 This execution plan is a living document. Keep its constraints, tolerances,
 risks, progress, discoveries, decisions, verification evidence and outcomes
@@ -123,9 +123,20 @@ EP-O1 assigns responsibility and records live evidence.
   review; incorporate all planning remedies. Runtime feasibility remains EP-M1.
 - [x] (2026-09-27) Pass planning document gates; prepare reviewed documents
   for commit and draft PR submission. Delivery is evidenced by PR metadata.
-- [ ] Receive explicit plan approval; record approving message and revision.
+- [x] (2026-11-09) Receive explicit plan approval; record approving message and
+  revision. The user's 2026-11-09 instruction "Begin implementation" and "Mark
+  the plan … as approved" ratifies revision 4, D1–D6 and milestones EP-M1–EP-M5
+  within the stated tolerances. EP-O1 stays separately authorized.
 - [ ] EP-M1: upstream feasibility and compatibility recipe.
-- [ ] EP-M2: authenticated pin/manifest contracts.
+- [x] (2026-11-09) EP-M2: authenticated pin/manifest contracts. Added
+  `rust_prover_tools/kani_snapshot/{models,pins,manifest,validation,integrity}.py`
+  and the tests `test_kani_snapshot_{pins,manifest,integrity}.py` plus
+  `tests/kani_snapshot_fixtures.py`. `ruff check`/`ruff format --check` are
+  clean and the three focused suites pass (72 tests). Evidence covers V1 round
+  trips and key mutation, strict duplicate/unknown/type rejection, exact-byte
+  manifest digest binding, checksum agreement and the explicit
+  `gh attestation verify` policy vector. V2 transport-ordering and
+  bounded-streaming cases remain with EP-M3 `download.py`.
 - [ ] EP-M3: isolated installation, identity checking and execution.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
