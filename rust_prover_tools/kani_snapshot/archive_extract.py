@@ -283,6 +283,9 @@ def _create_symbolic_links(entries: cabc.Sequence[ArchiveEntry], root: Path) -> 
             msg = f"snapshot symbolic link '{entry.path}' has no target"
             raise ProverToolError(msg)
         try:
+            # The graph permits a link below a directory the archive never
+            # lists, so the parent has to be created before the link.
+            target.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
             target.symlink_to(link_target)
         except OSError as exc:
             msg = f"failed to create snapshot symbolic link '{entry.path}': {exc}"
@@ -295,6 +298,9 @@ def _create_hard_links(entries: cabc.Sequence[ArchiveEntry], root: Path) -> None
         source = _target_path(root, entry.link_target or "")
         target = _target_path(root, entry.path)
         try:
+            # Hard-link parents are implicit for the same reason as symbolic
+            # ones: only the members themselves need to be listed.
+            target.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
             os.link(source, target, follow_symlinks=False)
         except OSError as exc:
             msg = f"failed to create snapshot hard link '{entry.path}': {exc}"

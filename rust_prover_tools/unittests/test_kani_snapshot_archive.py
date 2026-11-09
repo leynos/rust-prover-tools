@@ -440,3 +440,46 @@ def test_generated_parent_traversal_is_rejected(
     name = "/".join([*prefix, *suffix])
     with pytest.raises(ProverToolError, match="archive"):
         normalize_member_path(name, max_length=4096)
+
+
+def test_symbolic_link_creates_its_implicit_parent_directory(
+    tmp_path: Path,
+) -> None:
+    """A valid contained link is extractable when its parent is implicit."""
+    members: list[tuple[tarfile.TarInfo, bytes]] = [
+        (_info("data.txt", data=b"payload\n"), b"payload\n"),
+        (
+            _info("share/alias.txt", kind=tarfile.SYMTYPE, linkname="../data.txt"),
+            b"",
+        ),
+    ]
+    archive = _write_archive(tmp_path / "asset.tar.gz", members)
+    destination = tmp_path / "out"
+
+    extract_archive(archive, destination)
+
+    assert (destination / "share").is_dir()
+    assert str((destination / "share/alias.txt").readlink()) == "../data.txt"
+    assert (destination / "share/alias.txt").read_bytes() == b"payload\n"
+
+
+def test_hard_link_creates_its_implicit_parent_directory(
+    tmp_path: Path,
+) -> None:
+    """A hard link is extractable when its parent is not an archive member."""
+    members: list[tuple[tarfile.TarInfo, bytes]] = [
+        (_info("bin/tool", data=b"#!/bin/sh\n", mode=0o755), b"#!/bin/sh\n"),
+        (
+            _info("link/tool-hard", kind=tarfile.LNKTYPE, linkname="bin/tool"),
+            b"",
+        ),
+    ]
+    archive = _write_archive(tmp_path / "asset.tar.gz", members)
+    destination = tmp_path / "out"
+
+    extract_archive(archive, destination)
+
+    assert (destination / "link").is_dir()
+    assert (destination / "link/tool-hard").stat().st_ino == (
+        destination / "bin/tool"
+    ).stat().st_ino
