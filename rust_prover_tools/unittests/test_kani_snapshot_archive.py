@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses as dc
 import gzip
 import io
+import posixpath
 import stat
 import tarfile
+import tempfile
 import typing as typ
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -23,7 +28,6 @@ from rust_prover_tools.kani_snapshot.archive import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
 
 def _info(
@@ -483,3 +487,475 @@ def test_hard_link_creates_its_implicit_parent_directory(
     assert (destination / "link/tool-hard").stat().st_ino == (
         destination / "bin/tool"
     ).stat().st_ino
+
+
+# Generated member graphs complement the named fixtures above. They vary the
+# shape of a valid archive (depth, member order, link mix) and compare the
+# extracted tree with an oracle built from the generator's own knowledge, so a
+# containment or link-resolution regression cannot hide behind hand-picked
+# examples. They still complement rather than prove arbitrary filesystem
+# safety.
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _Graph:
+    """A generated archive and the tree it must produce."""
+
+    members: list[tuple[tarfile.TarInfo, bytes]]
+    directories: tuple[str, ...]
+    files: dict[str, tuple[bytes, int]]
+    symlinks: dict[str, str]
+    hardlinks: dict[str, str]
+
+
+@contextlib.contextmanager
+def _scratch_directory() -> cabc.Generator[Path]:
+    """Yield a fresh directory for one generated example.
+
+    Hypothesis does not reset a function-scoped fixture between examples, so
+    each example gets its own disposable root instead of sharing `tmp_path`.
+    """
+    with tempfile.TemporaryDirectory(prefix="kani-archive-") as raw:
+        yield Path(raw)
+
+
+def _ancestor_paths(path: str) -> tuple[str, ...]:
+    """Return every proper ancestor of an archive path."""
+    parts = path.split("/")
+    return tuple("/".join(parts[:index]) for index in range(1, len(parts)))
+
+
+def _draw_paths(draw: st.DrawFn) -> list[str]:
+    """Draw unique contained paths that all share one depth.
+
+    Equal depth rules out a path that is also another member's ancestor, so
+    the resulting graph never needs a file/directory collision decision.
+    """
+    depth = draw(st.integers(min_value=1, max_value=3))
+    # Join inside the strategy: `unique=True` compares drawn values in a set,
+    # and component lists are unhashable while their joined paths are not.
+    path_strategy = st.lists(_SAFE_COMPONENT, min_size=depth, max_size=depth).map(
+        "/".join
+    )
+    # Ten depth-three paths plus their ancestors reach thirty members, the
+    # graph size the verification plan asks these tests to cover.
+    return draw(st.lists(path_strategy, min_size=2, max_size=10, unique=True))
+
+
+def _draw_files(
+    draw: st.DrawFn,
+    paths: list[str],
+) -> tuple[list[str], dict[str, bytes], dict[str, int]]:
+    """Draw the graph's regular files with their bodies and modes."""
+    files = draw(
+        st.lists(
+            st.sampled_from(paths),
+            min_size=1,
+            max_size=min(len(paths), 6),
+            unique=True,
+        )
+    )
+    bodies = draw(
+        st.lists(st.binary(max_size=32), min_size=len(files), max_size=len(files))
+    )
+    modes = draw(
+        st.lists(
+            st.sampled_from([0o644, 0o755]),
+            min_size=len(files),
+            max_size=len(files),
+        )
+    )
+    return (
+        files,
+        dict(zip(files, bodies, strict=True)),
+        dict(zip(files, modes, strict=True)),
+    )
+
+
+def _draw_links(
+    draw: st.DrawFn,
+    files: list[str],
+    links: list[str],
+) -> tuple[
+    list[tuple[tarfile.TarInfo, bytes]],
+    dict[str, str],
+    dict[str, str],
+]:
+    """Draw contained symbolic and hard links to the graph's files."""
+    kinds = draw(
+        st.lists(
+            st.sampled_from([tarfile.SYMTYPE, tarfile.LNKTYPE]),
+            min_size=len(links),
+            max_size=len(links),
+        )
+    )
+    members: list[tuple[tarfile.TarInfo, bytes]] = []
+    symlinks: dict[str, str] = {}
+    hardlinks: dict[str, str] = {}
+    for path, kind in zip(links, kinds, strict=True):
+        target = draw(st.sampled_from(files))
+        if kind == tarfile.LNKTYPE:
+            hardlinks[path] = target
+            members.append((_info(path, kind=kind, linkname=target), b""))
+        else:
+            linkname = posixpath.relpath(target, posixpath.dirname(path) or ".")
+            symlinks[path] = linkname
+            members.append((_info(path, kind=kind, linkname=linkname), b""))
+    return members, symlinks, hardlinks
+
+
+@st.composite
+def _contained_graphs(draw: st.DrawFn) -> _Graph:
+    """Draw a member graph whose every write and link stays contained.
+
+    Links point at files in the same graph, never outside it, and the link
+    path set stays disjoint from the file set.
+    """
+    paths = _draw_paths(draw)
+    files, bodies, modes = _draw_files(draw, paths)
+    directories = tuple(
+        sorted({ancestor for path in paths for ancestor in _ancestor_paths(path)})
+    )
+    members: list[tuple[tarfile.TarInfo, bytes]] = [
+        (_info(path + "/", kind=tarfile.DIRTYPE, mode=0o755), b"")
+        for path in directories
+    ]
+    members.extend(
+        (_info(path, data=bodies[path], mode=modes[path]), bodies[path])
+        for path in files
+    )
+    link_members, symlinks, hardlinks = _draw_links(
+        draw, files, [path for path in paths if path not in files]
+    )
+    members.extend(link_members)
+    return _Graph(
+        members=members,
+        directories=directories,
+        files={path: (bodies[path], modes[path]) for path in files},
+        symlinks=symlinks,
+        hardlinks=hardlinks,
+    )
+
+
+def _assert_matches_graph(destination: Path, graph: _Graph) -> None:
+    """Assert the extracted tree equals the generator's expectation."""
+    root = destination.resolve()
+    for path in graph.directories:
+        assert (destination / path).is_dir(), f"missing directory {path}"
+    for path, (body, mode) in graph.files.items():
+        extracted = destination / path
+        assert extracted.is_file(), f"missing file {path}"
+        assert extracted.read_bytes() == body, f"wrong body for {path}"
+        assert stat.S_IMODE(extracted.stat().st_mode) == mode, f"wrong mode for {path}"
+    for path, target in graph.symlinks.items():
+        link = destination / path
+        assert link.is_symlink(), f"{path} is not a symbolic link"
+        assert str(link.readlink()) == target, f"{path} has the wrong target"
+        resolved = link.resolve()
+        assert resolved == root or root in resolved.parents, f"{path} escapes the root"
+    for path, target in graph.hardlinks.items():
+        assert (destination / path).stat().st_ino == (
+            destination / target
+        ).stat().st_ino, f"{path} is not a hard link to {target}"
+
+
+def _outside_sentinel(tmp_path: Path) -> tuple[Path, Path]:
+    """Create the outside tree that extraction must never touch."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_text("keep", encoding="utf-8")
+    return outside, sentinel
+
+
+def _assert_refused_without_outside_writes(
+    tmp_path: Path, archive: Path, match: str
+) -> None:
+    """Assert a hostile archive is refused and leaves no trace outside."""
+    outside, sentinel = _outside_sentinel(tmp_path)
+    destination = tmp_path / "out"
+
+    with pytest.raises(ProverToolError, match=match):
+        extract_archive(archive, destination)
+
+    assert sentinel.read_text(encoding="utf-8") == "keep", "outside file changed"
+    assert sorted(entry.name for entry in outside.iterdir()) == ["sentinel"], (
+        "extraction wrote outside the destination"
+    )
+    assert not destination.exists() or not any(destination.iterdir()), (
+        "a refused archive published members"
+    )
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(graph=_contained_graphs())
+def test_generated_contained_graphs_extract_inside_the_destination(
+    graph: _Graph,
+) -> None:
+    """Generated valid graphs materialize exactly as their oracle predicts."""
+    with _scratch_directory() as root:
+        archive = _write_archive(root / "asset.tar.gz", graph.members)
+        outside, sentinel = _outside_sentinel(root)
+        destination = root / "out"
+
+        extract_archive(archive, destination)
+
+        _assert_matches_graph(destination, graph)
+        assert sentinel.read_text(encoding="utf-8") == "keep", "outside file changed"
+        assert sorted(entry.name for entry in outside.iterdir()) == ["sentinel"], (
+            "extraction wrote outside the destination"
+        )
+        assert sorted(entry.name for entry in root.iterdir()) == [
+            "asset.tar.gz",
+            "out",
+            "outside",
+        ], "extraction created an unexpected top-level entry"
+
+
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(graph=_contained_graphs())
+def test_generated_member_order_permutations_extract_identically(
+    graph: _Graph,
+) -> None:
+    """Header order does not change the materialized tree or its links."""
+    with _scratch_directory() as root:
+        forward = _write_archive(root / "forward.tar.gz", graph.members)
+        reverse = _write_archive(root / "reverse.tar.gz", list(reversed(graph.members)))
+
+        extract_archive(forward, root / "forward")
+        extract_archive(reverse, root / "reverse")
+
+        _assert_matches_graph(root / "forward", graph)
+        _assert_matches_graph(root / "reverse", graph)
+
+
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(length=st.integers(min_value=1, max_value=16))
+def test_generated_link_chains_within_the_hop_limit_are_accepted(
+    length: int,
+) -> None:
+    """A chain of at most sixteen links resolves to its contained file."""
+    members: list[tuple[tarfile.TarInfo, bytes]] = [
+        (_info("target", data=b"payload\n"), b"payload\n")
+    ]
+    for index in range(length):
+        next_link = "target" if index == length - 1 else f"link{index + 1}"
+        members.append((
+            _info(f"link{index}", kind=tarfile.SYMTYPE, linkname=next_link),
+            b"",
+        ))
+    with _scratch_directory() as root:
+        archive = _write_archive(root / "asset.tar.gz", members)
+        destination = root / "out"
+
+        extract_archive(archive, destination)
+
+        assert (destination / "link0").read_bytes() == b"payload\n"
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(parts=st.lists(_SAFE_COMPONENT, min_size=1, max_size=3))
+def test_generated_parent_traversal_never_writes_outside(
+    parts: list[str],
+) -> None:
+    """A traversal path is refused before any outside write happens."""
+    escape = "/".join([*parts, *([".."] * (len(parts) + 1)), "outside"])
+    with _scratch_directory() as root:
+        archive = _write_archive(
+            root / "asset.tar.gz", [(_info(escape, data=b"x"), b"x")]
+        )
+
+        _assert_refused_without_outside_writes(root, archive, "archive")
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(
+    directory=st.lists(_SAFE_COMPONENT, min_size=1, max_size=3),
+    name=_SAFE_COMPONENT,
+)
+def test_generated_escaping_symbolic_links_never_write_outside(
+    directory: list[str],
+    name: str,
+) -> None:
+    """A symbolic link climbing past the root is refused."""
+    linkname = "../" * len(directory) + "outside"
+    member = _info(
+        "/".join([*directory, name]), kind=tarfile.SYMTYPE, linkname=linkname
+    )
+    with _scratch_directory() as root:
+        archive = _write_archive(root / "asset.tar.gz", [(member, b"")])
+
+        _assert_refused_without_outside_writes(root, archive, r"link|symbolic")
+
+
+@settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(
+    directory=st.lists(_SAFE_COMPONENT, min_size=1, max_size=2),
+    length=st.integers(min_value=2, max_value=6),
+)
+def test_generated_symbolic_link_cycles_are_refused(
+    directory: list[str],
+    length: int,
+) -> None:
+    """Every generated cycle is refused, whatever its length."""
+    names = [f"link{index}" for index in range(length)]
+    members: list[tuple[tarfile.TarInfo, bytes]] = [
+        (
+            _info(
+                "/".join([*directory, name]),
+                kind=tarfile.SYMTYPE,
+                linkname=names[(index + 1) % length],
+            ),
+            b"",
+        )
+        for index, name in enumerate(names)
+    ]
+    with _scratch_directory() as root:
+        archive = _write_archive(root / "asset.tar.gz", members)
+
+        _assert_refused_without_outside_writes(root, archive, r"link|cycle")
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(
+    parts=st.lists(_SAFE_COMPONENT, min_size=1, max_size=3),
+    first=st.binary(max_size=8),
+    second=st.binary(max_size=8),
+)
+def test_generated_duplicate_member_paths_are_refused(
+    parts: list[str],
+    first: bytes,
+    second: bytes,
+) -> None:
+    """The same effective path twice is refused before materialization."""
+    name = "/".join(parts)
+    with _scratch_directory() as root:
+        archive = _write_archive(
+            root / "asset.tar.gz",
+            [(_info(name, data=first), first), (_info(name, data=second), second)],
+        )
+
+        _assert_refused_without_outside_writes(root, archive, "more than once")
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(
+    parts=st.lists(_SAFE_COMPONENT, min_size=1, max_size=3),
+    kind=st.sampled_from([tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE]),
+)
+def test_generated_special_members_are_refused(
+    parts: list[str],
+    kind: bytes,
+) -> None:
+    """Devices and FIFOs never reach the filesystem."""
+    with _scratch_directory() as root:
+        archive = _write_archive(
+            root / "asset.tar.gz",
+            [(_info("/".join(parts), kind=kind), b"")],
+        )
+
+        _assert_refused_without_outside_writes(root, archive, r"special|unsupported")
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(
+    body=st.binary(min_size=2, max_size=32),
+    slack=st.integers(min_value=1, max_value=16),
+    actual=st.integers(min_value=0, max_value=1),
+)
+def test_generated_size_bombs_are_refused(
+    body: bytes,
+    slack: int,
+    actual: int,
+) -> None:
+    """Declared sizes beyond the budget are refused before extraction.
+
+    `actual` selects whether the archive also declares more bytes than it
+    carries; either way the limit must be enforced from the headers alone.
+    """
+    declared = body if actual else body + b"x" * slack
+    with _scratch_directory() as root:
+        archive = _write_archive(
+            root / "asset.tar.gz", [(_info("a", data=declared), declared)]
+        )
+        outside, sentinel = _outside_sentinel(root)
+        destination = root / "out"
+
+        with pytest.raises(ProverToolError, match=r"extracted data|archive"):
+            extract_archive(
+                archive,
+                destination,
+                limits=ArchiveLimits(max_total_bytes=len(declared) - 1),
+            )
+
+        assert sentinel.read_text(encoding="utf-8") == "keep", "outside file changed"
+        assert sorted(entry.name for entry in outside.iterdir()) == ["sentinel"], (
+            "extraction wrote outside the destination"
+        )
+        assert not destination.exists() or not any(destination.iterdir()), (
+            "a refused archive published members"
+        )
+
+
+@settings(
+    max_examples=30,
+    deadline=None,
+    suppress_health_check=(HealthCheck.too_slow,),
+)
+@given(body=st.binary(min_size=2, max_size=32))
+def test_generated_truncated_member_bodies_are_refused(
+    body: bytes,
+) -> None:
+    """A stream that ends early never leaves a partial file behind."""
+    info = _info("partial", data=body)
+    truncation = len(body) // 2
+    with _scratch_directory() as root:
+        archive = root / "asset.tar.gz"
+        archive.write_bytes(
+            gzip.compress(info.tobuf(format=tarfile.PAX_FORMAT) + body[:truncation])
+        )
+        destination = root / "out"
+
+        with pytest.raises(ProverToolError, match=r"archive|incomplete|size"):
+            extract_archive(archive, destination)
+
+        assert not (destination / "partial").exists(), "a partial file survived"
+        assert not destination.exists() or not any(destination.iterdir()), (
+            "a failed extraction must not publish member files"
+        )
