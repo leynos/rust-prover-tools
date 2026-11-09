@@ -99,6 +99,13 @@ def _install_toolchain_file(path: str, delimiter: str, data: bytes) -> str:
     )
 
 
+_PYTHON_PAYLOAD = (
+    'mkdir -p "$kani/pyroot/site/kani"\n'
+    "cat > \"$kani/pyroot/site/kani/__init__.py\" <<'PYROOT'\n"
+    '"""Fixture Kani Python payload."""\n'
+    "PYROOT\n"
+)
+
 _SETUP = (
     "#!/bin/sh\n"
     "set -eu\n"
@@ -106,7 +113,8 @@ _SETUP = (
     'mkdir -p "$kani"\n'
     'tar -xzf "$3" -C "$kani" --strip-components=1\n'
     'mkdir -p "$kani/pyroot"\n'
-    f'toolchain="$RUSTUP_HOME/toolchains/{TOOLCHAIN}"\n'
+    + _PYTHON_PAYLOAD
+    + f'toolchain="$RUSTUP_HOME/toolchains/{TOOLCHAIN}"\n'
     'mkdir -p "$toolchain/bin" "$toolchain/lib/rustlib"\n'
     'mkdir -p "$toolchain/lib/rustlib/x86_64-unknown-linux-gnu/lib"\n'
     + _install_toolchain_file("bin/rustc", "RUSTC", RUSTC_BYTES)

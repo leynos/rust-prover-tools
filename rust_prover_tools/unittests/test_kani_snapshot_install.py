@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import io
+import shutil
 import tarfile
 import time
 import typing as typ
@@ -11,6 +12,7 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot import install as install_module
 from rust_prover_tools.kani_snapshot import install_state, install_transport
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
@@ -34,6 +36,7 @@ from tests.kani_snapshot_bundles import (
     write_file,
 )
 from tests.kani_snapshot_install_fixtures import (
+    PYTHON_ROOT_FILE,
     SnapshotCase,
     active_generation,
     install_hooks,
@@ -626,11 +629,167 @@ def test_check_rejects_a_python_root_that_is_a_symbolic_link(
     pyroot = identity.launcher.parent.parent / "pyroot"
     outside = tmp_path / "outside-python"
     outside.mkdir()
-    pyroot.rmdir()
+    shutil.rmtree(pyroot)
     pyroot.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ProverToolError, match=r"must not be a symbolic link"):
         check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_an_unrecorded_python_root_member(tmp_path: Path) -> None:
+    """Setup may add the Python root, but only the content it recorded."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    injected = (
+        identity.launcher.parent.parent / "pyroot" / "site" / "kani" / "injected.py"
+    )
+    injected.write_bytes(b"import os\n")
+
+    with pytest.raises(ProverToolError, match=r"does not describe"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_a_modified_python_root_member(tmp_path: Path) -> None:
+    """A recorded Python member must keep the bytes setup wrote."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    recorded = identity.launcher.parent.parent / "pyroot" / PYTHON_ROOT_FILE
+    recorded.write_bytes(b'"""Tampered Kani Python payload."""\n')
+
+    with pytest.raises(ProverToolError, match=r"do not match the record"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_a_generation_without_a_python_root_record(
+    tmp_path: Path,
+) -> None:
+    """Reuse cannot treat a missing record as an empty Python root."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    record = identity.generation / "pyroot.json"
+    record.unlink()
+
+    with pytest.raises(ProverToolError, match=r"no recorded setup content"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_rejects_a_same_size_backend_replacement(tmp_path: Path) -> None:
+    """Cache reuse rehashes the backend, so an equal-size edit is still caught."""
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    backend = layout.downloads_dir / "backend.tar.gz"
+    data = bytearray(backend.read_bytes())
+    data[-1] ^= 0xFF
+    backend.write_bytes(bytes(data))
+
+    with pytest.raises(ProverToolError, match=r"backend\.tar\.gz.*digest"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_install_rejects_a_rustup_home_that_escapes_the_generation(
+    tmp_path: Path,
+) -> None:
+    """A relocated rustup home cannot satisfy the toolchain containment rule."""
+    case = make_case(tmp_path)
+    base = install_hooks(case)
+
+    def relocating_setup(
+        runtime: SnapshotRuntime,
+        bundle: Path,
+        timeout_seconds: float | None,
+    ) -> None:
+        """Install normally, then replace the private home with an outside link."""
+        base.setup(runtime, bundle, timeout_seconds)
+        outside = tmp_path / "outside-rustup"
+        runtime.layout.rustup_home.rename(outside)
+        runtime.layout.rustup_home.symlink_to(outside, target_is_directory=True)
+
+    hooks = dc.replace(base, setup=relocating_setup)
+    with pytest.raises(ProverToolError, match=r"rustup home escapes its generation"):
+        install_snapshot(install_options(case), hooks)
+
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, "an escaping rustup home was activated"
+
+
+def test_check_rejects_a_relocated_rustup_home(tmp_path: Path) -> None:
+    """Reuse applies the same generation containment rule as installation."""
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=active_generation(case),
+    )
+    outside = tmp_path / "outside-rustup"
+    layout.rustup_home.rename(outside)
+    layout.rustup_home.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ProverToolError, match=r"rustup home escapes its generation"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_launcher_copy_reports_progress_inside_a_large_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A launcher member is copied in chunks that each reach the deadline."""
+    monkeypatch.setattr(install_module, "READ_CHUNK_SIZE", 16)
+    source = tmp_path / "launcher"
+    source.write_bytes(b"x" * 64)
+    source.chmod(0o755)
+    destination = tmp_path / "installed"
+    calls: list[None] = []
+
+    def checkpoint() -> None:
+        """Expire the budget partway through the copy."""
+        calls.append(None)
+        if len(calls) > 2:
+            msg = "deadline expired during launcher placement"
+            raise ProverToolError(msg)
+
+    with pytest.raises(ProverToolError, match=r"launcher placement"):
+        install_module._copy_launcher(source, destination, checkpoint)
+
+    assert not destination.exists(), "an interrupted copy left a partial launcher"
+
+
+def test_install_deadline_interrupts_launcher_placement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An expired budget stops launcher placement before activation."""
+    case = make_case(tmp_path)
+    state = {"started": False}
+    real_copy = install_module._copy_launcher
+
+    def expire_during_copy(
+        entry: Path,
+        destination: Path,
+        checkpoint: cabc.Callable[[], None] | None,
+    ) -> None:
+        """Mark placement as started, then let the real copy checkpoint."""
+        state["started"] = True
+        real_copy(entry, destination, checkpoint)
+
+    def clock() -> float:
+        """Report an expired budget once placement has started."""
+        return 10_000.0 if state["started"] else 0.0
+
+    monkeypatch.setattr(install_module, "READ_CHUNK_SIZE", 1)
+    monkeypatch.setattr(install_module, "_copy_launcher", expire_during_copy)
+    monkeypatch.setattr(time, "monotonic", clock)
+    options = dc.replace(install_options(case), deadline_seconds=10.0)
+
+    with pytest.raises(
+        ProverToolError,
+        match=r"deadline expired during launcher placement",
+    ):
+        install_snapshot(options, install_hooks(case))
+
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, "an expired install activated a generation"
 
 
 def test_install_deadline_interrupts_payload_staging(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import shutil
 import typing as typ
 
 import pytest
@@ -160,6 +161,25 @@ def test_verify_toolchain_rejects_a_toolchain_link_out_of_the_rustup_home(
     root.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ProverToolError, match=r"escapes the private rustup home"):
+        verify_toolchain(runtime, _manifest())
+
+
+def test_verify_toolchain_rejects_a_rustup_home_that_escapes_the_generation(
+    tmp_path: Path,
+) -> None:
+    """A relocated rustup home cannot smuggle an out-of-generation toolchain.
+
+    Setup owns the private home, so a home that is really a link to another
+    tree would make the toolchain-containment check vacuous: the toolchain
+    would sit inside the linked home while that home sits outside the
+    generation.
+    """
+    runtime = _runtime(tmp_path)
+    outside = tmp_path / "outside-rustup"
+    shutil.move(str(runtime.layout.rustup_home), str(outside))
+    runtime.layout.rustup_home.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ProverToolError, match=r"rustup home escapes its generation"):
         verify_toolchain(runtime, _manifest())
 
 

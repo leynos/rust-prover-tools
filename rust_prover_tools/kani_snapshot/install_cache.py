@@ -9,8 +9,6 @@ Activation and execution call it before trusting either.
 from __future__ import annotations
 
 import hashlib
-import os
-import stat
 import tempfile
 import typing as typ
 from pathlib import Path
@@ -28,6 +26,7 @@ from rust_prover_tools.kani_snapshot.inventory import (
     validate_archive_inventory,
     validate_tree,
 )
+from rust_prover_tools.kani_snapshot.python_root import require_python_root_matches
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -44,10 +43,12 @@ if typ.TYPE_CHECKING:
 __all__ = ("validate_cached_payloads", "validate_installed_tree")
 
 _FULLY_VERIFIED_ROLES: typ.Final[frozenset[str]] = frozenset({
+    "backend",
     "inventory",
     "launcher",
 })
 #: Members that setup or launcher placement add to the backend inventory.
+#: `pyroot`'s content is not open-ended: `python_root` records it at install.
 _SETUP_ADDITIONS: typ.Final[tuple[str, ...]] = (
     "bin/cargo-kani",
     "bin/kani",
@@ -85,8 +86,9 @@ def validate_installed_tree(
     ------
     ProverToolError
         Raised when the installed tree differs from the inventory, the Python
-        root or one of its links escapes the generation, or an installed
-        launcher file differs from the verified archive.
+        root differs from its recorded setup content (or one of its links
+        escapes the generation), or an installed launcher file differs from
+        the verified archive.
     """
     inventory_asset, _ = _payload_assets(manifest)
     inventory = load_inventory(layout.downloads_dir / inventory_asset.name)
@@ -96,76 +98,8 @@ def validate_installed_tree(
         allowed_extra=_SETUP_ADDITIONS,
         checkpoint=checkpoint,
     )
-    _require_python_root(runtime, checkpoint)
+    require_python_root_matches(runtime, checkpoint=checkpoint)
     _validate_installed_launcher(layout, manifest, runtime, checkpoint)
-
-
-def _require_python_root(
-    runtime: SnapshotRuntime,
-    checkpoint: cabc.Callable[[], None] | None,
-) -> None:
-    """Require the setup-created Python root to stay inside the generation.
-
-    `pyroot` is an allowed extra because setup creates it, so the inventory
-    cannot describe it. Execution nevertheless adds it to `PYTHONPATH` and
-    `pyroot/bin` to `PATH`, which means a symbolic link or a relocated root
-    could make the pinned launcher import or execute bytes outside the
-    verified generation. Absence is accepted: a snapshot without a Python
-    payload simply has no root to inspect.
-    """
-    root = runtime.python_root
-    try:
-        status = root.lstat()
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        msg = f"failed to inspect snapshot Python root '{root}': {exc}"
-        raise ProverToolError(msg) from exc
-    if stat.S_ISLNK(status.st_mode):
-        msg = f"snapshot Python root must not be a symbolic link: {root}"
-        raise ProverToolError(msg)
-    if not stat.S_ISDIR(status.st_mode):
-        msg = f"snapshot Python root is not a directory: {root}"
-        raise ProverToolError(msg)
-    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
-    resolved_root = _resolve(root, "snapshot Python root")
-    if not resolved_root.is_relative_to(generation):
-        msg = f"snapshot Python root resolves outside its generation: {root}"
-        raise ProverToolError(msg)
-    _require_contained_python_links(root, generation, checkpoint)
-
-
-def _require_contained_python_links(
-    root: Path,
-    generation: Path,
-    checkpoint: cabc.Callable[[], None] | None,
-) -> None:
-    """Reject any symbolic link below the Python root that escapes it."""
-    for directory, names, filenames in os.walk(root, followlinks=False):
-        for name in (*names, *filenames):
-            if checkpoint is not None:
-                checkpoint()
-            path = Path(directory) / name
-            try:
-                status = path.lstat()
-            except OSError as exc:
-                msg = f"failed to inspect snapshot Python root member '{path}': {exc}"
-                raise ProverToolError(msg) from exc
-            if not stat.S_ISLNK(status.st_mode):
-                continue
-            target = _resolve(path, "snapshot Python root link")
-            if not target.is_relative_to(generation):
-                msg = f"snapshot Python root link escapes its generation: {path}"
-                raise ProverToolError(msg)
-
-
-def _resolve(path: Path, description: str) -> Path:
-    """Resolve one path, reporting unreadable or looping links."""
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError) as exc:
-        msg = f"failed to resolve {description} '{path}': {exc}"
-        raise ProverToolError(msg) from exc
 
 
 def _validate_installed_launcher(
@@ -228,7 +162,12 @@ def validate_cached_payloads(
     *,
     checkpoint: cabc.Callable[[], None] | None = None,
 ) -> None:
-    """Recheck cached sizes, small payload digests and the backend inventory."""
+    """Recheck cached digests and the backend archive's inventory agreement.
+
+    The backend archive is both rehashed and re-read. Hashing alone would not
+    prove its structure still matches the inventory, and a structural pass
+    alone would accept a same-size replacement whose headers happened to parse.
+    """
     downloads = layout.downloads_dir
     for asset in manifest.assets:
         if checkpoint is not None:

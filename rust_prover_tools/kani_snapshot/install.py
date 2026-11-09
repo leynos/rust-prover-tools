@@ -12,10 +12,11 @@ import dataclasses as dc
 import functools
 import logging
 import os
-import shutil
+import stat
 import time
 import typing as typ
 
+from rust_prover_tools.download_stream import READ_CHUNK_SIZE
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
 from rust_prover_tools.kani_snapshot.identity import (
@@ -43,6 +44,8 @@ from rust_prover_tools.kani_snapshot.install_transport import (
     bundle_policy,
     stage_assets,
 )
+from rust_prover_tools.kani_snapshot.progress import as_checkpoint
+from rust_prover_tools.kani_snapshot.python_root import record_python_root
 from rust_prover_tools.kani_snapshot.receipt import build_receipt, render_receipt
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotLayout,
@@ -54,6 +57,7 @@ from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
@@ -251,6 +255,16 @@ def _install_generation(
         layout,
         checkpoint=context.deadline.checkpoint("launcher placement"),
     )
+    # Setup owns `pyroot`, so its content is recorded before validation turns
+    # the inventory's open-ended allowance for it into a closed contract.
+    _write_generation_file(
+        layout.python_root_record_path,
+        record_python_root(
+            runtime,
+            checkpoint=context.deadline.checkpoint("Python root recording"),
+        ),
+        "Python root record",
+    )
     validate_installed_tree(
         layout,
         manifest,
@@ -271,7 +285,7 @@ def _install_generation(
     _require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)
     receipt = build_receipt(context.options.pin, manifest, identity, evidence)
-    _write_receipt(layout, render_receipt(receipt))
+    _write_generation_file(layout.receipt_path, render_receipt(receipt), "receipt")
     context.deadline.check("activation")
     write_active(layout, layout.generation_dir.name)
     log_event(
@@ -298,11 +312,38 @@ def _install_launcher_binaries(
         destination = target / entry.name
         if destination.exists():
             continue
-        try:
-            shutil.copy2(entry, destination)
-        except OSError as exc:
-            msg = f"failed to install snapshot launcher '{entry.name}': {exc}"
-            raise ProverToolError(msg) from exc
+        _copy_launcher(entry, destination, checkpoint)
+
+
+def _copy_launcher(
+    entry: Path,
+    destination: Path,
+    checkpoint: cabc.Callable[[], None] | None,
+) -> None:
+    """Copy one launcher file in bounded chunks that report progress.
+
+    `shutil.copy2` is one uninterrupted transfer, so a launcher archive with a
+    large member could spend the rest of the installation budget inside it
+    without ever reaching a checkpoint. The copy also preserves the archive
+    member's permission bits, which the launcher contract then requires.
+    """
+    progress = as_checkpoint(checkpoint)
+    try:
+        mode = stat.S_IMODE(entry.stat().st_mode)
+        with entry.open("rb") as reader, destination.open("xb") as writer:
+            while chunk := reader.read(READ_CHUNK_SIZE):
+                progress()
+                writer.write(chunk)
+            writer.flush()
+            os.fsync(writer.fileno())
+        destination.chmod(mode)
+    except OSError as exc:
+        destination.unlink(missing_ok=True)
+        msg = f"failed to install snapshot launcher '{entry.name}': {exc}"
+        raise ProverToolError(msg) from exc
+    except ProverToolError:
+        destination.unlink(missing_ok=True)
+        raise
 
 
 def _require_evidence(
@@ -327,20 +368,18 @@ def _require_evidence(
             raise ProverToolError(msg)
 
 
-def _write_receipt(layout: SnapshotLayout, data: bytes) -> None:
-    """Publish the receipt durably inside the generation."""
-    pending = layout.receipt_path.with_name(
-        f".receipt-{os.getpid()}-{time.monotonic_ns()}"
-    )
+def _write_generation_file(path: Path, data: bytes, description: str) -> None:
+    """Publish one generation-local file durably."""
+    pending = path.with_name(f".{path.name}-{os.getpid()}-{time.monotonic_ns()}")
     try:
         with pending.open("xb") as handle:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         pending.chmod(_PRIVATE_FILE_MODE)
-        pending.replace(layout.receipt_path)
-        fsync_directory(layout.generation_dir)
+        pending.replace(path)
+        fsync_directory(path.parent)
     except OSError as exc:
         pending.unlink(missing_ok=True)
-        msg = f"failed to write snapshot receipt: {exc}"
+        msg = f"failed to write snapshot {description}: {exc}"
         raise ProverToolError(msg) from exc

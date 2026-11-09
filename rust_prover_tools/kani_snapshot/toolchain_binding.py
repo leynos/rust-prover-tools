@@ -62,12 +62,16 @@ def toolchain_root(runtime: SnapshotRuntime) -> Path:
     here as one plain toolchain name and its resolved path must remain inside
     the generation's private rustup home. A manifest therefore cannot select an
     absolute path, a parent traversal or a symbolic link out of the generation.
+    The rustup home itself must also resolve inside the generation: checking
+    only that the toolchain sits below the home would accept a home that setup
+    replaced with a link to anywhere else.
 
     Raises
     ------
     ProverToolError
-        Raised when the identifier is not one safe toolchain name or the
-        resolved toolchain escapes the private rustup home.
+        Raised when the identifier is not one safe toolchain name, the private
+        rustup home escapes the generation, or the resolved toolchain escapes
+        the private rustup home.
     """
     name = runtime.toolchain
     if not is_safe_toolchain_name(name):
@@ -75,7 +79,13 @@ def toolchain_root(runtime: SnapshotRuntime) -> Path:
         raise ProverToolError(msg)
     toolchains = runtime.layout.rustup_home / "toolchains"
     root = toolchains / name
+    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
     home = _resolve(runtime.layout.rustup_home, "private rustup home")
+    if not home.is_relative_to(generation):
+        msg = (
+            f"snapshot rustup home escapes its generation: {runtime.layout.rustup_home}"
+        )
+        raise ProverToolError(msg)
     resolved = _resolve(root, "private toolchain")
     if not resolved.is_relative_to(home):
         msg = f"snapshot toolchain escapes the private rustup home: {root}"

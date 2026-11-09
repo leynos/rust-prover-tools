@@ -325,6 +325,28 @@ EP-O1 assigns responsibility and records live evidence.
   `lint`, `typecheck`, `test`, `markdownlint`, `nixie`) then passed on this
   candidate: 1163 passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty`
   clean and every Mermaid diagram valid.
+- [x] (2026-11-09) Remediated the second candidate-bound EP-M3 re-assessment at
+  `5778e50` (four findings, two evidence upgrades). (1) `verify_toolchain` now
+  requires the private rustup home itself to resolve inside the generation, not
+  merely to contain the toolchain; installation and reuse both refuse an
+  escaping home. (2) The new `python_root` module records every member below
+  `pyroot` in a generation-local canonical `pyroot.json` and requires an exact
+  match on reuse, closing the open-ended setup allowance with precise
+  missing/extra/changed diagnostics. (3) Launcher placement copies in bounded
+  chunks with a checkpoint and fsync per chunk, and `archive_read` wraps raw
+  reads so header scans also checkpoint while skipping a large member's body.
+  (4) Cache reuse rehashes the backend, inventory and launcher payloads instead
+  of trusting recorded sizes, so an equal-size backend edit is refused.
+  Evidence: the interruption suite now kills an installer after a partial
+  staged write, proves the pointer unchanged, and repairs from the intact
+  source release without restoring the damaged cache; the concurrency suite
+  adds a two-actor Hypothesis lock model and a witness that stalls an owner
+  inside setup so the contender's refusal is observed mid-pipeline, with the
+  retry reusing the owner's generation. Every repair has a test that failed
+  before it. The full sequential gate stack (`fmt`, `check-fmt`, `lint`,
+  `typecheck`, `test`, `markdownlint`, `nixie`) passed on this candidate: 1175
+  passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty` clean, spelling
+  and Mermaid validation clean.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -600,6 +622,25 @@ provides checkpoints threaded through transport copying, digest hashing,
 archive extraction and structure validation, launcher placement, installed-tree
 validation and toolchain verification. Each long local phase stops at expiry
 instead of only being checked before it starts and after it ends.
+
+2026-11-09, implemented D4 Python-root record: the inventory's `pyroot`
+exemption is closed by a generation-local `pyroot.json` written after setup. It
+records every member below the root with path, kind, mode, size, digest and
+contained link target, and reuse requires byte-identical content. Recording
+rather than extending the manifest keeps the producer from having to publish
+setup's output, and it makes setup nondeterminism and post-install drift
+detectable instead of importable.
+
+2026-11-09, implemented D4 reuse and interruption hardening: the private rustup
+home must resolve inside its generation; cache reuse rehashes the backend,
+inventory and launcher payloads and re-reads each archive's structure instead
+of trusting recorded sizes; launcher placement copies in bounded, fsynced
+chunks and archive scans checkpoint raw reads, so both stop inside a large
+transfer. Evidence adds a two-actor Hypothesis lock model over the real
+`flock`, a witness that stalls an owner inside setup so the contender is
+refused mid-pipeline and later reuses the owner's generation, and an
+interruption test that repairs from the intact source release after a killed
+partial staged write without restoring the damaged cache.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline

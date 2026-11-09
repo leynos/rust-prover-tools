@@ -1,14 +1,18 @@
-"""Two-process concurrency contracts for snapshot installation.
+"""Concurrency contracts for snapshot installation.
 
 The invariant is that active state names only a complete, validated
 generation. These tests force the cases a sequential model cannot: overlapping
 installs agree on one generation, an owner killed while holding the lock
-releases it, and a bounded lock timeout refuses rather than hanging.
+releases it, and a bounded lock timeout refuses rather than hanging. One
+witness stalls an owner inside its pipeline so the contender's refusal is
+observed at the pipeline boundary rather than only around a bare lock; the
+in-process two-actor model lives in `test_kani_snapshot_lock_model`.
 Sequential activation safety is covered in `test_kani_snapshot_activation`.
 """
 
 from __future__ import annotations
 
+import dataclasses as dc
 import multiprocessing
 import time
 import typing as typ
@@ -33,6 +37,7 @@ from tests.kani_snapshot_install_fixtures import (
 if typ.TYPE_CHECKING:
     from multiprocessing import queues, synchronize
 
+    from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 
@@ -77,6 +82,37 @@ def _acquire_lock(
             outcome.put("acquired")
     except ProverToolError as exc:
         outcome.put(f"refused: {exc}")
+
+
+def _install_and_stall_inside_setup(
+    case: SnapshotCase,
+    in_pipeline: synchronize.Event,
+    resume: synchronize.Event,
+    outcomes: queues.Queue[str],
+) -> None:
+    """Stall inside setup, after staging, while holding the identity lock."""
+    hooks = install_hooks(case)
+
+    def stalling_setup(
+        runtime: SnapshotRuntime,
+        bundle: Path,
+        timeout_seconds: float | None,
+    ) -> None:
+        """Announce that the pipeline is mid-flight, then wait to continue."""
+        in_pipeline.set()
+        if not resume.wait(30):
+            msg = "parent never released the stalled pipeline"
+            raise ProverToolError(msg)
+        hooks.setup(runtime, bundle, timeout_seconds)
+
+    try:
+        install_snapshot(
+            install_options(case),
+            dc.replace(hooks, setup=stalling_setup),
+        )
+        outcomes.put(active_generation(case))
+    except Exception as exc:  # ruff: ignore[blind-except] - the parent reports it
+        outcomes.put(f"error:{type(exc).__name__}:{exc}")
 
 
 @pytest.mark.timeout(30)
@@ -208,6 +244,62 @@ def test_killed_staging_owner_releases_the_lock(tmp_path: Path) -> None:
         check_snapshot(options, install_hooks(case))
     finally:
         owner.join(10)
+
+
+@pytest.mark.timeout(120)
+def test_contention_inside_the_pipeline_withholds_publication(
+    tmp_path: Path,
+) -> None:
+    """A peer refused mid-pipeline cannot publish, and later reuses the result.
+
+    The owner is stalled in setup, so it holds the identity lock with staging
+    already complete and no active pointer yet. The contender is refused at
+    that boundary rather than around a bare lock: it must not leave state of
+    its own behind, and once the owner finishes the retry must reuse the
+    owner's generation instead of publishing a second one.
+    """
+    context = multiprocessing.get_context("spawn")
+    case = make_case(tmp_path)
+    in_pipeline = context.Event()
+    resume = context.Event()
+    outcomes = context.Queue()
+    generation = ""
+    owner = context.Process(
+        target=_install_and_stall_inside_setup,
+        args=(case, in_pipeline, resume, outcomes),
+    )
+    owner.start()
+    try:
+        assert in_pipeline.wait(20), "the owner never reached setup"
+        layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+        assert load_active(layout) is None, "a stalled pipeline published a generation"
+        contender = dc.replace(
+            install_options(case),
+            lock_timeout_seconds=0.2,
+        )
+        with pytest.raises(ProverToolError, match="timed out"):
+            install_snapshot(contender, install_hooks(case))
+        assert load_active(layout) is None, (
+            "the refused contender activated a generation"
+        )
+        resume.set()
+        generation = typ.cast("str", outcomes.get(timeout=60))
+    finally:
+        resume.set()
+        owner.join(30)
+
+    assert owner.exitcode == 0, "the stalled owner crashed"
+    assert generation, "the stalled owner reported nothing"
+    assert not generation.startswith("error:"), (
+        f"the stalled owner failed: {generation}"
+    )
+    options = install_options(case)
+    assert active_generation(case) == generation, "the owner did not publish"
+    install_snapshot(options, install_hooks(case))
+    assert active_generation(case) == generation, (
+        "the retry published a second generation instead of reusing"
+    )
+    check_snapshot(options, install_hooks(case))
 
 
 @pytest.mark.timeout(120)

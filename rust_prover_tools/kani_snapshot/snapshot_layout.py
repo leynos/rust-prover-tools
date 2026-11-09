@@ -80,6 +80,11 @@ class SnapshotLayout:
         return self.generation_dir / "receipt.json"
 
     @property
+    def python_root_record_path(self) -> Path:
+        """Generation-local record of the setup-created Python root."""
+        return self.generation_dir / "pyroot.json"
+
+    @property
     def active_path(self) -> Path:
         """Identity-level atomic active pointer."""
         return self.identity_dir / "active.json"

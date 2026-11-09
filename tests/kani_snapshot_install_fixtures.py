@@ -44,6 +44,7 @@ if typ.TYPE_CHECKING:
     )
 
 __all__ = (
+    "PYTHON_ROOT_FILE",
     "SnapshotCase",
     "active_generation",
     "install_hooks",
@@ -51,6 +52,10 @@ __all__ = (
     "make_case",
     "rewrite_manifest_asset",
 )
+
+#: One setup-created Python payload, recorded with the root's content contract.
+PYTHON_ROOT_FILE: typ.Final[str] = "site/kani/__init__.py"
+_PYTHON_ROOT_BYTES: typ.Final[bytes] = b'"""Fixture Kani Python payload."""\n'
 
 
 @dc.dataclass(slots=True)
@@ -101,6 +106,7 @@ def install_hooks(
             policy=bundle_policy(runtime.backend_version),
         )
         (kani / "pyroot").mkdir()
+        write_file(kani / "pyroot" / PYTHON_ROOT_FILE, _PYTHON_ROOT_BYTES)
         # The toolchain bytes are exactly what the manifest digests describe,
         # so the double mirrors real setup rather than merely its shape.
         target = runtime.layout.rustup_home / "toolchains" / runtime.toolchain

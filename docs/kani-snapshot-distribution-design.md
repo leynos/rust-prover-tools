@@ -361,27 +361,35 @@ Activation remains a pointer write after validation. Repeating an install
 reuses a still-valid active generation before staging transport files, so
 changed local assets cannot disturb a healthy cache; changed assets are refused
 only when a new generation must be staged. `check` and `run` re-read the cached
-manifest, recheck receipt, cached sizes, the inventory and launcher digests,
-the backend/inventory agreement, executable modes, the absolute toolchain link
-and both probes. A corrupt generation is repaired by creating a new generation;
-the previous directory is never deleted. Install runs the same runtime-file
-contract as `check` before the probe executes anything, so a launcher archive
-that omits or strips the execute bit from a required binary cannot be activated.
+manifest, recheck receipt, rehash the backend, inventory and launcher payloads
+rather than trusting their recorded sizes, re-read each archive's structure,
+check the backend/inventory agreement, executable modes, the absolute toolchain
+link and both probes. A corrupt generation is repaired by creating a new
+generation; the previous directory is never deleted. Install runs the same
+runtime-file contract as `check` before the probe executes anything, so a
+launcher archive that omits or strips the execute bit from a required binary
+cannot be activated.
 
 The toolchain identifier is treated as a single path component, not free text:
 the parser and construction boundary reject absolute paths, parent traversal
 and symbolic links that resolve outside the generation's private Rustup home.
-Verification covers the compiler, the component list and every recorded
-library, and rejects any shared object under `<toolchain>/lib` that the
-manifest does not record, because the pinned dynamic-loader path would
-otherwise expose it. The identity probe sets the same `LD_LIBRARY_PATH` as the
-proof, so a host Rustup toolchain cannot shadow the verified libraries while
-the probe reports them.
+The private home itself must also resolve inside the generation, so a
+generation cannot be made to install its toolchain anywhere else. Verification
+covers the compiler, the component list and every recorded library, and rejects
+any shared object under `<toolchain>/lib` that the manifest does not record,
+because the pinned dynamic-loader path would otherwise expose it. The identity
+probe sets the same `LD_LIBRARY_PATH` as the proof, so a host Rustup toolchain
+cannot shadow the verified libraries while the probe reports them.
 
 Installed-tree validation exempts only the documented setup additions. `pyroot`
 is a setup-created directory whose contents the backend inventory cannot
-describe, so its descendants are exempt from inventory matching, but the
-directory itself must be a real directory inside the generation and every link
+describe, so its descendants are exempt from inventory matching. That allowance
+is closed by a generation-local record: after setup, the installer writes
+`pyroot.json`, a canonical JSON document describing every member below the root
+by path, kind, mode, size, digest and link target. Reuse requires the record to
+exist and the tree to match it exactly, so setup nondeterminism and
+post-install drift are both refused rather than silently accepted. The
+directory must still be a real directory inside the generation and every link
 beneath it must resolve inside the generation. `bin/cargo-kani` and `bin/kani`
 remain single-file exemptions beside the recorded `bin` inventory.
 
@@ -393,7 +401,8 @@ checks or a slow first command cannot extend the deadline. A bounded command
 runs as its own process group and expiry terminates the whole group, so a
 stalled `rustup` download cannot outlive the deadline or hold the lock past it.
 The same budget supplies checkpoints to local work — payload copying, digest
-hashing, archive extraction and structure validation, launcher placement,
+hashing, archive extraction and structure validation, archive header scanning
+including the bodies it skips, launcher placement in bounded chunks,
 installed-tree validation and toolchain verification — so each long phase stops
 when the deadline expires instead of only being checked at its boundary. Reuse
 is reported only after a final deadline check following the probe. The active

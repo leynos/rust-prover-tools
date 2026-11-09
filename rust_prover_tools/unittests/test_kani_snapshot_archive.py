@@ -7,6 +7,7 @@ import dataclasses as dc
 import gzip
 import io
 import posixpath
+import random
 import stat
 import tarfile
 import tempfile
@@ -94,6 +95,38 @@ def test_valid_archive_preserves_files_modes_and_contained_links(
     assert (destination / "bin/tool-hard").stat().st_ino == (
         destination / "bin/tool"
     ).stat().st_ino
+
+
+def test_read_archive_reports_progress_while_skipping_a_large_member(
+    tmp_path: Path,
+) -> None:
+    """Scanning must checkpoint inside a large member, not only per header.
+
+    `tarfile` reaches the next header by reading through the compressed body,
+    so a one-member archive whose body is skipped between two headers used to
+    spend the whole skip without reporting progress. The body is incompressible
+    on purpose: a compressible one fits in a single decompressor fill, so the
+    skip would never need a second raw read and would not witness the fix.
+    """
+    # Not a security boundary: deterministic bytes that merely compress badly.
+    body = random.Random(20261109).randbytes(4 * 1024 * 1024)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
+    archive = _write_archive(
+        tmp_path / "large.tar.gz",
+        [(_info("blob.bin", data=body), body)],
+    )
+    calls: list[None] = []
+
+    def checkpoint() -> None:
+        """Expire the budget well after the first member's header."""
+        calls.append(None)
+        if len(calls) > 16:
+            msg = "deadline expired during archive scan"
+            raise ProverToolError(msg)
+
+    with pytest.raises(ProverToolError, match=r"archive scan"):
+        read_archive(archive, checkpoint=checkpoint)
+
+    assert len(calls) > 16, "the skip never reported progress"
 
 
 def test_required_root_is_stripped_before_materialization(tmp_path: Path) -> None:

@@ -35,6 +35,7 @@ from rust_prover_tools.kani_snapshot.archive_graph import (
 )
 from rust_prover_tools.kani_snapshot.archive_read import (
     _entry_from_member,
+    open_tar_archive,
     read_archive,
 )
 from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
@@ -135,15 +136,20 @@ def extract_archive(  # ruff: ignore[too-many-arguments] - one parameter per arc
 
 
 @contextlib.contextmanager
-def _open_archive(archive_path: Path) -> cabc.Generator[tarfile.TarFile]:
+def _open_archive(
+    archive_path: Path,
+    checkpoint: Progress,
+) -> cabc.Generator[tarfile.TarFile]:
     """Open an archive for a materialization pass, reporting open failures.
 
-    The surrounding `try` also turns an unusual mid-stream `OSError` into the
-    same archive-level report; member bodies raise `tarfile.TarError`, which the
+    Reads report the caller's checkpoint too, so a pass that only scans
+    headers still reaches a deadline while it skips a large member's body. The
+    surrounding `try` also turns an unusual mid-stream `OSError` into the same
+    archive-level report; member bodies raise `tarfile.TarError`, which the
     caller handles separately.
     """
     try:
-        with contextlib.closing(tarfile.open(archive_path, "r:gz")) as archive:
+        with open_tar_archive(archive_path, checkpoint) as archive:
             yield archive
     except OSError as exc:
         msg = f"failed to read snapshot archive '{archive_path}': {exc}"
@@ -164,7 +170,7 @@ class _Extraction:
 def _materialize_files(extraction: _Extraction) -> None:
     """Create directories and regular files, skipping links."""
     total = 0
-    with _open_archive(extraction.archive_path) as archive:
+    with _open_archive(extraction.archive_path, extraction.checkpoint) as archive:
         for member in archive:
             extraction.checkpoint()
             entry = _entry_from_member(member, extraction.limits, extraction.policy)
@@ -251,7 +257,7 @@ def _materialize_links(extraction: _Extraction) -> None:
     """Create symbolic links, then hard links to already written files."""
     symbolic: list[ArchiveEntry] = []
     hard: list[ArchiveEntry] = []
-    with _open_archive(extraction.archive_path) as archive:
+    with _open_archive(extraction.archive_path, extraction.checkpoint) as archive:
         for member in archive:
             extraction.checkpoint()
             entry = _entry_from_member(member, extraction.limits, extraction.policy)

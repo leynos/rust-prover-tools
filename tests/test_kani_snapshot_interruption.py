@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import multiprocessing
+import os
 import time
 import typing as typ
 
@@ -32,12 +33,19 @@ if typ.TYPE_CHECKING:
     from multiprocessing import queues, synchronize
     from pathlib import Path
 
+    from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
-def _install_and_stall_during_staging(case: SnapshotCase, marker: Path) -> None:
-    """Install, but stall as soon as the pipeline starts copying assets.
 
-    The parent kills this process while it waits, so the marker must be
-    written before the first staged byte exists.
+def _install_and_stall_during_staging(
+    case: SnapshotCase,
+    marker: Path,
+    partial_name: str,
+) -> None:
+    """Install, stall after a partial staged write, then wait to be killed.
+
+    The parent kills this process while it sleeps, so the partial pending file
+    and the marker exist first. The partial file models a real interrupted
+    transfer rather than a stall before any byte is written.
     """
     real_copy = install_transport._copy_local
 
@@ -47,7 +55,12 @@ def _install_and_stall_during_staging(case: SnapshotCase, marker: Path) -> None:
         file: install_transport._TransportFile,
         checkpoint: cabc.Callable[[], None] | None = None,
     ) -> Path:
-        """Announce staging, then block until the parent kills this process."""
+        """Write part of one asset, announce staging, then block."""
+        if file.name != partial_name:
+            return real_copy(source, destination_dir, file, checkpoint)
+        pending = destination_dir / f".{file.name}.{os.getpid()}.pending"
+        with (source / file.name).open("rb") as reader:
+            pending.write_bytes(reader.read(1024))
         marker.write_text("staging", encoding="utf-8")
         time.sleep(60)
         return real_copy(source, destination_dir, file, checkpoint)
@@ -105,15 +118,18 @@ def _install_and_report(
 
 
 @pytest.mark.timeout(120)
-def test_killed_staging_installer_preserves_the_active_generation(
+def test_killed_installer_after_a_partial_write_leaves_recovery_intact(
     tmp_path: Path,
 ) -> None:
-    """An installer killed mid-staging leaves the pointer and recovery intact.
+    """A kill after a partial staged write neither publishes nor blocks repair.
 
-    Damaged downloads force the repair path, so the child is staging new
-    payloads while an older, currently active generation exists. Killing it
-    there must not publish a partial generation, and restoring the downloads
-    must let the next install reuse the old one.
+    Damaged downloads force the repair path, so the child is re-staging the
+    backend from the intact source release while an older generation is
+    active. The child is killed after writing part of the new backend into its
+    private staging directory. The pointer must still name the old generation,
+    and the next install must repair the cache from the source release on its
+    own: the test never restores the damaged cache, so recovery cannot be
+    confused with manual cleanup.
     """
     context = multiprocessing.get_context("spawn")
     case = make_case(tmp_path)
@@ -123,13 +139,12 @@ def test_killed_staging_installer_preserves_the_active_generation(
     # generation fail revalidation while a fresh staging can still succeed.
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
     backend = layout.downloads_dir / "backend.tar.gz"
-    original = backend.read_bytes()
-    backend.write_bytes(original + b"damaged")
+    backend.write_bytes(backend.read_bytes() + b"damaged")
 
     marker = tmp_path / "staging-started"
     owner = context.Process(
         target=_install_and_stall_during_staging,
-        args=(case, marker),
+        args=(case, marker, backend.name),
     )
     owner.start()
     try:
@@ -140,18 +155,43 @@ def test_killed_staging_installer_preserves_the_active_generation(
         owner.kill()
         owner.join(10)
         assert owner.exitcode is not None, "the killed installer did not exit"
-        assert active_generation(case) == generation, (
-            "a killed staging owner changed the active generation"
-        )
     finally:
-        backend.write_bytes(original)
         owner.join(10)
 
-    check_snapshot(install_options(case), install_hooks(case))
-    install_snapshot(install_options(case), install_hooks(case))
     assert active_generation(case) == generation, (
-        "recovery did not reuse the preserved generation"
+        "a killed staging owner changed the active generation"
     )
+    partials = _partial_staging_files(layout)
+    assert partials, "the killed installer left no partial staged write"
+    assert all(path.stat().st_size < backend.stat().st_size for path in partials), (
+        "the partial staged write was actually complete"
+    )
+
+    # No restoration happens here: the intact source release is the only
+    # repair input, exactly as a real operator would leave it.
+    install_snapshot(install_options(case), install_hooks(case))
+    check_snapshot(install_options(case), install_hooks(case))
+    previous = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=generation,
+    )
+    assert previous.receipt_path.is_file(), (
+        "recovery destroyed the previously active generation"
+    )
+    assert previous.python_root_record_path.is_file(), (
+        "recovery destroyed the previously active generation's Python record"
+    )
+
+
+def _partial_staging_files(layout: SnapshotLayout) -> list[Path]:
+    """Return pending files left in abandoned private staging directories."""
+    return [
+        pending
+        for staging in layout.identity_dir.glob(".staging-*")
+        if staging.is_dir()
+        for pending in staging.glob(".*.pending")
+    ]
 
 
 @pytest.mark.timeout(120)

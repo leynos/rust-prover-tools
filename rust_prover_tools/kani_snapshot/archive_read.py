@@ -8,6 +8,7 @@ and link-graph rules themselves live in
 
 from __future__ import annotations
 
+import contextlib
 import tarfile
 import typing as typ
 
@@ -28,12 +29,81 @@ from rust_prover_tools.kani_snapshot.archive_graph import (
 from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
-__all__ = ("read_archive",)
+__all__ = ("open_tar_archive", "read_archive")
 
 _PRIVILEGED_MODE_BITS: typ.Final[int] = 0o7000
 _LINK_KINDS: typ.Final[frozenset[str]] = frozenset({KIND_SYMLINK, KIND_HARDLINK})
+
+
+class _CheckpointedSource:
+    """Raw file wrapper that reports the caller's progress on every read.
+
+    `tarfile` reaches the next header by reading through the compressed stream,
+    so skipping one large member can outlive a caller's deadline even though a
+    checkpoint runs after each header. Reporting on the raw reads bounds that
+    window instead of leaving it between two headers.
+    """
+
+    def __init__(self, raw: typ.BinaryIO, progress: Progress) -> None:
+        """Wrap `raw`, reporting `progress` before each read."""
+        self._raw = raw
+        self._progress = progress
+
+    def read(self, size: int = -1) -> bytes:
+        """Read up to `size` bytes after reporting progress."""
+        self._progress()
+        return self._raw.read(size)
+
+    def seekable(self) -> bool:
+        """Report whether the wrapped file supports seeking."""
+        return self._raw.seekable()
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Seek the wrapped file."""
+        return self._raw.seek(offset, whence)
+
+    def tell(self) -> int:
+        """Return the wrapped file's position."""
+        return self._raw.tell()
+
+
+@contextlib.contextmanager
+def open_tar_archive(
+    archive_path: Path,
+    checkpoint: Progress | None = None,
+) -> cabc.Generator[tarfile.TarFile]:
+    """Open a gzip tar archive whose reads report the caller's progress.
+
+    Parameters
+    ----------
+    archive_path : Path
+        Gzip tar archive to open.
+    checkpoint : Progress | None
+        Called on every raw read, so a scan that skips a large member's body
+        still reaches a deadline. `None` is a no-op.
+
+    Yields
+    ------
+    tarfile.TarFile
+        Open archive. The caller owns the iteration and must not close it.
+
+    Raises
+    ------
+    OSError
+        Raised when the archive cannot be opened for reading.
+    tarfile.TarError
+        Raised when the bytes are not a valid gzip tar stream.
+    """
+    progress = as_checkpoint(checkpoint)
+    with archive_path.open("rb") as raw:
+        # `tarfile` only needs the read, seek and tell subset this wrapper
+        # provides; the cast records that narrower surface at the boundary.
+        source = typ.cast("typ.IO[bytes]", _CheckpointedSource(raw, progress))
+        with tarfile.open(None, mode="r:gz", fileobj=source) as archive:
+            yield archive
 
 
 def read_archive(
@@ -54,8 +124,9 @@ def read_archive(
     policy : ArchivePolicy
         Component stripping and optional required root.
     checkpoint : Progress | None
-        Called for each member so a caller's deadline interrupts a large
-        archive while its headers are still being scanned. `None` is a no-op.
+        Called for each member and on every raw read, so a caller's deadline
+        interrupts a large archive while it is still being scanned, including
+        while a large member's body is skipped. `None` is a no-op.
 
     Returns
     -------
@@ -72,7 +143,7 @@ def read_archive(
     entries: list[ArchiveEntry] = []
     total = 0
     try:
-        with tarfile.open(archive_path, "r:gz") as archive:
+        with open_tar_archive(archive_path, progress) as archive:
             for count, member in enumerate(archive, start=1):
                 progress()
                 if count > limits.max_members:
