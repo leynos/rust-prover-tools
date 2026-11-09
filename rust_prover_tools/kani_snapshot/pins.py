@@ -54,7 +54,9 @@ def _decode(data: bytes) -> dict[str, object]:
         raise ProverToolError(msg) from exc
     try:
         document = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
+    except (tomllib.TOMLDecodeError, RecursionError, ValueError) as exc:
+        # TOML nesting and CPython's integer-digit guard raise outside
+        # TOMLDecodeError on hostile input.
         msg = f"snapshot pin is not valid TOML: {exc}"
         raise ProverToolError(msg) from exc
     return typ.cast("dict[str, object]", document)

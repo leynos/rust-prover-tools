@@ -2,7 +2,7 @@
 
 The producer renders with sorted keys and a fixed two-space indent so that
 rerendering the same model is byte-stable. Rendering is kept separate from
-parsing because the parser must never reserialise before the consumer's digest
+parsing because the parser must never reserialize before the consumer's digest
 check.
 """
 

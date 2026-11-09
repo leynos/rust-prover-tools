@@ -27,11 +27,15 @@ def is_safe_asset_name(name: str) -> bool:
     Returns
     -------
     bool
-        `True` when the name contains no path separator and is not a dot
-        entry. Consumers build local paths from this name, so anything else
-        could redirect a write or a read outside the asset directory.
+        `True` when the name contains no path separator, no whitespace or
+        control characters, and is not a dot entry. Consumers build local
+        paths from this name, so anything else could redirect a write or a
+        read outside the asset directory. Whitespace is also refused because
+        the checksum format splits rows on it.
     """
     if name in {"", ".", ".."}:
+        return False
+    if not name.isprintable() or any(char.isspace() for char in name):
         return False
     return "/" not in name and "\\" not in name
 

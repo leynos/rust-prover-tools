@@ -205,7 +205,16 @@ def test_deeply_nested_json_is_reported() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["../backend.tar.gz", "a/b", ".", "manifest.json", "SHA256SUMS"],
+    [
+        "../backend.tar.gz",
+        "a/b",
+        ".",
+        "manifest.json",
+        "SHA256SUMS",
+        "a b",
+        "a\tb",
+        "\x01bad",
+    ],
 )
 def test_unsafe_asset_names_are_rejected(name: str) -> None:
     """Asset names must be plain basenames that do not shadow release files."""

@@ -6,7 +6,7 @@ import dataclasses as dc
 import typing as typ
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
 from rust_prover_tools.errors import ProverToolError
@@ -91,7 +91,7 @@ def test_load_pin_reports_an_unreadable_file(tmp_path: Path) -> None:
         ("manifest_sha256", "c" * 63),
     ],
 )
-def test_invalid_pin_fields_fail_closed(field: str, value: str) -> None:
+def test_invalid_pin_fields_fail_closed(field: str, value: object) -> None:
     """Every identity field rejects a value outside the schema."""
     text = _document(**{field: value})
     with pytest.raises(ProverToolError):
@@ -117,6 +117,21 @@ def test_boolean_schema_version_is_rejected_as_a_type_error() -> None:
     """A TOML boolean is not an integer, although Python's `bool` is an `int`."""
     with pytest.raises(ProverToolError, match="schema_version must be an integer"):
         parse_pin(_document(schema_version=True).encode())
+
+
+def test_unsupported_integer_schema_version_is_rejected_by_value() -> None:
+    """A well-typed but unsupported schema version names the expected value."""
+    with pytest.raises(ProverToolError, match="schema_version must be 1, got 2"):
+        parse_pin(_document(schema_version=2).encode())
+
+
+def test_hostile_toml_input_is_reported() -> None:
+    """Nesting depth and CPython's integer-digit guard fail cleanly."""
+    nested = b"a = " + b"[" * 100_000 + b"]" * 100_000 + b"\n"
+    huge = b"schema_version = " + b"9" * 5000 + b"\n"
+    for data in (nested, huge):
+        with pytest.raises(ProverToolError, match="not valid TOML"):
+            parse_pin(data)
 
 
 def test_non_utf8_pin_is_rejected() -> None:
@@ -200,6 +215,5 @@ def test_mutating_an_identity_field_changes_the_key(
 ) -> None:
     """A changed builder commit never shares a cache entry."""
     changed = dc.replace(pin, builder_commit=replacement)
-    if changed == pin:
-        return
+    assume(changed != pin)
     assert identity_key(pin) != identity_key(changed)

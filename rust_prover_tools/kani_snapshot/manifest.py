@@ -1,7 +1,7 @@
 """Strict parsing of snapshot manifests and canonical rendering.
 
 The manifest is UTF-8 JSON whose exact bytes are hashed into the consumer pin.
-Parsing therefore never reserialises before that digest is checked: callers
+Parsing therefore never reserializes before that digest is checked: callers
 verify `ParsedManifest.sha256` against the pin first, then inspect the model.
 Field-group parsers live in `manifest_groups`; deterministic rendering lives in
 `render` and is re-exported here so callers have one manifest entry point.
