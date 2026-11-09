@@ -363,10 +363,18 @@ and both probes. A corrupt generation is repaired by creating a new generation;
 the previous directory is never deleted.
 
 Per-identity installation is serialized by an advisory `flock` with a bounded
-wait inside a monotonic deadline. The active pointer is written to a private
-temporary file, fsynced, atomically renamed and followed by a directory fsync.
-A failed stage, extraction, setup or probe leaves the previous pointer
-untouched.
+wait inside a monotonic deadline. Setup and the compiler probes execute with
+the remaining budget; a bounded command runs as its own process group and
+expiry terminates the whole group, so a stalled `rustup` download cannot
+outlive the deadline or hold the lock past it. The active pointer is written to
+a private temporary file, fsynced, atomically renamed and followed by a
+directory fsync. A failed stage, extraction, setup or probe leaves the previous
+pointer untouched.
+
+`run` revalidates the generation, then runs the pinned launcher in the
+repository root and mirrors its stdout and stderr live while capturing them.
+The captured copy is not replayed, so progress output is neither delayed nor
+rewritten.
 
 ## D5: Workflow and immutable publication
 

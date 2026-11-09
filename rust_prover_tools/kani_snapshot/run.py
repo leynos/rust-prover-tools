@@ -2,8 +2,9 @@
 
 Execution never installs, never falls back to a host Kani and never changes the
 user's environment. It revalidates the generation, rejects setup or backend
-selectors, and then replaces itself with the pinned launcher while preserving
-the verifier's arguments, streams and exit status.
+selectors, and then runs the pinned launcher with the verifier's arguments
+unchanged, mirroring the launcher's stdout and stderr as they are produced and
+preserving its exit status.
 """
 
 from __future__ import annotations
@@ -47,11 +48,15 @@ class RunOptions:
         Arguments forwarded unchanged after `--`.
     cache_home : Path | None
         Explicit cache root holding the installed generation.
+    cwd : Path | None
+        Proof working directory, normally the repository root. `None`
+        inherits the caller's working directory.
     """
 
     pin: SnapshotPin
     args: tuple[str, ...] = ()
     cache_home: Path | None = None
+    cwd: Path | None = None
 
 
 def run_snapshot(
@@ -70,7 +75,9 @@ def run_snapshot(
     Returns
     -------
     CommandResult
-        Captured stdout, stderr and the launcher's exact exit status.
+        Captured stdout, stderr and the launcher's exact exit status. The same
+        output is mirrored to the caller's streams as the launcher writes it,
+        so a long proof is visible while it runs.
 
     Raises
     ------
@@ -96,4 +103,13 @@ def run_snapshot(
     manifest = active_manifest(options.pin, layout)
     runtime = runtime_for(generation, manifest)
     env = execution_environment(runtime, os.environ)
-    return run_command(CommandSpec((str(runtime.launcher), *options.args), env=env))
+    # `echo=True` mirrors each stream live while still capturing it, so the
+    # CLI must not replay the captured copy afterwards.
+    return run_command(
+        CommandSpec(
+            (str(runtime.launcher), *options.args),
+            cwd=options.cwd,
+            env=env,
+            echo=True,
+        )
+    )

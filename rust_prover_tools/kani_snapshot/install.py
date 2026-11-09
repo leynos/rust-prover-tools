@@ -85,6 +85,10 @@ class _Deadline:
             msg = f"snapshot installation deadline expired during {phase}"
             raise ProverToolError(msg)
 
+    def remaining(self) -> float:
+        """Return the seconds left, never negative."""
+        return max(0.0, self.expires_at - time.monotonic())
+
 
 def install_snapshot(
     options: InstallOptions,
@@ -192,11 +196,14 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             manifest,
             generation,
             context.hooks.probe,
+            context.deadline.remaining(),
         )
     except ProverToolError as exc:
-        log_event(_LOGGER, "install.repair", reason=str(exc))
+        # The exception text can embed filesystem paths, so the event carries
+        # only the bounded class name as its reason category.
+        log_event(_LOGGER, "kani.install.repair", reason=type(exc).__name__)
         return None
-    log_event(_LOGGER, "install.reused", generation=pointer.generation)
+    log_event(_LOGGER, "kani.install.reuse", generation=pointer.generation)
     return identity
 
 
@@ -215,17 +222,23 @@ def _install_generation(
     )
     context.deadline.check("setup")
     backend = layout.downloads_dir / asset_by_role(manifest, "backend").name
-    context.hooks.setup(runtime, backend)
+    # Setup and the probe run external processes, so each receives the
+    # remaining budget rather than merely being checked before and after.
+    context.hooks.setup(runtime, backend, context.deadline.remaining())
     context.deadline.check("setup")
     _install_launcher_binaries(runtime, layout)
-    evidence = context.hooks.probe(runtime)
+    evidence = context.hooks.probe(runtime, context.deadline.remaining())
     _require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)
     receipt = build_receipt(context.options.pin, manifest, identity, evidence)
     _write_receipt(layout, render_receipt(receipt))
     context.deadline.check("activation")
     write_active(layout, layout.generation_dir.name)
-    log_event(_LOGGER, "install.activated", generation=layout.generation_dir.name)
+    log_event(
+        _LOGGER,
+        "kani.install.activated",
+        generation=layout.generation_dir.name,
+    )
     return identity
 
 

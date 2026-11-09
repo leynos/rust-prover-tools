@@ -179,15 +179,19 @@ the active generation:
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness proof
 ```
 
-Every argument after `--` is forwarded unchanged, stdout and stderr remain
-separate, and the launcher's exit status becomes the command's exit status.
-`run` revalidates the generation first, so a changed payload or compiler stops
-the proof. It refuses `setup`, `--use-local-bundle`, `--use-local-toolchain` and
+Every argument after `--` is forwarded unchanged, stdout and stderr are
+mirrored live to the corresponding streams while they are also captured, and
+the launcher's exit status becomes the command's exit status. A long proof
+therefore reports progress as it runs rather than only on completion. `run`
+revalidates the generation first, so a changed payload or compiler stops the
+proof. It refuses `setup`, `--use-local-bundle`, `--use-local-toolchain` and
 `-Z lean` because they would replace the pinned backend.
 
 Install and check default the pin to `tools/kani/snapshot.toml` and the cache to
-`.kani-snapshots` below the repository root. Both accept `--pin`, `--repo` and
-`--cache-dir`; `run` accepts `--snapshot-pin`, `--repo` and `--cache-dir`.
+`.kani-snapshots` below the repository root. Both accept `--pin`,
+`--repo-root` and `--cache-dir`; `run` accepts `--snapshot-pin`, `--repo-root`
+and `--cache-dir`. `run` also uses the repository root, which defaults to the
+invocation directory, as the proof working directory.
 
 Repeating an install while a validated generation is active reuses that
 generation without reading `--asset-dir` again. A failed installation leaves
@@ -195,8 +199,10 @@ the previous generation and the active pointer unchanged; a new generation is
 activated only after its receipt is durable and its compiler has been observed.
 Concurrent installs for one identity serialize on an advisory lock with a
 bounded wait (300 seconds) inside an overall 1800-second installation deadline.
-A corrupt active generation is repaired by installing a new generation, and the
-old directory is preserved.
+Setup and the compiler probes run with the remaining budget, and expiry
+terminates the whole process group, so a stalled setup cannot outlive the
+deadline or keep another installer waiting. A corrupt active generation is
+repaired by installing a new generation, and the old directory is preserved.
 
 Checking and running never repair a generation. If `check` or `run` reports a
 missing, changed or drifted snapshot, run `prover-tools kani snapshot install`

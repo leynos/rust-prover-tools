@@ -145,7 +145,7 @@ def stage_assets(
     _verify_bundle_structures(parsed.manifest, downloads)
     log_event(
         _LOGGER,
-        "install.staged",
+        "kani.install.staged",
         tag=options.pin.tag,
         assets=len(parsed.manifest.assets),
     )

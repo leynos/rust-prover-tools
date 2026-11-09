@@ -232,7 +232,22 @@ EP-O1 assigns responsibility and records live evidence.
     module ceiling, so transport staging moved to `install_transport.py` and
     the state helpers became shared. Focused reruns after the repairs kept
     all 30 snapshot tests green.
-  - [ ] EP-M3 milestone CodeRabbit CLI review.
+  - [x] (2026-11-09) EP-M3 milestone CodeRabbit CLI review. Local CodeRabbit
+    CLI 0.9.3 reviewed the committed diff `60df24c..ad9a868` (26 files) as
+    `review_completed` with 8 findings (2 major, 3 minor, 3 trivial). All were
+    verified against the source and repaired. Major: launcher output was
+    buffered and replayed, now mirrored live with `echo=True` and no replay,
+    and the proof working directory is the repository root; setup and probes
+    were unbounded, now bounded by the remaining installation budget with
+    process-group termination on expiry. Minor: `--repo` became `--repo-root`
+    for install/check/run, the snapshot group help no longer claims to run,
+    and `install.repair` logs a bounded exception class name under the
+    documented `kani.install.*` event vocabulary. Trivial: NumPy docstrings
+    for the shared CLI helpers, assertion messages in the install tests, and
+    the run test's cross-module private-helper import replaced by a shared
+    fixtures module. All gates were re-run sequentially: `make fmt`,
+    `make check-fmt`, `make lint`, `make typecheck`, `make test` (1075 passed,
+    5 skipped), `make markdownlint` and `make nixie`.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -365,6 +380,16 @@ file, fsynced, renamed and followed by a directory fsync. A corrupt active
 generation triggers repair into a new generation, and the old generation
 directory is never deleted.
 
+2026-11-09, implemented D4 review remedies: `run` now sets `echo=True` on the
+Cuprum command so the launcher's stdout and stderr are mirrored live while
+remaining captured, and the CLI no longer replays the captured copy. The proof
+working directory is the repository root, as D1 specifies. Setup and the
+identity probes receive the remaining installation budget; a bounded command
+runs in its own process group so expiry terminates descendants instead of
+merely checking the clock before and after the call. Snapshot commands expose
+`--repo-root` to match D1 and the legacy commands, and event names follow the
+documented `kani.install.*` vocabulary with bounded fields.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -373,9 +398,8 @@ Neither a build attestation nor a zero-harness exit is proof success.
 ## Outcomes & retrospective
 
 Planning review is complete. EP-M2 (authenticated pin and manifest contracts)
-and the EP-M3 consumer implementation (isolated install, check and run) are
-implemented and locally tested; the remaining EP-M3 work is the full gate and
-milestone review record. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
+and EP-M3 (isolated install, check and run) are implemented, gated and through
+their milestone CLI review. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
 have not started. The consumer `install` command is deliberately limited to a
 verified local `--asset-dir` until the EP-M4 release transport is connected.
 Independent reviews covered all five requested specialities, with amendments

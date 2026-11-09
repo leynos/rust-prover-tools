@@ -29,7 +29,11 @@ __all__ = ("probe_generation", "run_local_bundle_setup")
 _INHERITED_EXTRACTION_VARIABLES: typ.Final[tuple[str, ...]] = ("TAR_OPTIONS",)
 
 
-def run_local_bundle_setup(runtime: SnapshotRuntime, bundle: Path) -> None:
+def run_local_bundle_setup(
+    runtime: SnapshotRuntime,
+    bundle: Path,
+    timeout_seconds: float | None = None,
+) -> None:
     """Run the packaged launcher's setup against the verified bundle.
 
     Parameters
@@ -38,11 +42,16 @@ def run_local_bundle_setup(runtime: SnapshotRuntime, bundle: Path) -> None:
         Generation whose launcher and private homes setup must use.
     bundle : Path
         Verified backend archive inside the identity's downloads directory.
+    timeout_seconds : float | None
+        Remaining installation budget. `None` leaves setup unbounded; a
+        bounded setup is terminated with its whole process group on expiry.
 
     Raises
     ------
     CommandFailedError
         Raised when setup exits non-zero.
+    ProverToolError
+        Raised when setup exceeds the remaining budget.
     """
     launcher = runtime.layout.launcher_dir / "bin" / "cargo-kani"
     env = execution_environment(runtime, os.environ)
@@ -57,17 +66,24 @@ def run_local_bundle_setup(runtime: SnapshotRuntime, bundle: Path) -> None:
                 str(bundle),
             ),
             env=env,
+            timeout_seconds=timeout_seconds,
         )
     )
 
 
-def probe_generation(runtime: SnapshotRuntime) -> SetupEvidence:
+def probe_generation(
+    runtime: SnapshotRuntime,
+    timeout_seconds: float | None = None,
+) -> SetupEvidence:
     """Observe the installed compiler identities and toolchain link.
 
     Parameters
     ----------
     runtime : SnapshotRuntime
         Generation to inspect.
+    timeout_seconds : float | None
+        Remaining installation budget applied to each identity command.
+        `None` leaves the probes unbounded.
 
     Returns
     -------
@@ -78,7 +94,8 @@ def probe_generation(runtime: SnapshotRuntime) -> SetupEvidence:
     ------
     ProverToolError
         Raised when the link is missing, relative or outside the private
-        toolchains, or when an executable cannot report its identity.
+        toolchains, or when an executable cannot report its identity within
+        the remaining budget.
     """
     link = runtime.kani_dir / "toolchain"
     try:
@@ -94,9 +111,19 @@ def probe_generation(runtime: SnapshotRuntime) -> SetupEvidence:
         msg = f"snapshot toolchain link escapes the private toolchains: {target}"
         raise ProverToolError(msg)
     env = execution_environment(runtime, os.environ)
-    rustc = run_checked(CommandSpec((str(runtime.rustc), "-vV"), env=env))
+    rustc = run_checked(
+        CommandSpec(
+            (str(runtime.rustc), "-vV"),
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
+    )
     kani_compiler = run_checked(
-        CommandSpec((str(runtime.compiler), "--version"), env=env)
+        CommandSpec(
+            (str(runtime.compiler), "--version"),
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
     )
     return SetupEvidence(
         observed=ObservedToolchain(

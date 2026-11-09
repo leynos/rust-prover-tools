@@ -255,19 +255,36 @@ def active_manifest(pin: SnapshotPin, layout: SnapshotLayout) -> SnapshotManifes
     return parsed.manifest
 
 
-def validate_generation(
+# pylint: disable-next=too-many-arguments,too-many-positional-arguments
+def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - one parameter per validated input
     options: InstallOptions,
     manifest: SnapshotManifest,
     layout: SnapshotLayout,
     probe: ProbeRunner,
+    timeout_seconds: float | None = None,
 ) -> SnapshotIdentity:
     """Return the identity of a generation that still satisfies the manifest.
+
+    Parameters
+    ----------
+    options : InstallOptions
+        Reviewed pin and cache root.
+    manifest : SnapshotManifest
+        Manifest the generation was installed from.
+    layout : SnapshotLayout
+        Generation to validate.
+    probe : ProbeRunner
+        Compiler identity probe.
+    timeout_seconds : float | None
+        Remaining installation budget for the probe, or `None` when the
+        caller has no deadline.
 
     Raises
     ------
     ProverToolError
         Raised when the receipt, cached payloads, toolchain link or effective
-        compiler no longer match the reviewed snapshot.
+        compiler no longer match the reviewed snapshot, or when the probe
+        exceeds the remaining budget.
     """
     receipt = load_receipt(layout.receipt_path)
     validate_receipt(receipt, options.pin, manifest, layout)
@@ -275,7 +292,7 @@ def validate_generation(
     _require_runtime_files(runtime)
     _check_toolchain_link(runtime, receipt.toolchain_link_target)
     validate_cached_payloads(layout, manifest)
-    evidence = probe(runtime)
+    evidence = probe(runtime, timeout_seconds)
     _check_evidence(evidence, manifest, runtime)
     if evidence.observed != receipt.observed:
         msg = "snapshot receipt observation does not match the installed compiler"

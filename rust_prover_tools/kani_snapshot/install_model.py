@@ -51,8 +51,8 @@ MANIFEST_MAX_BYTES: typ.Final[int] = 4 * 1024 * 1024
 ATTESTATION_MAX_BYTES: typ.Final[int] = 16 * 1024 * 1024
 CHECKSUMS_MAX_BYTES: typ.Final[int] = 1024 * 1024
 
-SetupRunner = cabc.Callable[["SnapshotRuntime", "Path"], None]
-ProbeRunner = cabc.Callable[["SnapshotRuntime"], "SetupEvidence"]
+SetupRunner = cabc.Callable[["SnapshotRuntime", "Path", "float | None"], None]
+ProbeRunner = cabc.Callable[["SnapshotRuntime", "float | None"], "SetupEvidence"]
 AttestationVerifier = cabc.Callable[["AttestationPolicy", "Path", "Path"], object]
 
 
@@ -98,9 +98,11 @@ class InstallHooks:
     Attributes
     ----------
     setup : SetupRunner
-        Runs the packaged launcher's local-bundle setup.
+        Runs the packaged launcher's local-bundle setup. The third argument is
+        the remaining installation budget, or `None` when unbounded.
     probe : ProbeRunner
-        Observes the compiler identities and toolchain link after setup.
+        Observes the compiler identities and toolchain link after setup. The
+        second argument is the remaining budget, or `None` when unbounded.
     verify_attestation : AttestationVerifier
         Verifies the manifest attestation before any extraction.
     """

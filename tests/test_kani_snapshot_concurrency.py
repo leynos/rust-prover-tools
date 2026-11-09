@@ -14,14 +14,16 @@ from rust_prover_tools.kani_snapshot.install_state import identity_lock
 from tests.kani_snapshot_fixtures import make_pin
 
 if typ.TYPE_CHECKING:
+    from multiprocessing import queues, synchronize
+
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 
 def _hold_lock(
     pin: SnapshotPin,
     cache_home: str,
-    ready: typ.Any,
-    release: typ.Any,
+    ready: synchronize.Event,
+    release: synchronize.Event,
 ) -> None:
     """Hold the identity lock until the parent permits release."""
     options = InstallOptions(pin=pin, cache_home=Path(cache_home))
@@ -30,7 +32,11 @@ def _hold_lock(
         release.wait(10)
 
 
-def _acquire_lock(pin: SnapshotPin, cache_home: str, outcome: typ.Any) -> None:
+def _acquire_lock(
+    pin: SnapshotPin,
+    cache_home: str,
+    outcome: queues.Queue[str],
+) -> None:
     """Try to acquire the lock and report whether it was refused."""
     options = InstallOptions(pin=pin, cache_home=Path(cache_home))
     try:
@@ -53,7 +59,7 @@ def test_second_process_waits_for_the_identity_lock(tmp_path: Path) -> None:
     )
     holder.start()
     try:
-        assert ready.wait(10)
+        assert ready.wait(10), "holder did not acquire the identity lock"
         outcome = context.Queue()
         contender = context.Process(
             target=_acquire_lock,
@@ -61,12 +67,13 @@ def test_second_process_waits_for_the_identity_lock(tmp_path: Path) -> None:
         )
         contender.start()
         contender.join(10)
-        assert contender.exitcode == 0
-        assert typ.cast("str", outcome.get(timeout=5)).startswith("refused")
+        assert contender.exitcode == 0, "contender crashed"
+        message = typ.cast("str", outcome.get(timeout=5))
+        assert message.startswith("refused"), "contender was not refused the lock"
     finally:
         release.set()
         holder.join(10)
-    assert holder.exitcode == 0
+    assert holder.exitcode == 0, "holder crashed"
 
 
 @pytest.mark.timeout(30)
@@ -81,10 +88,10 @@ def test_lock_is_available_after_the_owner_exits(tmp_path: Path) -> None:
         args=(pin, str(tmp_path), ready, release),
     )
     holder.start()
-    assert ready.wait(10)
+    assert ready.wait(10), "holder did not acquire the identity lock"
     release.set()
     holder.join(10)
-    assert holder.exitcode == 0
+    assert holder.exitcode == 0, "holder crashed"
     outcome = context.Queue()
     contender = context.Process(
         target=_acquire_lock,
@@ -92,5 +99,5 @@ def test_lock_is_available_after_the_owner_exits(tmp_path: Path) -> None:
     )
     contender.start()
     contender.join(10)
-    assert contender.exitcode == 0
-    assert outcome.get(timeout=5) == "acquired"
+    assert contender.exitcode == 0, "contender crashed"
+    assert outcome.get(timeout=5) == "acquired", "lock was not free after exit"

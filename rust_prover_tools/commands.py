@@ -25,10 +25,12 @@ import typing as typ
 from cuprum import (
     BrokenPipePolicy,
     ExecutionContext,
+    ProcessGroupPolicy,
     Program,
     ProgramCatalogue,
     ProjectSettings,
     RunOutputOptions,
+    TimeoutExpired,
     sh,
 )
 
@@ -59,12 +61,29 @@ class CommandResult:
 
 @dc.dataclass(frozen=True, slots=True)
 class CommandSpec:
-    """A command invocation request."""
+    """A command invocation request.
+
+    Attributes
+    ----------
+    argv : tuple[str, ...]
+        Program and arguments to execute.
+    cwd : Path | None
+        Working directory for the child process.
+    env : collections.abc.Mapping[str, str] | None
+        Environment overlay for the child process.
+    echo : bool
+        Mirror the child's output to the caller's streams while capturing it.
+    timeout_seconds : float | None
+        Wall-clock budget for the whole child process tree. `None` leaves the
+        command unbounded. When set, the child is placed in its own process
+        group so expiry terminates every descendant it started.
+    """
 
     argv: tuple[str, ...]
     cwd: Path | None = None
     env: cabc.Mapping[str, str] | None = None
     echo: bool = False
+    timeout_seconds: float | None = None
 
 
 def split_command(command: str) -> tuple[str, ...]:
@@ -119,7 +138,7 @@ def run_command(spec: CommandSpec) -> CommandResult:
     ----------
     spec : CommandSpec
         Command specification containing `argv`, optional `env`, optional
-        `cwd`, and echo behaviour.
+        `cwd`, echo behaviour and an optional wall-clock timeout.
 
     Returns
     -------
@@ -129,7 +148,9 @@ def run_command(spec: CommandSpec) -> CommandResult:
     Raises
     ------
     ProverToolError
-        Raised when `spec.argv` is empty.
+        Raised when `spec.argv` is empty or the command exceeds its timeout.
+        A timed-out command's whole process group is terminated first, so a
+        setup tool cannot outlive the caller's budget by leaving descendants.
     """
     if not spec.argv:
         msg = "command is empty"
@@ -146,7 +167,18 @@ def run_command(spec: CommandSpec) -> CommandResult:
     )
     catalogue = ProgramCatalogue(projects=(project,))
     cmd = sh.make(program, catalogue=catalogue)(*spec.argv[1:])
-    context = ExecutionContext(env=spec.env, cwd=spec.cwd)
+    context = ExecutionContext(
+        env=spec.env,
+        cwd=spec.cwd,
+        timeout=spec.timeout_seconds,
+        # Only a bounded command needs its descendants terminated with it;
+        # unbounded calls keep Cuprum's inherited-group default.
+        process_group=(
+            ProcessGroupPolicy.OWN_GROUP
+            if spec.timeout_seconds is not None
+            else ProcessGroupPolicy.INHERIT
+        ),
+    )
     # Echo mirrors output the user asked to see, such as a Verus proof run, so
     # the reader is often a pipe. `BEST_EFFORT` keeps a reader that goes away
     # (`| head`, a quit pager) from failing a command that succeeded, while
@@ -155,7 +187,14 @@ def run_command(spec: CommandSpec) -> CommandResult:
         echo=spec.echo,
         broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
     )
-    result = cmd.run_sync(output=output, context=context)
+    try:
+        result = cmd.run_sync(output=output, context=context)
+    except TimeoutExpired as exc:
+        msg = (
+            f"command timed out after {spec.timeout_seconds:g} seconds: "
+            f"{command_line(spec.argv)}"
+        )
+        raise ProverToolError(msg) from exc
     return CommandResult(
         stdout=result.stdout or "",
         stderr=result.stderr or "",

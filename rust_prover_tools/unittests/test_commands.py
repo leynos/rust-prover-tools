@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import time
 import typing as typ
 
 import pytest
@@ -10,11 +12,14 @@ from rust_prover_tools.commands import (
     CommandSpec,
     command_line,
     run_checked,
+    run_command,
     split_command,
 )
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from cmd_mox import CmdMox
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
@@ -86,3 +91,41 @@ def test_run_checked_raises_on_non_zero_exit(cmd_mox: CmdMox) -> None:
     expected = "command failed \\(2\\): cargo kani --version: boom"
     with pytest.raises(CommandFailedError, match=expected):
         run_checked(CommandSpec(("cargo", "kani", "--version")))
+
+
+def test_run_command_enforces_a_timeout() -> None:
+    """A command that outlives its budget fails instead of hanging."""
+    started = time.monotonic()
+    with pytest.raises(ProverToolError, match=r"timed out after 0\.2 seconds"):
+        run_command(
+            CommandSpec(
+                (sys.executable, "-I", "-c", "import time; time.sleep(30)"),
+                timeout_seconds=0.2,
+            )
+        )
+    assert time.monotonic() - started < 10, "timeout did not interrupt the command"
+
+
+def test_run_command_terminates_a_timed_out_process_tree(tmp_path: Path) -> None:
+    """A timed-out command's descendants are terminated with it."""
+    marker = tmp_path / "survivor"
+    # The grandchild writes shortly after the parent's budget expires, so the
+    # marker exists exactly when the group teardown missed it.
+    grandchild = (
+        "import pathlib, time; time.sleep(1.0); "
+        f"pathlib.Path({str(marker)!r}).write_text('alive')"
+    )
+    child = (
+        "import subprocess, sys, time; "
+        f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}]); "
+        "time.sleep(30)"
+    )
+    with pytest.raises(ProverToolError, match=r"timed out"):
+        run_command(
+            CommandSpec(
+                (sys.executable, "-I", "-c", child),
+                timeout_seconds=0.3,
+            )
+        )
+    time.sleep(1.5)
+    assert not marker.exists(), "a descendant survived the timed-out command"

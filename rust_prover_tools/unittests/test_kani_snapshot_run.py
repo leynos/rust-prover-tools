@@ -7,11 +7,12 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.install import install_snapshot
 from rust_prover_tools.kani_snapshot.run import RunOptions, run_snapshot
-from rust_prover_tools.unittests.test_kani_snapshot_install import (
-    _hooks,
-    _make_case,
-    _options,
+from tests.kani_snapshot_install_fixtures import (
+    install_hooks,
+    install_options,
+    make_case,
 )
 
 if typ.TYPE_CHECKING:
@@ -23,11 +24,9 @@ if typ.TYPE_CHECKING:
 @pytest.fixture
 def installed(tmp_path: Path) -> tuple[RunOptions, InstallHooks]:
     """Install the fixture snapshot and return run options and hooks."""
-    case = _make_case(tmp_path)
-    hooks = _hooks(case)
-    from rust_prover_tools.kani_snapshot.install import install_snapshot
-
-    install_snapshot(_options(case), hooks)
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
     return RunOptions(pin=case.pin, cache_home=case.cache_home), hooks
 
 
@@ -44,12 +43,12 @@ def test_run_forwards_arguments_and_exit_status(
         ),
         hooks,
     )
-    assert result.exit_code == 7
+    assert result.exit_code == 7, "launcher exit status was not preserved"
     assert result.stdout.splitlines() == [
         "--harness",
         "bounded push",
         "--output-format=terse",
-    ]
+    ], "launcher did not receive the forwarded arguments"
 
 
 def test_run_rejects_a_setup_command(
@@ -82,9 +81,9 @@ def test_run_rejects_the_lean_backend(
 
 def test_run_requires_an_installed_snapshot(tmp_path: Path) -> None:
     """Running without a generation is a clear error, not a PATH fallback."""
-    case = _make_case(tmp_path)
+    case = make_case(tmp_path)
     with pytest.raises(ProverToolError, match=r"not installed"):
         run_snapshot(
             RunOptions(pin=case.pin, cache_home=case.cache_home),
-            _hooks(case),
+            install_hooks(case),
         )

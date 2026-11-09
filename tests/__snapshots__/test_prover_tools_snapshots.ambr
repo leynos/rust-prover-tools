@@ -64,7 +64,7 @@
   ╰──────────────────────────────────────────────────────────────────────────────╯
   ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
   │ *  --snapshot-pin PATH  Required reviewed pin for this proof. [required]     │
-  │    --repo PATH          Repository root used for the default cache.          │
+  │    --repo-root PATH     Repository root; also the proof working directory.   │
   │    --cache-dir PATH     Snapshot cache. Defaults to `.kani-snapshots`.       │
   ╰──────────────────────────────────────────────────────────────────────────────╯
   
@@ -74,7 +74,7 @@
   '''
   Usage: prover-tools kani snapshot COMMAND
   
-  Install, check and run one immutable Kani snapshot
+  Install and check one immutable Kani snapshot
   
   ╭─ Commands ───────────────────────────────────────────────────────────────────╮
   │ check    Check that the active generation still matches its reviewed pin.    │
@@ -91,7 +91,7 @@
   
   ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
   │ --pin PATH        Reviewed pin. Defaults to `tools/kani/snapshot.toml`.      │
-  │ --repo PATH       Repository root used for default paths.                    │
+  │ --repo-root PATH  Repository root used for default paths.                    │
   │ --cache-dir PATH  Snapshot cache. Defaults to `.kani-snapshots`.             │
   │ --asset-dir PATH  Directory holding the release files and their attestation  │
   │                   bundle.                                                    │
