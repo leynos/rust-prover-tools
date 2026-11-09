@@ -31,6 +31,7 @@ __all__ = (
     "CHECKSUMS_ASSET_NAME",
     "MANIFEST_ASSET_NAME",
     "AttestationVerifier",
+    "InstallBudget",
     "InstallHooks",
     "InstallOptions",
     "ProbeRunner",
@@ -53,7 +54,31 @@ CHECKSUMS_MAX_BYTES: typ.Final[int] = 1024 * 1024
 
 SetupRunner = cabc.Callable[["SnapshotRuntime", "Path", "float | None"], None]
 ProbeRunner = cabc.Callable[["SnapshotRuntime", "float | None"], "SetupEvidence"]
-AttestationVerifier = cabc.Callable[["AttestationPolicy", "Path", "Path"], object]
+
+
+class InstallBudget(typ.Protocol):
+    """A monotonic installation budget shared by transport and hooks."""
+
+    def check(self, phase: str) -> None:
+        """Raise when the budget has expired during `phase`."""
+
+    def remaining(self) -> float:
+        """Return the seconds left, never negative."""
+
+
+class AttestationVerifier(typ.Protocol):
+    """A verifier of one manifest attestation."""
+
+    def __call__(
+        self,
+        policy: AttestationPolicy,
+        artifact: Path,
+        bundle: Path,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> object:
+        """Verify one attestation, bounded by the remaining budget."""
+        ...
 
 
 @dc.dataclass(frozen=True, slots=True)

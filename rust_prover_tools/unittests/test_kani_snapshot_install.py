@@ -319,3 +319,56 @@ def test_validate_generation_measures_the_probe_budget_after_cache_checks(
     assert order == ["payloads", "budget", "probe"], (
         "the probe budget was measured before the cache checks finished"
     )
+
+
+def test_failed_repair_leaves_existing_downloads_untouched(tmp_path: Path) -> None:
+    """A failed second install cannot replace validated cached evidence."""
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    downloads = snapshot_layout(case.pin, cache_home=tmp_path).downloads_dir
+    before = {path.name: path.read_bytes() for path in downloads.iterdir()}
+    # Force a repair so staging runs again instead of reusing the active
+    # generation.
+    (first.generation / "receipt.json").write_text("{}", encoding="utf-8")
+
+    # A broken checksum manifest fails after the manifest and attestation have
+    # been staged, which is exactly the window that must not disturb evidence.
+    write_file(case.assets_dir / CHECKSUMS_NAME, b"not a checksum list\n")
+    with pytest.raises(ProverToolError):
+        install_snapshot(install_options(case), hooks)
+
+    assert {path.name: path.read_bytes() for path in downloads.iterdir()} == before
+    identity_dir = downloads.parent
+    staging = [path for path in identity_dir.iterdir() if path.name.startswith(".")]
+    assert staging == [], f"failed staging left temporary directories: {staging}"
+
+
+def test_install_enforces_the_payload_transport_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A payload larger than the design bound never reaches setup."""
+    case = make_case(tmp_path)
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_snapshot.install_transport.PAYLOAD_MAX_BYTES",
+        16,
+    )
+
+    with pytest.raises(ProverToolError, match=r"backend\.tar\.gz.*transport limit"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+
+def test_install_enforces_the_inventory_transport_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inventory document has its own smaller bound."""
+    case = make_case(tmp_path)
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_snapshot.install_transport.INVENTORY_MAX_BYTES",
+        16,
+    )
+
+    with pytest.raises(ProverToolError, match=r"inventory.*transport limit"):
+        install_snapshot(install_options(case), install_hooks(case))

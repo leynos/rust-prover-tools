@@ -120,8 +120,11 @@ def install_hooks(
         policy: object,
         artifact: Path,
         bundle: Path,
+        *,
+        timeout_seconds: float | None = None,
     ) -> object:
         """Accept the expected manifest and bundle, or delegate to the caller."""
+        del timeout_seconds
         if attestation is not None:
             return attestation(policy, artifact, bundle)
         if artifact.name != MANIFEST_NAME:

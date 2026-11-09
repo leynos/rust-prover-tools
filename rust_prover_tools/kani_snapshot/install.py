@@ -139,7 +139,7 @@ def install_snapshot(
             options,
             layout,
             chosen,
-            check_deadline=deadline.check,
+            budget=deadline,
         )
         generation = snapshot_layout(
             options.pin,

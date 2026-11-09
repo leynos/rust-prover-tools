@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses as dc
 import logging
 import os
+import secrets
 import shutil
 import stat
 import typing as typ
@@ -26,6 +27,7 @@ from rust_prover_tools.kani_snapshot.install_model import (
     CHECKSUMS_MAX_BYTES,
     MANIFEST_ASSET_NAME,
     MANIFEST_MAX_BYTES,
+    InstallBudget,
     InstallHooks,
     InstallOptions,
 )
@@ -59,7 +61,12 @@ __all__ = ("asset_by_role", "bundle_policy", "stage_assets")
 
 _LOGGER = logging.getLogger(__name__)
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
+_PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _READ_CHUNK_SIZE: typ.Final[int] = 64 * 1024
+
+#: Design envelopes for one compressed payload and for the inventory document.
+PAYLOAD_MAX_BYTES: typ.Final[int] = 2 * 1024 * 1024 * 1024
+INVENTORY_MAX_BYTES: typ.Final[int] = 64 * 1024 * 1024
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -75,7 +82,7 @@ def stage_assets(
     layout: SnapshotLayout,
     hooks: InstallHooks,
     *,
-    check_deadline: cabc.Callable[[str], None],
+    budget: InstallBudget,
 ) -> SnapshotManifest:
     """Copy and verify every transport file into the identity's downloads.
 
@@ -87,8 +94,10 @@ def stage_assets(
         Identity whose private downloads directory receives the files.
     hooks : InstallHooks
         Attestation verifier.
-    check_deadline : collections.abc.Callable of (str) to None
-        Raises when the installation budget has expired for a phase.
+    budget : InstallBudget
+        Shared installation budget. Its check raises once a phase starts too
+        late, and attestation verification is bounded by what remains so an
+        unresponsive `gh` cannot outlive the installation.
 
     Returns
     -------
@@ -108,41 +117,49 @@ def stage_assets(
     if not source.is_dir():
         msg = f"snapshot asset directory does not exist: {source}"
         raise ProverToolError(msg)
-    downloads = layout.downloads_dir
+    staging = _new_staging_directory(layout)
+    names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
     try:
-        downloads.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except OSError as exc:
-        msg = f"failed to create snapshot downloads directory '{downloads}': {exc}"
-        raise ProverToolError(msg) from exc
-    manifest_path = _copy_local(
-        source,
-        downloads,
-        MANIFEST_ASSET_NAME,
-        _TransportLimit(MANIFEST_MAX_BYTES),
-    )
-    check_deadline("manifest verification")
-    parsed = parse_manifest(manifest_path.read_bytes())
-    verify_manifest_digest(parsed, options.pin)
-    validate_binding(options.pin, parsed.manifest)
-    attestation = _copy_local(
-        source,
-        downloads,
-        ATTESTATION_ASSET_NAME,
-        _TransportLimit(ATTESTATION_MAX_BYTES),
-    )
-    checksums = _copy_local(
-        source,
-        downloads,
-        CHECKSUMS_ASSET_NAME,
-        _TransportLimit(CHECKSUMS_MAX_BYTES),
-    )
-    verify_checksums(checksums, parsed.manifest, parsed.sha256)
-    hooks.verify_attestation(policy_for_pin(options.pin), manifest_path, attestation)
-    check_deadline("payload verification")
-    for asset in parsed.manifest.assets:
-        path = _copy_asset(source, downloads, asset)
-        verify_asset(path, asset)
-    _verify_bundle_structures(parsed.manifest, downloads)
+        manifest_path = _copy_local(
+            source,
+            staging,
+            MANIFEST_ASSET_NAME,
+            _TransportLimit(MANIFEST_MAX_BYTES),
+        )
+        budget.check("manifest verification")
+        parsed = parse_manifest(manifest_path.read_bytes())
+        verify_manifest_digest(parsed, options.pin)
+        validate_binding(options.pin, parsed.manifest)
+        attestation = _copy_local(
+            source,
+            staging,
+            ATTESTATION_ASSET_NAME,
+            _TransportLimit(ATTESTATION_MAX_BYTES),
+        )
+        checksums = _copy_local(
+            source,
+            staging,
+            CHECKSUMS_ASSET_NAME,
+            _TransportLimit(CHECKSUMS_MAX_BYTES),
+        )
+        verify_checksums(checksums, parsed.manifest, parsed.sha256)
+        hooks.verify_attestation(
+            policy_for_pin(options.pin),
+            manifest_path,
+            attestation,
+            timeout_seconds=budget.remaining(),
+        )
+        budget.check("payload verification")
+        for asset in parsed.manifest.assets:
+            path = _copy_asset(source, staging, asset)
+            verify_asset(path, asset)
+            names.append(asset.name)
+        _verify_bundle_structures(parsed.manifest, staging)
+        # Only fully verified evidence is published. A failed repair therefore
+        # leaves the previously staged payloads and the active pointer alone.
+        _publish_staged(staging, layout.downloads_dir, names)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     log_event(
         _LOGGER,
         "kani.install.staged",
@@ -157,13 +174,19 @@ def bundle_policy(version: str) -> ArchivePolicy:
     return ArchivePolicy(strip_components=1, required_root=f"kani-{version}")
 
 
-def _copy_asset(source: Path, downloads: Path, asset: AssetRecord) -> Path:
-    """Copy one manifest payload after checking its local size."""
+def _copy_asset(source: Path, staging: Path, asset: AssetRecord) -> Path:
+    """Copy one manifest payload under its design envelope.
+
+    The manifest's declared size is exact, but it is not the only bound: the
+    inventory document and every other payload also have design ceilings that
+    a compromised manifest cannot raise.
+    """
+    envelope = INVENTORY_MAX_BYTES if asset.role == "inventory" else PAYLOAD_MAX_BYTES
     return _copy_local(
         source,
-        downloads,
+        staging,
         asset.name,
-        _TransportLimit(asset.size, exact_size=asset.size),
+        _TransportLimit(min(asset.size, envelope), exact_size=asset.size),
     )
 
 
@@ -193,7 +216,7 @@ def _copy_local(
     pending = destination_dir / f".{name}.{os.getpid()}.pending"
     try:
         with origin.open("rb") as reader, pending.open("xb") as writer:
-            shutil.copyfileobj(reader, writer, _READ_CHUNK_SIZE)
+            written = _stream_bounded(reader, writer, name, limit)
             writer.flush()
             os.fsync(writer.fileno())
         pending.chmod(_PRIVATE_FILE_MODE)
@@ -202,7 +225,35 @@ def _copy_local(
         pending.unlink(missing_ok=True)
         msg = f"failed to stage snapshot asset '{name}': {exc}"
         raise ProverToolError(msg) from exc
+    except ProverToolError:
+        pending.unlink(missing_ok=True)
+        raise
+    if limit.exact_size is not None and written != limit.exact_size:
+        target.unlink(missing_ok=True)
+        msg = f"snapshot asset '{name}' has the wrong size"
+        raise ProverToolError(msg)
     return target
+
+
+def _stream_bounded(
+    reader: typ.BinaryIO,
+    writer: typ.BinaryIO,
+    name: str,
+    limit: _TransportLimit,
+) -> int:
+    """Copy until EOF, stopping at the transport bound.
+
+    The pre-copy size check is only a fast path: a file that grows while it is
+    copied must also stop at the bound instead of filling the cache.
+    """
+    written = 0
+    while chunk := reader.read(_READ_CHUNK_SIZE):
+        written += len(chunk)
+        if written > limit.max_bytes:
+            msg = f"snapshot asset '{name}' exceeds its transport limit"
+            raise ProverToolError(msg)
+        writer.write(chunk)
+    return written
 
 
 def _verify_bundle_structures(manifest: SnapshotManifest, downloads: Path) -> None:
@@ -224,3 +275,29 @@ def asset_by_role(manifest: SnapshotManifest, role: str) -> AssetRecord:
         msg = f"snapshot manifest must publish exactly one '{role}' asset"
         raise ProverToolError(msg)
     return matches[0]
+
+
+def _new_staging_directory(layout: SnapshotLayout) -> Path:
+    """Return a fresh private staging directory beside the downloads."""
+    staging = layout.identity_dir / f".staging-{os.getpid()}-{secrets.token_hex(8)}"
+    try:
+        staging.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=False)
+    except OSError as exc:
+        msg = f"failed to create snapshot staging directory '{staging}': {exc}"
+        raise ProverToolError(msg) from exc
+    return staging
+
+
+def _publish_staged(
+    staging: Path,
+    downloads: Path,
+    names: cabc.Iterable[str],
+) -> None:
+    """Move verified staging files into the downloads directory."""
+    try:
+        downloads.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
+        for name in names:
+            (staging / name).replace(downloads / name)
+    except OSError as exc:
+        msg = f"failed to publish snapshot payloads to '{downloads}': {exc}"
+        raise ProverToolError(msg) from exc

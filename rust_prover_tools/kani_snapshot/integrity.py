@@ -261,6 +261,9 @@ def attestation_command(
         Manifest whose attestation is verified.
     bundle : Path
         Local Sigstore bundle.
+    timeout_seconds : float | None
+        Budget for the verifier process. `None` leaves it unbounded; a bounded
+        verifier is terminated with its process group on expiry.
 
     Returns
     -------
@@ -301,6 +304,8 @@ def verify_attestation(
     policy: AttestationPolicy,
     artifact: Path,
     bundle: Path,
+    *,
+    timeout_seconds: float | None = None,
 ) -> tuple[dict[str, object], ...]:
     """Verify a build attestation and return the verified results.
 
@@ -312,6 +317,9 @@ def verify_attestation(
         Manifest whose attestation is verified.
     bundle : Path
         Local Sigstore bundle.
+    timeout_seconds : float | None
+        Budget for the verifier process. `None` leaves it unbounded; a bounded
+        verifier is terminated with its process group on expiry.
 
     Returns
     -------
@@ -324,7 +332,12 @@ def verify_attestation(
         Raised when the verifier fails, prints invalid JSON, or returns no
         verified result.
     """
-    result = run_checked(CommandSpec(attestation_command(policy, artifact, bundle)))
+    result = run_checked(
+        CommandSpec(
+            attestation_command(policy, artifact, bundle),
+            timeout_seconds=timeout_seconds,
+        )
+    )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
