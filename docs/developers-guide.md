@@ -509,6 +509,56 @@ text. When at least one profile backend is pinned, the override reports a
 validation stage completes, adding the selection, variable and collision
 counts. A repository that selects no backend emits no such event.
 
+## Kani snapshot installation and execution
+
+`rust_prover_tools.kani_snapshot.install` orchestrates one installation: stage
+and verify transport files, extract the launcher, run setup, probe the
+installed compiler, write the receipt, then publish the active pointer.
+`install_state` owns activation, locking and cache revalidation. `run` only
+revalidates and executes; it never installs. `kani_snapshot_cli` registers the
+public commands, and `cli_support` holds the repository-root and error-exit
+helpers shared with the legacy CLI. Keep lifecycle code out of the legacy
+`kani_release` modules.
+
+The dependency direction is CLI to orchestration to validated models and
+command adapters. `InstallHooks` is the injection seam for setup, probe and
+attestation, which keeps deterministic tests off the network and out of the
+host toolchain. Production defaults live in `install_defaults.py`: setup runs
+the packaged `cargo-kani` from the extracted launcher with
+`execution_environment`, and the probe reads the absolute toolchain link before
+executing `rustc -vV` and `kani-compiler --version`.
+
+Ordering is part of the contract. The manifest digest and pin binding are
+checked before checksums, checksums before attestation and payload copies, and
+payload digests before archive structure. `validate_archive_inventory` then
+requires two-way path equality and equal kind, mode, size and link target.
+Setup runs only after those checks, and the active pointer moves only after the
+receipt is fsynced and the probes match the manifest. A failure must leave the
+previous pointer and generation intact.
+
+Cache reuse is revalidation, not trust in directory existence.
+`validate_generation` reloads the receipt, checks cached sizes, recomputes the
+digests of the inventory and launcher, re-reads the backend archive against the
+inventory, requires the runtime executables and absolute toolchain link, and
+re-runs the probes. A corrupt generation is repaired by installing a new one;
+no code path deletes a previous generation.
+
+The snapshot CLI uses `config=()` on its sub-applications so Cyclopts does not
+inherit generic `INPUT_*` bindings. `run` must keep `Path` as a runtime import
+because Cyclopts evaluates annotations when it builds the command. The
+attestation verifier is `/usr/bin/gh` only in production; tests put a `gh` stub
+first on `PATH` for behavioural runs.
+
+Test layers are deliberate. Unit tests in
+`rust_prover_tools/unittests/test_kani_snapshot_install.py` cover activation,
+reuse, each rejection edge and repair with injected hooks.
+`tests/kani_snapshot_bundles.py` builds complete local releases, including a
+working `cargo-kani setup` stub, so `tests/steps/test_kani_snapshot_steps.py`
+can install through the real CLI and then run the pinned launcher.
+`tests/test_kani_snapshot_concurrency.py` uses real processes for the advisory
+lock. Keep these fixtures structural: they must exercise the production parsers
+rather than bypass them.
+
 Backend classification is positional, not name-based. `kani_release_config`
 walks every discovered Cargo configuration and ancestor manifest and returns a
 `VerificationConfig` holding each accepted `profile.<name>.codegen-backend`

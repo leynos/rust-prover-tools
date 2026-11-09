@@ -70,6 +70,11 @@ class SnapshotLayout:
         return self.generation_dir / "cargo-home"
 
     @property
+    def launcher_dir(self) -> Path:
+        """Staging root for the packaged launcher before setup."""
+        return self.generation_dir / "launcher"
+
+    @property
     def receipt_path(self) -> Path:
         """Generation-local setup receipt."""
         return self.generation_dir / "receipt.json"

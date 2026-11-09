@@ -414,14 +414,14 @@ not the default `make test` gate.
 ## Explicit legacy release execution
 
 The separate `kani exec` verb executes a selected complete release without
-installing it, while leaving the proposed snapshot-only `kani run` programme in
-[PR #131](https://github.com/leynos/rust-prover-tools/pull/131)
-unchanged. The initial compatibility boundary is Linux x86_64 Kani 0.67.0 and
-its exact release compiler metadata. Runtime lookup is child scoped; compiler
-identity queries and subsequent Cargo compilation retain every configured
-admission wrapper. Wrappers are optional when absent; the runtime does not
-create a substitute on hosted runners. Environment and Cargo configuration
-validation reject malformed selections and unproved backend or wrapper routes.
+installing it, while leaving the snapshot-only `kani run` command described
+under [Kani snapshot commands](#kani-snapshot-commands) unchanged. The initial
+compatibility boundary is Linux x86_64 Kani 0.67.0 and its exact release
+compiler metadata. Runtime lookup is child scoped; compiler identity queries
+and subsequent Cargo compilation retain every configured admission wrapper.
+Wrappers are optional when absent; the runtime does not create a substitute on
+hosted runners. Environment and Cargo configuration validation reject malformed
+selections and unproved backend or wrapper routes.
 
 Profile backends are classified by position, not by name. Discovery returns a
 `VerificationConfig` holding an immutable `BackendSelection` for each string
@@ -467,11 +467,33 @@ unqualified for nested Kani. Selecting ambient mode also changes coverage
 selection semantics, so consumers must validate their measured report scope and
 ratchet rather than assuming numeric equivalence.
 
-## Proposed Kani snapshot distribution
+## Kani snapshot commands
 
 The [Kani snapshot distribution design](kani-snapshot-distribution-design.md)
-proposes opt-in immutable binary snapshots, independent of the existing
-semantic-version release path. Its commands and pipeline await explicit plan
-approval and implementation; they are not part of the current CLI. The
-[execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
+defines opt-in immutable binary snapshots, independent of the existing
+semantic-version release path. The consumer half is implemented as a separate
+command group so the legacy CLI keeps its persisted `VERSION` contract:
+
+- `kani snapshot install` materializes and activates one reviewed pin from a
+  verified local asset directory.
+- `kani snapshot check` revalidates the active generation without setup.
+- `kani run --snapshot-pin PATH -- ARGS...` executes a proof through the
+  active generation and forwards every argument unchanged.
+
+`kani run` is distinct from legacy `kani exec`: `exec` selects a complete
+release by semantic version for one execution, while `run` requires an
+installed snapshot identity and refuses any argument that would replace its
+backend. Neither command is an alias for the other, and neither falls back to
+the other on failure.
+
+Install and check resolve the pin to `tools/kani/snapshot.toml` and the cache to
+`.kani-snapshots` below the repository root. `run` requires an explicit
+`--snapshot-pin` so a proof cannot silently drift to another snapshot. Snapshot
+sub-applications disable Cyclopts' `INPUT_*` configuration, keeping a generic
+workflow input from redirecting a reviewed pin or cache.
+
+Installation currently requires `--asset-dir`. The release download transport
+and the publication workflow are later milestones; until they land, a pin can
+be consumed only from release files that were obtained and reviewed separately.
+The [execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
 implementation acceptance from a separately authorized first publication.

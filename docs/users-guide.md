@@ -136,8 +136,76 @@ nested Kani invocation. Removing these child flags does not disable parent
 measurement. Coverage report scope and the local ratchet still need validation
 when selecting that mode.
 
-This legacy command is separate from the snapshot programme proposed in
-[PR #131](https://github.com/leynos/rust-prover-tools/pull/131).
+This legacy command is separate from the snapshot commands described in
+[Kani snapshot commands](#kani-snapshot-commands).
+
+### Kani snapshot commands
+
+The snapshot commands install, check and run one immutable, reviewed Kani
+build. They are independent of the legacy `kani check-version` and `kani exec`
+commands and never fall back to a host Kani installation.
+
+`prover-tools kani snapshot install` materializes the identity named by
+`tools/kani/snapshot.toml`:
+
+```sh
+prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+```
+
+Installation requires `--asset-dir` until the release download transport is
+implemented. The directory must contain `manifest.json`,
+`manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the manifest names. The
+installer checks, in order, that the manifest bytes match the reviewed pin
+digest, that the pin binds to the manifest, that the checksums agree, that
+`gh attestation verify` accepts the bundle under the repository policy, and
+that every payload matches its recorded size and digest. It then compares the
+backend archive's members with `inventory.json` and runs the packaged launcher's
+`setup --use-local-bundle` with generation-private `KANI_HOME`, `RUSTUP_HOME`
+and `CARGO_HOME`. Only after the installed `rustc -vV` and
+`kani-compiler --version` match the manifest does the command switch the active
+pointer.
+
+`prover-tools kani snapshot check` revalidates the active generation without
+running setup:
+
+```sh
+prover-tools kani snapshot check
+```
+
+`prover-tools kani run --snapshot-pin PATH -- ARGS...` executes a proof through
+the active generation:
+
+```sh
+prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness proof
+```
+
+Every argument after `--` is forwarded unchanged, stdout and stderr remain
+separate, and the launcher's exit status becomes the command's exit status.
+`run` revalidates the generation first, so a changed payload or compiler stops
+the proof. It refuses `setup`, `--use-local-bundle`, `--use-local-toolchain` and
+`-Z lean` because they would replace the pinned backend.
+
+Install and check default the pin to `tools/kani/snapshot.toml` and the cache to
+`.kani-snapshots` below the repository root. Both accept `--pin`, `--repo` and
+`--cache-dir`; `run` accepts `--snapshot-pin`, `--repo` and `--cache-dir`.
+
+Repeating an install while a validated generation is active reuses that
+generation without reading `--asset-dir` again. A failed installation leaves
+the previous generation and the active pointer unchanged; a new generation is
+activated only after its receipt is durable and its compiler has been observed.
+Concurrent installs for one identity serialize on an advisory lock with a
+bounded wait (300 seconds) inside an overall 1800-second installation deadline.
+A corrupt active generation is repaired by installing a new generation, and the
+old directory is preserved.
+
+Checking and running never repair a generation. If `check` or `run` reports a
+missing, changed or drifted snapshot, run `prover-tools kani snapshot install`
+again with the verified assets.
+
+Snapshot commands intentionally ignore the generic `INPUT_*` action bindings,
+so a workflow input cannot silently redirect a reviewed pin or cache. Proof
+execution is not a sandbox: the selected Kani build and the proof workspace
+must still be trusted.
 
 Cargo configuration discovery requires a non-empty `CARGO_HOME` or `HOME`. The
 command uses the invoking environment and fails rather than guessing a home

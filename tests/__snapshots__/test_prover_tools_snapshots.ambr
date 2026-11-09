@@ -53,6 +53,52 @@
   
   '''
 # ---
+# name: test_kani_run_help_snapshot
+  '''
+  Usage: prover-tools kani run --snapshot-pin PATH [OPTIONS] [ARGS...]
+  
+  Run a proof through the exact installed snapshot
+  
+  ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+  │ ARGS                                                                         │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ *  --snapshot-pin PATH  Required reviewed pin for this proof. [required]     │
+  │    --repo PATH          Repository root used for the default cache.          │
+  │    --cache-dir PATH     Snapshot cache. Defaults to `.kani-snapshots`.       │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_kani_snapshot_help_snapshot
+  '''
+  Usage: prover-tools kani snapshot COMMAND
+  
+  Install, check and run one immutable Kani snapshot
+  
+  ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ check    Check that the active generation still matches its reviewed pin.    │
+  │ install  Install a reviewed snapshot from a local verified asset directory.  │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_kani_snapshot_install_help_snapshot
+  '''
+  Usage: prover-tools kani snapshot install [OPTIONS]
+  
+  Install a reviewed snapshot from a local verified asset directory.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ --pin PATH        Reviewed pin. Defaults to `tools/kani/snapshot.toml`.      │
+  │ --repo PATH       Repository root used for default paths.                    │
+  │ --cache-dir PATH  Snapshot cache. Defaults to `.kani-snapshots`.             │
+  │ --asset-dir PATH  Directory holding the release files and their attestation  │
+  │                   bundle.                                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
 # name: test_top_level_help_snapshot
   '''
   Usage: prover-tools COMMAND

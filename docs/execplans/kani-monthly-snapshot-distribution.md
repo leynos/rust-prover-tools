@@ -202,6 +202,37 @@ EP-O1 assigns responsibility and records live evidence.
     generation paths and setup's absolute toolchain link, then validates it
     against the layout. 54 focused tests pass; the full suite reports 1039
     passed and 5 skipped.
+  - [x] (2026-11-09) Implemented isolated install, check and run.
+    `install.py` verifies the local transport in order, compares the backend
+    archive with the inventory, extracts the launcher, runs the packaged setup
+    with generation-private homes, probes compiler identity, writes a durable
+    receipt and switches the active pointer under a per-identity `flock`.
+    `install_state.py` owns activation and cache revalidation;
+    `install_defaults.py` owns production setup and probe; `run.py` refuses
+    backend-replacing arguments, revalidates and preserves the launcher's
+    streams and exit status. `kani_snapshot_cli.py` registers `kani snapshot
+    install|check` and `kani run --snapshot-pin`, and `cli_support.py` keeps
+    the legacy CLI inside its module and argument limits. 30 focused tests
+    pass: 13 install, 4 run, 5 CLI, 2 two-process lock and 6 BDD.
+  - [x] (2026-11-09) Added behavioural coverage and shared release fixtures.
+    `tests/kani_snapshot_bundles.py` builds complete local releases with a
+    working `cargo-kani setup` stub, so `tests/features/kani_snapshot.feature`
+    and `tests/steps/test_kani_snapshot_steps.py` install through the real
+    CLI, check the generation, forward arguments, preserve the launcher exit
+    status, refuse changed assets without deleting the previous generation,
+    and refuse upstream setup and the Lean backend. A `gh` attestation stub is
+    placed first on `PATH` only for these behavioural runs.
+  - [x] (2026-11-09) Ran the full sequential gate stack with `FORCE_COLOR`
+    unset: `make fmt`, `make check-fmt`, `make lint` (Ruff, Pylint 4.0.9 and
+    interrogate at 100%), `make typecheck` (ty 0.0.92), `make test` (1072
+    passed, 5 skipped), `make markdownlint` including spelling, and
+    `make nixie`. Two integration defects were repaired rather than
+    suppressed: the new shared `repo_root` helper was shadowed by CLI
+    parameters of the same name, and `install.py` exceeded the 400-line
+    module ceiling, so transport staging moved to `install_transport.py` and
+    the state helpers became shared. Focused reruns after the repairs kept
+    all 30 snapshot tests green.
+  - [ ] EP-M3 milestone CodeRabbit CLI review.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -230,6 +261,19 @@ counted as successful research. Wyvern agents also used local reads and primary
 GitHub source/run evidence. Leta's workspace index also encountered a read-only
 filesystem. These tooling limitations do not authorize skipping approval or
 verification.
+
+Repeating a local install does not reread `--asset-dir`: the reuse check runs
+under the identity lock before staging, so a healthy active generation is
+returned even when the local release directory has changed. The changed-assets
+refusal therefore belongs to a repair attempt and needs an invalid active
+generation first; the behavioural scenario corrupts the receipt to reach that
+path. This is intended cache behaviour, not a missing integrity check.
+
+The local `--asset-dir` requirement is a deliberate plateau. The D4 release
+host policy and downloader are already implemented and tested, but the consumer
+command does not yet fetch release assets from GitHub. EP-M4 must connect that
+transport before the workflow can depend on this command, and the current error
+message says so explicitly.
 
 ## Decision log
 
@@ -292,6 +336,35 @@ The forwarded-argument refusal list is finite and evidence-based: upstream's
 proxy accepts only `setup` with `--use-local-bundle`/`--use-local-toolchain`,
 and pinned driver source exposes `-Z lean` as the backend switch.
 
+2026-11-09, implemented D4 local transport: `install` requires `--asset-dir`
+until the release downloader is connected. The transport is explicit so a
+consumer cannot silently fall back to a host Kani, and every transport file is
+bounded and copied into a private downloads directory before verification.
+Repeating an installation validates and reuses the active generation before
+reading transport files, so changed local assets cannot disturb a healthy cache.
+
+2026-11-09, implemented D4 archive/inventory ordering: the manifest pins the
+archive bytes, so structural agreement runs before setup and setup consumes the
+same verified archive. `validate_archive_inventory` requires two-way path
+equality plus equal kind, mode, size and link target. Full payload digests are
+rechecked at stage time; cache reuse rechecks sizes for every asset and full
+digests for the inventory and launcher, then re-reads the backend archive
+against the inventory.
+
+2026-11-09, implemented D4 launcher staging and run revalidation: the launcher
+archive is extracted privately and its binaries are copied beside the backend
+after setup without overwriting backend files. `check` and `run` never install;
+they reload the cached manifest, receipt, payload evidence, absolute toolchain
+link and live probes, and any failure is reported without mutating the
+generation.
+
+2026-11-09, implemented D4 activation state: the per-identity advisory lock
+uses non-blocking `flock` with a bounded poll inside the installation deadline.
+The active pointer is a strict two-key document written to a private temporary
+file, fsynced, renamed and followed by a directory fsync. A corrupt active
+generation triggers repair into a new generation, and the old generation
+directory is never deleted.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -299,7 +372,12 @@ Neither a build attestation nor a zero-harness exit is proof success.
 
 ## Outcomes & retrospective
 
-Planning review is complete; implementation and publication have not started.
+Planning review is complete. EP-M2 (authenticated pin and manifest contracts)
+and the EP-M3 consumer implementation (isolated install, check and run) are
+implemented and locally tested; the remaining EP-M3 work is the full gate and
+milestone review record. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
+have not started. The consumer `install` command is deliberately limited to a
+verified local `--asset-dir` until the EP-M4 release transport is connected.
 Independent reviews covered all five requested specialities, with amendments
 recorded in the design and checked by a final testing/consistency review.
 Planning validation passed `make fmt`, `make markdownlint` (including spelling

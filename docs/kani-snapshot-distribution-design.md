@@ -330,6 +330,44 @@ compiler identity. Compare executable digests and effective compiler
 `cargo kani --version`. Record and validate setup-generated paths. Reports omit
 tokens, signed redirect URLs and inherited secret-bearing environment values.
 
+### Implemented consumer boundary (EP-M3)
+
+The installation pipeline is manifest digest, pin binding, checksums,
+attestation, payload copies and digests, archive structure, setup, launcher
+placement, probes, receipt, activation. A local `--asset-dir` is the only
+transport implemented so far; refusing to run without it is explicit rather
+than a silent fallback to a host installation. The remote download policy in
+this section remains the design for the later transport milestone.
+
+Structural agreement is checked before setup. The manifest pins the backend
+archive's bytes, and the separately hashed `inventory.json` is compared with
+the archive graph in both directions on path, kind, mode, size and link target.
+Setup then consumes the same verified bytes through
+`cargo-kani setup --use-local-bundle`, so the installer never re-implements
+extraction and never hands the launcher an unverified file.
+
+The launcher archive is extracted into a generation-private staging directory
+before setup, and its `bin` entries are copied beside the backend binaries only
+after setup succeeds. Existing backend binaries are never overwritten. Setup
+receives the generation's private homes through `execution_environment`, and
+the probe re-executes the installed `rustc -vV` and `kani-compiler --version`
+rather than trusting receipt text.
+
+Activation remains a pointer write after validation. Repeating an install
+reuses a still-valid active generation before staging transport files, so
+changed local assets cannot disturb a healthy cache; changed assets are refused
+only when a new generation must be staged. `check` and `run` re-read the cached
+manifest, recheck receipt, cached sizes, the inventory and launcher digests,
+the backend/inventory agreement, executable modes, the absolute toolchain link
+and both probes. A corrupt generation is repaired by creating a new generation;
+the previous directory is never deleted.
+
+Per-identity installation is serialized by an advisory `flock` with a bounded
+wait inside a monotonic deadline. The active pointer is written to a private
+temporary file, fsynced, atomically renamed and followed by a directory fsync.
+A failed stage, extraction, setup or probe leaves the previous pointer
+untouched.
+
 ## D5: Workflow and immutable publication
 
 Propose `.github/workflows/kani-monthly.yml`, independent of Python releases.
