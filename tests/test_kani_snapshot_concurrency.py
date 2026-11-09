@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import multiprocessing
-import time
 import typing as typ
-from pathlib import Path
 
 import pytest
 
@@ -24,10 +22,17 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
 from rust_prover_tools.kani_snapshot.install_model import InstallOptions
-from rust_prover_tools.kani_snapshot.install_state import identity_lock, load_active
+from rust_prover_tools.kani_snapshot.install_state import load_active
+from tests.kani_snapshot_actors import (
+    acquire_lock,
+    hold_lock,
+    hold_lock_until_killed,
+    install_after_barrier,
+    install_and_stall_inside_setup,
+    repair_and_stall_before_publishing,
+)
 from tests.kani_snapshot_fixtures import make_pin
 from tests.kani_snapshot_install_fixtures import (
-    SnapshotCase,
     active_generation,
     install_hooks,
     install_options,
@@ -35,84 +40,7 @@ from tests.kani_snapshot_install_fixtures import (
 )
 
 if typ.TYPE_CHECKING:
-    from multiprocessing import queues, synchronize
-
-    from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
-    from rust_prover_tools.kani_snapshot.models import SnapshotPin
-
-
-def _hold_lock(
-    pin: SnapshotPin,
-    cache_home: str,
-    ready: synchronize.Event,
-    release: synchronize.Event,
-) -> None:
-    """Hold the identity lock until the parent permits release."""
-    options = InstallOptions(pin=pin, cache_home=Path(cache_home))
-    with identity_lock(options, timeout=10):
-        ready.set()
-        release.wait(10)
-
-
-def _hold_lock_until_killed(
-    pin: SnapshotPin,
-    cache_home: str,
-    ready: synchronize.Event,
-) -> None:
-    """Hold the identity lock until the parent kills this process.
-
-    A plain sleep avoids the shared event's condition variables, whose
-    internal sleeper accounting a killed waiter would leave inconsistent.
-    """
-    options = InstallOptions(pin=pin, cache_home=Path(cache_home))
-    with identity_lock(options, timeout=10):
-        ready.set()
-        time.sleep(60)
-
-
-def _acquire_lock(
-    pin: SnapshotPin,
-    cache_home: str,
-    outcome: queues.Queue[str],
-) -> None:
-    """Try to acquire the lock and report whether it was refused."""
-    options = InstallOptions(pin=pin, cache_home=Path(cache_home))
-    try:
-        with identity_lock(options, timeout=0.2):
-            outcome.put("acquired")
-    except ProverToolError as exc:
-        outcome.put(f"refused: {exc}")
-
-
-def _install_and_stall_inside_setup(
-    case: SnapshotCase,
-    in_pipeline: synchronize.Event,
-    resume: synchronize.Event,
-    outcomes: queues.Queue[str],
-) -> None:
-    """Stall inside setup, after staging, while holding the identity lock."""
-    hooks = install_hooks(case)
-
-    def stalling_setup(
-        runtime: SnapshotRuntime,
-        bundle: Path,
-        timeout_seconds: float | None,
-    ) -> None:
-        """Announce that the pipeline is mid-flight, then wait to continue."""
-        in_pipeline.set()
-        if not resume.wait(30):
-            msg = "parent never released the stalled pipeline"
-            raise ProverToolError(msg)
-        hooks.setup(runtime, bundle, timeout_seconds)
-
-    try:
-        install_snapshot(
-            install_options(case),
-            dc.replace(hooks, setup=stalling_setup),
-        )
-        outcomes.put(active_generation(case))
-    except Exception as exc:  # ruff: ignore[blind-except] - the parent reports it
-        outcomes.put(f"error:{type(exc).__name__}:{exc}")
+    from pathlib import Path
 
 
 @pytest.mark.timeout(30)
@@ -123,7 +51,7 @@ def test_second_process_waits_for_the_identity_lock(tmp_path: Path) -> None:
     ready = context.Event()
     release = context.Event()
     holder = context.Process(
-        target=_hold_lock,
+        target=hold_lock,
         args=(pin, str(tmp_path), ready, release),
     )
     holder.start()
@@ -131,7 +59,7 @@ def test_second_process_waits_for_the_identity_lock(tmp_path: Path) -> None:
         assert ready.wait(10), "holder did not acquire the identity lock"
         outcome = context.Queue()
         contender = context.Process(
-            target=_acquire_lock,
+            target=acquire_lock,
             args=(pin, str(tmp_path), outcome),
         )
         contender.start()
@@ -153,7 +81,7 @@ def test_lock_is_available_after_the_owner_exits(tmp_path: Path) -> None:
     ready = context.Event()
     release = context.Event()
     holder = context.Process(
-        target=_hold_lock,
+        target=hold_lock,
         args=(pin, str(tmp_path), ready, release),
     )
     holder.start()
@@ -163,27 +91,13 @@ def test_lock_is_available_after_the_owner_exits(tmp_path: Path) -> None:
     assert holder.exitcode == 0, "holder crashed"
     outcome = context.Queue()
     contender = context.Process(
-        target=_acquire_lock,
+        target=acquire_lock,
         args=(pin, str(tmp_path), outcome),
     )
     contender.start()
     contender.join(10)
     assert contender.exitcode == 0, "contender crashed"
     assert outcome.get(timeout=5) == "acquired", "lock was not free after exit"
-
-
-def _install_after_barrier(
-    case: SnapshotCase,
-    barrier: synchronize.Barrier,
-    outcomes: queues.Queue[str],
-) -> None:
-    """Install once its peer has started and report the observed generation."""
-    try:
-        barrier.wait(timeout=10)
-        install_snapshot(install_options(case), install_hooks(case))
-        outcomes.put(active_generation(case))
-    except Exception as exc:  # ruff: ignore[blind-except] - the parent reports it
-        outcomes.put(f"error:{type(exc).__name__}:{exc}")
 
 
 @pytest.mark.timeout(120)
@@ -195,7 +109,7 @@ def test_overlapping_installs_publish_one_generation(tmp_path: Path) -> None:
     outcomes = context.Queue()
     workers = [
         context.Process(
-            target=_install_after_barrier,
+            target=install_after_barrier,
             args=(case, barrier, outcomes),
         )
         for _ in range(2)
@@ -225,7 +139,7 @@ def test_killed_staging_owner_releases_the_lock(tmp_path: Path) -> None:
     case = make_case(tmp_path)
     ready = context.Event()
     owner = context.Process(
-        target=_hold_lock_until_killed,
+        target=hold_lock_until_killed,
         args=(case.pin, str(case.cache_home), ready),
     )
     owner.start()
@@ -265,7 +179,7 @@ def test_contention_inside_the_pipeline_withholds_publication(
     outcomes = context.Queue()
     generation = ""
     owner = context.Process(
-        target=_install_and_stall_inside_setup,
+        target=install_and_stall_inside_setup,
         args=(case, in_pipeline, resume, outcomes),
     )
     owner.start()
@@ -310,7 +224,7 @@ def test_install_times_out_while_another_owner_holds_the_lock(tmp_path: Path) ->
     ready = context.Event()
     release = context.Event()
     owner = context.Process(
-        target=_hold_lock,
+        target=hold_lock,
         args=(case.pin, str(case.cache_home), ready, release),
     )
     owner.start()
@@ -333,4 +247,47 @@ def test_install_times_out_while_another_owner_holds_the_lock(tmp_path: Path) ->
     assert owner.exitcode == 0, "owner crashed"
 
     install_snapshot(install_options(case), install_hooks(case))
+    check_snapshot(install_options(case), install_hooks(case))
+
+
+@pytest.mark.timeout(120)
+def test_check_is_refused_while_a_repair_rewrites_the_cache(
+    tmp_path: Path,
+) -> None:
+    """A reader must not validate a cache a live repair is rewriting.
+
+    Damaging the cached backend forces the repair path while the active
+    generation's tree stays intact. The repair is stalled after verifying its
+    freshly staged payloads but before publishing any of them, so the shared
+    downloads still hold the damaged copy. A reader with a short lock timeout
+    must be refused at that boundary instead of reporting the damage, and must
+    succeed once the repair completes.
+    """
+    context = multiprocessing.get_context("spawn")
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    backend = layout.downloads_dir / "backend.tar.gz"
+    backend.write_bytes(backend.read_bytes() + b"damaged")
+    in_publish = context.Event()
+    resume = context.Event()
+    outcomes = context.Queue()
+    repairer = context.Process(
+        target=repair_and_stall_before_publishing,
+        args=(case, in_publish, resume, outcomes),
+    )
+    repairer.start()
+    try:
+        assert in_publish.wait(20), "the repair never reached publication"
+        reader = dc.replace(install_options(case), lock_timeout_seconds=0.2)
+        with pytest.raises(ProverToolError, match="timed out"):
+            check_snapshot(reader, install_hooks(case))
+        resume.set()
+        report = typ.cast("str", outcomes.get(timeout=60))
+    finally:
+        resume.set()
+        repairer.join(30)
+
+    assert repairer.exitcode == 0, "the repair process crashed"
+    assert report == "repaired", f"the repair failed: {report}"
     check_snapshot(install_options(case), install_hooks(case))

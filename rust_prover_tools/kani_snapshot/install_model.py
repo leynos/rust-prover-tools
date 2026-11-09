@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import collections.abc as cabc
 import dataclasses as dc
+import functools
+import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
@@ -17,6 +19,7 @@ from rust_prover_tools.kani_snapshot.install_defaults import (
     run_local_bundle_setup,
 )
 from rust_prover_tools.kani_snapshot.integrity import verify_attestation
+from rust_prover_tools.kani_snapshot.progress import run_within
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -26,11 +29,14 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
     from rust_prover_tools.kani_snapshot.receipt_model import SetupEvidence
 
+_T = typ.TypeVar("_T")
+
 __all__ = (
     "ATTESTATION_ASSET_NAME",
     "CHECKSUMS_ASSET_NAME",
     "MANIFEST_ASSET_NAME",
     "AttestationVerifier",
+    "Deadline",
     "InstallBudget",
     "InstallHooks",
     "InstallOptions",
@@ -64,6 +70,52 @@ class InstallBudget(typ.Protocol):
 
     def remaining(self) -> float:
         """Return the seconds left, never negative."""
+
+    def supervise(
+        self,
+        phase: str,
+        operation: cabc.Callable[[], _T],
+    ) -> _T:
+        """Run one possibly blocking local operation under the budget."""
+
+
+@dc.dataclass(slots=True)
+class Deadline:
+    """A monotonic installation budget shared by every phase.
+
+    The concrete implementation lives beside the protocol it satisfies so the
+    phase module that orchestrates installation does not also own clock
+    arithmetic.
+    """
+
+    expires_at: float
+
+    def check(self, phase: str) -> None:
+        """Fail when the budget has expired."""
+        if time.monotonic() >= self.expires_at:
+            msg = f"snapshot installation deadline expired during {phase}"
+            raise ProverToolError(msg)
+
+    def remaining(self) -> float:
+        """Return the seconds left, never negative."""
+        return max(0.0, self.expires_at - time.monotonic())
+
+    def checkpoint(self, phase: str) -> cabc.Callable[[], None]:
+        """Return a callable that enforces the budget inside `phase`.
+
+        Long local work such as copying, hashing, archive extraction and tree
+        validation calls it repeatedly, so an expired budget stops the phase
+        rather than being noticed only at the next phase boundary.
+        """
+        return functools.partial(self.check, phase)
+
+    def supervise(
+        self,
+        phase: str,
+        operation: cabc.Callable[[], _T],
+    ) -> _T:
+        """Run one blocking local operation without exceeding the budget."""
+        return run_within(operation, remaining=self.remaining, phase=phase)
 
 
 class AttestationVerifier(typ.Protocol):

@@ -15,12 +15,21 @@ import logging
 import os
 import secrets
 import shutil
-import stat
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.archive_graph import ArchivePolicy
 from rust_prover_tools.kani_snapshot.archive_read import read_archive
+from rust_prover_tools.kani_snapshot.install_copy import (
+    TransportFile,
+    TransportLimit,
+)
+from rust_prover_tools.kani_snapshot.install_copy import (
+    copy_local as _copy_local,
+)
+from rust_prover_tools.kani_snapshot.install_copy import (
+    transport_file as _transport_file,
+)
 from rust_prover_tools.kani_snapshot.install_model import (
     ATTESTATION_ASSET_NAME,
     ATTESTATION_MAX_BYTES,
@@ -46,7 +55,6 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
-from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -57,39 +65,17 @@ if typ.TYPE_CHECKING:
         AssetRecord,
         SnapshotManifest,
     )
+    from rust_prover_tools.kani_snapshot.progress import Progress
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 __all__ = ("asset_by_role", "bundle_policy", "stage_assets")
 
 _LOGGER = logging.getLogger(__name__)
-_PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
-_READ_CHUNK_SIZE: typ.Final[int] = 64 * 1024
 
 #: Design envelopes for one compressed payload and for the inventory document.
 PAYLOAD_MAX_BYTES: typ.Final[int] = 2 * 1024 * 1024 * 1024
 INVENTORY_MAX_BYTES: typ.Final[int] = 64 * 1024 * 1024
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _TransportLimit:
-    """The size rule for one local transport file."""
-
-    max_bytes: int
-    exact_size: int | None = None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class _TransportFile:
-    """One local transport file: its asset name and size rule."""
-
-    name: str
-    limit: _TransportLimit
-
-
-def _transport_file(name: str, max_bytes: int) -> _TransportFile:
-    """Return the envelope rule for one fixed-name transport file."""
-    return _TransportFile(name=name, limit=_TransportLimit(max_bytes))
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -164,27 +150,39 @@ def stage_assets(
     names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
     checkpoints = _Checkpoints.for_budget(budget)
     try:
-        manifest_path = _copy_local(
-            source,
-            staging,
-            _transport_file(MANIFEST_ASSET_NAME, MANIFEST_MAX_BYTES),
-            checkpoints.staging,
+        manifest_path = budget.supervise(
+            "transport staging",
+            functools.partial(
+                _copy_local,
+                source,
+                staging,
+                _transport_file(MANIFEST_ASSET_NAME, MANIFEST_MAX_BYTES),
+                checkpoints.staging,
+            ),
         )
         budget.check("manifest verification")
         parsed = parse_manifest(manifest_path.read_bytes())
         verify_manifest_digest(parsed, options.pin)
         validate_binding(options.pin, parsed.manifest)
-        attestation = _copy_local(
-            source,
-            staging,
-            _transport_file(ATTESTATION_ASSET_NAME, ATTESTATION_MAX_BYTES),
-            checkpoints.staging,
+        attestation = budget.supervise(
+            "transport staging",
+            functools.partial(
+                _copy_local,
+                source,
+                staging,
+                _transport_file(ATTESTATION_ASSET_NAME, ATTESTATION_MAX_BYTES),
+                checkpoints.staging,
+            ),
         )
-        checksums = _copy_local(
-            source,
-            staging,
-            _transport_file(CHECKSUMS_ASSET_NAME, CHECKSUMS_MAX_BYTES),
-            checkpoints.staging,
+        checksums = budget.supervise(
+            "transport staging",
+            functools.partial(
+                _copy_local,
+                source,
+                staging,
+                _transport_file(CHECKSUMS_ASSET_NAME, CHECKSUMS_MAX_BYTES),
+                checkpoints.staging,
+            ),
         )
         verify_checksums(checksums, parsed.manifest, parsed.sha256)
         hooks.verify_attestation(
@@ -195,13 +193,34 @@ def stage_assets(
         )
         budget.check("payload verification")
         for asset in parsed.manifest.assets:
-            path = _copy_asset(source, staging, asset, checkpoints.payload)
-            verify_asset(path, asset, checkpoint=checkpoints.digest)
+            path = budget.supervise(
+                "payload staging",
+                functools.partial(
+                    _copy_asset,
+                    source,
+                    staging,
+                    asset,
+                    checkpoints.payload,
+                ),
+            )
+            budget.supervise(
+                "payload verification",
+                functools.partial(
+                    verify_asset,
+                    path,
+                    asset,
+                    checkpoint=checkpoints.digest,
+                ),
+            )
             names.append(asset.name)
-        _verify_bundle_structures(
-            parsed.manifest,
-            staging,
-            checkpoint=checkpoints.archive,
+        budget.supervise(
+            "archive structure validation",
+            functools.partial(
+                _verify_bundle_structures,
+                parsed.manifest,
+                staging,
+                checkpoint=checkpoints.archive,
+            ),
         )
         # Only fully verified evidence is published. A failed repair therefore
         # leaves the previously staged payloads and the active pointer alone.
@@ -238,81 +257,12 @@ def _copy_asset(
     return _copy_local(
         source,
         staging,
-        _TransportFile(
+        TransportFile(
             name=asset.name,
-            limit=_TransportLimit(min(asset.size, envelope), exact_size=asset.size),
+            limit=TransportLimit(min(asset.size, envelope), exact_size=asset.size),
         ),
         checkpoint,
     )
-
-
-def _copy_local(
-    source: Path,
-    destination_dir: Path,
-    file: _TransportFile,
-    checkpoint: Progress | None = None,
-) -> Path:
-    """Copy one local release file into the private downloads directory."""
-    origin = source / file.name
-    try:
-        status = origin.stat()
-    except OSError as exc:
-        msg = f"failed to read snapshot asset '{file.name}': {exc}"
-        raise ProverToolError(msg) from exc
-    if not stat.S_ISREG(status.st_mode):
-        msg = f"snapshot asset '{file.name}' is not a regular file"
-        raise ProverToolError(msg)
-    if status.st_size > file.limit.max_bytes:
-        msg = f"snapshot asset '{file.name}' exceeds its transport limit"
-        raise ProverToolError(msg)
-    exact_size = file.limit.exact_size
-    if exact_size is not None and status.st_size != exact_size:
-        msg = f"snapshot asset '{file.name}' has the wrong size"
-        raise ProverToolError(msg)
-    target = destination_dir / file.name
-    pending = destination_dir / f".{file.name}.{os.getpid()}.pending"
-    try:
-        with origin.open("rb") as reader, pending.open("xb") as writer:
-            written = _stream_bounded(reader, writer, file, checkpoint)
-            writer.flush()
-            os.fsync(writer.fileno())
-        pending.chmod(_PRIVATE_FILE_MODE)
-        pending.replace(target)
-    except OSError as exc:
-        pending.unlink(missing_ok=True)
-        msg = f"failed to stage snapshot asset '{file.name}': {exc}"
-        raise ProverToolError(msg) from exc
-    except ProverToolError:
-        pending.unlink(missing_ok=True)
-        raise
-    if exact_size is not None and written != exact_size:
-        target.unlink(missing_ok=True)
-        msg = f"snapshot asset '{file.name}' has the wrong size"
-        raise ProverToolError(msg)
-    return target
-
-
-def _stream_bounded(
-    reader: typ.BinaryIO,
-    writer: typ.BinaryIO,
-    file: _TransportFile,
-    checkpoint: Progress | None = None,
-) -> int:
-    """Copy until EOF, stopping at the transport bound.
-
-    The pre-copy size check is only a fast path: a file that grows while it is
-    copied must also stop at the bound instead of filling the cache.
-    """
-    progress = as_checkpoint(checkpoint)
-    written = 0
-    while chunk := reader.read(_READ_CHUNK_SIZE):
-        progress()
-        written += len(chunk)
-        if written > file.limit.max_bytes:
-            msg = f"snapshot asset '{file.name}' exceeds its transport limit"
-            raise ProverToolError(msg)
-        writer.write(chunk)
-    return written
 
 
 def _verify_bundle_structures(

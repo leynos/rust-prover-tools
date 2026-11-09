@@ -17,7 +17,7 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot import install_transport
+from rust_prover_tools.kani_snapshot import install_copy, install_transport
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
 from tests.kani_snapshot_install_fixtures import (
@@ -33,6 +33,8 @@ if typ.TYPE_CHECKING:
     from multiprocessing import queues, synchronize
     from pathlib import Path
 
+    from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
+    from rust_prover_tools.kani_snapshot.receipt_model import SetupEvidence
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 
@@ -40,27 +42,34 @@ def _install_and_stall_during_staging(
     case: SnapshotCase,
     marker: Path,
     partial_name: str,
+    probe: cabc.Callable[[SnapshotRuntime], SetupEvidence] | None = None,
 ) -> None:
     """Install, stall after a partial staged write, then wait to be killed.
 
     The parent kills this process while it sleeps, so the partial pending file
     and the marker exist first. The partial file models a real interrupted
-    transfer rather than a stall before any byte is written.
+    transfer rather than a stall before any byte is written. A caller-supplied
+    probe can force the repair path before staging begins.
     """
     real_copy = install_transport._copy_local
 
     def stall(
         source: Path,
         destination_dir: Path,
-        file: install_transport._TransportFile,
+        file: install_copy.TransportFile,
         checkpoint: cabc.Callable[[], None] | None = None,
     ) -> Path:
-        """Write part of one asset, announce staging, then block."""
+        """Write half of one asset, announce staging, then block.
+
+        Half the file is strictly shorter than the source even for the small
+        fixture archives, so the partial write stays recognisable as
+        incomplete rather than relying on a fixed chunk being shorter.
+        """
         if file.name != partial_name:
             return real_copy(source, destination_dir, file, checkpoint)
+        data = (source / file.name).read_bytes()
         pending = destination_dir / f".{file.name}.{os.getpid()}.pending"
-        with (source / file.name).open("rb") as reader:
-            pending.write_bytes(reader.read(1024))
+        pending.write_bytes(data[: max(1, len(data) // 2)])
         marker.write_text("staging", encoding="utf-8")
         time.sleep(60)
         return real_copy(source, destination_dir, file, checkpoint)
@@ -70,7 +79,28 @@ def _install_and_stall_during_staging(
     # code. Assignment through `vars` keeps the test seam's looser signature
     # out of the module's checked surface.
     vars(install_transport)["_copy_local"] = stall
-    install_snapshot(install_options(case), install_hooks(case))
+    install_snapshot(install_options(case), install_hooks(case, probe=probe))
+
+
+def _repair_and_stall_during_staging(
+    case: SnapshotCase,
+    marker: Path,
+    partial_name: str,
+) -> None:
+    """Force a repair through a transient probe failure, then stall mid-staging.
+
+    Nothing about the active generation is damaged: its receipt, tree, Python
+    record and cached payloads stay valid, and only the one probe observation
+    fails. An interrupted repair therefore must not be able to blame the
+    generation it was about to replace.
+    """
+
+    def transient_probe(_runtime: SnapshotRuntime) -> SetupEvidence:
+        """Fail one observation, as a briefly unavailable compiler would."""
+        msg = "transient probe failure"
+        raise ProverToolError(msg)
+
+    _install_and_stall_during_staging(case, marker, partial_name, transient_probe)
 
 
 def _install_with_seeded_fault(
@@ -169,6 +199,72 @@ def test_killed_installer_after_a_partial_write_leaves_recovery_intact(
 
     # No restoration happens here: the intact source release is the only
     # repair input, exactly as a real operator would leave it.
+    install_snapshot(install_options(case), install_hooks(case))
+    check_snapshot(install_options(case), install_hooks(case))
+    previous = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=generation,
+    )
+    assert previous.receipt_path.is_file(), (
+        "recovery destroyed the previously active generation"
+    )
+    assert previous.python_root_record_path.is_file(), (
+        "recovery destroyed the previously active generation's Python record"
+    )
+
+
+@pytest.mark.timeout(120)
+def test_interrupted_repair_leaves_the_previous_generation_usable(
+    tmp_path: Path,
+) -> None:
+    """A killed repair must not invalidate the generation it was replacing.
+
+    A transient probe failure forces the repair path while every artefact of
+    the active generation is still intact. The repair is killed after a partial
+    staged write, so the pointer must still name the old generation and a
+    normal check, with a healthy probe, must validate it before any recovery
+    runs. A repair that damaged shared state before publishing would fail here.
+    """
+    context = multiprocessing.get_context("spawn")
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    generation = active_generation(case)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    backend = layout.downloads_dir / "backend.tar.gz"
+    marker = tmp_path / "repair-staging-started"
+    owner = context.Process(
+        target=_repair_and_stall_during_staging,
+        args=(case, marker, backend.name),
+    )
+    owner.start()
+    try:
+        deadline = time.monotonic() + 30
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert marker.exists(), "the repair never reached staging"
+        owner.kill()
+        owner.join(10)
+        assert owner.exitcode is not None, "the killed repair did not exit"
+    finally:
+        owner.join(10)
+
+    assert active_generation(case) == generation, (
+        "a killed repair changed the active generation"
+    )
+    partials = _partial_staging_files(layout)
+    assert partials, "the killed repair left no partial staged write"
+    assert all(path.stat().st_size < backend.stat().st_size for path in partials), (
+        "the partial staged write was actually complete"
+    )
+
+    # A healthy probe validates the old generation with no recovery in between:
+    # the interrupted repair did not touch the evidence it would have replaced.
+    check_snapshot(install_options(case), install_hooks(case))
+    assert active_generation(case) == generation, (
+        "validating the previous generation changed the active pointer"
+    )
+
     install_snapshot(install_options(case), install_hooks(case))
     check_snapshot(install_options(case), install_hooks(case))
     previous = snapshot_layout(

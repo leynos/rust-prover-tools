@@ -11,13 +11,11 @@ from __future__ import annotations
 import dataclasses as dc
 import functools
 import logging
-import os
-import stat
 import time
 import typing as typ
 
-from rust_prover_tools.download_stream import READ_CHUNK_SIZE
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.activation import write_active
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
@@ -25,43 +23,41 @@ from rust_prover_tools.kani_snapshot.identity import (
     snapshot_layout,
 )
 from rust_prover_tools.kani_snapshot.install_cache import validate_installed_tree
+from rust_prover_tools.kani_snapshot.install_generation import (
+    install_launcher_binaries,
+    require_evidence,
+    write_generation_file,
+)
 from rust_prover_tools.kani_snapshot.install_model import (
+    Deadline,
     InstallHooks,
     InstallOptions,
 )
 from rust_prover_tools.kani_snapshot.install_state import (
     active_manifest,
     ensure_private_directory,
-    fsync_directory,
     identity_lock,
     load_active,
     require_runtime_files,
     validate_generation,
-    write_active,
 )
 from rust_prover_tools.kani_snapshot.install_transport import (
     asset_by_role,
     bundle_policy,
     stage_assets,
 )
-from rust_prover_tools.kani_snapshot.progress import as_checkpoint
 from rust_prover_tools.kani_snapshot.python_root import record_python_root
 from rust_prover_tools.kani_snapshot.receipt import build_receipt, render_receipt
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotLayout,
-    SnapshotRuntime,
     new_generation_name,
 )
 from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-    from pathlib import Path
-
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
-    from rust_prover_tools.kani_snapshot.receipt_model import SetupEvidence
 
 __all__ = (
     "InstallHooks",
@@ -71,7 +67,6 @@ __all__ = (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -79,34 +74,8 @@ class _InstallContext:
     """The budgets and external operations for one installation."""
 
     options: InstallOptions
-    deadline: _Deadline
+    deadline: Deadline
     hooks: InstallHooks
-
-
-@dc.dataclass(slots=True)
-class _Deadline:
-    """A monotonic installation budget."""
-
-    expires_at: float
-
-    def check(self, phase: str) -> None:
-        """Fail when the budget has expired."""
-        if time.monotonic() >= self.expires_at:
-            msg = f"snapshot installation deadline expired during {phase}"
-            raise ProverToolError(msg)
-
-    def remaining(self) -> float:
-        """Return the seconds left, never negative."""
-        return max(0.0, self.expires_at - time.monotonic())
-
-    def checkpoint(self, phase: str) -> cabc.Callable[[], None]:
-        """Return a callable that enforces the budget inside `phase`.
-
-        Long local work such as copying, hashing, archive extraction and tree
-        validation calls it repeatedly, so an expired budget stops the phase
-        rather than being noticed only at the next phase boundary.
-        """
-        return functools.partial(self.check, phase)
 
 
 def install_snapshot(
@@ -141,7 +110,7 @@ def install_snapshot(
             "release transport is available"
         )
         raise ProverToolError(msg)
-    deadline = _Deadline(time.monotonic() + options.deadline_seconds)
+    deadline = Deadline(time.monotonic() + options.deadline_seconds)
     deadline.check("installation start")
     layout = snapshot_layout(options.pin, cache_home=options.cache_home)
     ensure_private_directory(layout.identity_dir)
@@ -174,25 +143,35 @@ def check_snapshot(
 ) -> SnapshotIdentity:
     """Validate and report the active generation without installing.
 
+    The pointer is resolved and the generation validated while the identity
+    lock is held. A repair publishes its cached payloads file by file under
+    that same lock, so reading without it could validate a half-repaired cache
+    and report a failure that the running repair is about to resolve.
+
     Raises
     ------
     ProverToolError
-        Raised when no generation is active or any receipt, payload,
-        toolchain or compiler check fails.
+        Raised when no generation is active, the identity lock cannot be
+        acquired within its bounded wait, or any receipt, payload, toolchain
+        or compiler check fails.
     """
     chosen = InstallHooks() if hooks is None else hooks
-    layout = snapshot_layout(options.pin, cache_home=options.cache_home)
-    pointer = load_active(layout)
-    if pointer is None:
-        msg = "snapshot is not installed; run install first"
-        raise ProverToolError(msg)
-    manifest = active_manifest(options.pin, layout)
-    generation = snapshot_layout(
-        options.pin,
-        cache_home=options.cache_home,
-        generation=pointer.generation,
-    )
-    return validate_generation(options, manifest, generation, chosen.probe)
+    with identity_lock(
+        options,
+        timeout=min(options.lock_timeout_seconds, options.deadline_seconds),
+    ):
+        layout = snapshot_layout(options.pin, cache_home=options.cache_home)
+        pointer = load_active(layout)
+        if pointer is None:
+            msg = "snapshot is not installed; run install first"
+            raise ProverToolError(msg)
+        manifest = active_manifest(options.pin, layout)
+        generation = snapshot_layout(
+            options.pin,
+            cache_home=options.cache_home,
+            generation=pointer.generation,
+        )
+        return validate_generation(options, manifest, generation, chosen.probe)
 
 
 def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
@@ -210,15 +189,23 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             generation=pointer.generation,
         )
         context.deadline.check("active generation validation")
-        identity = validate_generation(
-            options,
-            manifest,
-            generation,
-            context.hooks.probe,
-            context.deadline.remaining,
-            checkpoint=context.deadline.checkpoint("active generation validation"),
+        identity = context.deadline.supervise(
+            "active generation validation",
+            functools.partial(
+                validate_generation,
+                options,
+                manifest,
+                generation,
+                context.hooks.probe,
+                context.deadline.remaining,
+                checkpoint=context.deadline.checkpoint("active generation validation"),
+            ),
         )
     except ProverToolError as exc:
+        if context.deadline.remaining() <= 0:
+            # An exhausted budget is not evidence of a corrupt generation, and
+            # repair could not finish, so report the deadline instead.
+            raise
         # The exception text can embed filesystem paths, so the event carries
         # only the bounded class name as its reason category.
         log_event(_LOGGER, "kani.install.repair", reason=type(exc).__name__)
@@ -238,11 +225,15 @@ def _install_generation(
     """Run setup in a new generation and publish it only after validation."""
     ensure_private_directory(layout.generation_dir)
     runtime = runtime_for(layout, manifest)
-    extract_archive(
-        layout.downloads_dir / asset_by_role(manifest, "launcher").name,
-        layout.launcher_dir,
-        policy=bundle_policy(manifest.backend.version),
-        checkpoint=context.deadline.checkpoint("launcher extraction"),
+    context.deadline.supervise(
+        "launcher extraction",
+        functools.partial(
+            extract_archive,
+            layout.downloads_dir / asset_by_role(manifest, "launcher").name,
+            layout.launcher_dir,
+            policy=bundle_policy(manifest.backend.version),
+            checkpoint=context.deadline.checkpoint("launcher extraction"),
+        ),
     )
     context.deadline.check("setup")
     backend = layout.downloads_dir / asset_by_role(manifest, "backend").name
@@ -250,136 +241,65 @@ def _install_generation(
     # remaining budget rather than merely being checked before and after.
     context.hooks.setup(runtime, backend, context.deadline.remaining())
     context.deadline.check("setup")
-    _install_launcher_binaries(
+    install_launcher_binaries(
         runtime,
         layout,
-        checkpoint=context.deadline.checkpoint("launcher placement"),
+        budget=context.deadline,
     )
     # Setup owns `pyroot`, so its content is recorded before validation turns
     # the inventory's open-ended allowance for it into a closed contract.
-    _write_generation_file(
+    write_generation_file(
         layout.python_root_record_path,
-        record_python_root(
-            runtime,
-            checkpoint=context.deadline.checkpoint("Python root recording"),
+        context.deadline.supervise(
+            "Python root recording",
+            functools.partial(
+                record_python_root,
+                runtime,
+                checkpoint=context.deadline.checkpoint("Python root recording"),
+            ),
         ),
         "Python root record",
+        budget=context.deadline,
     )
-    validate_installed_tree(
-        layout,
-        manifest,
-        runtime,
-        checkpoint=context.deadline.checkpoint("installed tree validation"),
+    context.deadline.supervise(
+        "installed tree validation",
+        functools.partial(
+            validate_installed_tree,
+            layout,
+            manifest,
+            runtime,
+            checkpoint=context.deadline.checkpoint("installed tree validation"),
+        ),
     )
     # Activation must not publish executables the next check would reject, so
     # the same runtime-file contract `validate_generation` enforces is applied
     # here too, before the probe executes them.
     require_runtime_files(runtime)
     # The probe executes these bytes, so their digests are checked first.
-    verify_toolchain(
-        runtime,
-        manifest,
-        checkpoint=context.deadline.checkpoint("toolchain verification"),
+    context.deadline.supervise(
+        "toolchain verification",
+        functools.partial(
+            verify_toolchain,
+            runtime,
+            manifest,
+            checkpoint=context.deadline.checkpoint("toolchain verification"),
+        ),
     )
     evidence = context.hooks.probe(runtime, context.deadline.remaining())
-    _require_evidence(evidence, manifest, runtime)
+    require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)
     receipt = build_receipt(context.options.pin, manifest, identity, evidence)
-    _write_generation_file(layout.receipt_path, render_receipt(receipt), "receipt")
+    write_generation_file(
+        layout.receipt_path,
+        render_receipt(receipt),
+        "receipt",
+        budget=context.deadline,
+    )
     context.deadline.check("activation")
-    write_active(layout, layout.generation_dir.name)
+    write_active(layout, layout.generation_dir.name, budget=context.deadline)
     log_event(
         _LOGGER,
         "kani.install.activated",
         generation=layout.generation_dir.name,
     )
     return identity
-
-
-def _install_launcher_binaries(
-    runtime: SnapshotRuntime,
-    layout: SnapshotLayout,
-    *,
-    checkpoint: cabc.Callable[[], None] | None = None,
-) -> None:
-    """Place the packaged launcher beside the backend binaries."""
-    source = layout.launcher_dir / "bin"
-    target = runtime.kani_dir / "bin"
-    target.mkdir(parents=True, exist_ok=True)
-    for entry in sorted(source.iterdir()):
-        if checkpoint is not None:
-            checkpoint()
-        destination = target / entry.name
-        if destination.exists():
-            continue
-        _copy_launcher(entry, destination, checkpoint)
-
-
-def _copy_launcher(
-    entry: Path,
-    destination: Path,
-    checkpoint: cabc.Callable[[], None] | None,
-) -> None:
-    """Copy one launcher file in bounded chunks that report progress.
-
-    `shutil.copy2` is one uninterrupted transfer, so a launcher archive with a
-    large member could spend the rest of the installation budget inside it
-    without ever reaching a checkpoint. The copy also preserves the archive
-    member's permission bits, which the launcher contract then requires.
-    """
-    progress = as_checkpoint(checkpoint)
-    try:
-        mode = stat.S_IMODE(entry.stat().st_mode)
-        with entry.open("rb") as reader, destination.open("xb") as writer:
-            while chunk := reader.read(READ_CHUNK_SIZE):
-                progress()
-                writer.write(chunk)
-            writer.flush()
-            os.fsync(writer.fileno())
-        destination.chmod(mode)
-    except OSError as exc:
-        destination.unlink(missing_ok=True)
-        msg = f"failed to install snapshot launcher '{entry.name}': {exc}"
-        raise ProverToolError(msg) from exc
-    except ProverToolError:
-        destination.unlink(missing_ok=True)
-        raise
-
-
-def _require_evidence(
-    evidence: SetupEvidence,
-    manifest: SnapshotManifest,
-    runtime: SnapshotRuntime,
-) -> None:
-    """Require setup to have produced the reviewed compiler identity."""
-    expected_link = runtime.layout.rustup_home / "toolchains" / runtime.toolchain
-    checks = (
-        ("rustc", evidence.observed.rustc_vv, manifest.toolchain.rustc_vv),
-        (
-            "kani-compiler",
-            evidence.observed.kani_compiler,
-            manifest.toolchain.kani_compiler,
-        ),
-        ("toolchain link", evidence.toolchain_link_target, expected_link),
-    )
-    for name, actual, wanted in checks:
-        if actual != wanted:
-            msg = f"snapshot {name} identity does not match the manifest"
-            raise ProverToolError(msg)
-
-
-def _write_generation_file(path: Path, data: bytes, description: str) -> None:
-    """Publish one generation-local file durably."""
-    pending = path.with_name(f".{path.name}-{os.getpid()}-{time.monotonic_ns()}")
-    try:
-        with pending.open("xb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        pending.chmod(_PRIVATE_FILE_MODE)
-        pending.replace(path)
-        fsync_directory(path.parent)
-    except OSError as exc:
-        pending.unlink(missing_ok=True)
-        msg = f"failed to write snapshot {description}: {exc}"
-        raise ProverToolError(msg) from exc

@@ -11,12 +11,15 @@ from __future__ import annotations
 import contextlib
 import dataclasses as dc
 import fcntl
-import json
 import os
 import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.activation import (
+    fsync_directory,
+    write_active,
+)
 from rust_prover_tools.kani_snapshot.identity import (
     SnapshotIdentity,
     build_identity_report,
@@ -134,51 +137,6 @@ def load_active(layout: SnapshotLayout) -> ActivePointer | None:
         msg = f"snapshot active pointer names an unsafe generation: {generation!r}"
         raise ProverToolError(msg)
     return ActivePointer(schema_version=version, generation=generation)
-
-
-def write_active(layout: SnapshotLayout, generation: str) -> None:
-    """Atomically replace the active pointer with one generation name.
-
-    The pointer bytes are fsynced before the rename and the identity
-    directory is fsynced afterwards, so a crash exposes either the old pointer
-    or the new one, never a partial document.
-    """
-    if not is_safe_generation_name(generation):
-        msg = f"snapshot generation name is not one safe component: {generation!r}"
-        raise ProverToolError(msg)
-    encoded = json.dumps(
-        {"schema_version": SCHEMA_VERSION, "generation": generation},
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("ascii")
-    pending = layout.active_path.with_name(
-        f".active-{os.getpid()}-{time.monotonic_ns()}"
-    )
-    try:
-        descriptor = os.open(
-            pending,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
-            _PRIVATE_FILE_MODE,
-        )
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(encoded + b"\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        pending.replace(layout.active_path)
-        fsync_directory(layout.identity_dir)
-    except OSError as exc:
-        pending.unlink(missing_ok=True)
-        msg = f"failed to publish snapshot active pointer: {exc}"
-        raise ProverToolError(msg) from exc
-
-
-def fsync_directory(path: Path) -> None:
-    """Flush a directory entry so the rename survives a crash."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 @contextlib.contextmanager

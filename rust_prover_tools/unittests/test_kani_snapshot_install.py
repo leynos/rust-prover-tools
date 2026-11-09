@@ -6,14 +6,18 @@ import dataclasses as dc
 import io
 import shutil
 import tarfile
+import threading
 import time
 import typing as typ
 
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot import install as install_module
-from rust_prover_tools.kani_snapshot import install_state, install_transport
+from rust_prover_tools.kani_snapshot import (
+    install_copy,
+    install_generation,
+    install_state,
+)
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
@@ -25,6 +29,7 @@ from rust_prover_tools.kani_snapshot.install_state import (
     validate_generation,
 )
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
+from rust_prover_tools.kani_snapshot.snapshot_layout import new_generation_name
 from tests.kani_snapshot_bundles import (
     CHECKSUMS_NAME,
     LIBRARY_PATH,
@@ -50,8 +55,38 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
+    from rust_prover_tools.kani_snapshot.install_model import InstallBudget
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
+
+_T = typ.TypeVar("_T")
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ExpiringBudget:
+    """A budget that expires at exactly one named phase.
+
+    Activation is tested at its publication boundary rather than by waiting for
+    a real clock, so the refusal is deterministic and names the phase that was
+    interrupted.
+    """
+
+    phase: str
+
+    def check(self, phase: str) -> None:
+        """Expire when the guarded publication gate is reached."""
+        if phase == self.phase:
+            msg = f"snapshot installation deadline expired during {phase}"
+            raise ProverToolError(msg)
+
+    def remaining(self) -> float:
+        """Report a budget that is otherwise unspent."""
+        return 60.0
+
+    def supervise(self, phase: str, operation: cabc.Callable[[], _T]) -> _T:
+        """Run local work as an unexpired budget would, without a thread."""
+        del phase
+        return operation()
 
 
 def _same_version_case(directory: Path, *, cache_home: Path) -> SnapshotCase:
@@ -620,6 +655,71 @@ def test_check_rejects_a_python_root_link_escaping_the_generation(
         check_snapshot(install_options(case), install_hooks(case))
 
 
+def test_install_rejects_a_python_root_link_to_a_sibling_home(
+    tmp_path: Path,
+) -> None:
+    """A link to setup's private home leaves the tree the record describes.
+
+    The record holds link text, not the bytes a link reaches, so a target that
+    stays inside the generation but outside the root would let execution reach
+    content the record never describes.
+    """
+    case = make_case(tmp_path)
+    base = install_hooks(case)
+
+    def linking_setup(
+        runtime: SnapshotRuntime,
+        bundle: Path,
+        timeout_seconds: float | None,
+    ) -> None:
+        """Install normally, then link the root to the generation's Kani home."""
+        base.setup(runtime, bundle, timeout_seconds)
+        (runtime.python_root / "sibling").symlink_to(
+            runtime.kani_dir,
+            target_is_directory=True,
+        )
+
+    hooks = dc.replace(base, setup=linking_setup)
+    with pytest.raises(ProverToolError, match=r"Python root link escapes"):
+        install_snapshot(install_options(case), hooks)
+
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, (
+        "a Python root reaching outside its own tree was activated"
+    )
+
+
+def test_check_rejects_a_changed_python_root_link_target(tmp_path: Path) -> None:
+    """A recorded link cannot be retargeted inside the root after installation.
+
+    Retargeting a contained link changes what `PYTHONPATH` resolves without
+    adding or removing any member, so the record must observe the link text.
+    """
+    case = make_case(tmp_path)
+    base = install_hooks(case)
+
+    def linking_setup(
+        runtime: SnapshotRuntime,
+        bundle: Path,
+        timeout_seconds: float | None,
+    ) -> None:
+        """Install normally, then add one recorded link between root members."""
+        base.setup(runtime, bundle, timeout_seconds)
+        root = runtime.python_root
+        (root / "versions" / "a").mkdir(parents=True)
+        (root / "versions" / "b").mkdir()
+        (root / "current").symlink_to("versions/a", target_is_directory=True)
+
+    hooks = dc.replace(base, setup=linking_setup)
+    identity = install_snapshot(install_options(case), hooks)
+    link = identity.launcher.parent.parent / "pyroot" / "current"
+    link.unlink()
+    link.symlink_to("versions/b", target_is_directory=True)
+
+    with pytest.raises(ProverToolError, match=r"do not match the record"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+
 def test_check_rejects_a_python_root_that_is_a_symbolic_link(
     tmp_path: Path,
 ) -> None:
@@ -735,7 +835,7 @@ def test_launcher_copy_reports_progress_inside_a_large_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A launcher member is copied in chunks that each reach the deadline."""
-    monkeypatch.setattr(install_module, "READ_CHUNK_SIZE", 16)
+    monkeypatch.setattr(install_generation, "READ_CHUNK_SIZE", 16)
     source = tmp_path / "launcher"
     source.write_bytes(b"x" * 64)
     source.chmod(0o755)
@@ -750,7 +850,7 @@ def test_launcher_copy_reports_progress_inside_a_large_file(
             raise ProverToolError(msg)
 
     with pytest.raises(ProverToolError, match=r"launcher placement"):
-        install_module._copy_launcher(source, destination, checkpoint)
+        install_generation.copy_launcher(source, destination, checkpoint)
 
     assert not destination.exists(), "an interrupted copy left a partial launcher"
 
@@ -762,23 +862,24 @@ def test_install_deadline_interrupts_launcher_placement(
     """An expired budget stops launcher placement before activation."""
     case = make_case(tmp_path)
     state = {"started": False}
-    real_copy = install_module._copy_launcher
+    real_copy = install_generation.copy_launcher
 
     def expire_during_copy(
         entry: Path,
         destination: Path,
         checkpoint: cabc.Callable[[], None] | None,
+        budget: InstallBudget | None = None,
     ) -> None:
         """Mark placement as started, then let the real copy checkpoint."""
         state["started"] = True
-        real_copy(entry, destination, checkpoint)
+        real_copy(entry, destination, checkpoint, budget)
 
     def clock() -> float:
         """Report an expired budget once placement has started."""
         return 10_000.0 if state["started"] else 0.0
 
-    monkeypatch.setattr(install_module, "READ_CHUNK_SIZE", 1)
-    monkeypatch.setattr(install_module, "_copy_launcher", expire_during_copy)
+    monkeypatch.setattr(install_generation, "READ_CHUNK_SIZE", 1)
+    monkeypatch.setattr(install_generation, "copy_launcher", expire_during_copy)
     monkeypatch.setattr(time, "monotonic", clock)
     options = dc.replace(install_options(case), deadline_seconds=10.0)
 
@@ -799,12 +900,12 @@ def test_install_deadline_interrupts_payload_staging(
     """A large copy is stopped by the budget while it is still running."""
     case = make_case(tmp_path)
     state = {"expired": False}
-    real_stream = install_transport._stream_bounded
+    real_stream = install_copy.stream_bounded
 
     def expire_during_copy(
         reader: typ.BinaryIO,
         writer: typ.BinaryIO,
-        file: install_transport._TransportFile,
+        file: install_copy.TransportFile,
         checkpoint: cabc.Callable[[], None] | None = None,
     ) -> int:
         """Mark the budget expired, then let the real copy checkpoint."""
@@ -815,7 +916,7 @@ def test_install_deadline_interrupts_payload_staging(
         """Report an expired budget once copying has started."""
         return 10_000.0 if state["expired"] else 0.0
 
-    monkeypatch.setattr(install_transport, "_stream_bounded", expire_during_copy)
+    monkeypatch.setattr(install_copy, "stream_bounded", expire_during_copy)
     monkeypatch.setattr(time, "monotonic", clock)
     options = dc.replace(install_options(case), deadline_seconds=10.0)
 
@@ -824,3 +925,62 @@ def test_install_deadline_interrupts_payload_staging(
 
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
     assert load_active(layout) is None, "an expired install activated a generation"
+
+
+def test_install_deadline_bounds_a_stalled_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write stalled on a hung filesystem cannot outlive the budget.
+
+    A blocking `fsync` never reaches a checkpoint, so only the supervision of
+    the staging copy can end the wait. The test uses a real clock and a short
+    budget, so a regression that waits for the stalled write to finish shows up
+    as a test timeout rather than a false pass.
+    """
+    case = make_case(tmp_path)
+    release = threading.Event()
+    stalled: list[int] = []
+
+    def hanging_fsync(descriptor: int) -> None:
+        """Block like a hung filesystem until the test releases the worker."""
+        stalled.append(descriptor)
+        release.wait(30)
+
+    monkeypatch.setattr(install_copy.os, "fsync", hanging_fsync)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProverToolError, match=r"deadline expired during"):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled, "the staged write never reached its stalled flush"
+    assert elapsed < 10.0, f"the stalled write outlived the budget: {elapsed:.1f}s"
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    assert load_active(layout) is None, "a stalled install activated a generation"
+
+
+def test_pointer_is_not_published_when_the_budget_expires(tmp_path: Path) -> None:
+    """An expiry before the rename leaves no new pointer and no temporary file.
+
+    Installation checks the budget after the pointer document is durable and
+    immediately before the rename, so the only visible states are the previous
+    pointer and the complete new one.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+
+    with pytest.raises(ProverToolError, match=r"pointer publication"):
+        install_state.write_active(
+            layout,
+            new_generation_name(),
+            budget=_ExpiringBudget("pointer publication"),
+        )
+
+    assert not layout.active_path.exists(), "an expired budget published a pointer"
+    leftovers = list(layout.identity_dir.glob(".active-*"))
+    assert not leftovers, f"an expired budget left temporary pointers: {leftovers}"

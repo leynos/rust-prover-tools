@@ -8,6 +8,12 @@ Installation therefore records the exact members it produced, and every reuse
 requires the same members, so a later extra file cannot silently become
 importable or executable.
 
+A record of link text alone would not close the allowance: a link can reach
+content the record does not describe. Links below the root must therefore
+resolve inside the root itself, so everything reachable through one is part of
+the recorded tree rather than, for example, a mutable generation home whose
+later changes the record would not cover.
+
 The record is anchored in the generation, like the receipt, not in the
 manifest: the producer does not publish the Python tree, so setup is the only
 witness to what it created. Re-recording identical bytes on a fresh install
@@ -68,9 +74,9 @@ def record_python_root(
     Raises
     ------
     ProverToolError
-        Raised when the root or one of its links escapes the generation, a
-        member is a special file, or a member path is not a plain relative
-        path.
+        Raised when the root escapes the generation, one of its links escapes
+        the root, a member is a special file, or a member path is not a plain
+        relative path.
     """
     progress = as_checkpoint(checkpoint)
     members = _members(runtime, progress)
@@ -210,10 +216,16 @@ def _require_real_directory(root: Path, status: os.stat_result) -> None:
 
 
 def _require_contained_link(path: Path, runtime: SnapshotRuntime) -> None:
-    """Reject a Python-root link whose resolved target leaves the generation."""
-    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
-    if not _resolve(path, "snapshot Python root link").is_relative_to(generation):
-        msg = f"snapshot Python root link escapes its generation: {path}"
+    """Reject a Python-root link whose resolved target leaves the root.
+
+    The record stores a link's text, not the bytes it reaches, and execution
+    puts the root on `PYTHONPATH` and its `bin` on `PATH`. Keeping every target
+    inside the recorded tree means a link cannot redirect execution at a
+    sibling home whose later changes the record does not observe.
+    """
+    root = _resolve(runtime.python_root, "snapshot Python root")
+    if not _resolve(path, "snapshot Python root link").is_relative_to(root):
+        msg = f"snapshot Python root link escapes its root: {path}"
         raise ProverToolError(msg)
 
 
