@@ -23,10 +23,12 @@ from tests.kani_snapshot_bundles import (
     LIBRARY_PATH,
     MANIFEST_NAME,
     RUSTC_BYTES,
+    publish_manifest,
     tar_bytes,
     write_file,
 )
 from tests.kani_snapshot_install_fixtures import (
+    SnapshotCase,
     active_generation,
     install_hooks,
     install_options,
@@ -40,6 +42,71 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
+
+
+def _same_version_case(directory: Path, *, cache_home: Path) -> SnapshotCase:
+    """Return a second snapshot that reports the first one's versions.
+
+    Only the full commit identity and the published manifest bytes differ, so
+    the two pins agree on every version string a consumer could compare.
+    """
+    case = make_case(directory)
+    manifest = dc.replace(
+        case.manifest,
+        tag="kani-snapshot-2026-11-dddddddddddd-r1",
+        upstream_commit="d" * 40,
+        backend=dc.replace(case.manifest.backend, revision="d" * 40),
+    )
+    base_pin = dc.replace(
+        case.pin,
+        tag=manifest.tag,
+        upstream_commit=manifest.upstream_commit,
+    )
+    pin = publish_manifest(case.assets_dir, manifest, base_pin=base_pin)
+    return SnapshotCase(
+        pin=pin,
+        manifest=manifest,
+        assets_dir=case.assets_dir,
+        cache_home=cache_home,
+    )
+
+
+def test_same_reported_version_installs_into_disjoint_generations(
+    tmp_path: Path,
+) -> None:
+    """Two snapshots reporting one upstream version never share a tree."""
+    first = make_case(tmp_path / "first")
+    second = _same_version_case(tmp_path / "second", cache_home=first.cache_home)
+    assert first.pin.upstream_commit != second.pin.upstream_commit, (
+        "the two pins must differ by their full commit identity"
+    )
+    assert first.manifest.toolchain.identifier == second.manifest.toolchain.identifier
+    assert first.manifest.backend.version == second.manifest.backend.version
+    assert (
+        first.manifest.launcher_package_version
+        == second.manifest.launcher_package_version
+    )
+
+    first_identity = install_snapshot(install_options(first), install_hooks(first))
+    second_identity = install_snapshot(install_options(second), install_hooks(second))
+
+    assert first_identity.backend_version == second_identity.backend_version
+    assert first_identity.generation.parent != second_identity.generation.parent, (
+        "identical versions shared one identity directory"
+    )
+    assert first_identity.rustc != second_identity.rustc, (
+        "identical versions shared one toolchain"
+    )
+    assert active_generation(first) == first_identity.generation.name
+    assert active_generation(second) == second_identity.generation.name
+    # Both installations stay independently valid in the shared cache root.
+    assert (
+        check_snapshot(install_options(first), install_hooks(first)) == first_identity
+    )
+    assert (
+        check_snapshot(install_options(second), install_hooks(second))
+        == second_identity
+    )
 
 
 def test_install_activates_a_validated_generation(tmp_path: Path) -> None:
