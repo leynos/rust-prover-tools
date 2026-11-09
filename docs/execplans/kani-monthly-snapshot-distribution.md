@@ -147,7 +147,7 @@ EP-O1 assigns responsibility and records live evidence.
   requires; they are recorded, not unresolved defects. All eight gates were
   re-run after the fixes and passed; `make test` reports 888 passed and 5
   skipped, and the snapshot CLI tests need `FORCE_COLOR` unset.
-- [ ] EP-M3: isolated installation, identity checking and execution.
+- [x] EP-M3: isolated installation, identity checking and execution.
   - [x] (2026-11-09) Established the upstream setup boundary from pinned source
     `model-checking/kani@4e31125fdb4f01fad95150415cbafe46e0587d66`:
     `cargo kani setup --use-local-bundle <file>` extracts a `kani-<VERSION>/`
@@ -410,6 +410,16 @@ runs in its own process group so expiry terminates descendants instead of
 merely checking the clock before and after the call. Snapshot commands expose
 `--repo-root` to match D1 and the legacy commands, and event names follow the
 documented `kani.install.*` vocabulary with bounded fields.
+
+2026-11-09, implemented D4 budget remedies: the two identity probe commands
+share one budget, which is recomputed before each command and rejected once
+exhausted. Cache revalidation measures the probe budget through a callable
+immediately before the probe, and reuse is reported only after a final deadline
+check, so slow checks or a slow first command cannot silently extend the
+deadline. `run_command` resolves an enclosing Cuprum scope's default timeout
+before choosing process-group ownership, because that timeout also terminates
+the command, and reports the effective timeout from `TimeoutExpired` rather
+than formatting an absent per-spec value.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
