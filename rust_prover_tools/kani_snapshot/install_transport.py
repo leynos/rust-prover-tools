@@ -14,12 +14,12 @@ import functools
 import logging
 import os
 import secrets
-import shutil
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.archive_graph import ArchivePolicy
 from rust_prover_tools.kani_snapshot.archive_read import read_archive
+from rust_prover_tools.kani_snapshot.cleanup import discard_private_tree
 from rust_prover_tools.kani_snapshot.install_copy import (
     TransportFile,
     TransportLimit,
@@ -163,7 +163,15 @@ def stage_assets(
             ),
         )
         budget.check("manifest verification")
-        parsed = parse_manifest(manifest_path.read_bytes())
+        # Reading the staged manifest is blocking work on a shared budget, and
+        # abandoning a read mutates nothing, so it is supervised rather than
+        # left to hold the identity lock past the deadline.
+        parsed = parse_manifest(
+            budget.supervise(
+                "manifest read",
+                manifest_path.read_bytes,
+            ),
+        )
         verify_manifest_digest(parsed, options.pin)
         validate_binding(options.pin, parsed.manifest)
         attestation = budget.supervise(
@@ -235,7 +243,7 @@ def stage_assets(
             checkpoint=checkpoints.publish,
         )
     finally:
-        _discard_staging(staging, budget)
+        discard_private_tree(staging, budget=budget, phase="staging cleanup")
     log_event(
         _LOGGER,
         "kani.install.staged",
@@ -343,22 +351,3 @@ def _new_staging_directory(layout: SnapshotLayout, budget: InstallBudget) -> Pat
         msg = f"failed to create snapshot staging directory '{staging}': {exc}"
         raise ProverToolError(msg) from exc
     return staging
-
-
-def _discard_staging(staging: Path, budget: InstallBudget) -> None:
-    """Remove the private staging tree without holding the caller past budget.
-
-    Cleanup touches only this run's uniquely named directory, so a removal
-    that outlives the budget may be abandoned: it cannot disturb a later
-    install. A deferred or failed removal is logged rather than reported,
-    because the verified installation has already been decided by then.
-    """
-
-    def remove() -> None:
-        """Remove the private staging tree."""
-        shutil.rmtree(staging, ignore_errors=True)
-
-    try:
-        budget.supervise("staging cleanup", remove)
-    except ProverToolError as exc:
-        _LOGGER.debug("snapshot staging cleanup deferred for %s: %s", staging.name, exc)

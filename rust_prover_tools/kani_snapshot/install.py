@@ -347,7 +347,12 @@ def _install_generation(
     # Every required entry inside the generation is now durable, so the
     # activation record cannot survive a crash while naming a partially
     # flushed generation.
-    flush_generation_entries(runtime, layout, budget=context.deadline)
+    flush_generation_entries(
+        runtime,
+        layout,
+        manifest,
+        budget=context.deadline,
+    )
     write_active(layout, layout.generation_dir.name, budget=context.deadline)
     log_event(
         _LOGGER,

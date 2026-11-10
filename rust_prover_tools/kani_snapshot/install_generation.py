@@ -21,12 +21,15 @@ import typing as typ
 
 from rust_prover_tools.download_stream import READ_CHUNK_SIZE
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.cleanup import discard_private_file
 from rust_prover_tools.kani_snapshot.durability import (
     flush_directory,
+    flush_tree,
     fsync_directory,
     fsync_file,
 )
 from rust_prover_tools.kani_snapshot.progress import as_checkpoint
+from rust_prover_tools.kani_snapshot.toolchain_binding import toolchain_root
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -49,6 +52,8 @@ __all__ = (
 )
 
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
+#: Rustup's record of the components installed in one toolchain.
+_TOOLCHAIN_COMPONENTS: typ.Final[str] = "lib/rustlib/components"
 
 
 def install_launcher_binaries(
@@ -118,55 +123,102 @@ def copy_launcher(
         else:
             budget.supervise("launcher placement", copy)
     except OSError as exc:
-        destination.unlink(missing_ok=True)
+        discard_private_file(
+            destination,
+            budget=budget,
+            phase="launcher cleanup",
+        )
         msg = f"failed to install snapshot launcher '{entry.name}': {exc}"
         raise ProverToolError(msg) from exc
     except ProverToolError:
-        destination.unlink(missing_ok=True)
+        discard_private_file(
+            destination,
+            budget=budget,
+            phase="launcher cleanup",
+        )
         raise
 
 
 def flush_generation_entries(
     runtime: SnapshotRuntime,
     layout: SnapshotLayout,
+    manifest: SnapshotManifest,
     *,
     budget: InstallBudget | None = None,
 ) -> None:
     """Make every required generation entry durable before activation.
 
-    Setup writes the generation's own tree, so the installer confirms the
-    directories that hold the required runtime paths and flushes the
-    executables a consumer runs. A crash therefore cannot leave a durable
-    activation record naming a launcher whose bytes or executable bit were
-    never flushed. Setup's own internal data is outside the installer's
-    control; these are the files and entries this pipeline requires.
+    Setup writes most of the generation's tree, so the installer flushes the
+    state its own contract requires: the executables a consumer runs, the
+    toolchain compiler, component record and every recorded library, the
+    directories that name them, and every member of the setup-created Python
+    root. A crash therefore cannot leave a durable activation record naming a
+    generation whose launcher, library or Python payload was never written
+    back. Flushing the compiled binaries alone is not enough because a file's
+    parent directory entry is what makes the file reachable after a crash.
+
+    Files are flushed before their directories, and directories are flushed
+    deepest first, so every entry is durable before the entry that names it.
+    Setup's remaining internal data is outside the installer's control; these
+    are the files and entries this pipeline requires.
     """
-    directories = (
+    toolchain = toolchain_root(runtime)
+    libraries = tuple(
+        toolchain / library.path for library in manifest.toolchain.libraries
+    )
+    files = (
+        runtime.launcher,
+        runtime.driver,
+        runtime.compiler,
+        runtime.rustc,
+        toolchain / _TOOLCHAIN_COMPONENTS,
+        *libraries,
+    )
+    for path in files:
+        fsync_file(
+            path,
+            budget=budget,
+            phase="generation file flush",
+        )
+    for directory in _required_directories(runtime, layout, toolchain, libraries):
+        flush_directory(
+            directory,
+            budget=budget,
+            phase="generation directory flush",
+        )
+    flush_tree(runtime.python_root, budget=budget, phase="Python root flush")
+
+
+def _required_directories(
+    runtime: SnapshotRuntime,
+    layout: SnapshotLayout,
+    toolchain: Path,
+    libraries: cabc.Iterable[Path],
+) -> tuple[Path, ...]:
+    """Return the directories naming required state, deepest first.
+
+    A recorded library may sit several levels below the toolchain root, so each
+    ancestor between the library and the root is required as well. Sorting by
+    path depth makes the flush order children before parents; the set removes
+    duplicates without depending on filesystem enumeration order.
+    """
+    directories = {
         runtime.kani_dir / "bin",
         runtime.kani_dir,
         layout.kani_home,
         layout.rustup_home / "toolchains",
         layout.rustup_home,
         layout.generation_dir,
-    )
-    for directory in directories:
-        flush_directory(
-            directory,
-            budget=budget,
-            phase="generation directory flush",
-        )
-    executables = (
-        runtime.launcher,
-        runtime.driver,
-        runtime.compiler,
-        runtime.rustc,
-    )
-    for executable in executables:
-        fsync_file(
-            executable,
-            budget=budget,
-            phase="generation executable flush",
-        )
+        toolchain,
+        toolchain / "bin",
+        toolchain / "lib",
+    }
+    for library in libraries:
+        parent = library.parent
+        while parent != toolchain and parent.is_relative_to(toolchain):
+            directories.add(parent)
+            parent = parent.parent
+    return tuple(sorted(directories, key=lambda path: len(path.parts), reverse=True))
 
 
 def require_evidence(
@@ -226,9 +278,9 @@ def write_generation_file(
         else:
             budget.supervise(description, write)
     except OSError as exc:
-        pending.unlink(missing_ok=True)
+        discard_private_file(pending, budget=budget, phase="generation file cleanup")
         msg = f"failed to write snapshot {description}: {exc}"
         raise ProverToolError(msg) from exc
     except ProverToolError:
-        pending.unlink(missing_ok=True)
+        discard_private_file(pending, budget=budget, phase="generation file cleanup")
         raise

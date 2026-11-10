@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 import functools
-import logging
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
@@ -36,7 +35,6 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("Publication", "publish_staged")
 
-_LOGGER = logging.getLogger(__name__)
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 
 
@@ -143,16 +141,19 @@ def _clear_stale_markers(
     """
 
     def clear() -> None:
-        """Unlink every stale marker."""
+        """Unlink every stale marker, refusing to leave the cache marked."""
         for marker in markers:
             try:
                 marker.unlink(missing_ok=True)
             except OSError as exc:
-                _LOGGER.debug(
-                    "snapshot marker cleanup skipped %s: %s",
-                    marker.name,
-                    exc,
+                # A marker that cannot be removed keeps `check` refusing the
+                # cache, so continuing would let this installation report a
+                # usable generation that readers must reject.
+                msg = (
+                    "snapshot cache carries a publication marker that could "
+                    f"not be removed: '{marker.name}': {exc}"
                 )
+                raise ProverToolError(msg) from exc
 
     _supervise_publication("publication marker cleanup", budget, clear)
 

@@ -19,6 +19,7 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import (
     activation,
+    cleanup,
     durability,
     install_copy,
     install_generation,
@@ -29,7 +30,7 @@ from rust_prover_tools.kani_snapshot import (
 from rust_prover_tools.kani_snapshot import (
     install as install_module,
 )
-from rust_prover_tools.kani_snapshot.identity import snapshot_layout
+from rust_prover_tools.kani_snapshot.identity import runtime_for, snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
     check_snapshot,
@@ -1009,11 +1010,11 @@ def test_install_deadline_bounds_a_stalled_write(
 
 
 def test_pointer_is_not_published_when_the_budget_expires(tmp_path: Path) -> None:
-    """An expiry before the rename leaves no new pointer and no temporary file.
+    """An expiry before publication leaves no record and no pending document.
 
-    Installation checks the budget after the pointer document is durable and
-    immediately before the rename, so the only visible states are the previous
-    pointer and the complete new one.
+    Installation checks the budget after the pending record is durable and
+    immediately before the publication link, so the only visible states are
+    the previous record and the complete new one.
     """
     case = make_case(tmp_path)
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
@@ -1114,7 +1115,7 @@ def test_activation_reports_unconfirmed_durability_after_the_pointer_changes(
 ) -> None:
     """A failed directory flush is reported as durability, not as a failure.
 
-    The rename has already made the generation visible, so reporting a
+    The link has already made the generation visible, so reporting a
     publication failure would be untrue. The error names the generation and
     the pointer is left naming it.
     """
@@ -1146,7 +1147,7 @@ def test_activation_reports_unconfirmed_durability_after_the_pointer_changes(
 def test_activation_flush_timeout_is_reported_as_durability(
     tmp_path: Path,
 ) -> None:
-    """An expiry during the post-rename flush does not claim publication failed."""
+    """An expiry during the post-publication flush does not claim publication failed."""
     case = make_case(tmp_path)
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
     install_state.ensure_private_directory(layout.identity_dir)
@@ -1245,7 +1246,8 @@ def test_reuse_cannot_succeed_while_the_activation_flush_fails(
 ) -> None:
     """A retry after an unconfirmed activation keeps failing until a flush works.
 
-    The first install renames the pointer and then fails its directory flush.
+    The first install publishes the activation record and then fails its
+    directory flush.
     Every retry must reissue that flush and report the durability failure
     instead of validating the generation and reporting a successful reuse.
     """
@@ -1254,7 +1256,7 @@ def test_reuse_cannot_succeed_while_the_activation_flush_fails(
     real_flush = durability.fsync_directory
     flushes = {"identity": 0}
     # The marker write and the payload-directory flush each flush the identity
-    # directory before activation; the third one is the post-rename flush.
+    # directory before activation; the third one is the activation flush.
     failing = {"from": 3}
 
     def flaky_flush(path: Path) -> None:
@@ -1668,12 +1670,12 @@ def test_install_deadline_defers_a_stalled_staging_cleanup(
         finally:
             finished.set()
 
-    monkeypatch.setattr(install_transport.shutil, "rmtree", stalling_rmtree)
+    monkeypatch.setattr(cleanup.shutil, "rmtree", stalling_rmtree)
     options = dc.replace(install_options(case), deadline_seconds=2.0)
     started = time.monotonic()
     with caplog.at_level(
         logging.DEBUG,
-        logger="rust_prover_tools.kani_snapshot.install_transport",
+        logger="rust_prover_tools.kani_snapshot.cleanup",
     ):
         try:
             with pytest.raises(ProverToolError, match=r"deadline expired"):
@@ -1689,3 +1691,235 @@ def test_install_deadline_defers_a_stalled_staging_cleanup(
     assert "staging cleanup deferred" in caplog.text, (
         "the deferred cleanup was not recorded"
     )
+
+
+def test_a_recorded_toolchain_library_is_flushed_before_its_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A required library is durable before the entries that name it.
+
+    Flushing the compiler alone would leave the library it loads reachable
+    only through directory entries that a crash could lose. The library's file
+    flush must therefore precede the flush of its parent and of every ancestor
+    up to the toolchain root.
+    """
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=active_generation(case),
+    )
+    runtime = runtime_for(layout, case.manifest)
+    toolchain = layout.rustup_home / "toolchains" / runtime.toolchain
+    library = toolchain / LIBRARY_PATH
+    events: list[tuple[str, Path]] = []
+    real_fsync_file = install_generation.fsync_file
+    real_fsync_directory = durability.fsync_directory
+
+    def record_file(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "file flush",
+    ) -> None:
+        """Record one file flush, then perform it."""
+        events.append(("file", path))
+        real_fsync_file(path, budget=budget, phase=phase)
+
+    def record_directory(path: Path) -> None:
+        """Record one directory flush, then perform it."""
+        events.append(("directory", path))
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(install_generation, "fsync_file", record_file)
+    monkeypatch.setattr(durability, "fsync_directory", record_directory)
+
+    install_generation.flush_generation_entries(runtime, layout, case.manifest)
+
+    library_position = events.index(("file", library))
+    ancestors = (library.parent, toolchain / "lib", toolchain)
+    for directory in ancestors:
+        assert library_position < events.index(("directory", directory)), (
+            f"{directory} was flushed before the library it names"
+        )
+
+
+def test_install_does_not_activate_when_a_python_root_member_is_unflushed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unflushed Python payload prevents activation, not just a warning."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    real_fsync_file = durability.fsync_file
+
+    def failing_file_flush(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "file flush",
+    ) -> None:
+        """Fail the flush of the fixture's recorded Python payload."""
+        if path.name == "__init__.py" and "pyroot" in path.parts:
+            msg = f"failed to flush snapshot file '{path.name}'"
+            raise ProverToolError(msg)
+        real_fsync_file(path, budget=budget, phase=phase)
+
+    monkeypatch.setattr(durability, "fsync_file", failing_file_flush)
+
+    with pytest.raises(ProverToolError, match=r"__init__\.py"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    assert load_active(layout) is None, "an unflushed Python root was activated"
+
+
+def test_install_deadline_bounds_a_stalled_staged_manifest_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A staged manifest read cannot hold the identity lock past the budget."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_read = pathlib.Path.read_bytes
+
+    def stalling_read(self: Path) -> bytes:
+        """Block the staged manifest read like a hung filesystem."""
+        is_staged_manifest = self.name == MANIFEST_NAME and self.parent.name.startswith(
+            ".staging-"
+        )
+        if not is_staged_manifest:
+            return real_read(self)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_read(self)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", stalling_read)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during manifest read",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the staged manifest was never read"
+    assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned read never resumed"
+    assert load_active(layout) is None, "a stalled manifest read activated a generation"
+    published = (
+        sorted(path.name for path in layout.downloads_dir.iterdir())
+        if layout.downloads_dir.is_dir()
+        else []
+    )
+    assert published == [], f"a stalled manifest read published payloads: {published}"
+
+
+def test_activation_defers_a_stalled_pending_record_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stalled removal of this call's pending record is deferred, not awaited."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    generation = new_generation_name()
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_unlink = pathlib.Path.unlink
+
+    def stalling_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        """Block the private record cleanup like a hung filesystem."""
+        is_pending = self.name.startswith(".pending-") and (
+            threading.current_thread() is not threading.main_thread()
+        )
+        if not is_pending:
+            real_unlink(self, missing_ok=missing_ok)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_unlink(self, missing_ok=missing_ok)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "unlink", stalling_unlink)
+    started = time.monotonic()
+    try:
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="rust_prover_tools.kani_snapshot.cleanup",
+            ),
+            pytest.raises(
+                ProverToolError,
+                match=r"deadline expired|active but its activation",
+            ),
+        ):
+            activation.write_active(
+                layout,
+                generation,
+                budget=Deadline(time.monotonic() + 5.0),
+            )
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the private record cleanup never stalled"
+    assert elapsed < 20.0, f"the stalled cleanup outlived the budget: {elapsed:.1f}s"
+    assert "activation record cleanup deferred" in caplog.text, (
+        "the deferred cleanup was not recorded"
+    )
+    assert finished.wait(10), "the abandoned cleanup never resumed"
+    pointer = load_active(layout)
+    assert pointer is not None, "the activation record was lost"
+    assert pointer.generation == generation, (
+        "the activation record names another generation"
+    )
+
+
+def test_installation_fails_when_a_stale_publication_marker_cannot_be_removed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker that keeps the cache refused is an installation failure."""
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    stale = layout.publication_marker("stale")
+    stale.write_text("", encoding="utf-8")
+    real_unlink = pathlib.Path.unlink
+
+    def failing_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        """Refuse to remove the stale marker, as a broken cache would."""
+        if self == stale:
+            msg = "operation not permitted"
+            raise PermissionError(msg)
+        real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", failing_unlink)
+
+    with pytest.raises(ProverToolError, match=r"could not be removed"):
+        install_snapshot(install_options(case), hooks)
+
+    pointer = load_active(layout)
+    assert pointer is not None, "the previous activation record disappeared"
+    assert pointer.generation == first.generation.name, (
+        "a failed repair changed the active generation"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)

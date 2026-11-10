@@ -28,6 +28,7 @@ import secrets
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.cleanup import discard_private_file
 from rust_prover_tools.kani_snapshot.durability import confirm_activation
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
@@ -144,14 +145,16 @@ def write_active(
     except ProverToolError:
         # Discarding the private document stops a worker that has not yet
         # issued its link; one that already has is protected by the
-        # create-only rule instead.
-        _discard_private(pending)
+        # create-only rule instead. The removal is bounded and deferred when
+        # the budget has expired, since a stalled unlink must not hold the
+        # caller past the deadline.
+        discard_private_file(pending, budget=budget, phase="activation record cleanup")
         raise
     except OSError as exc:
-        _discard_private(pending)
+        discard_private_file(pending, budget=budget, phase="activation record cleanup")
         msg = f"failed to publish snapshot active pointer: {exc}"
         raise ProverToolError(msg) from exc
-    _discard_private(pending)
+    discard_private_file(pending, budget=budget, phase="activation record cleanup")
     confirm_activation(layout, budget)
     _prune_superseded(layout, sequence, budget)
 
@@ -258,7 +261,7 @@ def _prune_superseded(
         """Remove every record older than the one just published."""
         for sequence, path in _activation_entries(layout):
             if sequence < keep:
-                _discard_private(path)
+                discard_private_file(path, phase="activation record cleanup")
 
     try:
         if budget is None:
@@ -347,11 +350,3 @@ def _link_record(
         link()
     else:
         budget.supervise("pointer publication", link)
-
-
-def _discard_private(path: Path) -> None:
-    """Remove one private or superseded entry, ignoring a missing file."""
-    try:
-        path.unlink(missing_ok=True)
-    except OSError as exc:
-        _LOGGER.debug("snapshot cleanup could not remove %s: %s", path.name, exc)
