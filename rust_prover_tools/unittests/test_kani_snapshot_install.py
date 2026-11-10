@@ -6,6 +6,7 @@ import contextlib
 import dataclasses as dc
 import fcntl
 import io
+import json
 import logging
 import os
 import pathlib
@@ -22,6 +23,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import (
     activation,
     cleanup,
+    completion,
     durability,
     install_copy,
     install_generation,
@@ -43,10 +45,11 @@ from rust_prover_tools.kani_snapshot.install_state import (
     load_active,
     validate_generation,
 )
-from rust_prover_tools.kani_snapshot.models import FileRecord
+from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION, FileRecord
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
     PUBLICATION_MARKER_PREFIX,
+    SnapshotLayout,
     SnapshotRuntime,
     new_generation_name,
 )
@@ -84,7 +87,6 @@ if typ.TYPE_CHECKING:
         SnapshotManifest,
         SnapshotPin,
     )
-    from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 _T = typ.TypeVar("_T")
 
@@ -1425,11 +1427,11 @@ def test_an_abandoned_activation_cannot_displace_a_later_one(
     check_snapshot(install_options(case), hooks)
 
 
-def _active_sequence(layout: SnapshotLayout) -> int:
-    """Return the sequence number of the active record, requiring one."""
-    pointer = load_active(layout)
-    assert pointer is not None, "the install activated no generation"
-    return pointer.sequence
+def _completion(layout: SnapshotLayout) -> int:
+    """Return the completion watermark, requiring a completed installation."""
+    watermark = completion.completion_watermark(layout)
+    assert watermark > 0, "the install recorded no completion"
+    return watermark
 
 
 def test_an_abandoned_completion_cannot_clear_a_repair_marker(
@@ -1489,7 +1491,7 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
                 marker=marker_a,
                 stale_markers=(),
                 names=names,
-                base_sequence=_active_sequence(layout),
+                completed_sequence=_completion(layout),
             ),
             budget=Deadline(time.monotonic() + 0.5),
         )
@@ -1504,7 +1506,7 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
                 marker=marker_b,
                 stale_markers=(marker_a,),
                 names=names,
-                base_sequence=_active_sequence(layout),
+                completed_sequence=_completion(layout),
             ),
             budget=_ExpiringSupervision("publication completion"),
         )
@@ -2369,31 +2371,227 @@ def test_require_activation_ready_is_bounded(
     assert elapsed < 10.0, f"the stalled stat outlived the budget: {elapsed:.1f}s"
 
 
-def test_publication_marker_records_the_activation_it_follows(
+def test_install_deadline_bounds_a_stalled_asset_directory_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The asset directory probe is abandoned, not left holding the lock.
+
+    Staging begins by confirming the transport directory exists. That probe is
+    a read, so a stalled one is abandoned rather than allowed to outlive the
+    budget while the identity lock is held.
+    """
+    case = make_case(tmp_path)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_is_dir = pathlib.Path.is_dir
+
+    def stalling_is_dir(self: Path) -> bool:
+        """Block the asset directory probe like a hung filesystem."""
+        is_assets = (
+            self == case.assets_dir
+            and threading.current_thread() is not threading.main_thread()
+        )
+        if not is_assets:
+            return real_is_dir(self)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_is_dir(self)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "is_dir", stalling_is_dir)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during asset directory check",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the asset directory was never probed"
+    assert elapsed < 10.0, f"the stalled probe outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned probe never resumed"
+
+
+def test_install_deadline_bounds_a_stalled_checksum_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Checksum verification is abandoned instead of holding the lock."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_verify = install_transport.verify_checksums
+
+    def stalling_verify(
+        checksums: Path,
+        manifest: SnapshotManifest,
+        manifest_sha256: str,
+    ) -> None:
+        """Block checksum verification like a hung filesystem."""
+        if threading.current_thread().name != "snapshot checksum verification":
+            real_verify(checksums, manifest, manifest_sha256)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_verify(checksums, manifest, manifest_sha256)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(install_transport, "verify_checksums", stalling_verify)
+    options = dc.replace(install_options(case), deadline_seconds=2.0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during checksum verification",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "checksum verification was never attempted"
+    assert elapsed < 10.0, (
+        f"the stalled verification outlived the budget: {elapsed:.1f}s"
+    )
+    assert finished.wait(10), "the abandoned verification never resumed"
+    assert not layout.publication_markers(), "a stalled verification published payloads"
+
+
+def test_install_deadline_bounds_a_stalled_marker_listing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker listing that precedes publication is bounded as well."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    listing_thread = "snapshot publication marker listing"
+    real_listing = SnapshotLayout.publication_markers
+
+    def stalling_listing(self: SnapshotLayout) -> tuple[Path, ...]:
+        """Block the publication's marker listing like a hung filesystem."""
+        if threading.current_thread().name != listing_thread:
+            return real_listing(self)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_listing(self)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(SnapshotLayout, "publication_markers", stalling_listing)
+    options = dc.replace(install_options(case), deadline_seconds=2.0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during publication marker listing",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the publication never listed the markers"
+    assert elapsed < 10.0, f"the stalled listing outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned listing never resumed"
+    assert not layout.publication_markers(), "a stalled listing published a marker"
+
+
+def test_write_active_bounds_a_stalled_activation_directory_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recording an activation does not hang on a stalled directory probe."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    probe_thread = "snapshot activation directory check"
+    real_is_dir = pathlib.Path.is_dir
+
+    def stalling_is_dir(self: Path) -> bool:
+        """Block the activation directory probe like a hung filesystem."""
+        is_records = (
+            self == layout.activations_dir
+            and threading.current_thread().name == probe_thread
+        )
+        if not is_records:
+            return real_is_dir(self)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_is_dir(self)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "is_dir", stalling_is_dir)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during activation directory check",
+        ):
+            activation.write_active(
+                layout,
+                new_generation_name(),
+                budget=Deadline(time.monotonic() + 0.5),
+            )
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the activation directory was never probed"
+    assert elapsed < 10.0, f"the stalled probe outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned probe never resumed"
+
+
+def test_a_marker_is_pending_until_a_completion_supersedes_it(
     tmp_path: Path,
 ) -> None:
-    """A marker is pending only until a later activation record supersedes it."""
+    """Only a completion that followed a marker retires it.
+
+    The marker names the completion watermark its publication observed. A
+    completed installation after that point raises the watermark above it;
+    nothing else can, so a marker cannot be retired by an unrelated
+    activation, and one that names no completion at all stays pending.
+    """
     case = make_case(tmp_path)
     hooks = install_hooks(case)
     install_snapshot(install_options(case), hooks)
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
-    pointer = load_active(layout)
-    assert pointer is not None, "the install activated no generation"
-    marker = layout.publication_marker("sequence-test")
+    completed = _completion(layout)
+    marker = layout.publication_marker("completion-test")
 
-    marker.write_bytes(publication.render_marker(pointer.sequence - 1))
+    marker.write_bytes(publication.render_marker(completed - 1))
     assert not install_state.publication_pending(layout), (
-        "a marker below the active record was treated as pending"
+        "a marker before the completed installation was treated as pending"
     )
     check_snapshot(install_options(case), hooks)
 
-    marker.write_bytes(publication.render_marker(pointer.sequence))
+    marker.write_bytes(publication.render_marker(completed))
     assert install_state.publication_pending(layout), (
-        "a marker at the active record was not treated as pending"
+        "a marker at the completed installation was not treated as pending"
     )
     marker.write_bytes(b"publishing\n")
     assert install_state.publication_pending(layout), (
-        "a marker without a readable sequence was not treated as pending"
+        "a marker without a readable completion was not treated as pending"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
         check_snapshot(install_options(case), hooks)
@@ -2522,6 +2720,94 @@ def test_a_late_marker_cannot_make_a_reused_cache_unfinished(
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "a later reuse left the superseded marker behind"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
+def test_a_late_activation_record_cannot_hide_an_interrupted_repair(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unrelated activation does not retire an unfinished repair's marker.
+
+    The repair records the completion watermark it observed and is abandoned
+    while writing its marker. Another worker's activation lands after that
+    point, reissuing the generation that is already active; because it records
+    no completion, the interrupted repair's marker must still make readers
+    refuse the cache.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    monkeypatch.setattr(
+        install_module,
+        "validate_generation",
+        _ReuseValidationFailure(),
+    )
+    stall = _MarkerWriteStall()
+    stall.install(monkeypatch)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    with pytest.raises(ProverToolError, match=r"deadline expired during"):
+        install_snapshot(options, hooks)
+    assert stall.stalled.is_set(), "the publication marker write was never attempted"
+
+    # Another worker's activation lands while the repair's marker write is
+    # stalled, the way an abandoned reuse that got past its link would leave
+    # one: a new record reissuing the generation that is already active.
+    sequence = max(int(path.stem) for path in layout.activations_dir.glob("*.json"))
+    late_record = layout.activations_dir / f"{sequence + 1:020d}.json"
+    late_record.write_text(
+        json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "generation": first.generation.name,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="ascii",
+    )
+
+    try:
+        stall.release.set()
+        assert stall.finished.wait(10), "the abandoned marker write never resumed"
+    finally:
+        stall.release.set()
+
+    assert layout.publication_markers(), "the abandoned repair published no marker"
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+
+def test_repair_recovers_beyond_a_corrupt_activation_record(
+    tmp_path: Path,
+) -> None:
+    """A corrupt newest record is replaced instead of blocking every repair.
+
+    Publication does not read the activation record, so the ordering a repair
+    needs comes from the completion watermark, which the corrupt document
+    cannot affect.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    newest = max(layout.activations_dir.glob("*.json"))
+    newest.write_bytes(b'{"schema_version": 1, "generation": ')
+
+    with pytest.raises(ProverToolError):
+        check_snapshot(install_options(case), hooks)
+
+    repaired = install_snapshot(install_options(case), hooks)
+    assert repaired.generation.name != first.generation.name, (
+        "the repair reactivated the generation whose record was corrupt"
+    )
+    pointer = load_active(layout)
+    assert pointer is not None, "the repair activated no generation"
+    assert pointer.generation == repaired.generation.name, (
+        f"the repair left {pointer.generation} active instead of "
+        f"{repaired.generation.name}"
     )
     check_snapshot(install_options(case), hooks)
 

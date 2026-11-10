@@ -13,7 +13,9 @@ letting it change what a later operation already published.
 
 Durability of activation is part of the contract: a record that cannot be made
 durable is reported as active but unconfirmed, and reuse reissues that flush
-before reporting success.
+before reporting success. Once the record is confirmed durable, the activation
+also advances the identity's completion watermark, which is what tells readers
+that an installation finished rather than merely that a record exists.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.cleanup import discard_private_file
+from rust_prover_tools.kani_snapshot.completion import record_completion
 from rust_prover_tools.kani_snapshot.durability import confirm_activation
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
@@ -71,15 +74,12 @@ class ActivePointer:
 
     Attributes
     ----------
-    sequence : int
-        Ordering number encoded in the record's file name.
     schema_version : int
         Record schema version. Only version 1 is accepted.
     generation : str
         One safe generation directory name.
     """
 
-    sequence: int
     schema_version: int
     generation: str
 
@@ -159,6 +159,7 @@ def write_active(
         raise ProverToolError(msg) from exc
     discard_private_file(pending, budget=budget, phase="activation record cleanup")
     confirm_activation(layout, budget)
+    record_completion(layout, sequence, budget=budget)
     _prune_superseded(layout, sequence, budget)
 
 
@@ -217,15 +218,7 @@ def _parse_record(data: bytes, name: str) -> ActivePointer:
     if not is_safe_generation_name(generation):
         msg = f"snapshot activation record names an unsafe generation: {generation!r}"
         raise ProverToolError(msg)
-    sequence = _sequence_of(name)
-    if sequence is None:
-        msg = f"snapshot activation record has an unrecognised name: {name!r}"
-        raise ProverToolError(msg)
-    return ActivePointer(
-        sequence=sequence,
-        schema_version=version,
-        generation=generation,
-    )
+    return ActivePointer(schema_version=version, generation=generation)
 
 
 def _ensure_activations_dir(
@@ -234,12 +227,22 @@ def _ensure_activations_dir(
 ) -> None:
     """Create the record directory when it does not exist yet."""
     directory = layout.activations_dir
+
+    def exists() -> bool:
+        """Report whether the private record directory is present."""
+        return directory.is_dir()
+
     try:
-        if directory.is_dir():
-            return
+        present = (
+            exists()
+            if budget is None
+            else budget.supervise("activation directory check", exists)
+        )
     except OSError as exc:
         msg = f"failed to read snapshot activation directory: {exc}"
         raise ProverToolError(msg) from exc
+    if present:
+        return
 
     def create() -> None:
         """Create the private record directory."""

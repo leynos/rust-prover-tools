@@ -12,15 +12,18 @@ no shared marker name is reused. Every blocking step is supervised, so the
 caller keeps to its budget, and a replacement that outlives the budget is
 reported as an unknown outcome rather than as a failure or a success.
 
-A marker also records the activation it follows. A publication begins while
-one specific record is active, and completion always advances that record:
-a repair activates its new generation, and a reuse reissues the record it
-validated. A marker whose record has since been superseded therefore names a
-publication that either finished or lost its race, so readers ignore it. That
-is what lets an abandoned marker write land after a later installation has
-already reported success without making the cache look unfinished. A marker
-written by an older installation, or one whose content cannot be read, names
-no record and is still treated as pending.
+A marker also records the completion watermark it observed: the sequence of
+the last installation that finished before this publication began. Because a
+successful installation is the only writer of that watermark, and it writes it
+while holding the identity lock, a marker can be retired only by an
+installation that completed after it was written. The activation order alone
+cannot express that: an unrelated late activation can outrank the record a
+publication observed without the publication having finished. That
+distinction is what lets an abandoned marker write land after a later
+installation has already reported success without making the cache look
+unfinished, while an abandoned repair's marker still refuses the cache. A
+marker written by an older installation, or one whose content cannot be read,
+names no completion and is still treated as pending.
 """
 
 from __future__ import annotations
@@ -43,10 +46,10 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_snapshot.install_model import InstallBudget
 
-__all__ = ("Publication", "marker_base_sequence", "publish_staged", "render_marker")
+__all__ = ("Publication", "marker_completion", "publish_staged", "render_marker")
 
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
-_MARKER_PREFIX: typ.Final[bytes] = b"publishing base="
+_MARKER_PREFIX: typ.Final[bytes] = b"publishing completed="
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -65,10 +68,10 @@ class Publication:
         Markers left by publications that are no longer running.
     names : tuple[str, ...]
         Payload file names, each already verified against the manifest.
-    base_sequence : int
-        Activation sequence that was current when this publication began, or
-        zero when no generation was active. The marker is pending only while
-        no later activation record supersedes it.
+    completed_sequence : int
+        Completion watermark observed when this publication began, or zero
+        when no installation had completed. The marker is pending only while
+        no later installation completes.
     """
 
     staging: Path
@@ -76,24 +79,24 @@ class Publication:
     marker: Path
     stale_markers: tuple[Path, ...]
     names: tuple[str, ...]
-    base_sequence: int
+    completed_sequence: int
 
 
-def render_marker(base_sequence: int) -> bytes:
-    """Render the marker of a publication that follows `base_sequence`."""
-    if base_sequence < 0:
-        msg = "snapshot publication base sequence must not be negative"
+def render_marker(completed_sequence: int) -> bytes:
+    """Render the marker of a publication that observed `completed_sequence`."""
+    if completed_sequence < 0:
+        msg = "snapshot publication completion sequence must not be negative"
         raise ProverToolError(msg)
-    return f"publishing base={base_sequence}\n".encode("ascii")
+    return f"publishing completed={completed_sequence}\n".encode("ascii")
 
 
-def marker_base_sequence(marker: Path) -> int | None:
-    """Return the activation sequence a marker follows, or `None` if unknown.
+def marker_completion(marker: Path) -> int | None:
+    """Return the completion a marker observed, or `None` if unknown.
 
-    A marker written before markers recorded a sequence, and one that cannot
-    be read or parsed, names no known record. Readers treat both as pending,
-    because an unreadable marker is exactly the case in which the cache must
-    not be assumed complete.
+    A marker written before markers recorded a completion, and one that cannot
+    be read or parsed, names no completed installation. Readers treat both as
+    pending, because an unreadable marker is exactly the case in which the
+    cache must not be assumed complete.
     """
     try:
         data = marker.read_bytes()
@@ -131,7 +134,7 @@ def publish_staged(
         progress()
         write_generation_file(
             publication.marker,
-            render_marker(publication.base_sequence),
+            render_marker(publication.completed_sequence),
             "publication marker",
             budget=budget,
         )

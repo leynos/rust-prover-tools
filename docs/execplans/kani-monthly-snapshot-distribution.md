@@ -499,6 +499,24 @@ EP-O1 assigns responsibility and records live evidence.
   remaining budget, a stalled runtime-file check, marker classification by
   activation sequence, and a barrier-controlled abandoned marker write released
   after a later reuse.
+- [x] (2026-11-10) Remediated the tenth candidate-bound EP-M3 re-assessment at
+  `66ab5ee` (three findings). (1) Ordering markers against the activation
+  record could retire the marker of an unfinished repair when an unrelated late
+  activation landed, so a marker now records the identity's completion
+  watermark: one small file advanced only by a lock-holding installation after
+  its activation record is confirmed durable. Only a completion that follows a
+  marker retires it, so a late activation is irrelevant while a late marker
+  write from an abandoned publication still cannot make a completed cache look
+  unfinished. (2) Publication no longer reads the activation record at all, so
+  a corrupt newest record can no longer make every repair fail; the ordering
+  comes from the watermark, and a reinstall publishes a new record above the
+  damaged one. (3) Four reads that ran unbounded while the identity lock was
+  held are now supervised: the asset-directory probe, checksum verification,
+  the publication marker listing and the activation-directory probe. `check`
+  also supervises the publication-state, active-pointer and manifest reads it
+  performs under the lock. New tests cover the late-activation case, a
+  corrupt-record repair, and stalled asset-directory, checksum, marker-listing
+  and activation-directory reads.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -898,7 +916,28 @@ reissues the record it validated — so late marker work ranks below the
 activation it lost to. A marker with no readable sequence stays pending,
 because an unreadable marker is exactly the case in which the cache must not be
 assumed complete. Reuse prunes the markers its record superseded; a deferred
-prune is harmless because the leftover ranks below the active record.
+prune is harmless because the leftover ranks below the active record. That
+ordering was superseded by the completion watermark recorded in the next entry,
+which removes the dependence on the activation sequence.
+
+2026-11-10, ordered publication markers against a completion watermark rather
+than the activation sequence: the tenth re-assessment showed that an unrelated
+late activation can outrank the record a publication observed without that
+publication having finished, so the marker of an unfinished repair could be
+retired and `check` could accept a half-repaired cache. The activation order
+therefore cannot carry the meaning "an installation finished after this marker
+was written". A per-identity completion watermark now records exactly that: it
+is written only by a lock-holding installation after its activation record is
+confirmed durable, so no abandoned worker can advance it on its own, and a
+marker is pending unless the watermark has moved past the value the marker
+recorded. Publication reads the watermark instead of the record, which also
+removes the repair path's dependence on parsing the newest record: a corrupt
+record is replaced rather than fatal. A late watermark write can only name a
+sequence the activation order already published, which keeps markers pending
+rather than retiring them, so abandoning that write is safe. The four shared
+reads that remained unbounded under the lock — the asset-directory probe,
+checksum verification, the publication marker listing and the
+activation-directory probe — are now supervised as well.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
@@ -912,8 +951,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty-two more issues: the
-runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found thirty-five more issues:
+the runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -929,13 +968,15 @@ marker whose failed removal fails the installation, a backend-inventory
 durability sweep with each required toolchain file's ancestor chain, supervised
 generation creation and activation-record enumeration, bounded identity
 directory and lock-file creation with a lock wait limited by the remaining
-budget, and publication markers ordered against the activation they follow. All
-are repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1,
-and all publication, have not started. The consumer `install` command is
-deliberately limited to a verified local `--asset-dir` until the EP-M4 release
-transport is connected. Independent reviews covered all five requested
-specialities, with amendments recorded in the design and checked by a final
-testing/consistency review. Planning validation passed `make fmt`,
+budget, publication markers ordered against a completion watermark rather than
+the activation record, repair that survives a corrupt newest record, and
+bounded asset-directory, checksum, marker-listing and activation-directory
+probes. All are repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5
+and EP-O1, and all publication, have not started. The consumer `install`
+command is deliberately limited to a verified local `--asset-dir` until the
+EP-M4 release transport is connected. Independent reviews covered all five
+requested specialities, with amendments recorded in the design and checked by a
+final testing/consistency review. Planning validation passed `make fmt`,
 `make markdownlint` (including spelling and three spelling-helper tests),
 `make nixie`, and both working/staged `git diff --check`. Earlier
 dependency-network and document spelling/line-wrap failures were resolved

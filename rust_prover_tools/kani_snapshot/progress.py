@@ -53,7 +53,10 @@ def run_within[T](
     private staging directory or an unreferenced generation, reads, removal
     of a file this run owns by name, and shared writes whose published name is
     unique or totally ordered, such as an activation record that must be
-    created at a sequence number a later activation has already passed.
+    created at a sequence number a later activation has already passed. A
+    shared write that replaces one file qualifies only while a late value
+    cannot retire an unfinished marker, as with the completion watermark,
+    whose late value ranks no higher than what a later installation recorded.
     Callers pass anything else a budget check immediately before it happens, or
     keep it on this thread.
     """

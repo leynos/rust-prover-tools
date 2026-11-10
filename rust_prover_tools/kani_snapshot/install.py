@@ -156,7 +156,9 @@ def check_snapshot(
     The pointer is resolved and the generation validated while the identity
     lock is held. A repair publishes its cached payloads file by file under
     that same lock, so reading without it could validate a half-repaired cache
-    and report a failure that the running repair is about to resolve.
+    and report a failure that the running repair is about to resolve. The
+    shared reads that establish the pointer are supervised like the lock, so a
+    hung filesystem cannot hold it past the deadline.
 
     Raises
     ------
@@ -173,14 +175,23 @@ def check_snapshot(
         budget=deadline,
     ):
         layout = snapshot_layout(options.pin, cache_home=options.cache_home)
-        if publication_pending(layout):
+        if deadline.supervise(
+            "publication state read",
+            functools.partial(publication_pending, layout),
+        ):
             msg = "snapshot cache publication did not finish; run install to repair"
             raise ProverToolError(msg)
-        pointer = load_active(layout)
+        pointer = deadline.supervise(
+            "active pointer read",
+            functools.partial(load_active, layout),
+        )
         if pointer is None:
             msg = "snapshot is not installed; run install first"
             raise ProverToolError(msg)
-        manifest = active_manifest(options.pin, layout)
+        manifest = deadline.supervise(
+            "manifest read",
+            functools.partial(active_manifest, options.pin, layout),
+        )
         generation = snapshot_layout(
             options.pin,
             cache_home=options.cache_home,
@@ -248,9 +259,10 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
     # Reuse reissues the activation record it validated. Writing that record
     # flushes the activation directories, so a previous activation that
     # published and then failed its flush is confirmed durable before reuse
-    # reports success. It also advances the activation order: any publication
-    # marker an abandoned repair writes from now on ranks below this record
-    # and can no longer make the cache look unfinished.
+    # reports success. It also records this completion, which retires the
+    # markers of publications that were overtaken: a marker an abandoned
+    # repair writes from now on names an older completion and can no longer
+    # make the cache look unfinished.
     write_active(layout, pointer.generation, budget=context.deadline)
     prune_superseded_markers(layout, budget=context.deadline)
     context.deadline.check("active generation reuse")

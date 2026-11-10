@@ -322,9 +322,10 @@ def write_generation_file(
 
     Generation-local callers write files that are private until the pointer
     names their generation, so a stalled write may be abandoned when the
-    budget expires. The publication marker is the deliberate exception: it is
-    identity-level shared state whose whole purpose is to be visible before
-    the first payload replacement.
+    budget expires. Two callers write identity-level shared state instead: the
+    publication marker, whose whole purpose is to be visible before the first
+    payload replacement, and the completion watermark, whose value is always a
+    sequence the activation order has already published.
     """
     pending = path.with_name(
         f".{path.name}-{os.getpid()}-{time.monotonic_ns()}",

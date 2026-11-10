@@ -422,13 +422,16 @@ on expiry. That is safe for reads, which mutate nothing; for writes whose
 output is a private staging directory or an unreferenced generation; for
 removing a file this run owns by name; and for shared writes whose published
 name is unique or totally ordered, such as an activation record at a sequence
-number a later activation has already passed. It is not used to abandon shared
-publication silently: publication carries a durable marker, described below,
-that makes an unfinished replacement visible. Reads of the activation records,
-the cached manifest on the reuse path, the staged transport manifest and the
-cached backend inventory are supervised too, since a hung read would otherwise
-hold the identity lock past the deadline. So are the operations that precede
-the lock and the ones that run while it is held but were once left
+number a later activation has already passed, or a completion watermark whose
+late value ranks no higher than what a later installation recorded. It is not
+used to abandon shared publication silently: publication carries a durable
+marker, described below, that makes an unfinished replacement visible. Reads of
+the activation records, the cached manifest on the reuse path, the staged
+transport manifest, the cached backend inventory, the completion watermark, the
+publication marker listing, the asset directory probe, checksum verification
+and the activation-directory probe are supervised too, since a hung read would
+otherwise hold the identity lock past the deadline. So are the operations that
+precede the lock and the ones that run while it is held but were once left
 unsupervised: creating the identity directory, opening the lock file and the
 runtime-file checks that precede the probe. The lock wait itself is bounded by
 whichever is shorter, the configured timeout or the seconds the installation
@@ -445,16 +448,23 @@ durable. Because no marker name is reused, a publication that resumes after
 being abandoned can remove only its own marker; a repair that starts meanwhile
 writes a new one first and clears the older ones only once its own marker is
 durable, so the incomplete state is never unmarked. A marker also records the
-activation record that was current when its publication began. A reader refuses
-a cache whose marker names the active record or one at least as new, and
-ignores a marker whose record a later one has superseded. Completion always
-advances that record — a repair activates its new generation and a reuse
-reissues the record it validated — so a marker written late by an abandoned
-publication ranks below the activation that overtook it and cannot make a
-completed cache look unfinished. A marker from an older installation records no
-sequence, and one whose bytes cannot be read or parsed yields none either; both
-remain pending, because an unreadable marker is exactly the case in which the
-cache must not be assumed complete. Directory creation, each replacement, both
+completion watermark it observed when its publication began. The watermark is
+one small file per identity, written only by a lock-holding installation after
+its activation record is confirmed durable, so its value names an installation
+that finished rather than merely one that published a record. A reader refuses
+a cache whose marker names the watermark at least as new as the current one,
+and ignores a marker a later completion has moved past. The activation order
+cannot carry that meaning on its own: an unrelated late activation can outrank
+the record a publication observed without that publication having finished, so
+ordering markers against records could retire the marker of an unfinished
+repair. A marker written late by an abandoned publication names an older
+completion and therefore cannot make a completed cache look unfinished, while
+the marker of an abandoned repair stays pending whatever other activations
+land. A marker from an older installation records no completion, and one whose
+bytes cannot be read or parsed yields none either; both remain pending, because
+an unreadable marker is exactly the case in which the cache must not be assumed
+complete. An absent, unreadable or malformed watermark is reported as zero,
+which can only keep markers pending. Directory creation, each replacement, both
 directory flushes and the marker removal are supervised. A replacement that
 outlives the budget is reported as an unknown outcome, because the abandoned
 worker may still complete that atomic rename; every payload was verified before
@@ -477,15 +487,18 @@ are pruned after the new record is durable, and a deferred prune is only a
 harmless leftover. Activation includes the directory flush: a flush that times
 out or fails raises an error naming the generation that is already visible.
 Reuse reissues the record it validated, which reissues that flush, so a retry
-after an unconfirmed activation cannot report reuse until a flush succeeds.
-Reissuing the record also advances the sequence, which is what lets a later
-reader ignore a marker an abandoned publication writes after the reuse; the
-reuse then prunes the markers its record superseded. Before the record may
-move, the installer flushes every entry its runtime contract requires: the
-launcher, driver, compiler and `rustc`; the toolchain component record and
-every recorded library; every file and directory the backend inventory
-publishes, so a setup-extracted member such as `share/data.txt` is as durable
-as an executable; the directories naming them, including each required
+after an unconfirmed activation cannot report reuse until a flush succeeds. A
+confirmed record then advances the identity's completion watermark, which is
+what lets a later reader ignore a marker an abandoned publication writes after
+the reuse; the reuse then prunes the markers that completion superseded.
+Because publication never reads the activation record, a corrupt record cannot
+block the repair that replaces it: the watermark supplies the ordering, and a
+new installation publishes its own record above the damaged one. Before the
+record may move, the installer flushes every entry its runtime contract
+requires: the launcher, driver, compiler and `rustc`; the toolchain component
+record and every recorded library; every file and directory the backend
+inventory publishes, so a setup-extracted member such as `share/data.txt` is as
+durable as an executable; the directories naming them, including each required
 toolchain file's whole ancestor chain, deepest first, so the component record's
 `lib/rustlib` directory is flushed even when no recorded library sits beneath
 it; and every file and directory of the setup-created Python root. Files are

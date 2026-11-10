@@ -22,6 +22,7 @@ from rust_prover_tools.kani_snapshot.activation import (
     load_active,
     write_active,
 )
+from rust_prover_tools.kani_snapshot.completion import completion_watermark
 from rust_prover_tools.kani_snapshot.durability import fsync_directory
 from rust_prover_tools.kani_snapshot.identity import (
     SnapshotIdentity,
@@ -42,7 +43,7 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
-from rust_prover_tools.kani_snapshot.publication import marker_base_sequence
+from rust_prover_tools.kani_snapshot.publication import marker_completion
 from rust_prover_tools.kani_snapshot.receipt import (
     load_receipt,
     validate_receipt,
@@ -201,15 +202,13 @@ def publication_pending(layout: SnapshotLayout) -> bool:
     The marker exists from before the first cached payload is replaced until
     the replacements and their directory flushes are durable. A cache that
     still carries a pending marker may be half-repaired, so readers must not
-    validate it. A marker naming an activation record that a later one has
-    superseded belongs to a publication that either finished or lost its race
-    with that later activation, so it is not pending; a marker from an older
-    installation names no record and remains pending.
+    validate it. Only an installation that completed after the marker was
+    written retires it, which the identity's completion watermark records; a
+    marker from an older installation names no completion and remains pending.
     """
     markers = _publication_markers(layout)
-    pointer = load_active(layout)
-    active_sequence = 0 if pointer is None else pointer.sequence
-    return any(_marker_is_pending(marker, active_sequence) for marker in markers)
+    completed = completion_watermark(layout)
+    return any(_marker_is_pending(marker, completed) for marker in markers)
 
 
 def _publication_markers(layout: SnapshotLayout) -> tuple[Path, ...]:
@@ -221,10 +220,10 @@ def _publication_markers(layout: SnapshotLayout) -> tuple[Path, ...]:
         raise ProverToolError(msg) from exc
 
 
-def _marker_is_pending(marker: Path, active_sequence: int) -> bool:
+def _marker_is_pending(marker: Path, completed: int) -> bool:
     """Report whether `marker` still guards an unfinished publication."""
-    base_sequence = marker_base_sequence(marker)
-    return base_sequence is None or base_sequence >= active_sequence
+    observed = marker_completion(marker)
+    return observed is None or observed >= completed
 
 
 def prune_superseded_markers(
@@ -232,22 +231,21 @@ def prune_superseded_markers(
     *,
     budget: InstallBudget | None = None,
 ) -> None:
-    """Remove markers that the active activation record has superseded.
+    """Remove markers that a completed installation has superseded.
 
-    Reuse reissues the record it validated, so the marker of a publication
-    that a reuse overtook becomes stale without ever being observed as
-    pending. Removal is best-effort: the leftover marker ranks below the
-    active record and therefore cannot make readers refuse the cache, so a
-    stalled or failed removal is deferred rather than reported.
+    Reuse reissues the record it validated and then records its completion, so
+    the marker of a publication that a reuse overtook becomes stale without
+    ever being observed as pending. Removal is best-effort: the leftover
+    marker is no longer pending and therefore cannot make readers refuse the
+    cache, so a stalled or failed removal is deferred rather than reported.
     """
 
     def prune() -> None:
-        """Remove every marker the active record supersedes."""
+        """Remove every marker the completion watermark supersedes."""
         markers = _publication_markers(layout)
-        pointer = load_active(layout)
-        active_sequence = 0 if pointer is None else pointer.sequence
+        completed = completion_watermark(layout)
         for marker in markers:
-            if _marker_is_pending(marker, active_sequence):
+            if _marker_is_pending(marker, completed):
                 continue
             try:
                 marker.unlink(missing_ok=True)
@@ -262,8 +260,8 @@ def prune_superseded_markers(
         else:
             budget.supervise("publication marker cleanup", prune)
     except ProverToolError as exc:
-        # A marker this run could not remove is harmless once it ranks below
-        # the active record, so an expired budget defers it like any failure.
+        # A marker this run could not remove is harmless once a completion
+        # supersedes it, so an expired budget defers it like any failure.
         _LOGGER.debug("snapshot marker cleanup deferred: %s", exc)
 
 

@@ -515,7 +515,8 @@ counts. A repository that selects no backend emits no such event.
 and verify transport files, extract the launcher, run setup, probe the
 installed compiler, write the receipt, then publish the next activation record.
 `install_state` owns locking and cache revalidation, `activation` owns the
-ordered create-only records, `durability` owns the flushes that make state
+ordered create-only records, `completion` owns the per-identity completion
+watermark those records advance, `durability` owns the flushes that make state
 durable, and `cleanup` owns bounded removal of private, uniquely named state.
 `run` only revalidates and executes; it never installs. `kani_snapshot_cli`
 registers the public commands, and `cli_support` holds the repository-root and
@@ -553,18 +554,24 @@ directory the backend inventory publishes, the directories that name them
 `lib/rustlib` is flushed even without a recorded library beneath it), and every
 member of the setup-created Python root. Files are flushed before their
 directories, so a crash cannot leave a durable record naming bytes that were
-never written back. A publication marker records the activation sequence it
-follows, so readers refuse a marker that names the active record or a newer one
-and ignore a marker a later activation superseded; a marker that records no
-sequence, or whose content cannot be parsed, is still pending. Because reuse
-reissues the record it validated, an abandoned publication that writes its
-marker after a reuse lands below the new record and cannot make a completed
-cache look unfinished. A stale publication marker whose removal fails is an
-installation failure rather than a logged deferral, because readers still
-refuse a cache whose marker has not been superseded. Cache reuse rehashes the
-backend, inventory and launcher payloads and re-reads each archive's structure,
-so a size-preserving edit is still refused. A failure must leave the previous
-pointer and generation intact.
+never written back. A successful activation then advances the identity's
+completion watermark, one small file written only after the record's flush
+succeeds, so it names an installation that finished rather than one that merely
+published a record. A publication marker records the watermark it observed, so
+readers refuse a marker at least as new as the current watermark and ignore one
+a later completion has passed; a marker that records no completion, or whose
+content cannot be parsed, is still pending, and an absent or malformed
+watermark reads as zero. Ordering against the watermark rather than the
+activation order matters because an unrelated late activation can outrank the
+record a publication observed without that publication having finished. Because
+reuse reissues the record it validated and then records its own completion, an
+abandoned publication that writes its marker after a reuse names an older
+completion and cannot make a completed cache look unfinished. A stale
+publication marker whose removal fails is an installation failure rather than a
+logged deferral, because readers still refuse a cache whose marker has not been
+superseded. Cache reuse rehashes the backend, inventory and launcher payloads
+and re-reads each archive's structure, so a size-preserving edit is still
+refused. A failure must leave the previous pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).

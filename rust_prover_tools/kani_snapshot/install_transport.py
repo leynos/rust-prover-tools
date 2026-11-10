@@ -17,10 +17,10 @@ import secrets
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.activation import load_active
 from rust_prover_tools.kani_snapshot.archive_graph import ArchivePolicy
 from rust_prover_tools.kani_snapshot.archive_read import read_archive
 from rust_prover_tools.kani_snapshot.cleanup import discard_private_tree
+from rust_prover_tools.kani_snapshot.completion import completion_watermark
 from rust_prover_tools.kani_snapshot.install_copy import (
     TransportFile,
     TransportLimit,
@@ -146,7 +146,9 @@ def stage_assets(
     if source is None:
         msg = "snapshot installation requires --asset-dir until remote transport exists"
         raise ProverToolError(msg)
-    if not source.is_dir():
+    # The probe runs while the identity lock is held, and a hung filesystem
+    # must not hold that lock past the deadline. Abandoning it mutates nothing.
+    if not budget.supervise("asset directory check", source.is_dir):
         msg = f"snapshot asset directory does not exist: {source}"
         raise ProverToolError(msg)
     staging = _new_staging_directory(layout, budget)
@@ -195,7 +197,15 @@ def stage_assets(
                 checkpoints.staging,
             ),
         )
-        verify_checksums(checksums, parsed.manifest, parsed.sha256)
+        budget.supervise(
+            "checksum verification",
+            functools.partial(
+                verify_checksums,
+                checksums,
+                parsed.manifest,
+                parsed.sha256,
+            ),
+        )
         hooks.verify_attestation(
             policy_for_pin(options.pin),
             manifest_path,
@@ -322,26 +332,31 @@ def _publication(
 ) -> Publication:
     """Own a fresh marker and every marker left by earlier publications.
 
-    The marker records the activation that is current now. A publication that
-    is abandoned and resumes after a later installation has completed writes a
-    marker naming that older activation, so readers can tell it has already
-    been overtaken. Reading the record is a read, so it is supervised.
+    The marker records the completion watermark observed now. A publication
+    that is abandoned and resumes after a later installation has completed
+    writes a marker naming an older completion, so readers can tell it has
+    already been overtaken. An unrelated late activation cannot produce that
+    evidence, which is why the watermark rather than the active record is
+    read. Both the watermark read and the marker listing are reads of shared
+    state, so each is supervised.
     """
     publication_id = f"{os.getpid():x}-{secrets.token_hex(8)}"
     marker = layout.publication_marker(publication_id)
-    pointer = budget.supervise(
-        "active pointer read",
-        functools.partial(load_active, layout),
+    completed = budget.supervise(
+        "completion watermark read",
+        functools.partial(completion_watermark, layout),
+    )
+    published = budget.supervise(
+        "publication marker listing",
+        layout.publication_markers,
     )
     return Publication(
         staging=staging,
         downloads=layout.downloads_dir,
         marker=marker,
-        stale_markers=tuple(
-            path for path in layout.publication_markers() if path != marker
-        ),
+        stale_markers=tuple(path for path in published if path != marker),
         names=tuple(names),
-        base_sequence=0 if pointer is None else pointer.sequence,
+        completed_sequence=completed,
     )
 
 
