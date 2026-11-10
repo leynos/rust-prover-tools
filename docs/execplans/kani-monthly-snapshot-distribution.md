@@ -465,24 +465,23 @@ EP-O1 assigns responsibility and records live evidence.
   publishes, and a stale marker whose failed removal fails the repair and leaves
   `check` refusing the cache.
 - [x] (2026-11-10) Remediated the eighth candidate-bound EP-M3 re-assessment at
-  `db50eca` (two findings and one plan-consistency gap). (1) The
-  pre-activation sweep now covers every file and directory the backend
-  inventory publishes, so a setup-extracted member such as `share/data.txt`
-  and the directory entries naming it are durable like a named binary. Each
-  required toolchain file's whole ancestor chain is flushed as well, so the
-  component record's `lib/rustlib` directory is required even when no recorded
-  library sits beneath it. (2) The installation deadline now bounds the
-  generation directory's creation, the cached-inventory read that feeds the
-  sweep, and the activation-record listing that allocates the next sequence
-  number. All are supervised under a protocol whose abandoned work is safe:
-  the creation is private and idempotent, and the reads only observe. (3) The
-  D4 departure and its successive refinements are recorded as explicitly
-  accepted in the decision log, as the conformance basis requires. New tests
-  cover a backend inventory member flushed before
-  its directory and refusing activation when its flush fails, the component
-  directory flushed and fatal when it cannot be flushed without a recorded
-  library beneath it, and stalled generation creation and record enumeration
-  under a real short budget.
+  `db50eca` (two findings and one plan-consistency gap). (1) The pre-activation
+  sweep now covers every file and directory the backend inventory publishes, so
+  a setup-extracted member such as `share/data.txt` and the directory entries
+  naming it are durable like a named binary. Each required toolchain file's
+  whole ancestor chain is flushed as well, so the component record's
+  `lib/rustlib` directory is required even when no recorded library sits
+  beneath it. (2) The installation deadline now bounds the generation
+  directory's creation, the cached-inventory read that feeds the sweep, and the
+  activation-record listing that allocates the next sequence number. All are
+  supervised under a protocol whose abandoned work is safe: the creation is
+  private and idempotent, and the reads only observe. (3) The D4 departure and
+  its successive refinements are recorded as explicitly accepted in the
+  decision log, as the conformance basis requires. New tests cover a backend
+  inventory member flushed before its directory and refusing activation when
+  its flush fails, the component directory flushed and fatal when it cannot be
+  flushed without a recorded library beneath it, and stalled generation
+  creation and record enumeration under a real short budget.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -855,16 +854,16 @@ backend inventory members and the component record's `lib/rustlib` directory
 unflushed, and that generation-directory creation and the activation-record
 listing ran synchronously while holding the identity lock. The sweep now
 flushes every backend inventory file and directory plus each required toolchain
-file's whole ancestor chain, and the creation, cached-inventory read and
-record listing are supervised under protocols whose late work is safe: the
-creation is private and idempotent, and the reads only observe. The ordered
-create-only activation record is design revision 4's D4 contract, which plan
-approval ratifies. Its
-later durability, cleanup, publication and bounded-work refinements, including
-this revision, are explicitly accepted here under the user's implementing
-instruction of 2026-11-10, which directs this plan's implementation to continue
-through the hosted assessment to equilibrium; this entry is the recorded
-acceptance the conformance basis requires for that departure.
+file's whole ancestor chain, and the creation, cached-inventory read and record
+listing are supervised under protocols whose late work is safe: the creation is
+private and idempotent, and the reads only observe. The ordered create-only
+activation record is design revision 4's D4 contract, which plan approval
+ratifies. Its later durability, cleanup, publication and bounded-work
+refinements, including this revision, are explicitly accepted here under the
+user's implementing instruction of 2026-11-10, which directs this plan's
+implementation to continue through the hosted assessment to equilibrium; this
+entry is the recorded acceptance the conformance basis requires for that
+departure.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
@@ -878,8 +877,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty more issues:
-the runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found thirty more issues: the
+runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -894,25 +893,24 @@ record and the Python root, supervised private cleanup, a stale publication
 marker whose failed removal fails the installation, a backend-inventory
 durability sweep with each required toolchain file's ancestor chain, and
 supervised generation creation and activation-record enumeration. All are
-repaired with tests
-recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have
-not started. The consumer `install` command is deliberately limited to a
-verified local `--asset-dir` until the EP-M4 release transport is connected.
-Independent reviews covered all five requested specialities, with amendments
-recorded in the design and checked by a final testing/consistency review.
-Planning validation passed `make fmt`, `make markdownlint` (including spelling
-and three spelling-helper tests), `make nixie`, and both working/staged
-`git diff --check`. Earlier dependency-network and document spelling/line-wrap
-failures were resolved without weakening gates. Only four Markdown files
-changed during initial planning. The later requested rebase validation ran the
-full gate stack, as recorded below; implementation gates still apply to each
-future milestone. The associated draft PR records the commit, branch, upstream
-tracking and delivery link. Add red/green, smoke and conformance evidence only
-after approval. Only mark implementation roadmap entries complete when their
-actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
-operational work. Before status `COMPLETE`, reconcile discoveries with the
-approved design, requirements and every evidence link; do not conceal an
-unresolved deviation.
+repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and
+all publication, have not started. The consumer `install` command is
+deliberately limited to a verified local `--asset-dir` until the EP-M4 release
+transport is connected. Independent reviews covered all five requested
+specialities, with amendments recorded in the design and checked by a final
+testing/consistency review. Planning validation passed `make fmt`,
+`make markdownlint` (including spelling and three spelling-helper tests),
+`make nixie`, and both working/staged `git diff --check`. Earlier
+dependency-network and document spelling/line-wrap failures were resolved
+without weakening gates. Only four Markdown files changed during initial
+planning. The later requested rebase validation ran the full gate stack, as
+recorded below; implementation gates still apply to each future milestone. The
+associated draft PR records the commit, branch, upstream tracking and delivery
+link. Add red/green, smoke and conformance evidence only after approval. Only
+mark implementation roadmap entries complete when their actual acceptance
+criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
+Before status `COMPLETE`, reconcile discoveries with the approved design,
+requirements and every evidence link; do not conceal an unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired

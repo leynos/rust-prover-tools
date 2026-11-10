@@ -555,10 +555,9 @@ member of the setup-created Python root. Files are flushed before their
 directories, so a crash cannot leave a durable record naming bytes that were
 never written back. A stale publication marker whose removal fails is an
 installation failure rather than a logged deferral, because readers refuse any
-marked cache. Cache reuse rehashes the backend,
-inventory and launcher payloads and re-reads each archive's structure, so a
-size-preserving edit is still refused. A failure must leave the previous
-pointer and generation intact.
+marked cache. Cache reuse rehashes the backend, inventory and launcher payloads
+and re-reads each archive's structure, so a size-preserving edit is still
+refused. A failure must leave the previous pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).
@@ -573,8 +572,8 @@ inventory, requires the runtime executables and absolute toolchain link, and
 re-runs the probes. The installation budget is passed as a checkpoint callable
 through staging, hashing, extraction, tree validation and toolchain
 verification as well as setup and the probes, so no long local phase can
-outlive the deadline. Filesystem operations that may block on a hung
-filesystem — private directory creation and removal, the staged manifest and
+outlive the deadline. Filesystem operations that may block on a hung filesystem
+— private directory creation and removal, the staged manifest and
 cached-inventory reads, each flush, and the activation-record listing that
 allocates the next sequence number — are individually supervised, so none of
 them can hold the identity lock past the deadline. A corrupt generation is

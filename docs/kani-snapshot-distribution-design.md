@@ -431,24 +431,23 @@ hold the identity lock past the deadline. Removal of private, uniquely named
 state — a pending activation document, a partially copied launcher or
 generation file, a staging tree — is supervised as well, and a removal that
 outlives the budget is deferred and debug-logged rather than reported as a
-failure: no reader resolves those names,
-so an abandoned removal cannot disturb a later install. Staged payloads are
-published under a bound rather than abandoned silently. Each publication owns a
-marker in the identity directory, named for that publication, made durable
-before the first payload is replaced and removed only after every replacement
-and its directory flush are durable. Because no marker name is reused, a
-publication that resumes after being abandoned can remove only its own marker;
-a repair that starts meanwhile writes a new one first and clears the older ones
-only once its own marker is durable, so the incomplete state is never unmarked.
-A reader refuses a cache that still carries any marker, and a later `install`
-repairs it. Directory creation, each replacement, both directory flushes and
-the marker removal are supervised. A replacement that outlives the budget is
-reported as an unknown outcome, because the abandoned worker may still complete
-that atomic rename; every payload was verified before publication, so the cache
-is then either valid or detectably incomplete. A stale marker whose removal
-fails is an installation failure rather than a logged deferral: readers refuse
-any marked cache, so continuing would report a usable generation the cache
-cannot serve.
+failure: no reader resolves those names, so an abandoned removal cannot disturb
+a later install. Staged payloads are published under a bound rather than
+abandoned silently. Each publication owns a marker in the identity directory,
+named for that publication, made durable before the first payload is replaced
+and removed only after every replacement and its directory flush are durable.
+Because no marker name is reused, a publication that resumes after being
+abandoned can remove only its own marker; a repair that starts meanwhile writes
+a new one first and clears the older ones only once its own marker is durable,
+so the incomplete state is never unmarked. A reader refuses a cache that still
+carries any marker, and a later `install` repairs it. Directory creation, each
+replacement, both directory flushes and the marker removal are supervised. A
+replacement that outlives the budget is reported as an unknown outcome, because
+the abandoned worker may still complete that atomic rename; every payload was
+verified before publication, so the cache is then either valid or detectably
+incomplete. A stale marker whose removal fails is an installation failure
+rather than a logged deferral: readers refuse any marked cache, so continuing
+would report a usable generation the cache cannot serve.
 
 Activation is a create-only write into an identity-level directory of ordered
 records, never a rename onto one mutable file. The highest-numbered record
@@ -475,12 +474,12 @@ toolchain file's whole ancestor chain, deepest first, so the component record's
 it; and every file and directory of the setup-created Python root. Files are
 flushed before the directories that hold them, so a crash cannot leave a
 durable activation naming a launcher, library, backend member or Python payload
-whose bytes were never written back. Launcher modes are applied before the fsync
-that makes those bytes durable. Staging-directory creation and its removal are
-supervised as well: an abandoned creation is private and uniquely named, and an
-abandoned removal touches only this run's own directory. The generation
-directory's own creation and the record listing that allocates the next
-sequence number are supervised too; both touch only private, idempotent or
+whose bytes were never written back. Launcher modes are applied before the
+fsync that makes those bytes durable. Staging-directory creation and its
+removal are supervised as well: an abandoned creation is private and uniquely
+named, and an abandoned removal touches only this run's own directory. The
+generation directory's own creation and the record listing that allocates the
+next sequence number are supervised too; both touch only private, idempotent or
 read-only state, so an abandoned creation or listing cannot disturb a later
 activation. A failed stage, extraction, setup or probe leaves every existing
 record untouched.
