@@ -474,7 +474,11 @@ unfinished, while the marker of an interrupted repair stays pending until an
 installation that began after it completes. A marker written before markers
 recorded a base, and one whose bytes cannot be read or parsed, names no base;
 both remain pending, because an unreadable marker is exactly the case in which
-the cache must not be assumed complete. An identity with no readable completion
+the cache must not be assumed complete. A completion record counts only when
+its name is canonical, its entry is a regular file rather than a directory or a
+symlink, and its contents name the same sequence; anything else names no
+finished installation and is ignored, because evidence the installer cannot
+account for must not retire a marker. An identity with no readable completion
 record reports a watermark of zero, which can only keep markers pending.
 Directory creation, each replacement, both directory flushes and the marker
 removal are supervised. A replacement that outlives the budget is reported as

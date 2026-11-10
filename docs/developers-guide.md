@@ -560,25 +560,28 @@ installation, named by its sequence and written only after the record's flush
 succeeds. Such a record names an installation that finished rather than one
 that merely published a record, and a record that lands after a newer one joins
 the order beneath it instead of replacing it, so the watermark never regresses.
-Each publication marker records its base: the highest activation record its
-publication observed before replacing anything. Readers refuse a marker until
-the watermark rises above that base, and ignore one a later completion has
-passed. Because an installation links its record before recording completion, a
-completion above a base always belongs to an installation that started after
-the publication, while a completion whose record the publication already saw
-cannot retire the marker even when its write lands late; a marker that records
-no base, or whose content cannot be parsed, is still pending, and an absent or
-malformed watermark reads as zero. Ordering against completions rather than the
-activation order matters because an unrelated late activation can outrank the
-record a publication observed without that publication having finished. Because
-reuse reissues the record it validated and then records its own completion
-above every marker's base, an abandoned publication that writes its marker
-after a reuse names a lower base and cannot make a completed cache look
-unfinished. A stale publication marker whose removal fails is an installation
-failure rather than a logged deferral, because readers still refuse a cache
-whose marker has not been superseded. Cache reuse rehashes the backend,
-inventory and launcher payloads and re-reads each archive's structure, so a
-size-preserving edit is still refused. A failure must leave the previous
+Only a canonical record counts: a regular file named by its 20-digit sequence
+whose contents name that same sequence. Anything else names no finished
+installation and cannot retire a marker. Each publication marker records its
+base: the highest activation record its publication observed before replacing
+anything. Readers refuse a marker until the watermark rises above that base,
+and ignore one a later completion has passed. Because an installation links its
+record before recording completion, a completion above a base always belongs to
+an installation that started after the publication, while a completion whose
+record the publication already saw cannot retire the marker even when its write
+lands late; a marker that records no base, or whose content cannot be parsed,
+is still pending, and an absent watermark, or evidence that is malformed,
+unreadable or mismatched, reads as zero. Ordering against completions rather
+than the activation order matters because an unrelated late activation can
+outrank the record a publication observed without that publication having
+finished. Because reuse reissues the record it validated and then records its
+own completion above every marker's base, an abandoned publication that writes
+its marker after a reuse names a lower base and cannot make a completed cache
+look unfinished. A stale publication marker whose removal fails is an
+installation failure rather than a logged deferral, because readers still
+refuse a cache whose marker has not been superseded. Cache reuse rehashes the
+backend, inventory and launcher payloads and re-reads each archive's structure,
+so a size-preserving edit is still refused. A failure must leave the previous
 pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded

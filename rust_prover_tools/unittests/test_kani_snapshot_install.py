@@ -3003,6 +3003,54 @@ def test_a_marker_is_pending_until_a_completion_supersedes_its_base(
         check_snapshot(install_options(case), hooks)
 
 
+def test_malformed_completion_evidence_cannot_retire_a_marker(
+    tmp_path: Path,
+) -> None:
+    """Only completion evidence this module writes may retire a marker.
+
+    A marker is retired by a completion above its base, so a directory entry
+    that merely looks like a completion record must not raise the watermark:
+    an interrupted repair's marker would then be treated as superseded and an
+    incomplete cache served. Every malformed shape seeded above the real
+    completion leaves the watermark where the last installation put it, and
+    the cache stays refused.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    completed = _completion(layout)
+    marker = layout.publication_marker("malformed-completion-test")
+    marker.write_bytes(publication.render_marker(activation.highest_sequence(layout)))
+
+    identity = layout.identity_dir
+    next_sequence = completed + 1
+    seeds = {
+        "a short sequence": identity / "completed.999",
+        "a non-numeric sequence": identity / f"completed.{'9' * 19}x",
+        "a directory entry": identity / f"completed.{next_sequence:020d}",
+        "a symlink": identity / f"completed.{next_sequence + 1:020d}",
+        "mismatched content": identity / f"completed.{next_sequence + 2:020d}",
+        "a zero sequence": identity / f"completed.{0:020d}",
+    }
+    seeds["a short sequence"].write_text("999\n", encoding="ascii")
+    seeds["a non-numeric sequence"].write_text("1\n", encoding="ascii")
+    seeds["a directory entry"].mkdir()
+    seeds["a symlink"].symlink_to(identity / "absent-completion-record")
+    seeds["mismatched content"].write_text(f"{next_sequence + 3}\n", encoding="ascii")
+    seeds["a zero sequence"].write_text("0\n", encoding="ascii")
+
+    for description, path in seeds.items():
+        assert completion.completion_watermark(layout) == completed, (
+            f"{description} raised the completion watermark: {path.name!r}"
+        )
+    assert install_state.publication_pending(layout), (
+        "malformed completion evidence retired an unfinished marker"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+
 class _ReuseValidationFailure:
     """Fail the first reuse validation so the next attempt publishes.
 

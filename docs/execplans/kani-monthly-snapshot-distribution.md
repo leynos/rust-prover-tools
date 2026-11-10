@@ -543,6 +543,17 @@ EP-O1 assigns responsibility and records live evidence.
   it. Older records are pruned after the new one is durable, and a deferred
   prune is a harmless leftover. A barrier test reproduces the sequence and
   requires `check` to accept the cache after both abandoned workers resume.
+- [x] (2026-11-10) Remediated the thirteenth candidate-bound EP-M3
+  re-assessment at `b9a6d72` (one finding). The watermark was computed from
+  directory entry names alone, so any entry whose name looked like a completion
+  record could retire a pending marker: a short or non-canonical sequence, a
+  directory or symlink, or a record whose contents named another sequence.
+  Completion evidence now counts only when its name is canonical, its entry is
+  a regular file, and its contents name the same sequence; anything else is
+  ignored, which keeps markers pending and makes `check` refuse the cache. A
+  test seeds every malformed shape above the real completion beside an
+  unfinished marker and requires the watermark not to move and `check` to
+  refuse the cache.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -996,6 +1007,16 @@ replacing it, so the watermark can rise but never regress, and a marker is
 still retired only by a completion above its base. Older records are pruned
 after the new one is durable, and a deferred prune is a harmless leftover.
 
+2026-11-10, required completion evidence to be canonical before it can retire a
+marker: the thirteenth re-assessment showed that counting any directory entry
+whose name looked like a completion record let a stray, malformed, wrongly
+typed or content-mismatched entry raise the watermark and retire an unfinished
+repair's marker. A record now counts only when its name is the documented
+20-digit sequence, its entry is a regular file rather than a directory or a
+symlink, and its contents name that same sequence. Anything else is ignored,
+which keeps markers pending, so unaccountable evidence can only make readers
+refuse the cache, never accept an incomplete one.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1008,7 +1029,7 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty-seven more issues:
+tests. Further candidate-bound re-assessments found thirty-eight more issues:
 the runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
@@ -1028,7 +1049,8 @@ directory and lock-file creation with a lock wait limited by the remaining
 budget, publication markers ordered against a completion watermark rather than
 the activation record, publication markers ordered by the base a later
 completion must exceed, completion records that cannot regress when an
-abandoned write lands last, repair that survives a corrupt newest record, and
+abandoned write lands last, completion evidence that must be canonical before
+it can retire a marker, repair that survives a corrupt newest record, and
 bounded asset-directory, checksum, marker-listing, activation-directory and
 activation-sequence probes. All are repaired with tests recorded in Progress.
 EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started. The

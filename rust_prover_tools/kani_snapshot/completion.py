@@ -16,8 +16,10 @@ before it records completion, a watermark above a publication's base always
 names an installation that started after that publication, while a late
 completion adds a record beneath any newer one: it cannot retire a later
 unfinished marker, and it cannot regress the evidence a later installation
-already recorded. An absent, unreadable or malformed record is ignored, and a
-watermark with no records reads as zero, which only ever keeps a marker
+already recorded. Only evidence this module writes counts: a record must have
+the canonical name, be a regular file, and name the same sequence in its
+contents. An absent, unreadable, mismatched or malformed record is ignored,
+and a watermark with no records reads as zero, which only ever keeps a marker
 pending.
 """
 
@@ -50,15 +52,16 @@ def completion_watermark(layout: SnapshotLayout) -> int:
 
     Each completed installation owns a record named by its sequence, so a
     write that lands after a newer one adds a record this answer ignores
-    rather than lowering it. A missing directory, an unreadable entry or a
-    name that is not a completion record names no completed installation, and
-    reporting zero for those only keeps markers pending, which makes readers
-    refuse the cache until an installation completes.
+    rather than lowering it. A missing directory, a name that is not
+    canonical, an entry that is not a regular file, and unreadable or
+    mismatched contents all name no completed installation; reporting zero
+    for those only keeps markers pending, which makes readers refuse the cache
+    until an installation completes.
     """
     sequences = (
-        int(digits)
-        for name in _identity_entries(layout)
-        if (digits := _record_digits(name)) is not None
+        sequence
+        for path in _identity_entries(layout)
+        if (sequence := _record_sequence(path)) is not None
     )
     return max(sequences, default=0)
 
@@ -98,18 +101,43 @@ def _record_path(layout: SnapshotLayout, sequence: int) -> Path:
     return layout.identity_dir / f"{_RECORD_PREFIX}{sequence:0{_RECORD_DIGITS}d}"
 
 
-def _record_digits(name: str) -> str | None:
-    """Return the sequence digits of a completion record name, if it is one."""
+def _record_sequence(path: Path) -> int | None:
+    """Return the sequence one completion record names, if it is canonical.
+
+    Completion evidence retires publication markers, so only a record this
+    module writes may count: a name of exactly the documented width, a regular
+    file rather than a directory or a symlink, and content naming the same
+    sequence. Anything else names no completed installation and is ignored,
+    which keeps markers pending and makes readers refuse the cache rather than
+    trust state the installer cannot account for.
+    """
+    name = path.name
     if not name.startswith(_RECORD_PREFIX):
         return None
     digits = name.removeprefix(_RECORD_PREFIX)
-    return digits if digits.isascii() and digits.isdigit() else None
+    if len(digits) != _RECORD_DIGITS or not (digits.isascii() and digits.isdigit()):
+        return None
+    sequence = int(digits)
+    if sequence <= 0:
+        return None
+    return sequence if _record_names(path, sequence) else None
 
 
-def _identity_entries(layout: SnapshotLayout) -> list[str]:
-    """Return every identity entry name, or none when the directory is absent."""
+def _record_names(path: Path, sequence: int) -> bool:
+    """Report whether `path` is a regular file whose bytes name `sequence`."""
+    expected = f"{sequence}\n".encode("ascii")
     try:
-        return [entry.name for entry in layout.identity_dir.iterdir()]
+        if not path.is_file(follow_symlinks=False):
+            return False
+        return path.read_bytes() == expected
+    except OSError:
+        return False
+
+
+def _identity_entries(layout: SnapshotLayout) -> list[Path]:
+    """Return every identity entry, or none when the directory is absent."""
+    try:
+        return list(layout.identity_dir.iterdir())
     except FileNotFoundError:
         return []
     except OSError as exc:
@@ -133,13 +161,10 @@ def _prune_superseded(
     def prune() -> None:
         """Remove every record below the highest completion recorded."""
         highest = completion_watermark(layout)
-        for name in _identity_entries(layout):
-            sequence = _record_digits(name)
-            if sequence is not None and int(sequence) < highest:
-                discard_private_file(
-                    layout.identity_dir / name,
-                    phase="completion record cleanup",
-                )
+        for path in _identity_entries(layout):
+            sequence = _record_sequence(path)
+            if sequence is not None and sequence < highest:
+                discard_private_file(path, phase="completion record cleanup")
 
     try:
         if budget is None:
