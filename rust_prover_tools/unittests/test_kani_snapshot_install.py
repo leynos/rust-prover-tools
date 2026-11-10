@@ -3114,14 +3114,46 @@ def test_an_oversized_completion_record_is_read_with_a_bound(
         "an oversized completion record raised the watermark"
     )
     assert reads, "the oversized completion record was never read"
-    assert all(size >= 0 for size in reads), (
-        f"the completion record was read without a bound: {reads}"
+    bounded = len(f"{completed + 1}\n".encode("ascii")) + 1
+    assert all(0 <= size <= bounded for size in reads), (
+        f"the completion record read was not bounded to {bounded} bytes: {reads}"
     )
     assert install_state.publication_pending(layout), (
         "oversized completion evidence retired an unfinished marker"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
         check_snapshot(install_options(case), hooks)
+
+
+def test_an_oversized_marker_base_cannot_block_repair(tmp_path: Path) -> None:
+    """A marker base too long to be a sequence is unparsable, not fatal.
+
+    A corrupted marker can carry more digits than Python will convert. It must
+    read as a marker with no base, which keeps the cache refused, rather than
+    raising out of `check` and out of the reuse path an installation needs in
+    order to repair the cache.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    marker = layout.publication_marker("oversized-base-test")
+    marker.write_bytes(b"publishing base=" + b"9" * 5000 + b"\n")
+
+    assert publication.marker_base_sequence(marker) is None, (
+        "an oversized marker base was parsed"
+    )
+    assert install_state.publication_pending(layout), (
+        "an oversized marker base retired the marker"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+    install_snapshot(install_options(case), hooks)
+    assert not layout.publication_markers(), (
+        "the repair left the corrupted marker in place"
+    )
+    check_snapshot(install_options(case), hooks)
 
 
 class _ReuseValidationFailure:

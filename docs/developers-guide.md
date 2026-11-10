@@ -570,12 +570,16 @@ that base, and ignore one a later completion has passed. Because an
 installation links its record before recording completion, a completion above a
 base always belongs to an installation that started after the publication,
 while a completion whose record the publication already saw cannot retire the
-marker even when its write lands late; a marker that records no base, or whose
-content cannot be parsed, is still pending, and an absent watermark, or
-evidence that is malformed, unreadable or mismatched, reads as zero. Ordering
-against completions rather than the activation order matters because an
-unrelated late activation can outrank the record a publication observed without
-that publication having finished. Because reuse reissues the record it
+marker even when its write lands late; a marker that records no base, whose
+content cannot be parsed, or whose base carries more digits than an activation
+sequence, is still pending, and an absent watermark, or evidence that is
+malformed, unreadable or mismatched, reads as zero. A marker is read only as
+far as the longest canonical one, so a corrupt marker cannot exhaust the
+process or raise out of `check`; the next install repairs the cache because the
+pending marker sends it down the publication path, which clears stale markers.
+Ordering against completions rather than the activation order matters because
+an unrelated late activation can outrank the record a publication observed
+without that publication having finished. Because reuse reissues the record it
 validated and then records its own completion above every marker's base, an
 abandoned publication that writes its marker after a reuse names a lower base
 and cannot make a completed cache look unfinished. A stale publication marker

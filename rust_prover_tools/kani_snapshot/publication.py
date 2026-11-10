@@ -25,9 +25,12 @@ activation can outrank the record a publication observed without the
 publication having finished. That distinction is what lets an abandoned
 marker write land after a later installation has already reported success
 without making the cache look unfinished, while an abandoned repair's marker
-still refuses the cache. A marker written before markers recorded a base, or
-one whose content cannot be read, names no base and is still treated as
-pending.
+still refuses the cache. A marker written before markers recorded a base, one
+whose content cannot be read, and one whose base is longer than an activation
+sequence, all name no base and are still treated as pending. The marker read
+is bounded and an unparsable base stays an unknown rather than an error, so
+corrupt state can only keep the cache refused until an installation repairs
+it.
 """
 
 from __future__ import annotations
@@ -65,6 +68,8 @@ __all__ = (
 
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _MARKER_PREFIX: typ.Final[bytes] = b"publishing base="
+#: Longest base a marker can carry: an activation sequence is 20 digits.
+_MAX_BASE_DIGITS: typ.Final[int] = 20
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -114,9 +119,17 @@ def marker_base_sequence(marker: Path) -> int | None:
     read or parsed, names no base. Readers treat both as pending, because an
     unreadable marker is exactly the case in which the cache must not be
     assumed complete.
+
+    The read stops one byte past the longest canonical marker, and a base
+    longer than any activation sequence is unparsable rather than fatal, so
+    corrupt state can neither exhaust the process nor raise out of the readers
+    that must keep the cache refused. An installation then repairs the cache
+    by publishing a generation whose marker write clears the stale one.
     """
+    limit = len(_MARKER_PREFIX) + _MAX_BASE_DIGITS + 1
     try:
-        data = marker.read_bytes()
+        with marker.open("rb") as handle:
+            data = handle.read(limit)
     except OSError:
         return None
     text = data.strip()
@@ -124,6 +137,8 @@ def marker_base_sequence(marker: Path) -> int | None:
         return None
     digits = text.removeprefix(_MARKER_PREFIX)
     if not (digits.isascii() and digits.isdigit()):
+        return None
+    if len(digits) > _MAX_BASE_DIGITS:
         return None
     return int(digits)
 

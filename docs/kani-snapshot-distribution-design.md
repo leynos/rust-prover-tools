@@ -472,23 +472,29 @@ publication writes late names a base below the completion of any installation
 that finished after it began, so it cannot make a completed cache look
 unfinished, while the marker of an interrupted repair stays pending until an
 installation that began after it completes. A marker written before markers
-recorded a base, and one whose bytes cannot be read or parsed, names no base;
-both remain pending, because an unreadable marker is exactly the case in which
-the cache must not be assumed complete. A completion record counts only when
-its name is canonical, its entry is a regular file rather than a directory or a
-symlink, and its contents name the same sequence; anything else names no
-finished installation and is ignored, because evidence the installer cannot
-account for must not retire a marker. Contents are read only as far as a
-canonical record, so corrupt evidence cannot exhaust the process deciding
-whether a marker is pending. An identity with no readable completion record
-reports a watermark of zero, which can only keep markers pending. Directory
-creation, each replacement, both directory flushes and the marker removal are
-supervised. A replacement that outlives the budget is reported as an unknown
-outcome, because the abandoned worker may still complete that atomic rename;
-every payload was verified before publication, so the cache is then either
-valid or detectably incomplete. A stale marker whose removal fails is an
-installation failure rather than a logged deferral: readers refuse any marked
-cache, so continuing would report a usable generation the cache cannot serve.
+recorded a base, one whose bytes cannot be read, and one whose base carries
+more digits than an activation sequence, all name no base; each remains
+pending, because an unreadable marker is exactly the case in which the cache
+must not be assumed complete. The marker read stops one byte past the longest
+canonical marker, and a base longer than a sequence is unparsable rather than
+fatal, so corrupt state can neither exhaust the process nor raise out of the
+readers that must keep the cache refused; an installation then repairs the
+cache because a pending marker sends it down the publication path, whose marker
+write clears the stale one. A completion record counts only when its name is
+canonical, its entry is a regular file rather than a directory or a symlink,
+and its contents name the same sequence; anything else names no finished
+installation and is ignored, because evidence the installer cannot account for
+must not retire a marker. Contents are read only as far as a canonical record,
+so corrupt evidence cannot exhaust the process deciding whether a marker is
+pending. An identity with no readable completion record reports a watermark of
+zero, which can only keep markers pending. Directory creation, each
+replacement, both directory flushes and the marker removal are supervised. A
+replacement that outlives the budget is reported as an unknown outcome, because
+the abandoned worker may still complete that atomic rename; every payload was
+verified before publication, so the cache is then either valid or detectably
+incomplete. A stale marker whose removal fails is an installation failure
+rather than a logged deferral: readers refuse any marked cache, so continuing
+would report a usable generation the cache cannot serve.
 
 Activation is a create-only write into an identity-level directory of ordered
 records, never a rename onto one mutable file. The highest-numbered record

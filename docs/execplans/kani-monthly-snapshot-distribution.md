@@ -563,6 +563,16 @@ EP-O1 assigns responsibility and records live evidence.
   unfinished marker, records every read size through a wrapped handle, requires
   each read to carry a bound, and requires the marker to stay pending and
   `check` to refuse the cache.
+- [x] (2026-11-10) Remediated the fifteenth candidate-bound EP-M3 re-assessment
+  at `7f2c0c3` (one finding). The marker read was unbounded, and a marker base
+  of more than 4,300 digits made `int()` raise `ValueError`, which escaped both
+  `check` and the reuse path an installation needs to repair the cache. The
+  marker read now stops one byte past the longest canonical marker, and a base
+  longer than an activation sequence is unparsable, so it names no base and
+  stays pending instead of raising. A regression writes a 5,000-digit marker
+  base, requires `marker_base_sequence` to return `None`, requires `check` to
+  refuse the cache, then requires a subsequent install to clear the stale
+  marker and `check` to pass.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -1033,6 +1043,16 @@ path. The read now stops one byte past a canonical record and the comparison
 happens against those bytes, so unaccountable evidence costs bounded memory as
 well as failing to retire a marker.
 
+2026-11-10, bounded the marker read and made an unparsable base an unknown
+rather than an error: the fifteenth re-assessment showed that a marker carrying
+more digits than Python converts raised `ValueError` out of `check` and out of
+the reuse path, so an installation could not repair the cache it had refused.
+The read now stops one byte past the longest canonical marker, and a base
+longer than an activation sequence names no base, which keeps the marker
+pending. Repair follows the ordinary path: a pending marker rejects reuse, and
+the fresh publication's marker write clears the stale one once its own marker
+is durable.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1045,8 +1065,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty-nine more issues:
-the runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found forty more issues: the
+runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -1068,25 +1088,26 @@ completion must exceed, completion records that cannot regress when an
 abandoned write lands last, completion evidence that must be canonical before
 it can retire a marker and must not be loaded whole, repair that survives a
 corrupt newest record, and bounded asset-directory, checksum, marker-listing,
-activation-directory and activation-sequence probes. All are repaired with
-tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
-have not started. The consumer `install` command is deliberately limited to a
-verified local `--asset-dir` until the EP-M4 release transport is connected.
-Independent reviews covered all five requested specialities, with amendments
-recorded in the design and checked by a final testing/consistency review.
-Planning validation passed `make fmt`, `make markdownlint` (including spelling
-and three spelling-helper tests), `make nixie`, and both working/staged
-`git diff --check`. Earlier dependency-network and document spelling/line-wrap
-failures were resolved without weakening gates. Only four Markdown files
-changed during initial planning. The later requested rebase validation ran the
-full gate stack, as recorded below; implementation gates still apply to each
-future milestone. The associated draft PR records the commit, branch, upstream
-tracking and delivery link. Add red/green, smoke and conformance evidence only
-after approval. Only mark implementation roadmap entries complete when their
-actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
-operational work. Before status `COMPLETE`, reconcile discoveries with the
-approved design, requirements and every evidence link; do not conceal an
-unresolved deviation.
+activation-directory and activation-sequence probes, and a bounded marker read
+whose unparsable base keeps the marker pending instead of raising. All are
+repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and
+all publication, have not started. The consumer `install` command is
+deliberately limited to a verified local `--asset-dir` until the EP-M4 release
+transport is connected. Independent reviews covered all five requested
+specialities, with amendments recorded in the design and checked by a final
+testing/consistency review. Planning validation passed `make fmt`,
+`make markdownlint` (including spelling and three spelling-helper tests),
+`make nixie`, and both working/staged `git diff --check`. Earlier
+dependency-network and document spelling/line-wrap failures were resolved
+without weakening gates. Only four Markdown files changed during initial
+planning. The later requested rebase validation ran the full gate stack, as
+recorded below; implementation gates still apply to each future milestone. The
+associated draft PR records the commit, branch, upstream tracking and delivery
+link. Add red/green, smoke and conformance evidence only after approval. Only
+mark implementation roadmap entries complete when their actual acceptance
+criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
+Before status `COMPLETE`, reconcile discoveries with the approved design,
+requirements and every evidence link; do not conceal an unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired
