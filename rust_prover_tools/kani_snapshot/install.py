@@ -15,12 +15,12 @@ import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.activation import (
-    flush_directory,
-    fsync_directory,
-    write_active,
-)
+from rust_prover_tools.kani_snapshot.activation import write_active
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
+from rust_prover_tools.kani_snapshot.durability import (
+    confirm_activation,
+    flush_directory,
+)
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
     runtime_for,
@@ -28,6 +28,7 @@ from rust_prover_tools.kani_snapshot.identity import (
 )
 from rust_prover_tools.kani_snapshot.install_cache import validate_installed_tree
 from rust_prover_tools.kani_snapshot.install_generation import (
+    flush_generation_entries,
     install_launcher_binaries,
     require_evidence,
     write_generation_file,
@@ -247,21 +248,14 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
 
 
 def _confirm_durable(layout: SnapshotLayout, deadline: Deadline) -> None:
-    """Flush the identity directory before reporting an active generation.
+    """Flush the activation directories before reporting an active generation.
 
-    A previous activation may have renamed the pointer and then failed or
-    timed out while flushing the directory, leaving a visible but not durable
-    generation. Reuse reissues that flush, so a retry cannot report success
-    until the activation is confirmed durable.
+    A previous activation may have published its record and then failed or
+    timed out while flushing, leaving a visible but not durable generation.
+    Reuse reissues those flushes, so a retry cannot report success until the
+    activation is confirmed durable.
     """
-    try:
-        deadline.supervise(
-            "active generation durability",
-            functools.partial(fsync_directory, layout.identity_dir),
-        )
-    except OSError as exc:
-        msg = f"snapshot generation is active but its activation is not durable: {exc}"
-        raise ProverToolError(msg) from exc
+    confirm_activation(layout, deadline)
 
 
 def _install_generation(
@@ -350,14 +344,10 @@ def _install_generation(
         budget=context.deadline,
     )
     context.deadline.check("activation")
-    # Every installer-written entry inside the generation is now durable, so
-    # the pointer cannot survive a crash while naming a partially flushed
-    # generation.
-    flush_directory(
-        layout.generation_dir,
-        budget=context.deadline,
-        phase="generation content flush",
-    )
+    # Every required entry inside the generation is now durable, so the
+    # activation record cannot survive a crash while naming a partially
+    # flushed generation.
+    flush_generation_entries(runtime, layout, budget=context.deadline)
     write_active(layout, layout.generation_dir.name, budget=context.deadline)
     log_event(
         _LOGGER,

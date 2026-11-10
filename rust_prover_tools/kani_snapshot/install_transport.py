@@ -148,7 +148,7 @@ def stage_assets(
     if not source.is_dir():
         msg = f"snapshot asset directory does not exist: {source}"
         raise ProverToolError(msg)
-    staging = _new_staging_directory(layout)
+    staging = _new_staging_directory(layout, budget)
     names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
     checkpoints = _Checkpoints.for_budget(budget)
     try:
@@ -230,17 +230,12 @@ def stage_assets(
         # readers, so an abandoned replacement can never pass for a complete
         # cache.
         publish_staged(
-            Publication(
-                staging=staging,
-                downloads=layout.downloads_dir,
-                marker=layout.publication_marker_path,
-                names=tuple(names),
-            ),
+            _publication(layout, staging, names),
             budget=budget,
             checkpoint=checkpoints.publish,
         )
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        _discard_staging(staging, budget)
     log_event(
         _LOGGER,
         "kani.install.staged",
@@ -310,12 +305,60 @@ def asset_by_role(manifest: SnapshotManifest, role: str) -> AssetRecord:
     return matches[0]
 
 
-def _new_staging_directory(layout: SnapshotLayout) -> Path:
-    """Return a fresh private staging directory beside the downloads."""
+def _publication(
+    layout: SnapshotLayout,
+    staging: Path,
+    names: list[str],
+) -> Publication:
+    """Own a fresh marker and every marker left by earlier publications."""
+    publication_id = f"{os.getpid():x}-{secrets.token_hex(8)}"
+    marker = layout.publication_marker(publication_id)
+    return Publication(
+        staging=staging,
+        downloads=layout.downloads_dir,
+        marker=marker,
+        stale_markers=tuple(
+            path for path in layout.publication_markers() if path != marker
+        ),
+        names=tuple(names),
+    )
+
+
+def _new_staging_directory(layout: SnapshotLayout, budget: InstallBudget) -> Path:
+    """Return a fresh private staging directory beside the downloads.
+
+    The directory is private and uniquely named, so a creation that outlives
+    the budget may be abandoned: it exposes nothing, and a later install uses
+    a different name.
+    """
     staging = layout.identity_dir / f".staging-{os.getpid()}-{secrets.token_hex(8)}"
-    try:
+
+    def create() -> None:
+        """Create the private staging directory."""
         staging.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=False)
+
+    try:
+        budget.supervise("staging directory creation", create)
     except OSError as exc:
         msg = f"failed to create snapshot staging directory '{staging}': {exc}"
         raise ProverToolError(msg) from exc
     return staging
+
+
+def _discard_staging(staging: Path, budget: InstallBudget) -> None:
+    """Remove the private staging tree without holding the caller past budget.
+
+    Cleanup touches only this run's uniquely named directory, so a removal
+    that outlives the budget may be abandoned: it cannot disturb a later
+    install. A deferred or failed removal is logged rather than reported,
+    because the verified installation has already been decided by then.
+    """
+
+    def remove() -> None:
+        """Remove the private staging tree."""
+        shutil.rmtree(staging, ignore_errors=True)
+
+    try:
+        budget.supervise("staging cleanup", remove)
+    except ProverToolError as exc:
+        _LOGGER.debug("snapshot staging cleanup deferred for %s: %s", staging.name, exc)

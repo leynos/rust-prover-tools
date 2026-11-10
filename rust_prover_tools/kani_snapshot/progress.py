@@ -48,10 +48,14 @@ def run_within[T](
     caller waits only for the seconds that remain. On expiry the caller raises
     a deadline error and abandons the worker.
 
-    Abandonment is safe only because publication stays on this thread: callers
-    wrap operations whose output is a private staging directory or an
-    unreferenced generation, and every step that makes shared state visible
-    checks the budget immediately before it happens.
+    Abandonment is only safe for work whose late completion cannot change a
+    decision another operation has already made. That covers operations on a
+    private staging directory or an unreferenced generation, reads, removal
+    of a file this run owns by name, and shared writes whose published name is
+    unique or totally ordered, such as an activation record that must be
+    created at a sequence number a later activation has already passed.
+    Callers pass anything else a budget check immediately before it happens, or
+    keep it on this thread.
     """
     budget = remaining()
     if budget <= 0:

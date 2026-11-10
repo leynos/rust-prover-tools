@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import dataclasses as dc
 import io
+import logging
+import os
+import pathlib
 import shutil
+import stat
 import tarfile
 import threading
 import time
@@ -15,6 +19,7 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import (
     activation,
+    durability,
     install_copy,
     install_generation,
     install_state,
@@ -36,7 +41,10 @@ from rust_prover_tools.kani_snapshot.install_state import (
     validate_generation,
 )
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
-from rust_prover_tools.kani_snapshot.snapshot_layout import new_generation_name
+from rust_prover_tools.kani_snapshot.snapshot_layout import (
+    SnapshotRuntime,
+    new_generation_name,
+)
 from tests.kani_snapshot_bundles import (
     CHECKSUMS_NAME,
     LIBRARY_PATH,
@@ -61,7 +69,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
     from rust_prover_tools.kani_snapshot.install_model import InstallBudget
     from rust_prover_tools.kani_snapshot.models import (
         SnapshotManifest,
@@ -319,8 +326,9 @@ def test_install_rejects_a_mismatched_effective_compiler(tmp_path: Path) -> None
             install_hooks(case, setup_calls=calls, probe=wrong),
         )
     assert calls, "setup did not run before the compiler probe"
-    pointer = snapshot_layout(case.pin, cache_home=tmp_path).active_path
-    assert not pointer.exists(), "a mismatched probe activated a generation"
+    assert load_active(snapshot_layout(case.pin, cache_home=tmp_path)) is None, (
+        "a mismatched probe activated a generation"
+    )
 
 
 def test_install_repairs_a_corrupt_active_generation(tmp_path: Path) -> None:
@@ -1018,9 +1026,9 @@ def test_pointer_is_not_published_when_the_budget_expires(tmp_path: Path) -> Non
             budget=_ExpiringBudget("pointer publication"),
         )
 
-    assert not layout.active_path.exists(), "an expired budget published a pointer"
-    leftovers = list(layout.identity_dir.glob(".active-*"))
-    assert not leftovers, f"an expired budget left temporary pointers: {leftovers}"
+    assert load_active(layout) is None, "an expired budget published a pointer"
+    leftovers = list(layout.activations_dir.glob(".pending-*"))
+    assert not leftovers, f"an expired budget left temporary records: {leftovers}"
 
 
 def test_install_deadline_stops_before_publishing_payloads(
@@ -1114,7 +1122,7 @@ def test_activation_reports_unconfirmed_durability_after_the_pointer_changes(
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
     install_state.ensure_private_directory(layout.identity_dir)
     generation = new_generation_name()
-    real_flush = activation.fsync_directory
+    real_flush = durability.fsync_directory
 
     def failing_flush(path: Path) -> None:
         """Fail the identity-directory flush, as a broken filesystem would."""
@@ -1123,7 +1131,7 @@ def test_activation_reports_unconfirmed_durability_after_the_pointer_changes(
             raise OSError(msg)
         real_flush(path)
 
-    monkeypatch.setattr(activation, "fsync_directory", failing_flush)
+    monkeypatch.setattr(durability, "fsync_directory", failing_flush)
 
     with pytest.raises(ProverToolError, match=r"active but its activation"):
         install_state.write_active(layout, generation)
@@ -1131,8 +1139,8 @@ def test_activation_reports_unconfirmed_durability_after_the_pointer_changes(
     pointer = load_active(layout)
     assert pointer is not None, "the generation is not visible after the failure"
     assert pointer.generation == generation, "the pointer names another generation"
-    leftovers = list(layout.identity_dir.glob(".active-*"))
-    assert not leftovers, f"a failed flush left temporary pointers: {leftovers}"
+    leftovers = list(layout.activations_dir.glob(".pending-*"))
+    assert not leftovers, f"a failed flush left temporary records: {leftovers}"
 
 
 def test_activation_flush_timeout_is_reported_as_durability(
@@ -1198,14 +1206,15 @@ def test_payload_publication_reports_an_unknown_outcome_when_it_stalls(
     assert elapsed < 10.0, (
         f"the stalled publication outlived the budget: {elapsed:.1f}s"
     )
-    assert layout.publication_marker_path.exists(), (
-        "an unresolved publication left no marker for readers"
+    markers = layout.publication_markers()
+    assert len(markers) == 1, (
+        f"an unresolved publication left {len(markers)} markers for readers"
     )
 
     # A later install revalidates the cache and clears the marker, so the
     # indeterminate outcome is recoverable rather than a dead end.
     install_snapshot(install_options(case), install_hooks(case))
-    assert not layout.publication_marker_path.exists(), (
+    assert not layout.publication_markers(), (
         "a completed repair left the publication marker behind"
     )
     check_snapshot(install_options(case), install_hooks(case))
@@ -1218,13 +1227,13 @@ def test_check_refuses_a_cache_whose_publication_did_not_finish(
     case = make_case(tmp_path)
     install_snapshot(install_options(case), install_hooks(case))
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
-    layout.publication_marker_path.write_text("publishing\n", encoding="ascii")
+    layout.publication_marker("test-1").write_text("publishing\n", encoding="ascii")
 
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
         check_snapshot(install_options(case), install_hooks(case))
 
     install_snapshot(install_options(case), install_hooks(case))
-    assert not layout.publication_marker_path.exists(), (
+    assert not layout.publication_markers(), (
         "the repair did not clear the publication marker"
     )
     check_snapshot(install_options(case), install_hooks(case))
@@ -1242,7 +1251,7 @@ def test_reuse_cannot_succeed_while_the_activation_flush_fails(
     """
     case = make_case(tmp_path)
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
-    real_flush = activation.fsync_directory
+    real_flush = durability.fsync_directory
     flushes = {"identity": 0}
     # The marker write and the payload-directory flush each flush the identity
     # directory before activation; the third one is the post-rename flush.
@@ -1257,8 +1266,7 @@ def test_reuse_cannot_succeed_while_the_activation_flush_fails(
                 raise OSError(msg)
         real_flush(path)
 
-    monkeypatch.setattr(activation, "fsync_directory", flaky_flush)
-    monkeypatch.setattr(install_module, "fsync_directory", flaky_flush)
+    monkeypatch.setattr(durability, "fsync_directory", flaky_flush)
     monkeypatch.setattr(install_generation, "fsync_directory", flaky_flush)
 
     with pytest.raises(ProverToolError, match=r"active but its activation"):
@@ -1334,3 +1342,350 @@ def test_install_does_not_activate_when_the_generation_entry_is_unflushed(
         install_snapshot(install_options(case), install_hooks(case))
 
     assert load_active(layout) is None, "an unflushed generation was activated"
+
+
+def test_an_abandoned_activation_cannot_displace_a_later_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A link abandoned by its caller cannot outrank a later activation.
+
+    The abandoned worker holds the sequence number it observed before its
+    caller timed out. A later activation takes that number first, so releasing
+    the worker can only find it already created; the active record still names
+    the later generation and the cache stays valid.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    (first.generation / "receipt.json").write_text("{}", encoding="utf-8")
+    second = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    real_link = os.link
+    calls = {"count": 0}
+
+    def stalling_link(source: Path, target: Path) -> None:
+        """Hold the first link across another activation, then retry it."""
+        calls["count"] += 1
+        if calls["count"] != 1:
+            real_link(source, target)
+            return
+        # Preserve the inode the abandoned worker is publishing, so the test
+        # exercises the create-only rule rather than the removal of the
+        # worker's private document.
+        preserved = layout.activations_dir / ".preserved-record"
+        real_link(source, preserved)
+        try:
+            release.wait(30)
+            real_link(preserved, target)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(activation.os, "link", stalling_link)
+
+    with pytest.raises(ProverToolError, match=r"outcome is unknown"):
+        activation.write_active(
+            layout,
+            first.generation.name,
+            budget=Deadline(time.monotonic() + 0.5),
+        )
+    # The later activation takes the sequence number the abandoned worker
+    # observed, because that worker never published its record.
+    activation.write_active(layout, second.generation.name)
+
+    try:
+        release.set()
+        assert finished.wait(10), "the abandoned activation never resumed"
+    finally:
+        release.set()
+
+    pointer = load_active(layout)
+    assert pointer is not None, "no activation record survived"
+    assert pointer.generation == second.generation.name, (
+        f"an abandoned activation displaced {second.generation.name} "
+        f"with {pointer.generation}"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
+def test_an_abandoned_completion_cannot_clear_a_repair_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resumed publication removes only its own marker, never a repair's.
+
+    The abandoned completion resumes after a repair has written its own marker
+    and been interrupted. Because no marker name is reused, the repair's
+    marker survives and readers still see the cache as unfinished.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    names = tuple(sorted(path.name for path in layout.downloads_dir.iterdir()))
+    marker_a = layout.publication_marker("abandoned")
+    marker_b = layout.publication_marker("repair")
+
+    def restage(label: str) -> pathlib.Path:
+        """Copy the cached payloads into a private staging directory."""
+        staging = layout.identity_dir / f".staging-test-{label}"
+        staging.mkdir(mode=0o700)
+        for name in names:
+            shutil.copy2(layout.downloads_dir / name, staging / name)
+        return staging
+
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_unlink = pathlib.Path.unlink
+
+    def stalling_unlink(self: Path, *, missing_ok: bool = False) -> None:
+        """Hold the abandoned completion's unlink of its own marker."""
+        is_own_marker = (
+            self == marker_a
+            and threading.current_thread() is not threading.main_thread()
+        )
+        if not is_own_marker:
+            real_unlink(self, missing_ok=missing_ok)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_unlink(self, missing_ok=missing_ok)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "unlink", stalling_unlink)
+
+    with pytest.raises(ProverToolError, match=r"completion marker"):
+        publication.publish_staged(
+            publication.Publication(
+                staging=restage("a"),
+                downloads=layout.downloads_dir,
+                marker=marker_a,
+                stale_markers=(),
+                names=names,
+            ),
+            budget=Deadline(time.monotonic() + 0.5),
+        )
+    assert stalled.is_set(), "the publication completion never stalled"
+    assert marker_a.exists(), "the abandoned publication lost its marker"
+
+    with pytest.raises(ProverToolError, match=r"completion marker"):
+        publication.publish_staged(
+            publication.Publication(
+                staging=restage("b"),
+                downloads=layout.downloads_dir,
+                marker=marker_b,
+                stale_markers=(marker_a,),
+                names=names,
+            ),
+            budget=_ExpiringSupervision("publication completion"),
+        )
+
+    try:
+        release.set()
+        assert finished.wait(10), "the abandoned completion never resumed"
+    finally:
+        release.set()
+
+    assert marker_b.exists(), "an abandoned completion removed a later repair's marker"
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+    install_snapshot(install_options(case), hooks)
+    assert not layout.publication_markers(), (
+        "the completed repair left a publication marker behind"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
+def test_launcher_mode_is_durable_before_its_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The executable bit is applied before the launcher bytes are flushed."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    source = layout.launcher_dir / "bin"
+    source.mkdir(parents=True)
+    launcher = source / "kani"
+    launcher.write_bytes(b"#!/bin/sh\n")
+    launcher.chmod(0o755)
+    runtime = SnapshotRuntime(
+        layout=layout,
+        toolchain="1.85.0-x86_64-unknown-linux-gnu",
+        backend_version="0.56.0",
+    )
+    events: list[tuple[str, int]] = []
+    real_fchmod = os.fchmod
+    real_fsync = os.fsync
+
+    def record_fchmod(descriptor: int, mode: int) -> None:
+        """Record the mode change, then apply it."""
+        events.append(("chmod", descriptor))
+        real_fchmod(descriptor, mode)
+
+    def record_fsync(descriptor: int) -> None:
+        """Record each durable flush."""
+        events.append(("fsync", descriptor))
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(install_generation.os, "fchmod", record_fchmod)
+    monkeypatch.setattr(install_generation.os, "fsync", record_fsync)
+
+    install_generation.install_launcher_binaries(runtime, layout)
+
+    assert runtime.launcher.read_bytes() == b"#!/bin/sh\n"
+    assert stat.S_IMODE(runtime.launcher.stat().st_mode) == 0o755, (
+        "the installed launcher lost its executable bit"
+    )
+    assert events[0][0] == "chmod", "the launcher bytes were flushed before its mode"
+    assert events[1] == ("fsync", events[0][1]), (
+        "the executable bit was not made durable with the bytes it guards"
+    )
+
+
+def test_install_does_not_activate_when_a_launcher_directory_is_unflushed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The nested launcher directory must be durable before activation."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    real_flush = install_generation.flush_directory
+    flushed = {"bin": 0}
+
+    def failing_flush(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "directory flush",
+    ) -> None:
+        """Fail the generation sweep's flush of the launcher directory."""
+        if path.name == "bin":
+            flushed["bin"] += 1
+            if flushed["bin"] >= 2:
+                msg = "failed to flush snapshot directory 'bin'"
+                raise ProverToolError(msg)
+        real_flush(path, budget=budget, phase=phase)
+
+    monkeypatch.setattr(install_generation, "flush_directory", failing_flush)
+
+    with pytest.raises(ProverToolError, match=r"'bin'"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    assert flushed["bin"] >= 2, "the generation sweep never flushed the launcher bin"
+    assert load_active(layout) is None, "an unflushed launcher was activated"
+
+
+def test_install_deadline_bounds_a_stalled_staging_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stalled staging-directory creation cannot hold the lock past budget."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled: list[str] = []
+    real_mkdir = pathlib.Path.mkdir
+
+    def stalling_mkdir(
+        self: Path,
+        mode: int = 0o777,
+        *,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        """Block a private staging creation like a hung filesystem."""
+        if not self.name.startswith(".staging-"):
+            real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+            return
+        stalled.append(self.name)
+        release.wait(30)
+        try:
+            real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", stalling_mkdir)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during staging directory creation",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled, "the staging creation was never attempted"
+    assert elapsed < 10.0, f"the stalled creation outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned creation never resumed"
+    assert load_active(layout) is None, "a stalled staging created an active pointer"
+    leftovers = list(layout.identity_dir.glob(".staging-*"))
+    assert len(leftovers) == 1, f"unexpected staging leftovers: {leftovers}"
+    assert stat.S_IMODE(leftovers[0].stat().st_mode) == 0o700, (
+        "an abandoned staging directory is not private"
+    )
+
+
+def test_install_deadline_defers_a_stalled_staging_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stalled cleanup is deferred and logged instead of holding the lock."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_rmtree = shutil.rmtree
+
+    def stalling_rmtree(
+        path: str | Path,
+        *,
+        ignore_errors: bool = False,
+    ) -> None:
+        """Block removal of this run's private staging tree."""
+        target = pathlib.Path(path)
+        is_staging = target.parent == layout.identity_dir and target.name.startswith(
+            ".staging-"
+        )
+        if not is_staging:
+            real_rmtree(target, ignore_errors=ignore_errors)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_rmtree(target, ignore_errors=ignore_errors)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(install_transport.shutil, "rmtree", stalling_rmtree)
+    options = dc.replace(install_options(case), deadline_seconds=2.0)
+    started = time.monotonic()
+    with caplog.at_level(
+        logging.DEBUG,
+        logger="rust_prover_tools.kani_snapshot.install_transport",
+    ):
+        try:
+            with pytest.raises(ProverToolError, match=r"deadline expired"):
+                install_snapshot(options, install_hooks(case))
+            elapsed = time.monotonic() - started
+        finally:
+            release.set()
+
+    assert stalled.is_set(), "the staging cleanup was never attempted"
+    assert elapsed < 10.0, f"the stalled cleanup outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned cleanup never resumed"
+    assert load_active(layout) is None, "a deferred cleanup activated a generation"
+    assert "staging cleanup deferred" in caplog.text, (
+        "the deferred cleanup was not recorded"
+    )

@@ -21,7 +21,11 @@ import typing as typ
 
 from rust_prover_tools.download_stream import READ_CHUNK_SIZE
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.activation import fsync_directory
+from rust_prover_tools.kani_snapshot.durability import (
+    flush_directory,
+    fsync_directory,
+    fsync_file,
+)
 from rust_prover_tools.kani_snapshot.progress import as_checkpoint
 
 if typ.TYPE_CHECKING:
@@ -38,6 +42,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "copy_launcher",
+    "flush_generation_entries",
     "install_launcher_binaries",
     "require_evidence",
     "write_generation_file",
@@ -68,6 +73,13 @@ def install_launcher_binaries(
         if destination.exists():
             continue
         copy_launcher(entry, destination, checkpoint, budget)
+    # The launchers are new entries in `bin`, so that directory must be
+    # durable before the pointer can name a generation that runs them.
+    flush_directory(
+        target,
+        budget=budget,
+        phase="launcher directory flush",
+    )
 
 
 def copy_launcher(
@@ -94,9 +106,11 @@ def copy_launcher(
             while chunk := reader.read(READ_CHUNK_SIZE):
                 progress()
                 writer.write(chunk)
+            # The mode is applied to the open descriptor before the fsync so
+            # the executable bit is as durable as the bytes it guards.
+            os.fchmod(writer.fileno(), mode)
             writer.flush()
             os.fsync(writer.fileno())
-        destination.chmod(mode)
 
     try:
         if budget is None:
@@ -110,6 +124,49 @@ def copy_launcher(
     except ProverToolError:
         destination.unlink(missing_ok=True)
         raise
+
+
+def flush_generation_entries(
+    runtime: SnapshotRuntime,
+    layout: SnapshotLayout,
+    *,
+    budget: InstallBudget | None = None,
+) -> None:
+    """Make every required generation entry durable before activation.
+
+    Setup writes the generation's own tree, so the installer confirms the
+    directories that hold the required runtime paths and flushes the
+    executables a consumer runs. A crash therefore cannot leave a durable
+    activation record naming a launcher whose bytes or executable bit were
+    never flushed. Setup's own internal data is outside the installer's
+    control; these are the files and entries this pipeline requires.
+    """
+    directories = (
+        runtime.kani_dir / "bin",
+        runtime.kani_dir,
+        layout.kani_home,
+        layout.rustup_home / "toolchains",
+        layout.rustup_home,
+        layout.generation_dir,
+    )
+    for directory in directories:
+        flush_directory(
+            directory,
+            budget=budget,
+            phase="generation directory flush",
+        )
+    executables = (
+        runtime.launcher,
+        runtime.driver,
+        runtime.compiler,
+        runtime.rustc,
+    )
+    for executable in executables:
+        fsync_file(
+            executable,
+            budget=budget,
+            phase="generation executable flush",
+        )
 
 
 def require_evidence(
@@ -157,9 +214,9 @@ def write_generation_file(
         """Write the pending file and make it durable."""
         with pending.open("xb") as handle:
             handle.write(data)
+            os.fchmod(handle.fileno(), _PRIVATE_FILE_MODE)
             handle.flush()
             os.fsync(handle.fileno())
-        pending.chmod(_PRIVATE_FILE_MODE)
         pending.replace(path)
         fsync_directory(path.parent)
 

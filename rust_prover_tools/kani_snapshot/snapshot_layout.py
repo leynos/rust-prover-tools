@@ -34,6 +34,9 @@ __all__ = (
     "snapshot_layout",
 )
 
+#: Name prefix of a marker naming one unconfirmed payload publication.
+PUBLICATION_MARKER_PREFIX: typ.Final[str] = ".publication-pending-"
+
 _GENERATION_ALPHABET: typ.Final[frozenset[str]] = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
 )
@@ -85,9 +88,14 @@ class SnapshotLayout:
         return self.generation_dir / "pyroot.json"
 
     @property
-    def active_path(self) -> Path:
-        """Identity-level atomic active pointer."""
-        return self.identity_dir / "active.json"
+    def activations_dir(self) -> Path:
+        """Identity-level directory of ordered activation records.
+
+        The active generation is the highest-numbered record. Records are
+        only ever created, never replaced, so an activation that was
+        abandoned and later completes cannot overwrite a newer one.
+        """
+        return self.identity_dir / "active"
 
     @property
     def lock_path(self) -> Path:
@@ -99,16 +107,19 @@ class SnapshotLayout:
         """Identity-level verified-asset directory."""
         return self.identity_dir / "downloads"
 
-    @property
-    def publication_marker_path(self) -> Path:
-        """Marker naming a payload publication that has not been confirmed.
+    def publication_marker(self, publication_id: str) -> Path:
+        """Return the marker naming one unconfirmed payload publication.
 
-        The marker is written durably before the first cached payload is
-        replaced and removed only after every replacement and its directory
-        flush are durable. Readers therefore never mistake a half-published
-        cache for a complete one, even when publication was abandoned.
+        Each publication owns its marker, so a publication that resumes after
+        being abandoned can only remove its own marker. Readers treat any
+        marker as an unfinished publication, and the next install clears the
+        markers of publications that can no longer be running.
         """
-        return self.identity_dir / ".publication-pending"
+        return self.identity_dir / f"{PUBLICATION_MARKER_PREFIX}{publication_id}"
+
+    def publication_markers(self) -> tuple[Path, ...]:
+        """Return every marker of an unconfirmed payload publication."""
+        return tuple(self.identity_dir.glob(f"{PUBLICATION_MARKER_PREFIX}*"))
 
 
 @dc.dataclass(frozen=True, slots=True)

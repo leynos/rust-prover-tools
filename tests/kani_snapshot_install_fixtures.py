@@ -9,12 +9,12 @@ one test module from another.
 from __future__ import annotations
 
 import dataclasses as dc
-import json
 import typing as typ
 
 from rust_prover_tools.kani_snapshot.archive import extract_archive
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install_model import InstallHooks, InstallOptions
+from rust_prover_tools.kani_snapshot.install_state import load_active
 from rust_prover_tools.kani_snapshot.install_transport import bundle_policy
 from rust_prover_tools.kani_snapshot.receipt_model import (
     ObservedToolchain,
@@ -172,13 +172,12 @@ def install_options(
 
 
 def active_generation(case: SnapshotCase) -> str:
-    """Return the generation name recorded by the active pointer."""
-    pointer = (
-        snapshot_layout(case.pin, cache_home=case.cache_home).identity_dir
-        / "active.json"
-    )
-    document = json.loads(pointer.read_text(encoding="utf-8"))
-    return typ.cast("str", document["generation"])
+    """Return the generation named by the highest activation record."""
+    pointer = load_active(snapshot_layout(case.pin, cache_home=case.cache_home))
+    if pointer is None:
+        msg = "the fixture installed no active generation"
+        raise AssertionError(msg)
+    return pointer.generation
 
 
 def rewrite_manifest_asset(case: SnapshotCase, name: str, data: bytes) -> None:

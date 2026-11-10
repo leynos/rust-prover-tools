@@ -143,7 +143,7 @@ def test_snapshot_layout_places_everything_inside_the_generation(
     assert layout.rustup_home == layout.generation_dir / "rustup-home"
     assert layout.cargo_home == layout.generation_dir / "cargo-home"
     assert layout.receipt_path == layout.generation_dir / "receipt.json"
-    assert layout.active_path == layout.identity_dir / "active.json"
+    assert layout.activations_dir == layout.identity_dir / "active"
     assert layout.lock_path == layout.identity_dir / "install.lock"
     for path in (
         layout.kani_home,
@@ -357,7 +357,7 @@ def test_layout_paths_are_absolute_and_private(tmp_path: Path) -> None:
         layout.rustup_home,
         layout.cargo_home,
         layout.receipt_path,
-        layout.active_path,
+        layout.activations_dir,
         layout.lock_path,
     ]
 

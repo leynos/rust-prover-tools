@@ -89,10 +89,11 @@ def run_snapshot(
         repository's Cargo routing cannot be proved safe.
     """
     validate_forwarded_args(options.args)
-    # The identity names the exact generation that was just validated. Reading
-    # `active.json` again would let a concurrent repair switch the pointer
-    # between the check and the launch, so execution uses the checked identity
-    # rather than a second, unvalidated pointer read.
+    # The identity names the exact generation that was just validated.
+    # Resolving the activation records again would let a concurrent repair
+    # switch the active generation between the check and the launch, so
+    # execution uses the checked identity rather than a second, unvalidated
+    # resolution.
     identity = check_snapshot(
         InstallOptions(pin=options.pin, cache_home=options.cache_home),
         hooks,

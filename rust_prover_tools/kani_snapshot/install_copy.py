@@ -90,9 +90,9 @@ def copy_local(
     try:
         with origin.open("rb") as reader, pending.open("xb") as writer:
             written = stream_bounded(reader, writer, file, checkpoint)
+            os.fchmod(writer.fileno(), _PRIVATE_FILE_MODE)
             writer.flush()
             os.fsync(writer.fileno())
-        pending.chmod(_PRIVATE_FILE_MODE)
         pending.replace(target)
     except OSError as exc:
         pending.unlink(missing_ok=True)
