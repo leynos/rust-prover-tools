@@ -542,7 +542,11 @@ attestation for another run, or for another attempt of the same run,
 authenticates nothing this installation may use. Policy, artefact, bundle and
 identity travel together as one `AttestationRequest` through
 `InstallHooks.verify_attestation`, so a test double observes exactly the run
-the manifest records rather than an assumption about it.
+the manifest records rather than an assumption about it. The tests exercise
+each policy dimension as a refusal: a verifier double enforces the signer
+workflow, source ref, source digest and signer digest flags the way `gh` does,
+and an installation test runs the real verifier against a bundle that fails one
+dimension at a time and requires setup never to be reached.
 
 Ordering is part of the contract. The manifest digest and pin binding are
 checked before checksums, checksums before attestation and payload copies, and

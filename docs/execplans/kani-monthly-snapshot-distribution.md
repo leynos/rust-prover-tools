@@ -621,6 +621,21 @@ EP-O1 assigns responsibility and records live evidence.
   manifest digest comparison replaced by a no-op, a release rewritten after
   review reaches the setup spy, which shows the companion refusal is caused by
   that comparison rather than by an unreachable spy.
+- [x] (2026-11-10) Closed the nineteenth candidate-bound re-assessment's V2
+  evidence gap. The run correlation was accepted, but the verification plan's
+  wrong-signer, wrong-source and wrong-ref cases were covered only by
+  policy-flag assertions and a generic verifier failure. In
+  `test_kani_snapshot_integrity.py` a double now enforces every policy flag the
+  way `gh attestation verify` does; a parametrized test changes one of signer
+  workflow, source ref, source digest or signer digest and requires the refusal
+  to surface as `CommandFailedError`, while the trusted policy passes through
+  the same double, so the check is not vacuous. In
+  `test_kani_snapshot_install.py` the real `verify_attestation` runs against a
+  modelled bundle that fails one dimension at a time, and installation must
+  stop before the setup spy, which is the extraction boundary. Real signature
+  verification remains EP-M5's boundary. Stale duplicated checksum constants
+  and an out-of-date parameter list in `attestation_command`'s docstring were
+  removed in the same change.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -649,6 +664,16 @@ counted as successful research. Wyvern agents also used local reads and primary
 GitHub source/run evidence. Leta's workspace index also encountered a read-only
 filesystem. These tooling limitations do not authorize skipping approval or
 verification.
+
+Hosted `lint` runs `interrogate` under Python 3.13 even though the project
+targets Python 3.14, because the tool's Python is whatever the runner's `uv`
+resolves rather than a pinned interpreter. `ruff format` with
+`target-version = "py314"` rewrites a parenthesised multiple-exception clause
+without an `as` binding to the parenthesis-free PEP 758 form, which Python 3.13
+cannot parse, so the local `make lint` passed while the hosted run failed with
+`SyntaxError: multiple exception types must be parenthesized`. Source must stay
+parseable by 3.13 until the tool's interpreter is pinned; separate failure
+modes instead of relying on the parenthesis-free form.
 
 Repeating a local install does not reread `--asset-dir`: the reuse check runs
 under the identity lock before staging, so a healthy active generation is
@@ -1136,6 +1161,21 @@ certificate pins signer identity and source digest, and this comparison closes
 the remaining gap between "a trusted builder signed something" and "that
 builder signed this run's statement".
 
+2026-11-10, completed the V2 wrong-identity evidence: the nineteenth
+re-assessment accepted the run correlation but observed that the verification
+plan's wrong signer, source and ref cases were asserted only as policy flags
+and a generic verifier failure. The verifier double now enforces every policy
+flag the way `gh attestation verify` does, and a parametrized test proves each
+wrong signer workflow, source ref, source digest and signer digest is refused
+rather than masked, with the trusted policy accepted through the same double so
+the check is not vacuous. A second parametrized installation test runs the real
+`verify_attestation` against a modelled bundle that fails one dimension at a
+time and proves setup is never reached, which is the wrong-signer, wrong-source
+and wrong-ref refusal at the boundary where extraction would otherwise occur.
+These modelled refusals are evidence about this code's propagation and
+ordering, not about a real signature verification, which remains EP-M5's real
+verifier boundary.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1148,8 +1188,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found forty-three more issues:
-the runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found forty-four more issues: the
+runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -1176,14 +1216,15 @@ accepts a base only from the canonical bytes `render_marker` writes, so an
 unparsable base, an incomplete marker, a truncated tail or a non-canonical
 spelling keeps the marker pending instead of raising, and attestation
 verification that accepts a result only when a verified record names the
-manifest's own run and attempt. All are repaired with tests recorded in
-Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started.
-The consumer `install` command is deliberately limited to a verified local
-`--asset-dir` until the EP-M4 release transport is connected. Independent
-reviews covered all five requested specialities, with amendments recorded in
-the design and checked by a final testing/consistency review. Planning
-validation passed `make fmt`, `make markdownlint` (including spelling and three
-spelling-helper tests), `make nixie`, and both working/staged
+manifest's own run and attempt, and V2 wrong-signer, wrong-source and wrong-ref
+refusal evidence at the verifier and installation boundaries. All are repaired
+with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all
+publication, have not started. The consumer `install` command is deliberately
+limited to a verified local `--asset-dir` until the EP-M4 release transport is
+connected. Independent reviews covered all five requested specialities, with
+amendments recorded in the design and checked by a final testing/consistency
+review. Planning validation passed `make fmt`, `make markdownlint` (including
+spelling and three spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the

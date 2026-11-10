@@ -48,12 +48,6 @@ SIGNER_WORKFLOW_PATH: typ.Final[str] = ".github/workflows/kani-monthly.yml"
 #: The only source ref a snapshot may be built from.
 TRUSTED_SOURCE_REF: typ.Final[str] = "refs/heads/main"
 
-#: A checksum row is exactly `<digest> <name>`.
-_CHECKSUM_FIELDS: typ.Final[int] = 2
-
-#: A SHA-256 digest is 64 lowercase hexadecimal characters.
-_SHA256_HEX_LENGTH: typ.Final[int] = 64
-
 
 @dc.dataclass(frozen=True, slots=True)
 class AttestationPolicy:
@@ -127,9 +121,6 @@ def attestation_command(
         Manifest whose attestation is verified.
     bundle : Path
         Local Sigstore bundle.
-    timeout_seconds : float | None
-        Budget for the verifier process. `None` leaves it unbounded; a bounded
-        verifier is terminated with its process group on expiry.
 
     Returns
     -------

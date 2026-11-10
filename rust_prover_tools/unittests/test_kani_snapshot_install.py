@@ -34,6 +34,7 @@ from rust_prover_tools.kani_snapshot import (
 from rust_prover_tools.kani_snapshot import (
     install as install_module,
 )
+from rust_prover_tools.kani_snapshot.attestation import verify_attestation
 from rust_prover_tools.kani_snapshot.identity import runtime_for, snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
@@ -78,6 +79,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from cmd_mox import CmdMox, Invocation
+
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
     from rust_prover_tools.kani_snapshot.install_model import (
         InstallBudget,
@@ -87,6 +90,8 @@ if typ.TYPE_CHECKING:
         SnapshotManifest,
         SnapshotPin,
     )
+
+pytest_plugins = ("cmd_mox.pytest_plugin",)
 
 _T = typ.TypeVar("_T")
 
@@ -320,6 +325,42 @@ def test_install_rejects_a_failed_attestation(tmp_path: Path) -> None:
             install_hooks(case, setup_calls=calls, attestation=reject),
         )
     assert calls == [], "setup ran despite a rejected attestation"
+
+
+@pytest.mark.parametrize(
+    ("flag", "refusal"),
+    [
+        ("--signer-workflow", "the certificate's workflow is not trusted"),
+        ("--source-ref", "the statement's source ref is not trusted"),
+        ("--source-digest", "the statement's source digest is not trusted"),
+    ],
+)
+def test_install_stops_before_setup_when_the_verifier_refuses_a_policy_dimension(
+    tmp_path: Path, cmd_mox: CmdMox, flag: str, refusal: str
+) -> None:
+    """Each policy refusal from the real verifier stops installation.
+
+    The policy is the trusted one; the modelled bundle is what fails a single
+    dimension, which is the real wrong-signer, wrong-source and wrong-ref
+    scenario. The real `verify_attestation` runs, so the refusal travels the
+    same path a genuine `gh` failure would.
+    """
+    case = make_case(tmp_path)
+    calls: list[Path] = []
+
+    def refuse(invocation: Invocation) -> tuple[str, str, int]:
+        """Model a bundle that fails one policy dimension."""
+        assert flag in invocation.args, f"{flag} was not sent to the verifier"
+        return ("", f"no matching attestations: {refusal}", 1)
+
+    cmd_mox.stub("gh").runs(refuse)
+    hooks = dc.replace(
+        install_hooks(case, setup_calls=calls),
+        verify_attestation=verify_attestation,
+    )
+    with pytest.raises(ProverToolError, match="no matching attestations"):
+        install_snapshot(install_options(case), hooks)
+    assert calls == [], "setup ran despite a refused attestation"
 
 
 def test_install_rejects_a_checksum_mismatch(tmp_path: Path) -> None:
