@@ -15,7 +15,7 @@ import typing as typ
 from pathlib import Path
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot import install_transport
+from rust_prover_tools.kani_snapshot import install_transport, publication
 from rust_prover_tools.kani_snapshot.install import install_snapshot
 from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 from rust_prover_tools.kani_snapshot.install_state import identity_lock
@@ -31,6 +31,7 @@ if typ.TYPE_CHECKING:
     from multiprocessing import queues, synchronize
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
+    from rust_prover_tools.kani_snapshot.install_model import InstallBudget
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 __all__ = (
@@ -143,12 +144,12 @@ def repair_and_stall_before_publishing(
     of them is published, so the shared downloads still hold the damaged
     content while the identity lock is held.
     """
-    real_publish = install_transport._publish_staged
+    real_publish = publication.publish_staged
 
     def stalling_publish(
-        staging: Path,
-        downloads: Path,
-        names: cabc.Iterable[str],
+        staged: publication.Publication,
+        *,
+        budget: InstallBudget | None = None,
         checkpoint: cabc.Callable[[], None] | None = None,
     ) -> None:
         """Announce the mid-repair state, then publish when permitted."""
@@ -156,11 +157,11 @@ def repair_and_stall_before_publishing(
         if not resume.wait(30):
             msg = "parent never released the stalled repair"
             raise ProverToolError(msg)
-        real_publish(staging, downloads, names, checkpoint)
+        real_publish(staged, budget=budget, checkpoint=checkpoint)
 
     # `stage_assets` resolves the helper from the module namespace at call
     # time, so this substitution needs no seam in production code.
-    vars(install_transport)["_publish_staged"] = stalling_publish
+    vars(install_transport)["publish_staged"] = stalling_publish
     try:
         install_snapshot(install_options(case), install_hooks(case))
         outcomes.put("repaired")

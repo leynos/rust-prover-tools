@@ -55,11 +55,10 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
-from rust_prover_tools.kani_snapshot.progress import as_checkpoint
+from rust_prover_tools.kani_snapshot.publication import Publication, publish_staged
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.models import (
@@ -227,13 +226,17 @@ def stage_assets(
         )
         # Only fully verified evidence is published. A failed repair therefore
         # leaves the previously staged payloads and the active pointer alone.
-        # Publication stays on the calling thread and checks the budget before
-        # each replacement: a supervised worker that timed out could otherwise
-        # keep publishing after the installation had reported failure.
-        _publish_staged(
-            staging,
-            layout.downloads_dir,
-            names,
+        # The marker makes a publication that was not confirmed visible to
+        # readers, so an abandoned replacement can never pass for a complete
+        # cache.
+        publish_staged(
+            Publication(
+                staging=staging,
+                downloads=layout.downloads_dir,
+                marker=layout.publication_marker_path,
+                names=tuple(names),
+            ),
+            budget=budget,
             checkpoint=checkpoints.publish,
         )
     finally:
@@ -316,28 +319,3 @@ def _new_staging_directory(layout: SnapshotLayout) -> Path:
         msg = f"failed to create snapshot staging directory '{staging}': {exc}"
         raise ProverToolError(msg) from exc
     return staging
-
-
-def _publish_staged(
-    staging: Path,
-    downloads: Path,
-    names: cabc.Iterable[str],
-    checkpoint: Progress | None = None,
-) -> None:
-    """Move verified staging files into the downloads directory.
-
-    Each replacement publishes one finished file into shared state, so the
-    checkpoint runs before every replacement rather than inside a supervised
-    worker: an expiry must stop publication before the next file becomes
-    visible, never abandon a worker that could still replace it later.
-    """
-    progress = as_checkpoint(checkpoint)
-    try:
-        progress()
-        downloads.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
-        for name in names:
-            progress()
-            (staging / name).replace(downloads / name)
-    except OSError as exc:
-        msg = f"failed to publish snapshot payloads to '{downloads}': {exc}"
-        raise ProverToolError(msg) from exc

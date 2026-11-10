@@ -1,11 +1,14 @@
 """Generation-local writes performed by one installation.
 
-Every helper here publishes a file that only the new, still unreferenced
+Most helpers here publish a file that only the new, still unreferenced
 generation can see: the launcher binaries placed beside the backend, the
 Python-root record, and the receipt. None of them is shared state until the
 active pointer moves, so a write stalled on a hung filesystem may be abandoned
-when the installation budget expires. The evidence check also lives here
-because it decides whether that generation may be recorded at all.
+when the installation budget expires. `write_generation_file` also publishes
+the identity-level publication marker, which is deliberately shared: its job is
+to make an unconfirmed payload publication visible to readers. The evidence
+check also lives here because it decides whether that generation may be
+recorded at all.
 """
 
 from __future__ import annotations
@@ -138,10 +141,13 @@ def write_generation_file(
     *,
     budget: InstallBudget | None = None,
 ) -> None:
-    """Publish one generation-local file durably.
+    """Publish one small file durably beside its final path.
 
-    The file is private to an unreferenced generation until the pointer names
-    it, so a stalled write may be abandoned when the budget expires.
+    Generation-local callers write files that are private until the pointer
+    names their generation, so a stalled write may be abandoned when the
+    budget expires. The publication marker is the deliberate exception: it is
+    identity-level shared state whose whole purpose is to be visible before
+    the first payload replacement.
     """
     pending = path.with_name(
         f".{path.name}-{os.getpid()}-{time.monotonic_ns()}",

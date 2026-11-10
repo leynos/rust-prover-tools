@@ -19,6 +19,7 @@ from rust_prover_tools.kani_snapshot import (
     install_generation,
     install_state,
     install_transport,
+    publication,
 )
 from rust_prover_tools.kani_snapshot import (
     install as install_module,
@@ -29,6 +30,7 @@ from rust_prover_tools.kani_snapshot.install import (
     check_snapshot,
     install_snapshot,
 )
+from rust_prover_tools.kani_snapshot.install_model import Deadline
 from rust_prover_tools.kani_snapshot.install_state import (
     load_active,
     validate_generation,
@@ -1152,3 +1154,183 @@ def test_activation_flush_timeout_is_reported_as_durability(
     pointer = load_active(layout)
     assert pointer is not None, "the generation is not visible after the expiry"
     assert pointer.generation == generation, "the pointer names another generation"
+
+
+def test_payload_publication_reports_an_unknown_outcome_when_it_stalls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stalled replacement is abandoned and reported as indeterminate.
+
+    The marker made durable before the first replacement is what makes the
+    half-published cache visible as incomplete, so a reader cannot mistake it
+    for a valid cache even though the abandoned worker may still finish.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    release = threading.Event()
+    stalled: list[str] = []
+    real_replace = publication._replace_verified
+
+    def stalling_replace(source: Path, target: Path) -> None:
+        """Block like a hung filesystem until the test releases the worker."""
+        stalled.append(target.name)
+        release.wait(30)
+        real_replace(source, target)
+
+    monkeypatch.setattr(publication, "_replace_verified", stalling_replace)
+    budget = Deadline(time.monotonic() + 1.0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProverToolError, match=r"outcome is unknown"):
+            install_transport.stage_assets(
+                install_options(case),
+                layout,
+                install_hooks(case),
+                budget=budget,
+            )
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled, "publication never reached a payload replacement"
+    assert elapsed < 10.0, (
+        f"the stalled publication outlived the budget: {elapsed:.1f}s"
+    )
+    assert layout.publication_marker_path.exists(), (
+        "an unresolved publication left no marker for readers"
+    )
+
+    # A later install revalidates the cache and clears the marker, so the
+    # indeterminate outcome is recoverable rather than a dead end.
+    install_snapshot(install_options(case), install_hooks(case))
+    assert not layout.publication_marker_path.exists(), (
+        "a completed repair left the publication marker behind"
+    )
+    check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_check_refuses_a_cache_whose_publication_did_not_finish(
+    tmp_path: Path,
+) -> None:
+    """A carrying marker makes the cache unreadable until a repair completes."""
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    layout.publication_marker_path.write_text("publishing\n", encoding="ascii")
+
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), install_hooks(case))
+
+    install_snapshot(install_options(case), install_hooks(case))
+    assert not layout.publication_marker_path.exists(), (
+        "the repair did not clear the publication marker"
+    )
+    check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_reuse_cannot_succeed_while_the_activation_flush_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A retry after an unconfirmed activation keeps failing until a flush works.
+
+    The first install renames the pointer and then fails its directory flush.
+    Every retry must reissue that flush and report the durability failure
+    instead of validating the generation and reporting a successful reuse.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    real_flush = activation.fsync_directory
+    flushes = {"identity": 0}
+    # The marker write and the payload-directory flush each flush the identity
+    # directory before activation; the third one is the post-rename flush.
+    failing = {"from": 3}
+
+    def flaky_flush(path: Path) -> None:
+        """Fail identity-directory flushes from the second one onwards."""
+        if path == layout.identity_dir:
+            flushes["identity"] += 1
+            if flushes["identity"] >= failing["from"]:
+                msg = "input/output error"
+                raise OSError(msg)
+        real_flush(path)
+
+    monkeypatch.setattr(activation, "fsync_directory", flaky_flush)
+    monkeypatch.setattr(install_module, "fsync_directory", flaky_flush)
+    monkeypatch.setattr(install_generation, "fsync_directory", flaky_flush)
+
+    with pytest.raises(ProverToolError, match=r"active but its activation"):
+        install_snapshot(install_options(case), install_hooks(case))
+    pointer = load_active(layout)
+    assert pointer is not None, "the pointer was not published before the flush"
+    generation = pointer.generation
+
+    with pytest.raises(ProverToolError, match=r"active but its activation"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    failing["from"] = 99
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    assert identity.generation.name == generation, (
+        "a retry installed another generation"
+    )
+    assert load_active(layout) == pointer, "a successful reuse moved the pointer"
+
+
+def test_install_does_not_activate_when_the_payload_flush_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached payload entries must be durable before the pointer may name them."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    real_flush = publication.flush_directory
+
+    def failing_flush(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "directory flush",
+    ) -> None:
+        """Fail the downloads flush, as a broken filesystem would."""
+        if path == layout.downloads_dir:
+            msg = "failed to flush snapshot directory 'downloads'"
+            raise ProverToolError(msg)
+        real_flush(path, budget=budget, phase=phase)
+
+    monkeypatch.setattr(publication, "flush_directory", failing_flush)
+
+    with pytest.raises(ProverToolError, match=r"downloads"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    assert load_active(layout) is None, "an unflushed cache was activated"
+
+
+def test_install_does_not_activate_when_the_generation_entry_is_unflushed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generation directory entry must be durable before activation."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    real_flush = install_module.flush_directory
+
+    def failing_flush(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "directory flush",
+    ) -> None:
+        """Fail the generations-directory flush, as a broken filesystem would."""
+        if path == layout.generation_dir.parent:
+            msg = "failed to flush snapshot directory 'generations'"
+            raise ProverToolError(msg)
+        real_flush(path, budget=budget, phase=phase)
+
+    monkeypatch.setattr(install_module, "flush_directory", failing_flush)
+
+    with pytest.raises(ProverToolError, match=r"generations"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    assert load_active(layout) is None, "an unflushed generation was activated"

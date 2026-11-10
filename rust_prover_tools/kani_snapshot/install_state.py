@@ -74,6 +74,7 @@ __all__ = (
     "fsync_directory",
     "identity_lock",
     "load_active",
+    "publication_pending",
     "require_runtime_files",
     "validate_generation",
     "write_active",
@@ -188,6 +189,20 @@ def ensure_private_directory(path: Path) -> None:
         path.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
     except OSError as exc:
         msg = f"failed to create snapshot cache directory '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def publication_pending(layout: SnapshotLayout) -> bool:
+    """Report whether a payload publication has not been confirmed.
+
+    The marker exists from before the first cached payload is replaced until
+    the replacements and their directory flushes are durable. A cache that
+    still carries it may be half-repaired, so readers must not validate it.
+    """
+    try:
+        return layout.publication_marker_path.exists()
+    except OSError as exc:
+        msg = f"failed to read snapshot publication state: {exc}"
         raise ProverToolError(msg) from exc
 
 

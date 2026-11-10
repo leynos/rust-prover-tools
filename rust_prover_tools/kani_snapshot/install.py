@@ -15,7 +15,11 @@ import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.activation import write_active
+from rust_prover_tools.kani_snapshot.activation import (
+    flush_directory,
+    fsync_directory,
+    write_active,
+)
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
@@ -38,6 +42,7 @@ from rust_prover_tools.kani_snapshot.install_state import (
     ensure_private_directory,
     identity_lock,
     load_active,
+    publication_pending,
     require_runtime_files,
     validate_generation,
 )
@@ -164,6 +169,9 @@ def check_snapshot(
         timeout=min(options.lock_timeout_seconds, options.deadline_seconds),
     ):
         layout = snapshot_layout(options.pin, cache_home=options.cache_home)
+        if publication_pending(layout):
+            msg = "snapshot cache publication did not finish; run install to repair"
+            raise ProverToolError(msg)
         pointer = load_active(layout)
         if pointer is None:
             msg = "snapshot is not installed; run install first"
@@ -185,6 +193,14 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
         # Both reads touch the shared cache, so a hung filesystem must not hold
         # the identity lock past the budget. Abandoning a read is safe because
         # it mutates nothing.
+        if context.deadline.supervise(
+            "publication state read",
+            functools.partial(publication_pending, layout),
+        ):
+            # A cache carrying the marker may be half-repaired, so reuse would
+            # validate a state that a later publication is still changing.
+            log_event(_LOGGER, "kani.install.repair", reason="PublicationPending")
+            return None
         pointer = context.deadline.supervise(
             "active pointer read",
             functools.partial(load_active, layout),
@@ -224,9 +240,28 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
         return None
     # The probe was bounded by the budget left when it started, so a probe
     # that spent all of it must not report a successful reuse.
+    _confirm_durable(layout, context.deadline)
     context.deadline.check("active generation reuse")
     log_event(_LOGGER, "kani.install.reuse", generation=pointer.generation)
     return identity
+
+
+def _confirm_durable(layout: SnapshotLayout, deadline: Deadline) -> None:
+    """Flush the identity directory before reporting an active generation.
+
+    A previous activation may have renamed the pointer and then failed or
+    timed out while flushing the directory, leaving a visible but not durable
+    generation. Reuse reissues that flush, so a retry cannot report success
+    until the activation is confirmed durable.
+    """
+    try:
+        deadline.supervise(
+            "active generation durability",
+            functools.partial(fsync_directory, layout.identity_dir),
+        )
+    except OSError as exc:
+        msg = f"snapshot generation is active but its activation is not durable: {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def _install_generation(
@@ -236,6 +271,13 @@ def _install_generation(
 ) -> SnapshotIdentity:
     """Run setup in a new generation and publish it only after validation."""
     ensure_private_directory(layout.generation_dir)
+    # The generation's own directory entry lives in `generations`, so that
+    # parent must be durable before the pointer can be understood to name it.
+    flush_directory(
+        layout.generation_dir.parent,
+        budget=context.deadline,
+        phase="generation directory flush",
+    )
     runtime = runtime_for(layout, manifest)
     context.deadline.supervise(
         "launcher extraction",
@@ -308,6 +350,14 @@ def _install_generation(
         budget=context.deadline,
     )
     context.deadline.check("activation")
+    # Every installer-written entry inside the generation is now durable, so
+    # the pointer cannot survive a crash while naming a partially flushed
+    # generation.
+    flush_directory(
+        layout.generation_dir,
+        budget=context.deadline,
+        phase="generation content flush",
+    )
     write_active(layout, layout.generation_dir.name, budget=context.deadline)
     log_event(
         _LOGGER,

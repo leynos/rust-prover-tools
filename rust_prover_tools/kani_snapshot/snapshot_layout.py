@@ -99,6 +99,17 @@ class SnapshotLayout:
         """Identity-level verified-asset directory."""
         return self.identity_dir / "downloads"
 
+    @property
+    def publication_marker_path(self) -> Path:
+        """Marker naming a payload publication that has not been confirmed.
+
+        The marker is written durably before the first cached payload is
+        replaced and removed only after every replacement and its directory
+        flush are durable. Readers therefore never mistake a half-published
+        cache for a complete one, even when publication was abandoned.
+        """
+        return self.identity_dir / ".publication-pending"
+
 
 @dc.dataclass(frozen=True, slots=True)
 class SnapshotRuntime:
