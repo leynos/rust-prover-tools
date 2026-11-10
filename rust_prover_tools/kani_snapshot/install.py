@@ -100,8 +100,11 @@ def install_snapshot(
     Raises
     ------
     ProverToolError
-        Raised when verification fails or the overall deadline expires. The
-        previously active generation and pointer are left untouched.
+        Raised when verification fails or the overall deadline expires.
+        Failures before publication leave the previously active generation and
+        pointer untouched. A durability failure after the rename reports the
+        generation that is already active rather than claiming that nothing
+        was published.
     """
     chosen = InstallHooks() if hooks is None else hooks
     if options.assets_dir is None:
@@ -179,10 +182,19 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
     options = context.options
     layout = snapshot_layout(options.pin, cache_home=options.cache_home)
     try:
-        pointer = load_active(layout)
+        # Both reads touch the shared cache, so a hung filesystem must not hold
+        # the identity lock past the budget. Abandoning a read is safe because
+        # it mutates nothing.
+        pointer = context.deadline.supervise(
+            "active pointer read",
+            functools.partial(load_active, layout),
+        )
         if pointer is None:
             return None
-        manifest = active_manifest(options.pin, layout)
+        manifest = context.deadline.supervise(
+            "manifest read",
+            functools.partial(active_manifest, options.pin, layout),
+        )
         generation = snapshot_layout(
             options.pin,
             cache_home=options.cache_home,

@@ -14,9 +14,14 @@ import pytest
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import (
+    activation,
     install_copy,
     install_generation,
     install_state,
+    install_transport,
+)
+from rust_prover_tools.kani_snapshot import (
+    install as install_module,
 )
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
@@ -56,7 +61,10 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
     from rust_prover_tools.kani_snapshot.install_model import InstallBudget
-    from rust_prover_tools.kani_snapshot.models import SnapshotManifest
+    from rust_prover_tools.kani_snapshot.models import (
+        SnapshotManifest,
+        SnapshotPin,
+    )
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 _T = typ.TypeVar("_T")
@@ -86,6 +94,33 @@ class _ExpiringBudget:
     def supervise(self, phase: str, operation: cabc.Callable[[], _T]) -> _T:
         """Run local work as an unexpired budget would, without a thread."""
         del phase
+        return operation()
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ExpiringSupervision:
+    """A budget whose supervised phase times out instead of running.
+
+    Durability failures happen inside a supervised operation rather than at a
+    cooperative checkpoint, so this budget reproduces the expiry the worker
+    wait would report without needing a real stalled `fsync`.
+    """
+
+    phase: str
+
+    def check(self, phase: str) -> None:
+        """Accept every cooperative checkpoint."""
+        del phase
+
+    def remaining(self) -> float:
+        """Report a budget that has not expired."""
+        return 60.0
+
+    def supervise(self, phase: str, operation: cabc.Callable[[], _T]) -> _T:
+        """Expire the named supervised phase and run every other one."""
+        if phase == self.phase:
+            msg = f"snapshot installation deadline expired during {phase}"
+            raise ProverToolError(msg)
         return operation()
 
 
@@ -984,3 +1019,136 @@ def test_pointer_is_not_published_when_the_budget_expires(tmp_path: Path) -> Non
     assert not layout.active_path.exists(), "an expired budget published a pointer"
     leftovers = list(layout.identity_dir.glob(".active-*"))
     assert not leftovers, f"an expired budget left temporary pointers: {leftovers}"
+
+
+def test_install_deadline_stops_before_publishing_payloads(
+    tmp_path: Path,
+) -> None:
+    """An expired budget cannot publish verified payloads into the cache.
+
+    Publication replaces shared files one at a time, so the budget is checked
+    before each replacement instead of inside a supervised worker that could
+    keep publishing after the installation reported failure.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+
+    with pytest.raises(ProverToolError, match=r"payload publication"):
+        install_transport.stage_assets(
+            install_options(case),
+            layout,
+            install_hooks(case),
+            budget=_ExpiringBudget("payload publication"),
+        )
+
+    published = (
+        sorted(path.name for path in layout.downloads_dir.iterdir())
+        if layout.downloads_dir.is_dir()
+        else []
+    )
+    assert published == [], f"an expired budget published payloads: {published}"
+    leftovers = list(layout.identity_dir.glob(".staging-*"))
+    assert not leftovers, f"an expired staging left directories: {leftovers}"
+
+
+def test_install_deadline_bounds_a_stalled_manifest_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A read stalled on a hung filesystem cannot hold the lock past the budget.
+
+    The reuse path reads the active pointer and the cached manifest while
+    holding the identity lock. Supervision abandons such a read, which mutates
+    nothing, so a later install is refused by the budget instead of waiting for
+    the filesystem.
+    """
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    generation = load_active(layout)
+    assert generation is not None, "the first install activated no generation"
+    release = threading.Event()
+    stalled: list[str] = []
+    real_manifest = install_module.active_manifest
+
+    def stalling_manifest(
+        pin: SnapshotPin,
+        target: SnapshotLayout,
+    ) -> SnapshotManifest:
+        """Block like a hung read until the test releases the worker."""
+        stalled.append("manifest")
+        release.wait(30)
+        return real_manifest(pin, target)
+
+    monkeypatch.setattr(install_module, "active_manifest", stalling_manifest)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProverToolError, match=r"deadline expired during"):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled, "the reuse path never read the manifest"
+    assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
+    assert load_active(layout) == generation, (
+        "a stall during reuse changed the active pointer"
+    )
+
+
+def test_activation_reports_unconfirmed_durability_after_the_pointer_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed directory flush is reported as durability, not as a failure.
+
+    The rename has already made the generation visible, so reporting a
+    publication failure would be untrue. The error names the generation and
+    the pointer is left naming it.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    generation = new_generation_name()
+    real_flush = activation.fsync_directory
+
+    def failing_flush(path: Path) -> None:
+        """Fail the identity-directory flush, as a broken filesystem would."""
+        if path == layout.identity_dir:
+            msg = "input/output error"
+            raise OSError(msg)
+        real_flush(path)
+
+    monkeypatch.setattr(activation, "fsync_directory", failing_flush)
+
+    with pytest.raises(ProverToolError, match=r"active but its activation"):
+        install_state.write_active(layout, generation)
+
+    pointer = load_active(layout)
+    assert pointer is not None, "the generation is not visible after the failure"
+    assert pointer.generation == generation, "the pointer names another generation"
+    leftovers = list(layout.identity_dir.glob(".active-*"))
+    assert not leftovers, f"a failed flush left temporary pointers: {leftovers}"
+
+
+def test_activation_flush_timeout_is_reported_as_durability(
+    tmp_path: Path,
+) -> None:
+    """An expiry during the post-rename flush does not claim publication failed."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    generation = new_generation_name()
+
+    with pytest.raises(ProverToolError, match=r"active but its activation"):
+        install_state.write_active(
+            layout,
+            generation,
+            budget=_ExpiringSupervision("pointer directory flush"),
+        )
+
+    pointer = load_active(layout)
+    assert pointer is not None, "the generation is not visible after the expiry"
+    assert pointer.generation == generation, "the pointer names another generation"

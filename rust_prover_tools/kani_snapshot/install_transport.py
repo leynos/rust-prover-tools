@@ -55,6 +55,7 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
+from rust_prover_tools.kani_snapshot.progress import as_checkpoint
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -91,6 +92,7 @@ class _Checkpoints:
     payload: Progress
     digest: Progress
     archive: Progress
+    publish: Progress
 
     @classmethod
     def for_budget(cls, budget: InstallBudget) -> _Checkpoints:
@@ -103,6 +105,7 @@ class _Checkpoints:
                 budget.check,
                 "archive structure validation",
             ),
+            publish=functools.partial(budget.check, "payload publication"),
         )
 
 
@@ -224,7 +227,15 @@ def stage_assets(
         )
         # Only fully verified evidence is published. A failed repair therefore
         # leaves the previously staged payloads and the active pointer alone.
-        _publish_staged(staging, layout.downloads_dir, names)
+        # Publication stays on the calling thread and checks the budget before
+        # each replacement: a supervised worker that timed out could otherwise
+        # keep publishing after the installation had reported failure.
+        _publish_staged(
+            staging,
+            layout.downloads_dir,
+            names,
+            checkpoint=checkpoints.publish,
+        )
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     log_event(
@@ -311,11 +322,21 @@ def _publish_staged(
     staging: Path,
     downloads: Path,
     names: cabc.Iterable[str],
+    checkpoint: Progress | None = None,
 ) -> None:
-    """Move verified staging files into the downloads directory."""
+    """Move verified staging files into the downloads directory.
+
+    Each replacement publishes one finished file into shared state, so the
+    checkpoint runs before every replacement rather than inside a supervised
+    worker: an expiry must stop publication before the next file becomes
+    visible, never abandon a worker that could still replace it later.
+    """
+    progress = as_checkpoint(checkpoint)
     try:
+        progress()
         downloads.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
         for name in names:
+            progress()
             (staging / name).replace(downloads / name)
     except OSError as exc:
         msg = f"failed to publish snapshot payloads to '{downloads}': {exc}"

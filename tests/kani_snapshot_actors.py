@@ -149,13 +149,14 @@ def repair_and_stall_before_publishing(
         staging: Path,
         downloads: Path,
         names: cabc.Iterable[str],
+        checkpoint: cabc.Callable[[], None] | None = None,
     ) -> None:
         """Announce the mid-repair state, then publish when permitted."""
         in_publish.set()
         if not resume.wait(30):
             msg = "parent never released the stalled repair"
             raise ProverToolError(msg)
-        real_publish(staging, downloads, names)
+        real_publish(staging, downloads, names, checkpoint)
 
     # `stage_assets` resolves the helper from the module namespace at call
     # time, so this substitution needs no seam in production code.

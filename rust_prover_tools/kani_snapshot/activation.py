@@ -2,15 +2,17 @@
 
 The pointer is the only mutable shared state in the cache. It is replaced
 atomically under the identity lock, so a reader sees either the previous
-generation or the complete new one. Publication is also gated on the remaining
-installation budget immediately before the rename, so an installation that ran
-out of time cannot become visible after its deadline.
+generation or the complete new one. Publication is gated on the remaining
+installation budget immediately before the rename, and the rename itself is
+issued on the calling thread: a supervised worker that timed out could
+otherwise complete it after the installation had already reported failure.
+Durability of the rename is part of activation, so a flush that cannot be
+confirmed is reported as such rather than silently deferred.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 import time
 import typing as typ
@@ -21,7 +23,6 @@ from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotLayout,
     is_safe_generation_name,
 )
-from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -30,7 +31,6 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("fsync_directory", "write_active")
 
-_LOGGER = logging.getLogger(__name__)
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 
 
@@ -49,10 +49,16 @@ def write_active(
     A supplied budget is checked after the temporary document is durable and
     immediately before the rename. An installation whose budget expires while
     writing or flushing the temporary file therefore leaves the previous
-    pointer in place rather than publishing after its deadline. The directory
-    flush that follows the rename cannot change what is published, so a stall
-    there is reported as deferred durability instead of as a failed
-    activation.
+    pointer in place rather than publishing after its deadline. The rename is
+    a single atomic operation on the calling thread, so it is issued only
+    while the budget remains and can never be completed later by an abandoned
+    worker.
+
+    The directory flush that follows the rename is what makes the activation
+    survive a crash. It is bounded by the remaining budget, and a flush that
+    times out or fails raises a distinct error naming the generation that is
+    already visible, because reporting a publication failure would be untrue
+    and reporting a durable activation would be unverified.
     """
     if not is_safe_generation_name(generation):
         msg = f"snapshot generation name is not one safe component: {generation!r}"
@@ -69,8 +75,6 @@ def write_active(
         _write_pending_pointer(pending, encoded, budget)
         if budget is not None:
             budget.check("pointer publication")
-        pending.replace(layout.active_path)
-        _flush_identity_directory(layout, budget)
     except OSError as exc:
         pending.unlink(missing_ok=True)
         msg = f"failed to publish snapshot active pointer: {exc}"
@@ -78,6 +82,22 @@ def write_active(
     except ProverToolError:
         pending.unlink(missing_ok=True)
         raise
+    # The rename is the point after which the new generation is visible. A
+    # failure here still leaves the previous pointer in place, so it is a
+    # publication failure and the temporary document is discarded.
+    try:
+        pending.replace(layout.active_path)
+    except OSError as exc:
+        pending.unlink(missing_ok=True)
+        msg = f"failed to publish snapshot active pointer: {exc}"
+        raise ProverToolError(msg) from exc
+    # Everything below describes durability, not publication: the generation
+    # is already active and the message must not suggest otherwise.
+    try:
+        _flush_identity_directory(layout, budget)
+    except ProverToolError as exc:
+        msg = f"snapshot generation is active but its activation is not durable: {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def _write_pending_pointer(
@@ -109,20 +129,25 @@ def _flush_identity_directory(
     layout: SnapshotLayout,
     budget: InstallBudget | None,
 ) -> None:
-    """Flush the rename, reporting a stall after publication as deferred."""
-    if budget is None:
+    """Make the published rename durable, bounded by `budget`.
+
+    A timeout is raised as `ProverToolError` by `supervise`, and an `OSError`
+    from the flush is converted so the caller reports one durability
+    contract regardless of which failure occurred.
+    """
+
+    def flush() -> None:
+        """Flush the identity directory entry."""
         fsync_directory(layout.identity_dir)
-        return
+
     try:
-        budget.supervise(
-            "pointer directory flush",
-            lambda: fsync_directory(layout.identity_dir),
-        )
-    except ProverToolError:
-        # The rename is already visible to readers. Only crash durability is
-        # deferred to the operating system, so this must not fail an
-        # activation that has happened.
-        log_event(_LOGGER, "kani.install.activation_flush_deferred")
+        if budget is None:
+            flush()
+        else:
+            budget.supervise("pointer directory flush", flush)
+    except OSError as exc:
+        msg = f"failed to flush snapshot activation: {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def fsync_directory(path: Path) -> None:
