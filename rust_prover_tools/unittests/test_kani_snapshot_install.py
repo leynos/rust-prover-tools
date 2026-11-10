@@ -2562,6 +2562,133 @@ def test_write_active_bounds_a_stalled_activation_directory_check(
     assert finished.wait(10), "the abandoned probe never resumed"
 
 
+def test_check_deadline_bounds_a_stalled_publication_state_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`check` bounds the read that decides whether a marker is still pending."""
+    case = make_case(tmp_path)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    phase_thread = "snapshot publication state read"
+    real_pending = install_module.publication_pending
+
+    def stalling_pending(layout: SnapshotLayout) -> bool:
+        """Block the publication-state read like a hung filesystem."""
+        if threading.current_thread().name != phase_thread:
+            return real_pending(layout)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_pending(layout)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(install_module, "publication_pending", stalling_pending)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during publication state read",
+        ):
+            check_snapshot(options)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the publication state was never read"
+    assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned read never resumed"
+
+
+def test_check_deadline_bounds_a_stalled_active_pointer_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`check` bounds the read that resolves the active pointer."""
+    case = make_case(tmp_path)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    phase_thread = "snapshot active pointer read"
+    real_load = install_module.load_active
+
+    def stalling_load(layout: SnapshotLayout) -> activation.ActivePointer | None:
+        """Block the pointer read like a hung filesystem."""
+        if threading.current_thread().name != phase_thread:
+            return real_load(layout)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_load(layout)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(install_module, "load_active", stalling_load)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during active pointer read",
+        ):
+            check_snapshot(options)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the active pointer was never read"
+    assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned read never resumed"
+
+
+def test_check_deadline_bounds_a_stalled_manifest_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`check` bounds the read that loads the active generation's manifest."""
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    phase_thread = "snapshot manifest read"
+    real_manifest = install_module.active_manifest
+
+    def stalling_manifest(
+        pin: SnapshotPin,
+        layout: SnapshotLayout,
+    ) -> SnapshotManifest:
+        """Block the manifest read like a hung filesystem."""
+        if threading.current_thread().name != phase_thread:
+            return real_manifest(pin, layout)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_manifest(pin, layout)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(install_module, "active_manifest", stalling_manifest)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during manifest read",
+        ):
+            check_snapshot(options)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the manifest was never read"
+    assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned read never resumed"
+
+
 def test_a_marker_is_pending_until_a_completion_supersedes_it(
     tmp_path: Path,
 ) -> None:

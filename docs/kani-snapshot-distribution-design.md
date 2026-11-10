@@ -429,49 +429,50 @@ marker, described below, that makes an unfinished replacement visible. Reads of
 the activation records, the cached manifest on the reuse path, the staged
 transport manifest, the cached backend inventory, the completion watermark, the
 publication marker listing, the asset directory probe, checksum verification
-and the activation-directory probe are supervised too, since a hung read would
-otherwise hold the identity lock past the deadline. So are the operations that
-precede the lock and the ones that run while it is held but were once left
-unsupervised: creating the identity directory, opening the lock file and the
-runtime-file checks that precede the probe. The lock wait itself is bounded by
-whichever is shorter, the configured timeout or the seconds the installation
-still has, so time already spent cannot be spent a second time. Removal of
-private, uniquely named state — a pending activation document, a partially
-copied launcher or generation file, a staging tree — is supervised as well, and
-a removal that outlives the budget is deferred and debug-logged rather than
-reported as a failure: no reader resolves those names, so an abandoned removal
-cannot disturb a later install. Staged payloads are published under a bound
-rather than abandoned silently. Each publication owns a marker in the identity
-directory, named for that publication, made durable before the first payload is
-replaced and removed only after every replacement and its directory flush are
-durable. Because no marker name is reused, a publication that resumes after
-being abandoned can remove only its own marker; a repair that starts meanwhile
-writes a new one first and clears the older ones only once its own marker is
-durable, so the incomplete state is never unmarked. A marker also records the
-completion watermark it observed when its publication began. The watermark is
-one small file per identity, written only by a lock-holding installation after
-its activation record is confirmed durable, so its value names an installation
-that finished rather than merely one that published a record. A reader refuses
-a cache whose marker names the watermark at least as new as the current one,
-and ignores a marker a later completion has moved past. The activation order
-cannot carry that meaning on its own: an unrelated late activation can outrank
-the record a publication observed without that publication having finished, so
-ordering markers against records could retire the marker of an unfinished
-repair. A marker written late by an abandoned publication names an older
-completion and therefore cannot make a completed cache look unfinished, while
-the marker of an abandoned repair stays pending whatever other activations
-land. A marker from an older installation records no completion, and one whose
-bytes cannot be read or parsed yields none either; both remain pending, because
-an unreadable marker is exactly the case in which the cache must not be assumed
-complete. An absent, unreadable or malformed watermark is reported as zero,
-which can only keep markers pending. Directory creation, each replacement, both
-directory flushes and the marker removal are supervised. A replacement that
-outlives the budget is reported as an unknown outcome, because the abandoned
-worker may still complete that atomic rename; every payload was verified before
-publication, so the cache is then either valid or detectably incomplete. A
-stale marker whose removal fails is an installation failure rather than a
-logged deferral: readers refuse any marked cache, so continuing would report a
-usable generation the cache cannot serve.
+and the activation-directory probe are supervised too, as are the publication
+state, active pointer and manifest reads `check` performs while it holds the
+lock, since a hung read would otherwise hold that lock past the deadline. So
+are the operations that precede the lock and the ones that run while it is held
+but were once left unsupervised: creating the identity directory, opening the
+lock file and the runtime-file checks that precede the probe. The lock wait
+itself is bounded by whichever is shorter, the configured timeout or the
+seconds the installation still has, so time already spent cannot be spent a
+second time. Removal of private, uniquely named state — a pending activation
+document, a partially copied launcher or generation file, a staging tree — is
+supervised as well, and a removal that outlives the budget is deferred and
+debug-logged rather than reported as a failure: no reader resolves those names,
+so an abandoned removal cannot disturb a later install. Staged payloads are
+published under a bound rather than abandoned silently. Each publication owns a
+marker in the identity directory, named for that publication, made durable
+before the first payload is replaced and removed only after every replacement
+and its directory flush are durable. Because no marker name is reused, a
+publication that resumes after being abandoned can remove only its own marker;
+a repair that starts meanwhile writes a new one first and clears the older ones
+only once its own marker is durable, so the incomplete state is never unmarked.
+A marker also records the completion watermark it observed when its publication
+began. The watermark is one small file per identity, written only by a
+lock-holding installation after its activation record is confirmed durable, so
+its value names an installation that finished rather than merely one that
+published a record. A reader refuses a cache whose marker names the watermark
+at least as new as the current one, and ignores a marker a later completion has
+moved past. The activation order cannot carry that meaning on its own: an
+unrelated late activation can outrank the record a publication observed without
+that publication having finished, so ordering markers against records could
+retire the marker of an unfinished repair. A marker written late by an
+abandoned publication names an older completion and therefore cannot make a
+completed cache look unfinished, while the marker of an abandoned repair stays
+pending whatever other activations land. A marker from an older installation
+records no completion, and one whose bytes cannot be read or parsed yields none
+either; both remain pending, because an unreadable marker is exactly the case
+in which the cache must not be assumed complete. An absent, unreadable or
+malformed watermark is reported as zero, which can only keep markers pending.
+Directory creation, each replacement, both directory flushes and the marker
+removal are supervised. A replacement that outlives the budget is reported as
+an unknown outcome, because the abandoned worker may still complete that atomic
+rename; every payload was verified before publication, so the cache is then
+either valid or detectably incomplete. A stale marker whose removal fails is an
+installation failure rather than a logged deferral: readers refuse any marked
+cache, so continuing would report a usable generation the cache cannot serve.
 
 Activation is a create-only write into an identity-level directory of ordered
 records, never a rename onto one mutable file. The highest-numbered record

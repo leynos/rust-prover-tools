@@ -515,8 +515,8 @@ EP-O1 assigns responsibility and records live evidence.
   the publication marker listing and the activation-directory probe. `check`
   also supervises the publication-state, active-pointer and manifest reads it
   performs under the lock. New tests cover the late-activation case, a
-  corrupt-record repair, and stalled asset-directory, checksum, marker-listing
-  and activation-directory reads.
+  corrupt-record repair, stalled asset-directory, checksum, marker-listing and
+  activation-directory reads, and the three stalled reads `check` performs.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
