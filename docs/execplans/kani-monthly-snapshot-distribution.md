@@ -395,6 +395,25 @@ EP-O1 assigns responsibility and records live evidence.
   publication, a stalled manifest read under a real short budget, a failed
   post-rename flush, and a flush timeout; each asserts the pointer state the
   error describes.
+- [x] (2026-11-10) Remediated the fifth candidate-bound EP-M3 re-assessment at
+  `cf14fbc` (three findings). (1) Publication now has a bounded, reconcilable
+  protocol instead of relying on synchronous calls no deadline can interrupt. A
+  durable `.publication-pending` marker in the identity directory precedes the
+  first payload replacement and is removed only after every replacement and its
+  directory flush are durable; `check` refuses a cache that still carries it and
+  `install` repairs it. Every publication step is supervised, and a
+  replacement that outlives the budget reports an unknown outcome, because the
+  abandoned worker may still complete that atomic rename. The active-pointer
+  rename is supervised the same way, and a timeout leaves its temporary
+  document for a possible late completion rather than claiming either state.
+  (2) Reuse reissues the identity-directory flush before reporting success, so
+  a retry after an unconfirmed activation cannot report reuse until a flush
+  succeeds. (3) The generation directory entry, the cached payload entries and
+  their parent directory entries are flushed before the pointer moves. New
+  tests cover a stalled replacement under a real short budget, a cache refused
+  while its publication is unfinished, an install that fails its payload or
+  generation flush without activating, and a retry that cannot reuse an
+  activation whose flush failed.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -705,20 +724,25 @@ because a repair publishes verified payloads file by file under that lock.
 link text, not reachable content; a target in a sibling generation home would
 be neither recorded nor observed on reuse.
 
-2026-11-10, revised D4 publication bounds and durability: the fourth
+2026-11-10, revised D4 bounded publication and reconciliation: the fourth
 re-assessment showed that reuse still read the pointer and manifest
 unsupervised, that staged payloads were published without a budget check, and
 that a post-rename flush failure or expiry was logged as deferred durability
 while install reported success. Reuse reads are now supervised, because
-abandoning a read mutates nothing. Payload publication checks the budget before
-the directory creation and before every replacement on the calling thread, so
-an expiry stops before the next shared file is replaced rather than abandoning
-a worker that could still replace it. Activation now includes durability: the
+abandoning a read mutates nothing. Activation includes durability: the
 post-rename directory flush is bounded by the remaining budget, and a timeout or
-`OSError` raises an error naming the generation that is already visible.
-Success therefore still means the activation was flushed, while a failure
-distinguishes visible-but-not-durable activation from a publication that never
-happened.
+`OSError` raises an error naming the generation that is already visible. The
+fifth re-assessment then showed that synchronous publication cannot keep the
+deadline, that reuse did not reissue an unconfirmed flush, and that the
+generation and payload directory entries were never flushed. Publication now
+writes a durable `.publication-pending` marker before the first replacement and
+supervises every step, so an unfinished publication is visible to readers and
+repaired by the next install; a replacement or rename that outlives the budget
+is reported as an unknown outcome rather than as success or failure. Reuse
+reissues the identity-directory flush before reporting success, and the
+generation and payload parent entries are flushed before activation. Success
+therefore still means the activation was flushed, while a failure distinguishes
+visible-but-not-durable activation from a publication that never happened.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
@@ -732,31 +756,33 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found fifteen more issues: the
+tests. Further candidate-bound re-assessments found eighteen more issues: the
 runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
-the identity lock, supervised reuse reads, checkpointed payload publication,
-and a durability contract that neither claims an unflushed activation nor
-reports a publication failure after the pointer changed. All are repaired with
-tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
-have not started. The consumer `install` command is deliberately limited to a
-verified local `--asset-dir` until the EP-M4 release transport is connected.
-Independent reviews covered all five requested specialities, with amendments
-recorded in the design and checked by a final testing/consistency review.
-Planning validation passed `make fmt`, `make markdownlint` (including spelling
-and three spelling-helper tests), `make nixie`, and both working/staged
-`git diff --check`. Earlier dependency-network and document spelling/line-wrap
-failures were resolved without weakening gates. Only four Markdown files
-changed during initial planning. The later requested rebase validation ran the
-full gate stack, as recorded below; implementation gates still apply to each
-future milestone. The associated draft PR records the commit, branch, upstream
-tracking and delivery link. Add red/green, smoke and conformance evidence only
-after approval. Only mark implementation roadmap entries complete when their
-actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
-operational work. Before status `COMPLETE`, reconcile discoveries with the
-approved design, requirements and every evidence link; do not conceal an
-unresolved deviation.
+the identity lock, supervised reuse reads, a durability contract that neither
+claims an unflushed activation nor reports a publication failure after the
+pointer changed, a durable publication marker with an explicit unknown-outcome
+report for a supervised replacement, durability reasserted on reuse, and
+generation and payload parent-directory flushes before activation. All are
+repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and
+all publication, have not started. The consumer `install` command is
+deliberately limited to a verified local `--asset-dir` until the EP-M4 release
+transport is connected. Independent reviews covered all five requested
+specialities, with amendments recorded in the design and checked by a final
+testing/consistency review. Planning validation passed `make fmt`,
+`make markdownlint` (including spelling and three spelling-helper tests),
+`make nixie`, and both working/staged `git diff --check`. Earlier
+dependency-network and document spelling/line-wrap failures were resolved
+without weakening gates. Only four Markdown files changed during initial
+planning. The later requested rebase validation ran the full gate stack, as
+recorded below; implementation gates still apply to each future milestone. The
+associated draft PR records the commit, branch, upstream tracking and delivery
+link. Add red/green, smoke and conformance evidence only after approval. Only
+mark implementation roadmap entries complete when their actual acceptance
+criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
+Before status `COMPLETE`, reconcile discoveries with the approved design,
+requirements and every evidence link; do not conceal an unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired

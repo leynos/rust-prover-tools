@@ -417,22 +417,32 @@ when the deadline expires instead of only being checked at its boundary. A
 checkpoint is only reached between blocking calls, so local work that transfers
 bytes is additionally supervised: the operation runs in a private daemon thread
 while the installer waits no longer than the remaining budget, and abandons it
-on expiry. That is safe only because publication stays on the calling thread
-and every operation wrapped this way writes to a private staging directory or a
-unreferenced generation; the active-pointer rename is preceded by its own
-budget check after the temporary document is durable. Reads of the pointer and
-the cached manifest on the reuse path are supervised too, since a hung read
-would otherwise hold the identity lock past the deadline and abandoning a read
-mutates nothing. Staged payloads are published on the calling thread with a
-budget check before each replacement, because a supervised publisher that timed
-out could still replace a file after the installation had reported failure.
-Reuse is reported only after a final deadline check following the probe. The
-active pointer is written to a private temporary file, fsynced, checked against
-the budget, atomically renamed and followed by a directory fsync. Activation
-includes that flush: a flush that times out or fails raises an error naming the
-generation that is already visible, so publication is never reported as failed
-when it happened and durability is never claimed when it could not be
-confirmed. A failed stage, extraction, setup or probe leaves the previous
+on expiry. That is safe for reads, which mutate nothing, and for writes whose
+output is a private staging directory or an unreferenced generation. It is not
+used to abandon shared publication silently: publication carries a durable
+marker, described below, that makes an unfinished replacement visible. Reads of
+the pointer and the cached manifest on the reuse path are supervised too, since
+a hung read would otherwise hold the identity lock past the deadline. Staged
+payloads are published under a bound rather than abandoned silently. A
+publication marker is made durable in the identity directory before the first
+payload is replaced and removed only after every replacement and its directory
+flush are durable, so a reader never validates a half-published cache: `check`
+refuses a cache that still carries the marker, and a later `install` repairs
+it. Directory creation, each replacement, both directory flushes and the marker
+removal are supervised. A replacement that outlives the budget is reported as
+an unknown outcome, because the abandoned worker may still complete that atomic
+rename; every payload was verified before publication, so the cache is then
+either valid or detectably incomplete. The active pointer is written to a
+private temporary file, fsynced, checked against the budget and then renamed
+under supervision. An `OSError` leaves the previous pointer in place, while a
+rename that outlives the budget is reported as unknown for the same reason and
+its temporary document is left for the worker. Activation includes the
+directory flush: a flush that times out or fails raises an error naming the
+generation that is already visible, and reuse reissues that flush before
+reporting success, so a retry after an unconfirmed activation cannot report
+reuse until a flush succeeds. The generation directory entry, the cached
+payload entries and their parent directory entries are all flushed before the
+pointer moves. A failed stage, extraction, setup or probe leaves the previous
 pointer untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
