@@ -297,18 +297,19 @@ unreferenced unique generation directory at its permanent location. Perform
 extraction and setup there using generation-local `KANI_HOME` and isolated
 Rustup state as required by the upstream experiment. Do not rename a setup home
 containing absolute symlinks. Validate assets, toolchain, backend and receipt;
-flush files and parent directories before atomically replacing a small
-`active.json` pointer. Readers resolve and validate this pointer while holding
-the key lock. An interrupted stage is never active. Existing validated
-generations remain intact on failure. Immutable payload/toolchain trees are not
-mutated or automatically garbage-collected; repair creates a new generation at
-the same identity and switches only after validation. This avoids deleting
-paths used by a running proof. Detect corrupt receipts, missing files, wrong
-modes, changed symlinks and payload hashes on cache reuse, before running
-probes. Inventory actual upstream writes during feasibility. Give narrowly
-named bookkeeping/lock/scratch files separate generation-private mutable state;
-never exempt arbitrary subtrees from integrity checking. Two concurrent proofs
-must leave immutable trees unchanged and both normal user homes untouched.
+flush files and parent directories before creating the small, ordered
+activation record that names the generation. Readers resolve and validate the
+highest record while holding the key lock. An interrupted stage is never
+active. Existing validated generations remain intact on failure. Immutable
+payload/toolchain trees are not mutated or automatically garbage-collected;
+repair creates a new generation at the same identity and switches only after
+validation. This avoids deleting paths used by a running proof. Detect corrupt
+receipts, missing files, wrong modes, changed symlinks and payload hashes on
+cache reuse, before running probes. Inventory actual upstream writes during
+feasibility. Give narrowly named bookkeeping/lock/scratch files separate
+generation-private mutable state; never exempt arbitrary subtrees from
+integrity checking. Two concurrent proofs must leave immutable trees unchanged
+and both normal user homes untouched.
 
 Resolve launchers to absolute paths, force generation-private homes, select the
 exact toolchain and backend, and remove conflicting inherited Kani/Rust
@@ -357,23 +358,23 @@ receives the generation's private homes through `execution_environment`, and
 the probe re-executes the installed `rustc -vV` and `kani-compiler --version`
 rather than trusting receipt text.
 
-Activation remains a pointer write after validation. Repeating an install
-reuses a still-valid active generation before staging transport files, so
-changed local assets cannot disturb a healthy cache; changed assets are refused
-only when a new generation must be staged. `check` and `run` re-read the cached
-manifest, recheck receipt, rehash the backend, inventory and launcher payloads
-rather than trusting their recorded sizes, re-read each archive's structure,
-check the backend/inventory agreement, executable modes, the absolute toolchain
-link and both probes. `check` and `run` resolve the pointer and validate the
-generation while holding the same bounded identity lock as installation,
-because a repair publishes its verified payloads file by file under that lock;
-reading without it could validate a half-repaired cache and report a failure
-the running repair is about to resolve. A reader whose bounded wait expires is
-refused rather than waiting indefinitely. A corrupt generation is repaired by
-creating a new generation; the previous directory is never deleted. Install
-runs the same runtime-file contract as `check` before the probe executes
-anything, so a launcher archive that omits or strips the execute bit from a
-required binary cannot be activated.
+Activation remains an ordered record write after validation. Repeating an
+install reuses a still-valid active generation before staging transport files,
+so changed local assets cannot disturb a healthy cache; changed assets are
+refused only when a new generation must be staged. `check` and `run` re-read
+the cached manifest, recheck receipt, rehash the backend, inventory and
+launcher payloads rather than trusting their recorded sizes, re-read each
+archive's structure, check the backend/inventory agreement, executable modes,
+the absolute toolchain link and both probes. `check` and `run` resolve the
+highest activation record and validate the generation while holding the same
+bounded identity lock as installation, because a repair publishes its verified
+payloads file by file under that lock; reading without it could validate a
+half-repaired cache and report a failure the running repair is about to
+resolve. A reader whose bounded wait expires is refused rather than waiting
+indefinitely. A corrupt generation is repaired by creating a new generation;
+the previous directory is never deleted. Install runs the same runtime-file
+contract as `check` before the probe executes anything, so a launcher archive
+that omits or strips the execute bit from a required binary cannot be activated.
 
 The toolchain identifier is treated as a single path component, not free text:
 the parser and construction boundary reject absolute paths, parent traversal
@@ -417,42 +418,62 @@ when the deadline expires instead of only being checked at its boundary. A
 checkpoint is only reached between blocking calls, so local work that transfers
 bytes is additionally supervised: the operation runs in a private daemon thread
 while the installer waits no longer than the remaining budget, and abandons it
-on expiry. That is safe for reads, which mutate nothing, and for writes whose
-output is a private staging directory or an unreferenced generation. It is not
-used to abandon shared publication silently: publication carries a durable
-marker, described below, that makes an unfinished replacement visible. Reads of
-the pointer and the cached manifest on the reuse path are supervised too, since
-a hung read would otherwise hold the identity lock past the deadline. Staged
-payloads are published under a bound rather than abandoned silently. A
-publication marker is made durable in the identity directory before the first
-payload is replaced and removed only after every replacement and its directory
-flush are durable, so a reader never validates a half-published cache: `check`
-refuses a cache that still carries the marker, and a later `install` repairs
-it. Directory creation, each replacement, both directory flushes and the marker
-removal are supervised. A replacement that outlives the budget is reported as
-an unknown outcome, because the abandoned worker may still complete that atomic
-rename; every payload was verified before publication, so the cache is then
-either valid or detectably incomplete. The active pointer is written to a
-private temporary file, fsynced, checked against the budget and then renamed
-under supervision. An `OSError` leaves the previous pointer in place, while a
-rename that outlives the budget is reported as unknown for the same reason and
-its temporary document is left for the worker. Activation includes the
-directory flush: a flush that times out or fails raises an error naming the
-generation that is already visible, and reuse reissues that flush before
-reporting success, so a retry after an unconfirmed activation cannot report
-reuse until a flush succeeds. The generation directory entry, the cached
-payload entries and their parent directory entries are all flushed before the
-pointer moves. A failed stage, extraction, setup or probe leaves the previous
-pointer untouched.
+on expiry. That is safe for reads, which mutate nothing; for writes whose
+output is a private staging directory or an unreferenced generation; for
+removing a file this run owns by name; and for shared writes whose published
+name is unique or totally ordered, such as an activation record at a sequence
+number a later activation has already passed. It is not used to abandon shared
+publication silently: publication carries a durable marker, described below,
+that makes an unfinished replacement visible. Reads of the activation records
+and the cached manifest on the reuse path are supervised too, since a hung read
+would otherwise hold the identity lock past the deadline. Staged payloads are
+published under a bound rather than abandoned silently. Each publication owns a
+marker in the identity directory, named for that publication, made durable
+before the first payload is replaced and removed only after every replacement
+and its directory flush are durable. Because no marker name is reused, a
+publication that resumes after being abandoned can remove only its own marker;
+a repair that starts meanwhile writes a new one first and clears the older ones
+only once its own marker is durable, so the incomplete state is never unmarked.
+A reader refuses a cache that still carries any marker, and a later `install`
+repairs it. Directory creation, each replacement, both directory flushes and
+the marker removal are supervised. A replacement that outlives the budget is
+reported as an unknown outcome, because the abandoned worker may still complete
+that atomic rename; every payload was verified before publication, so the cache
+is then either valid or detectably incomplete.
+
+Activation is a create-only write into an identity-level directory of ordered
+records, never a rename onto one mutable file. The highest-numbered record
+names the active generation. A record is written privately and fsynced, then
+hard-linked to the next free sequence number, and a link that finds the number
+taken retries with the next one. An abandoned activation can therefore only
+fail against a number a later activation already took, or add a record that
+ranks below it: it cannot replace or outrank the newer activation after the
+lock has moved on. A link that outlives the budget is reported as an unknown
+outcome for the same reason, and its private document is discarded so a worker
+that has not issued the link cannot publish at all. Records below the newest
+are pruned after the new record is durable, and a deferred prune is only a
+harmless leftover. Activation includes the directory flush: a flush that times
+out or fails raises an error naming the generation that is already visible, and
+reuse reissues that flush before reporting success, so a retry after an
+unconfirmed activation cannot report reuse until a flush succeeds. Before the
+record may move, the installer flushes the nested directories that hold the
+required runtime paths and the setup-created executables a consumer runs, and
+applies launcher modes before the fsync that makes those bytes durable, so a
+crash cannot leave a durable activation naming an unusable launcher.
+Staging-directory creation and its removal are supervised as well: an abandoned
+creation is private and uniquely named, and an abandoned removal touches only
+this run's own directory. A failed stage, extraction, setup or probe leaves
+every existing record untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
 repository root and mirrors its stdout and stderr live. It executes the exact
-generation named by the validation result rather than reading `active.json` a
-second time, so a concurrent repair cannot switch the pointer between the check
-and the launch. It retains only the last 64 KiB of each stream through
-`commands.TailCapture` rather than buffering the whole run, because a proof log
-is diagnostic context whose size the caller does not control. The mirrored
-output is not replayed, so progress output is neither delayed nor rewritten.
+generation named by the validation result rather than resolving the activation
+records a second time, so a concurrent repair cannot switch the active
+generation between the check and the launch. It retains only the last 64 KiB of
+each stream through `commands.TailCapture` rather than buffering the whole run,
+because a proof log is diagnostic context whose size the caller does not
+control. The mirrored output is not replayed, so progress output is neither
+delayed nor rewritten.
 
 Two verification boundaries support this design. Generated archive graphs,
 checked against an independent expected-tree oracle, cover member ordering,

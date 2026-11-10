@@ -162,8 +162,8 @@ that every payload matches its recorded size and digest. It then compares the
 backend archive's members with `inventory.json` and runs the packaged launcher's
 `setup --use-local-bundle` with generation-private `KANI_HOME`, `RUSTUP_HOME`
 and `CARGO_HOME`. Only after the installed `rustc -vV` and
-`kani-compiler --version` match the manifest does the command switch the active
-pointer. The same check that `snapshot check` performs runs first: every
+`kani-compiler --version` match the manifest does the command record the active
+generation. The same check that `snapshot check` performs runs first: every
 runtime file the launcher needs must be present and executable, `pyroot` must
 be a real directory whose links resolve inside that directory and whose members
 exactly match the record written after setup, and the recorded toolchain's
@@ -195,10 +195,10 @@ it runs rather than only on completion. Because a proof log can be arbitrarily
 large, the command retains only the last 64 KiB of each stream for diagnostics
 instead of buffering the whole run in memory. `run` revalidates the generation
 first, so a changed payload or compiler stops the proof, and then executes
-exactly the generation it validated: a concurrent change to the active pointer
-cannot redirect the proof to a different build. It refuses `setup`,
-`--use-local-bundle`, `--use-local-toolchain` and `-Z lean` because they would
-replace the pinned backend.
+exactly the generation it validated: a concurrent change to the active
+activation record cannot redirect the proof to a different build. It refuses
+`setup`, `--use-local-bundle`, `--use-local-toolchain` and `-Z lean` because
+they would replace the pinned backend.
 
 Install and check default the pin to `tools/kani/snapshot.toml` and the cache to
 `.kani-snapshots` below the repository root. Both accept `--pin`,
@@ -208,16 +208,16 @@ invocation directory, as the proof working directory.
 
 Repeating an install while a validated generation is active reuses that
 generation without reading `--asset-dir` again. A failed installation leaves
-the previous generation and the active pointer unchanged; a new generation is
-activated only after its receipt is durable and its compiler has been observed.
-Concurrent installs for one identity serialize on an advisory lock with a
-bounded wait (300 seconds) inside an overall 1800-second installation deadline.
-Staging, hashing, extraction, tree validation, setup and the compiler probes
-all run within that budget; the probes share the remaining time and refresh it
-before each command, and expiry terminates the whole process group. A stalled
-setup therefore cannot outlive the deadline or keep another installer waiting.
-A corrupt active generation is repaired by installing a new generation, and the
-old directory is preserved.
+the previous generation and the active activation record unchanged; a new
+generation is activated only after its receipt is durable and its compiler has
+been observed. Concurrent installs for one identity serialize on an advisory
+lock with a bounded wait (300 seconds) inside an overall 1800-second
+installation deadline. Staging, hashing, extraction, tree validation, setup and
+the compiler probes all run within that budget; the probes share the remaining
+time and refresh it before each command, and expiry terminates the whole
+process group. A stalled setup therefore cannot outlive the deadline or keep
+another installer waiting. A corrupt active generation is repaired by
+installing a new generation, and the old directory is preserved.
 
 Checking and running never repair a generation. If `check` or `run` reports a
 missing, changed or drifted snapshot, run `prover-tools kani snapshot install`

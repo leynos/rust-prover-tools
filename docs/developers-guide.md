@@ -563,11 +563,12 @@ verification as well as setup and the probes, so no long local phase can
 outlive the deadline. A corrupt generation is repaired by installing a new one;
 no code path deletes a previous generation.
 
-`run` executes the identity returned by `check_snapshot` rather than re-reading
-`active.json`, so a pointer changed between validation and execution cannot
-redirect a proof. The probe and the proof both route dynamic libraries through
-the verified toolchain's `lib` directory, and a pre-existing `LD_LIBRARY_PATH`
-entry under another Rustup toolchain is dropped rather than inherited.
+`run` executes the identity returned by `check_snapshot` rather than resolving
+the activation records again, so an active generation changed between
+validation and execution cannot redirect a proof. The probe and the proof both
+route dynamic libraries through the verified toolchain's `lib` directory, and a
+pre-existing `LD_LIBRARY_PATH` entry under another Rustup toolchain is dropped
+rather than inherited.
 
 The snapshot CLI uses `config=()` on its sub-applications so Cyclopts does not
 inherit generic `INPUT_*` bindings. `run` must keep `Path` as a runtime import

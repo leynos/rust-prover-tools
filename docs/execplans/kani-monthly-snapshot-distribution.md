@@ -363,19 +363,22 @@ EP-O1 assigns responsibility and records live evidence.
   installation, so a reader cannot validate a cache a repair is rewriting. For
   this candidate a post-rename directory flush that timed out was logged as
   deferred durability; the fourth re-assessment rejected that contract, and the
-  paragraph below records the replacement. New tests cover a link into a
-  sibling home, a retargeted contained link, a write stalled in `fsync` under a
-  real short budget, an expiry immediately before the pointer rename with no
-  temporary left behind, a barrier-controlled check-versus-repair refusal, and
-  a repair forced by a transient probe failure and killed mid-staging where the
-  previous generation still validates with healthy hooks before recovery. The
-  added code pushed four gated modules past Pylint's 400-line ceiling, so
-  pointer publication, generation-local writes and the bounded copy rule were
-  extracted into `activation`, `install_generation` and `install_copy`, and the
-  spawn-process targets into `tests/kani_snapshot_actors.py`, instead of
-  suppressing the check per file. The full sequential gate stack passed on the
-  working tree: 1181 passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty`
-  clean, spelling, Markdown and Mermaid validation clean.
+  paragraph below records the replacement. The sixth re-assessment later
+  replaced the rename-based pointer entirely with ordered, create-only
+  activation records; the design and Progress record the final protocol. New
+  tests cover a link into a sibling home, a retargeted contained link, a write
+  stalled in `fsync` under a real short budget, an expiry immediately before
+  the pointer rename with no temporary left behind, a barrier-controlled
+  check-versus-repair refusal, and a repair forced by a transient probe failure
+  and killed mid-staging where the previous generation still validates with
+  healthy hooks before recovery. The added code pushed four gated modules past
+  Pylint's 400-line ceiling, so pointer publication, generation-local writes
+  and the bounded copy rule were extracted into `activation`,
+  `install_generation` and `install_copy`, and the spawn-process targets into
+  `tests/kani_snapshot_actors.py`, instead of suppressing the check per file.
+  The full sequential gate stack passed on the working tree: 1181 passed, 5
+  skipped, interrogate 100%, Pylint 10.00/10, `ty` clean, spelling, Markdown
+  and Mermaid validation clean.
 - [x] (2026-11-10) Remediated the fourth candidate-bound EP-M3 re-assessment at
   `8d7d0e8` (two findings). (1) The deadline now bounds every blocking
   operation on the install path that can be bounded safely. The pointer and
@@ -414,6 +417,29 @@ EP-O1 assigns responsibility and records live evidence.
   while its publication is unfinished, an install that fails its payload or
   generation flush without activating, and a retry that cannot reuse an
   activation whose flush failed.
+- [x] (2026-11-10) Remediated the sixth candidate-bound EP-M3 re-assessment at
+  `e81bafb` (four findings). (1) Activation is a create-only write into an
+  identity-level directory of ordered records instead of a rename onto one
+  mutable file. A record is written privately, fsynced and hard-linked to the
+  next free sequence number; an abandoned worker holds the number it observed,
+  so it can only fail against a number a later activation already took or add a
+  lower-ranked record, never replace or outrank the newer one. Records below
+  the newest are pruned after the new record is durable. (2) Each publication
+  owns a uniquely named marker, made durable before the first replacement and
+  removed only by its own completion, so an abandoned completion cannot clear a
+  later repair's marker; stale markers are cleared only once the new marker is
+  durable. (3) Activation now flushes the nested directories holding the
+  required runtime paths and the setup-created executables, and applies
+  launcher modes before the fsync that makes its bytes durable, so a crash
+  cannot leave a durable activation naming an unusable launcher. Reuse also
+  reissues both activation-directory flushes. (4) Staging-directory creation
+  and removal are supervised; an abandoned creation is private and uniquely
+  named, and an abandoned removal touches only this run's directory. New tests
+  cover a barrier-controlled activation that times out, completes another
+  activation and is then released, the overlapping timeout/repair/interrupted
+  publication sequence, launcher mode-before-fsync ordering, a failed launcher
+  directory sweep, and stalled staging creation and cleanup under a real short
+  budget.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -744,6 +770,24 @@ generation and payload parent entries are flushed before activation. Success
 therefore still means the activation was flushed, while a failure distinguishes
 visible-but-not-durable activation from a publication that never happened.
 
+2026-11-10, revised D4 ordered activation and per-publication markers: the
+sixth re-assessment showed that a supervised rename can be abandoned and later
+overwrite a newer activation, that a shared marker name lets an abandoned
+completion remove a repair's marker, that activation did not flush nested
+generation entries or setup-created executables, and that staging creation and
+cleanup ran unbounded. Activation is now a create-only hard link into an
+ordered record directory: the highest sequence wins, an abandoned worker holds
+the number it observed, and a later activation takes that number first, so the
+abandoned link can only fail. Each publication owns a marker named for it, and
+completion removes only that marker, so overlapping publications cannot clear
+each other's evidence. The installer flushes the nested runtime directories and
+the setup-created executables, and applies launcher modes before the fsync that
+makes the bytes durable. Staging creation and removal are supervised because
+both touch only this run's private, uniquely named directory. A supervised
+shared write is now allowed only where its published name is unique or totally
+ordered; every other shared mutation stays on the calling thread or behind an
+explicit budget check.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -756,21 +800,23 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found eighteen more issues: the
+tests. Further candidate-bound re-assessments found twenty-two more issues: the
 runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
 claims an unflushed activation nor reports a publication failure after the
 pointer changed, a durable publication marker with an explicit unknown-outcome
-report for a supervised replacement, durability reasserted on reuse, and
-generation and payload parent-directory flushes before activation. All are
-repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and
-all publication, have not started. The consumer `install` command is
-deliberately limited to a verified local `--asset-dir` until the EP-M4 release
-transport is connected. Independent reviews covered all five requested
-specialities, with amendments recorded in the design and checked by a final
-testing/consistency review. Planning validation passed `make fmt`,
+report for a supervised replacement, durability reasserted on reuse, generation
+and payload parent-directory flushes before activation, ordered create-only
+activation records, per-publication markers, nested generation-entry and
+executable flushes with mode-before-fsync ordering, and bounded staging
+creation and cleanup. All are repaired with tests recorded in Progress. EP-M1,
+EP-M4, EP-M5 and EP-O1, and all publication, have not started. The consumer
+`install` command is deliberately limited to a verified local `--asset-dir`
+until the EP-M4 release transport is connected. Independent reviews covered all
+five requested specialities, with amendments recorded in the design and checked
+by a final testing/consistency review. Planning validation passed `make fmt`,
 `make markdownlint` (including spelling and three spelling-helper tests),
 `make nixie`, and both working/staged `git diff --check`. Earlier
 dependency-network and document spelling/line-wrap failures were resolved
