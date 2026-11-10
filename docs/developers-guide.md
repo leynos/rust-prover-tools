@@ -513,12 +513,14 @@ counts. A repository that selects no backend emits no such event.
 
 `rust_prover_tools.kani_snapshot.install` orchestrates one installation: stage
 and verify transport files, extract the launcher, run setup, probe the
-installed compiler, write the receipt, then publish the active pointer.
-`install_state` owns activation, locking and cache revalidation. `run` only
-revalidates and executes; it never installs. `kani_snapshot_cli` registers the
-public commands, and `cli_support` holds the repository-root and error-exit
-helpers shared with the legacy CLI. Keep lifecycle code out of the legacy
-`kani_release` modules.
+installed compiler, write the receipt, then publish the next activation record.
+`install_state` owns locking and cache revalidation, `activation` owns the
+ordered create-only records, `durability` owns the flushes that make state
+durable, and `cleanup` owns bounded removal of private, uniquely named state.
+`run` only revalidates and executes; it never installs. `kani_snapshot_cli`
+registers the public commands, and `cli_support` holds the repository-root and
+error-exit helpers shared with the legacy CLI. Keep lifecycle code out of the
+legacy `kani_release` modules.
 
 The dependency direction is CLI to orchestration to validated models and
 command adapters. `InstallHooks` is the injection seam for setup, probe and
@@ -543,9 +545,17 @@ executable, `pyroot` a real directory whose resolved links stay inside the
 Python root itself (the record describes link text, not reachable content), the
 rustup home itself must resolve inside the generation, and the toolchain's
 recorded shared libraries must be covered with no unrecorded `.so` beside them
-inside that home. Cache reuse rehashes the backend, inventory and launcher
-payloads and re-reads each archive's structure, so a size-preserving edit is
-still refused. A failure must leave the previous pointer and generation intact.
+inside that home. Before publishing the activation record the installer flushes
+every entry that contract requires: the launchers, driver, compiler and
+`rustc`, the toolchain component record, every recorded library and the
+directories that name them, and every member of the setup-created Python root.
+Files are flushed before their directories, so a crash cannot leave a durable
+record naming bytes that were never written back. A stale publication marker
+whose removal fails is an installation failure rather than a logged deferral,
+because readers refuse any marked cache. Cache reuse rehashes the backend,
+inventory and launcher payloads and re-reads each archive's structure, so a
+size-preserving edit is still refused. A failure must leave the previous
+pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).

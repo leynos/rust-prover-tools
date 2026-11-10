@@ -440,6 +440,30 @@ EP-O1 assigns responsibility and records live evidence.
   publication sequence, launcher mode-before-fsync ordering, a failed launcher
   directory sweep, and stalled staging creation and cleanup under a real short
   budget.
+- [x] (2026-11-10) Remediated the seventh candidate-bound EP-M3 re-assessment at
+  `8cbd68c` (three findings and one plan-consistency gap). (1) Activation now
+  flushes every entry its runtime contract requires: the compiler, the
+  toolchain component record and every recorded library, the `bin` and `lib`
+  directories plus each library's ancestor chain, and every file and directory
+  of the setup-created Python root, files before their directories and
+  directories deepest first. Flushing only the executables the record named
+  left the libraries the compiler loads reachable through unflushed directory
+  entries. (2) Blocking work that may safely be abandoned is now supervised:
+  the staged manifest read, and every removal of private, uniquely named state
+  such as a pending activation document, a partially copied launcher or
+  generation file, and a staging tree. Those removals are deferred and
+  debug-logged when they outlive the budget, because no reader resolves their
+  names, and a single `cleanup` helper owns that distinction. (3) A stale
+  publication marker that cannot be removed now fails the installation instead
+  of being logged, because `check` refuses any marked cache and continuing
+  would report a usable generation the cache cannot serve. (4) This plan's
+  remaining `active.json` wording is reconciled with the ordered create-only
+  record protocol. New tests cover a recorded library flushed before its
+  ancestor directories, a Python-root member whose failed flush prevents
+  activation, a stalled staged-manifest read under a real short budget, a
+  stalled pending-record cleanup that is deferred while the activation still
+  publishes, and a stale marker whose failed removal fails the repair and leaves
+  `check` refusing the cache.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -788,6 +812,23 @@ shared write is now allowed only where its published name is unique or totally
 ordered; every other shared mutation stays on the calling thread or behind an
 explicit budget check.
 
+2026-11-10, revised D4 durability coverage and cleanup ownership: the seventh
+re-assessment showed that activation flushed only the executables the record
+named, not the toolchain component record, the libraries the compiler loads,
+the directories that make them reachable, or setup's Python tree; that the
+staged manifest read and several private removals were unsupervised; and that a
+stale publication marker whose removal failed was logged while the installation
+reported success. A tree flush now writes back every regular file below a root
+before the directories that hold it, and the generation sweep covers the
+component record, every recorded library and each library's ancestor chain. The
+staged manifest read and every removal of private, uniquely named state are
+supervised, and a removal that outlives the budget is deferred and debug-logged
+because no reader resolves its name. A stale marker whose removal fails is
+fatal instead, because `check` refuses any marked cache, so continuing would
+report a generation the cache cannot serve. A dedicated cleanup module owns the
+private-removal contract so a later private removal cannot silently become
+shared-state cleanup.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -800,8 +841,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found twenty-two more issues: the
-runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found twenty-five more issues:
+the runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -810,25 +851,28 @@ pointer changed, a durable publication marker with an explicit unknown-outcome
 report for a supervised replacement, durability reasserted on reuse, generation
 and payload parent-directory flushes before activation, ordered create-only
 activation records, per-publication markers, nested generation-entry and
-executable flushes with mode-before-fsync ordering, and bounded staging
-creation and cleanup. All are repaired with tests recorded in Progress. EP-M1,
-EP-M4, EP-M5 and EP-O1, and all publication, have not started. The consumer
-`install` command is deliberately limited to a verified local `--asset-dir`
-until the EP-M4 release transport is connected. Independent reviews covered all
-five requested specialities, with amendments recorded in the design and checked
-by a final testing/consistency review. Planning validation passed `make fmt`,
-`make markdownlint` (including spelling and three spelling-helper tests),
-`make nixie`, and both working/staged `git diff --check`. Earlier
-dependency-network and document spelling/line-wrap failures were resolved
-without weakening gates. Only four Markdown files changed during initial
-planning. The later requested rebase validation ran the full gate stack, as
-recorded below; implementation gates still apply to each future milestone. The
-associated draft PR records the commit, branch, upstream tracking and delivery
-link. Add red/green, smoke and conformance evidence only after approval. Only
-mark implementation roadmap entries complete when their actual acceptance
-criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
-Before status `COMPLETE`, reconcile discoveries with the approved design,
-requirements and every evidence link; do not conceal an unresolved deviation.
+executable flushes with mode-before-fsync ordering, bounded staging creation
+and cleanup, a durability sweep covering recorded libraries, the component
+record and the Python root, supervised private cleanup, and a stale publication
+marker whose failed removal fails the installation. All are repaired with tests
+recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have
+not started. The consumer `install` command is deliberately limited to a
+verified local `--asset-dir` until the EP-M4 release transport is connected.
+Independent reviews covered all five requested specialities, with amendments
+recorded in the design and checked by a final testing/consistency review.
+Planning validation passed `make fmt`, `make markdownlint` (including spelling
+and three spelling-helper tests), `make nixie`, and both working/staged
+`git diff --check`. Earlier dependency-network and document spelling/line-wrap
+failures were resolved without weakening gates. Only four Markdown files
+changed during initial planning. The later requested rebase validation ran the
+full gate stack, as recorded below; implementation gates still apply to each
+future milestone. The associated draft PR records the commit, branch, upstream
+tracking and delivery link. Add red/green, smoke and conformance evidence only
+after approval. Only mark implementation roadmap entries complete when their
+actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
+operational work. Before status `COMPLETE`, reconcile discoveries with the
+approved design, requirements and every evidence link; do not conceal an
+unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired
@@ -1044,9 +1088,9 @@ bounds, at most three transient attempts and five validated redirects.
 Cache keys hash complete build identity and target. Under a per-key bounded
 `flock`, stage into a permanent unique generation, set private Kani/Rustup
 homes, setup from the validated local bundle, verify identities, flush state
-and atomically replace `active.json`. Never relocate a setup home or delete
-working generations. Recheck receipt, inventories and effective compiler before
-execution. Keep immutable payload/toolchain files separate from narrowly
+and publish the next ordered activation record. Never relocate a setup home or
+delete working generations. Recheck receipt, inventories and effective compiler
+before execution. Keep immutable payload/toolchain files separate from narrowly
 inventoried mutable bookkeeping, lock and scratch paths; two concurrent proofs
 must not alter immutable trees or the user's normal Kani/Rustup homes. Resolve
 absolute launchers; remove conflicting inherited selection variables and reject
@@ -1232,8 +1276,8 @@ repair between payload verification and publication, and shows a reader with a
 short lock timeout is refused by the lock rather than reporting the cache
 damage; after the repair publishes, the same check succeeds. Unit cases bound a
 write stalled in `fsync` under a real 0.5-second budget, and expire the budget
-immediately before the pointer rename, leaving no `active.json` and no
-`.active-*` temporary file.
+immediately before record publication, leaving no activation record and no
+`.pending-*` document.
 
 ### V5: Execution selects the exact distribution
 
@@ -1257,9 +1301,9 @@ Re-assessment evidence (2026-11-09): `run_snapshot` now executes the generation
 identity that `check_snapshot` validated, so a pointer rewritten between
 validation and execution cannot redirect a proof.
 `test_kani_snapshot_run.py::test_run_executes_the_generation_it_validated`
-installs a second generation with a differently exiting launcher, switches
-`active.json` from inside the probe hook, and asserts the proof still reports
-the validated generation's status (7). The probe contract also pins
+installs a second generation with a differently exiting launcher, publishes a
+new activation record from inside the probe hook, and asserts the proof still
+reports the validated generation's status (7). The probe contract also pins
 `LD_LIBRARY_PATH` to the verified toolchain's `lib` directory in
 `test_kani_snapshot_probe.py`, so an inherited Rustup toolchain cannot shadow
 the libraries the toolchain check approved.

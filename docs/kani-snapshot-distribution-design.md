@@ -424,9 +424,14 @@ removing a file this run owns by name; and for shared writes whose published
 name is unique or totally ordered, such as an activation record at a sequence
 number a later activation has already passed. It is not used to abandon shared
 publication silently: publication carries a durable marker, described below,
-that makes an unfinished replacement visible. Reads of the activation records
-and the cached manifest on the reuse path are supervised too, since a hung read
-would otherwise hold the identity lock past the deadline. Staged payloads are
+that makes an unfinished replacement visible. Reads of the activation records,
+the cached manifest on the reuse path and the staged transport manifest are
+supervised too, since a hung read would otherwise hold the identity lock past
+the deadline. Removal of private, uniquely named state — a pending activation
+document, a partially copied launcher or generation file, a staging tree — is
+supervised as well, and a removal that outlives the budget is deferred and
+debug-logged rather than reported as a failure: no reader resolves those names,
+so an abandoned removal cannot disturb a later install. Staged payloads are
 published under a bound rather than abandoned silently. Each publication owns a
 marker in the identity directory, named for that publication, made durable
 before the first payload is replaced and removed only after every replacement
@@ -439,7 +444,10 @@ repairs it. Directory creation, each replacement, both directory flushes and
 the marker removal are supervised. A replacement that outlives the budget is
 reported as an unknown outcome, because the abandoned worker may still complete
 that atomic rename; every payload was verified before publication, so the cache
-is then either valid or detectably incomplete.
+is then either valid or detectably incomplete. A stale marker whose removal
+fails is an installation failure rather than a logged deferral: readers refuse
+any marked cache, so continuing would report a usable generation the cache
+cannot serve.
 
 Activation is a create-only write into an identity-level directory of ordered
 records, never a rename onto one mutable file. The highest-numbered record
@@ -456,14 +464,18 @@ harmless leftover. Activation includes the directory flush: a flush that times
 out or fails raises an error naming the generation that is already visible, and
 reuse reissues that flush before reporting success, so a retry after an
 unconfirmed activation cannot report reuse until a flush succeeds. Before the
-record may move, the installer flushes the nested directories that hold the
-required runtime paths and the setup-created executables a consumer runs, and
-applies launcher modes before the fsync that makes those bytes durable, so a
-crash cannot leave a durable activation naming an unusable launcher.
-Staging-directory creation and its removal are supervised as well: an abandoned
-creation is private and uniquely named, and an abandoned removal touches only
-this run's own directory. A failed stage, extraction, setup or probe leaves
-every existing record untouched.
+record may move, the installer flushes every entry its runtime contract
+requires: the launcher, driver, compiler and `rustc`; the toolchain component
+record and every recorded library; the directories naming them, including each
+library's ancestor chain, deepest first; and every file and directory of the
+setup-created Python root. Files are flushed before the directories that hold
+them, so a crash cannot leave a durable activation naming a launcher, library
+or Python payload whose bytes were never written back. Launcher modes are
+applied before the fsync that makes those bytes durable. Staging-directory
+creation and its removal are supervised as well: an abandoned creation is
+private and uniquely named, and an abandoned removal touches only this run's
+own directory. A failed stage, extraction, setup or probe leaves every existing
+record untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
 repository root and mirrors its stdout and stderr live. It executes the exact
