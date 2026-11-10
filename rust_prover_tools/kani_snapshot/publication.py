@@ -26,9 +26,10 @@ publication having finished. That distinction is what lets an abandoned
 marker write land after a later installation has already reported success
 without making the cache look unfinished, while an abandoned repair's marker
 still refuses the cache. A marker written before markers recorded a base, one
-whose content cannot be read, and one whose base is longer than an activation
-sequence, all name no base and are still treated as pending. The marker read
-is bounded and an unparsable base stays an unknown rather than an error, so
+whose content cannot be read, one that is not exactly a complete canonical
+marker, and one whose base is longer than an activation sequence, all name no
+base and are still treated as pending. The marker read is bounded and an
+unparsable or incomplete marker stays an unknown rather than an error, so
 corrupt state can only keep the cache refused until an installation repairs
 it.
 """
@@ -68,8 +69,11 @@ __all__ = (
 
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _MARKER_PREFIX: typ.Final[bytes] = b"publishing base="
+_MARKER_TERMINATOR: typ.Final[bytes] = b"\n"
 #: Longest base a marker can carry: an activation sequence is 20 digits.
 _MAX_BASE_DIGITS: typ.Final[int] = 20
+#: Longest canonical marker: the prefix, a full-width base and its newline.
+_MAX_MARKER_BYTES: typ.Final[int] = len(_MARKER_PREFIX) + _MAX_BASE_DIGITS + 1
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -115,24 +119,38 @@ def render_marker(base_sequence: int) -> bytes:
 def marker_base_sequence(marker: Path) -> int | None:
     """Return the base a marker recorded, or `None` if unknown.
 
-    A marker written before markers recorded a base, and one that cannot be
-    read or parsed, names no base. Readers treat both as pending, because an
-    unreadable marker is exactly the case in which the cache must not be
-    assumed complete.
+    A marker written before markers recorded a base, one that cannot be read,
+    and one that is not exactly a complete canonical marker all name no base.
+    Readers treat each as pending, because an unreadable or malformed marker is
+    exactly the case in which the cache must not be assumed complete.
 
-    The read stops one byte past the longest canonical marker, and a base
-    longer than any activation sequence is unparsable rather than fatal, so
-    corrupt state can neither exhaust the process nor raise out of the readers
-    that must keep the cache refused. An installation then repairs the cache
-    by publishing a generation whose marker write clears the stale one.
+    The read stops one byte past the longest canonical marker, so corrupt state
+    cannot exhaust the process. A marker that fills that read continues past
+    what was read, so its tail is unknown and the visible prefix is not trusted;
+    a base longer than any activation sequence is unparsable rather than fatal.
+    Neither case can raise out of the readers that must keep the cache refused,
+    and an installation repairs the cache by publishing a generation whose
+    marker write clears the stale one.
     """
-    limit = len(_MARKER_PREFIX) + _MAX_BASE_DIGITS + 1
     try:
         with marker.open("rb") as handle:
-            data = handle.read(limit)
+            data = handle.read(_MAX_MARKER_BYTES + 1)
     except OSError:
         return None
-    text = data.strip()
+    return _parse_marker(data)
+
+
+def _parse_marker(data: bytes) -> int | None:
+    """Return the base a complete canonical marker names, or `None`.
+
+    The caller reads one byte past the longest canonical marker, so a buffer
+    that reached the limit means the marker continues beyond what was read. Its
+    tail is unknown, and neither it nor a marker without the terminator
+    `render_marker` writes may be trusted for the bytes that were visible.
+    """
+    if len(data) > _MAX_MARKER_BYTES or not data.endswith(_MARKER_TERMINATOR):
+        return None
+    text = data.removesuffix(_MARKER_TERMINATOR)
     if not text.startswith(_MARKER_PREFIX):
         return None
     digits = text.removeprefix(_MARKER_PREFIX)

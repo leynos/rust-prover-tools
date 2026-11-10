@@ -3156,6 +3156,40 @@ def test_an_oversized_marker_base_cannot_block_repair(tmp_path: Path) -> None:
     check_snapshot(install_options(case), hooks)
 
 
+def test_a_truncated_marker_cannot_retire_itself(tmp_path: Path) -> None:
+    """A marker whose tail lies past the bounded read names no base.
+
+    The read stops one byte past the longest canonical marker, so a corrupt
+    marker can end in padding that whitespace stripping would hide. Treating
+    the visible prefix as a complete base would let a malformed marker retire
+    itself; it must stay pending so `check` refuses the cache and the next
+    install repairs it.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    marker = layout.publication_marker("truncated-marker-test")
+    # A valid-looking base, then padding that fills the bounded read, then an
+    # invalid suffix beyond it. Stripping the padding would parse base 0.
+    marker.write_bytes(b"publishing base=0" + b" " * 20 + b"x")
+
+    assert publication.marker_base_sequence(marker) is None, (
+        "a truncated marker was parsed as a complete base"
+    )
+    assert install_state.publication_pending(layout), (
+        "a truncated marker retired itself"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+    install_snapshot(install_options(case), hooks)
+    assert not layout.publication_markers(), (
+        "the repair left the truncated marker in place"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
 class _ReuseValidationFailure:
     """Fail the first reuse validation so the next attempt publishes.
 
