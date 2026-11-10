@@ -547,12 +547,15 @@ rustup home itself must resolve inside the generation, and the toolchain's
 recorded shared libraries must be covered with no unrecorded `.so` beside them
 inside that home. Before publishing the activation record the installer flushes
 every entry that contract requires: the launchers, driver, compiler and
-`rustc`, the toolchain component record, every recorded library and the
-directories that name them, and every member of the setup-created Python root.
-Files are flushed before their directories, so a crash cannot leave a durable
-record naming bytes that were never written back. A stale publication marker
-whose removal fails is an installation failure rather than a logged deferral,
-because readers refuse any marked cache. Cache reuse rehashes the backend,
+`rustc`, the toolchain component record, every recorded library, every file and
+directory the backend inventory publishes, the directories that name them
+(including each required toolchain file's whole ancestor chain, so
+`lib/rustlib` is flushed even without a recorded library beneath it), and every
+member of the setup-created Python root. Files are flushed before their
+directories, so a crash cannot leave a durable record naming bytes that were
+never written back. A stale publication marker whose removal fails is an
+installation failure rather than a logged deferral, because readers refuse any
+marked cache. Cache reuse rehashes the backend,
 inventory and launcher payloads and re-reads each archive's structure, so a
 size-preserving edit is still refused. A failure must leave the previous
 pointer and generation intact.
@@ -570,8 +573,12 @@ inventory, requires the runtime executables and absolute toolchain link, and
 re-runs the probes. The installation budget is passed as a checkpoint callable
 through staging, hashing, extraction, tree validation and toolchain
 verification as well as setup and the probes, so no long local phase can
-outlive the deadline. A corrupt generation is repaired by installing a new one;
-no code path deletes a previous generation.
+outlive the deadline. Filesystem operations that may block on a hung
+filesystem — private directory creation and removal, the staged manifest and
+cached-inventory reads, each flush, and the activation-record listing that
+allocates the next sequence number — are individually supervised, so none of
+them can hold the identity lock past the deadline. A corrupt generation is
+repaired by installing a new one; no code path deletes a previous generation.
 
 `run` executes the identity returned by `check_snapshot` rather than resolving
 the activation records again, so an active generation changed between

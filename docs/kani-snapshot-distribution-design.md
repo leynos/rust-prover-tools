@@ -425,12 +425,13 @@ name is unique or totally ordered, such as an activation record at a sequence
 number a later activation has already passed. It is not used to abandon shared
 publication silently: publication carries a durable marker, described below,
 that makes an unfinished replacement visible. Reads of the activation records,
-the cached manifest on the reuse path and the staged transport manifest are
-supervised too, since a hung read would otherwise hold the identity lock past
-the deadline. Removal of private, uniquely named state — a pending activation
-document, a partially copied launcher or generation file, a staging tree — is
-supervised as well, and a removal that outlives the budget is deferred and
-debug-logged rather than reported as a failure: no reader resolves those names,
+the cached manifest on the reuse path, the staged transport manifest and the
+cached backend inventory are supervised too, since a hung read would otherwise
+hold the identity lock past the deadline. Removal of private, uniquely named
+state — a pending activation document, a partially copied launcher or
+generation file, a staging tree — is supervised as well, and a removal that
+outlives the budget is deferred and debug-logged rather than reported as a
+failure: no reader resolves those names,
 so an abandoned removal cannot disturb a later install. Staged payloads are
 published under a bound rather than abandoned silently. Each publication owns a
 marker in the identity directory, named for that publication, made durable
@@ -466,15 +467,22 @@ reuse reissues that flush before reporting success, so a retry after an
 unconfirmed activation cannot report reuse until a flush succeeds. Before the
 record may move, the installer flushes every entry its runtime contract
 requires: the launcher, driver, compiler and `rustc`; the toolchain component
-record and every recorded library; the directories naming them, including each
-library's ancestor chain, deepest first; and every file and directory of the
-setup-created Python root. Files are flushed before the directories that hold
-them, so a crash cannot leave a durable activation naming a launcher, library
-or Python payload whose bytes were never written back. Launcher modes are
-applied before the fsync that makes those bytes durable. Staging-directory
-creation and its removal are supervised as well: an abandoned creation is
-private and uniquely named, and an abandoned removal touches only this run's
-own directory. A failed stage, extraction, setup or probe leaves every existing
+record and every recorded library; every file and directory the backend
+inventory publishes, so a setup-extracted member such as `share/data.txt` is as
+durable as an executable; the directories naming them, including each required
+toolchain file's whole ancestor chain, deepest first, so the component record's
+`lib/rustlib` directory is flushed even when no recorded library sits beneath
+it; and every file and directory of the setup-created Python root. Files are
+flushed before the directories that hold them, so a crash cannot leave a
+durable activation naming a launcher, library, backend member or Python payload
+whose bytes were never written back. Launcher modes are applied before the fsync
+that makes those bytes durable. Staging-directory creation and its removal are
+supervised as well: an abandoned creation is private and uniquely named, and an
+abandoned removal touches only this run's own directory. The generation
+directory's own creation and the record listing that allocates the next
+sequence number are supervised too; both touch only private, idempotent or
+read-only state, so an abandoned creation or listing cannot disturb a later
+activation. A failed stage, extraction, setup or probe leaves every existing
 record untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
