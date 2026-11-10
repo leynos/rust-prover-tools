@@ -314,13 +314,22 @@ def test_a_bundle_with_a_wrong_identity_is_refused(
 def test_a_command_that_requests_an_untrusted_identity_is_refused(
     tmp_path: Path, cmd_mox: CmdMox, attribute: str, wrong: str
 ) -> None:
-    """A weakened policy is refused even when the bundle claims that identity."""
+    """A weakened policy is refused even when the bundle claims that identity.
+
+    The request and the modelled bundle name the same untrusted value, so the
+    only remaining reason to refuse is the model's comparison with the trusted
+    policy. That isolates the command-side check from the bundle-side one.
+    """
     trusted = policy_for_pin(make_pin())
-    cmd_mox.stub("gh").runs(bundle_verifier(trusted, workflow=make_manifest().workflow))
-    request = dc.replace(
-        _request(tmp_path),
-        policy=dc.replace(trusted, **{attribute: wrong}),
+    untrusted = dc.replace(trusted, **{attribute: wrong})
+    cmd_mox.stub("gh").runs(
+        bundle_verifier(
+            trusted,
+            workflow=make_manifest().workflow,
+            bundle=untrusted,
+        )
     )
+    request = dc.replace(_request(tmp_path), policy=untrusted)
     with pytest.raises(CommandFailedError, match=REFUSALS[attribute]):
         verify_attestation(request)
 

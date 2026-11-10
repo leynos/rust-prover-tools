@@ -646,13 +646,14 @@ EP-O1 assigns responsibility and records live evidence.
   first dimension where the two disagree, and accepts a matching bundle.
   Parametrized tests require a wrong signer workflow, source ref, source digest
   and signer digest to be refused, require a command that requests an untrusted
-  identity to be refused, and require a matching bundle to pass, so the model
-  is not vacuous. The installation test now runs the real `verify_attestation`
-  against a modelled bundle that fails one dimension at a time and spies on
-  launcher extraction as well as setup, because the installer extracts the
-  launcher before calling setup; both spies must stay empty for every refusal,
-  and a matching-bundle control requires both to be reached. Real signature
-  verification remains EP-M5's boundary.
+  identity to be refused even when the bundle claims that same identity, and
+  require a matching bundle to pass, so the model is not vacuous. The
+  installation test now runs the real `verify_attestation` against a modelled
+  bundle that fails one dimension at a time and spies on launcher extraction as
+  well as setup, because the installer extracts the launcher before calling
+  setup; both spies must stay empty for every refusal, and a matching-bundle
+  control requires both to be reached. Real signature verification remains
+  EP-M5's boundary.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
