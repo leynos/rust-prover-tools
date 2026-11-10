@@ -17,10 +17,7 @@ import typing as typ
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.activation import write_active
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
-from rust_prover_tools.kani_snapshot.durability import (
-    confirm_activation,
-    flush_directory,
-)
+from rust_prover_tools.kani_snapshot.durability import flush_directory
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
     runtime_for,
@@ -43,6 +40,7 @@ from rust_prover_tools.kani_snapshot.install_state import (
     ensure_private_directory,
     identity_lock,
     load_active,
+    prune_superseded_markers,
     publication_pending,
     require_runtime_files,
     validate_generation,
@@ -64,6 +62,7 @@ from rust_prover_tools.observability import log_event
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
+    from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
 
 __all__ = (
     "InstallHooks",
@@ -122,11 +121,13 @@ def install_snapshot(
     deadline = Deadline(time.monotonic() + options.deadline_seconds)
     deadline.check("installation start")
     layout = snapshot_layout(options.pin, cache_home=options.cache_home)
-    ensure_private_directory(layout.identity_dir)
     context = _InstallContext(options=options, deadline=deadline, hooks=chosen)
+    # `identity_lock` creates the identity directory under this budget, so the
+    # installation needs no separate creation step before taking the lock.
     with identity_lock(
         options,
-        timeout=min(options.lock_timeout_seconds, options.deadline_seconds),
+        timeout=options.lock_timeout_seconds,
+        budget=deadline,
     ):
         reusable = _reuse_active(context)
         if reusable is not None:
@@ -165,9 +166,11 @@ def check_snapshot(
         or compiler check fails.
     """
     chosen = InstallHooks() if hooks is None else hooks
+    deadline = Deadline(time.monotonic() + options.deadline_seconds)
     with identity_lock(
         options,
-        timeout=min(options.lock_timeout_seconds, options.deadline_seconds),
+        timeout=options.lock_timeout_seconds,
+        budget=deadline,
     ):
         layout = snapshot_layout(options.pin, cache_home=options.cache_home)
         if publication_pending(layout):
@@ -241,21 +244,34 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
         return None
     # The probe was bounded by the budget left when it started, so a probe
     # that spent all of it must not report a successful reuse.
-    _confirm_durable(layout, context.deadline)
+    #
+    # Reuse reissues the activation record it validated. Writing that record
+    # flushes the activation directories, so a previous activation that
+    # published and then failed its flush is confirmed durable before reuse
+    # reports success. It also advances the activation order: any publication
+    # marker an abandoned repair writes from now on ranks below this record
+    # and can no longer make the cache look unfinished.
+    write_active(layout, pointer.generation, budget=context.deadline)
+    prune_superseded_markers(layout, budget=context.deadline)
     context.deadline.check("active generation reuse")
     log_event(_LOGGER, "kani.install.reuse", generation=pointer.generation)
     return identity
 
 
-def _confirm_durable(layout: SnapshotLayout, deadline: Deadline) -> None:
-    """Flush the activation directories before reporting an active generation.
+def _require_activation_ready(
+    context: _InstallContext,
+    runtime: SnapshotRuntime,
+) -> None:
+    """Require the runtime executables, bounded by the installation budget.
 
-    A previous activation may have published its record and then failed or
-    timed out while flushing, leaving a visible but not durable generation.
-    Reuse reissues those flushes, so a retry cannot report success until the
-    activation is confirmed durable.
+    The check is a handful of `stat` calls, but it runs while the identity
+    lock is held, and a hung filesystem must not hold that lock past the
+    deadline. Abandoning the reads mutates nothing.
     """
-    confirm_activation(layout, deadline)
+    context.deadline.supervise(
+        "runtime file requirements",
+        functools.partial(require_runtime_files, runtime),
+    )
 
 
 def _install_generation(
@@ -329,7 +345,7 @@ def _install_generation(
     # Activation must not publish executables the next check would reject, so
     # the same runtime-file contract `validate_generation` enforces is applied
     # here too, before the probe executes them.
-    require_runtime_files(runtime)
+    _require_activation_ready(context, runtime)
     # The probe executes these bytes, so their digests are checked first.
     context.deadline.supervise(
         "toolchain verification",

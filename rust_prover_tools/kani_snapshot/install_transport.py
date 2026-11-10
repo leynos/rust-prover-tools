@@ -17,6 +17,7 @@ import secrets
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.activation import load_active
 from rust_prover_tools.kani_snapshot.archive_graph import ArchivePolicy
 from rust_prover_tools.kani_snapshot.archive_read import read_archive
 from rust_prover_tools.kani_snapshot.cleanup import discard_private_tree
@@ -238,7 +239,7 @@ def stage_assets(
         # readers, so an abandoned replacement can never pass for a complete
         # cache.
         publish_staged(
-            _publication(layout, staging, names),
+            _publication(layout, staging, names, budget),
             budget=budget,
             checkpoint=checkpoints.publish,
         )
@@ -317,10 +318,21 @@ def _publication(
     layout: SnapshotLayout,
     staging: Path,
     names: list[str],
+    budget: InstallBudget,
 ) -> Publication:
-    """Own a fresh marker and every marker left by earlier publications."""
+    """Own a fresh marker and every marker left by earlier publications.
+
+    The marker records the activation that is current now. A publication that
+    is abandoned and resumes after a later installation has completed writes a
+    marker naming that older activation, so readers can tell it has already
+    been overtaken. Reading the record is a read, so it is supervised.
+    """
     publication_id = f"{os.getpid():x}-{secrets.token_hex(8)}"
     marker = layout.publication_marker(publication_id)
+    pointer = budget.supervise(
+        "active pointer read",
+        functools.partial(load_active, layout),
+    )
     return Publication(
         staging=staging,
         downloads=layout.downloads_dir,
@@ -329,6 +341,7 @@ def _publication(
             path for path in layout.publication_markers() if path != marker
         ),
         names=tuple(names),
+        base_sequence=0 if pointer is None else pointer.sequence,
     )
 
 

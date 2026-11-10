@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import functools
+import logging
 import os
 import time
 import typing as typ
@@ -40,6 +42,7 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
+from rust_prover_tools.kani_snapshot.publication import marker_base_sequence
 from rust_prover_tools.kani_snapshot.receipt import (
     load_receipt,
     validate_receipt,
@@ -50,6 +53,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from rust_prover_tools.kani_snapshot.install_model import InstallBudget
     from rust_prover_tools.kani_snapshot.models import (
         SnapshotManifest,
         SnapshotPin,
@@ -67,12 +71,14 @@ __all__ = (
     "fsync_directory",
     "identity_lock",
     "load_active",
+    "prune_superseded_markers",
     "publication_pending",
     "require_runtime_files",
     "validate_generation",
     "write_active",
 )
 
+_LOGGER = logging.getLogger(__name__)
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 _LOCK_POLL_SECONDS: typ.Final[float] = 0.05
@@ -85,41 +91,99 @@ def identity_lock(
     *,
     timeout: float,
     clock: cabc.Callable[[], float] = time.monotonic,
+    budget: InstallBudget | None = None,
 ) -> cabc.Generator[None]:
     """Hold the per-identity advisory lock, waiting at most `timeout`.
 
     The lock file is created private. A timeout is reported as a snapshot
     error rather than retried indefinitely, so a stuck owner cannot hang a
-    proof forever.
+    proof forever. A `budget` bounds the directory creation, the lock file's
+    creation and the wait itself by the seconds the caller still has, so work
+    already done under that budget is not spent twice. The wait never exceeds
+    what remains: a lock acquired at the last second would leave no time for
+    the installation it protects.
     """
     identity_dir = identity_directory(options.pin, cache_home=options.cache_home)
-    ensure_private_directory(identity_dir)
+    _create_identity_directory(identity_dir, budget)
     path = identity_dir / "install.lock"
+    descriptor = _open_lock_file(path, budget)
     try:
-        descriptor = os.open(
-            path,
-            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
-            _PRIVATE_FILE_MODE,
-        )
-    except OSError as exc:
-        msg = f"failed to open snapshot install lock '{path}': {exc}"
-        raise ProverToolError(msg) from exc
-    try:
-        deadline = clock() + timeout
-        while True:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if clock() >= deadline:
-                    msg = "timed out waiting for the snapshot installation lock"
-                    raise ProverToolError(msg) from None
-                time.sleep(_LOCK_POLL_SECONDS)
+        _await_lock(descriptor, timeout, clock, budget)
         yield
     finally:
         with contextlib.suppress(OSError):
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+def _create_identity_directory(
+    directory: Path,
+    budget: InstallBudget | None,
+) -> None:
+    """Create the identity directory, abandoning a stalled creation.
+
+    The directory is private and its creation is idempotent, so a creation
+    that outlives the budget may finish later without changing any decision
+    this call makes.
+    """
+    if budget is None:
+        ensure_private_directory(directory)
+    else:
+        budget.supervise(
+            "identity directory creation",
+            functools.partial(ensure_private_directory, directory),
+        )
+
+
+def _open_lock_file(path: Path, budget: InstallBudget | None) -> int:
+    """Open the lock file private, bounded by `budget` when supplied."""
+
+    def open_private() -> int:
+        """Open or create the lock file descriptor.
+
+        A worker that finishes after the budget expired closes its own
+        descriptor: the caller has already stopped waiting for the value, so
+        nobody else could close it.
+        """
+        descriptor = os.open(
+            path,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC,
+            _PRIVATE_FILE_MODE,
+        )
+        if budget is not None and budget.remaining() <= 0:
+            os.close(descriptor)
+            msg = "snapshot installation deadline expired during lock file creation"
+            raise ProverToolError(msg)
+        return descriptor
+
+    try:
+        if budget is None:
+            return open_private()
+        return budget.supervise("lock file creation", open_private)
+    except OSError as exc:
+        msg = f"failed to open snapshot install lock '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def _await_lock(
+    descriptor: int,
+    timeout: float,
+    clock: cabc.Callable[[], float],
+    budget: InstallBudget | None,
+) -> None:
+    """Acquire the lock, waiting no longer than `timeout` or the budget."""
+    wait = timeout if budget is None else min(timeout, budget.remaining())
+    deadline = clock() + wait
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            if clock() >= deadline:
+                msg = "timed out waiting for the snapshot installation lock"
+                raise ProverToolError(msg) from None
+            time.sleep(_LOCK_POLL_SECONDS)
+        else:
+            return
 
 
 def ensure_private_directory(path: Path) -> None:
@@ -136,13 +200,71 @@ def publication_pending(layout: SnapshotLayout) -> bool:
 
     The marker exists from before the first cached payload is replaced until
     the replacements and their directory flushes are durable. A cache that
-    still carries it may be half-repaired, so readers must not validate it.
+    still carries a pending marker may be half-repaired, so readers must not
+    validate it. A marker naming an activation record that a later one has
+    superseded belongs to a publication that either finished or lost its race
+    with that later activation, so it is not pending; a marker from an older
+    installation names no record and remains pending.
     """
+    markers = _publication_markers(layout)
+    pointer = load_active(layout)
+    active_sequence = 0 if pointer is None else pointer.sequence
+    return any(_marker_is_pending(marker, active_sequence) for marker in markers)
+
+
+def _publication_markers(layout: SnapshotLayout) -> tuple[Path, ...]:
+    """Return the publication markers, reporting an unreadable directory."""
     try:
-        return bool(layout.publication_markers())
+        return layout.publication_markers()
     except OSError as exc:
         msg = f"failed to read snapshot publication state: {exc}"
         raise ProverToolError(msg) from exc
+
+
+def _marker_is_pending(marker: Path, active_sequence: int) -> bool:
+    """Report whether `marker` still guards an unfinished publication."""
+    base_sequence = marker_base_sequence(marker)
+    return base_sequence is None or base_sequence >= active_sequence
+
+
+def prune_superseded_markers(
+    layout: SnapshotLayout,
+    *,
+    budget: InstallBudget | None = None,
+) -> None:
+    """Remove markers that the active activation record has superseded.
+
+    Reuse reissues the record it validated, so the marker of a publication
+    that a reuse overtook becomes stale without ever being observed as
+    pending. Removal is best-effort: the leftover marker ranks below the
+    active record and therefore cannot make readers refuse the cache, so a
+    stalled or failed removal is deferred rather than reported.
+    """
+
+    def prune() -> None:
+        """Remove every marker the active record supersedes."""
+        markers = _publication_markers(layout)
+        pointer = load_active(layout)
+        active_sequence = 0 if pointer is None else pointer.sequence
+        for marker in markers:
+            if _marker_is_pending(marker, active_sequence):
+                continue
+            try:
+                marker.unlink(missing_ok=True)
+            except OSError as exc:
+                _LOGGER.debug(
+                    "snapshot marker cleanup deferred: %s", type(exc).__name__
+                )
+
+    try:
+        if budget is None:
+            prune()
+        else:
+            budget.supervise("publication marker cleanup", prune)
+    except ProverToolError as exc:
+        # A marker this run could not remove is harmless once it ranks below
+        # the active record, so an expired budget defers it like any failure.
+        _LOGGER.debug("snapshot marker cleanup deferred: %s", exc)
 
 
 def active_manifest(pin: SnapshotPin, layout: SnapshotLayout) -> SnapshotManifest:

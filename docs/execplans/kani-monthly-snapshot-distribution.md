@@ -482,6 +482,23 @@ EP-O1 assigns responsibility and records live evidence.
   its flush fails, the component directory flushed and fatal when it cannot be
   flushed without a recorded library beneath it, and stalled generation
   creation and record enumeration under a real short budget.
+- [x] (2026-11-10) Remediated the ninth candidate-bound EP-M3 re-assessment at
+  `4210283` (two findings). (1) The overall deadline now bounds the work that
+  ran before the identity lock and the runtime-file check that ran while
+  holding it: creating the identity directory, opening the lock file and the
+  four runtime-file stats are supervised, and the lock wait is bounded by the
+  seconds the installation still has rather than only by its configured
+  timeout. (2) A publication marker now records the activation sequence it
+  follows, and readers ignore a marker that a later activation superseded.
+  Because reuse reissues the record it validated, a marker that an abandoned
+  publication writes after a later successful install ranks below that record
+  instead of making a completed cache look unfinished; reuse then prunes the
+  markers its record superseded. A marker from an older installation, or one
+  whose content cannot be read, still counts as pending. New tests cover a
+  stalled identity-directory creation, a lock wait that spends only the
+  remaining budget, a stalled runtime-file check, marker classification by
+  activation sequence, and a barrier-controlled abandoned marker write released
+  after a later reuse.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -865,6 +882,24 @@ implementation to continue through the hosted assessment to equilibrium; this
 entry is the recorded acceptance the conformance basis requires for that
 departure.
 
+2026-11-10, extended the bounded-work rule to the lock boundary and ordered
+publication markers against activation: the ninth re-assessment showed that the
+identity directory's creation, the lock file's open and the runtime-file stats
+before the probe still ran synchronously, and that the lock wait was budgeted
+from the configured timeout alone, so time already spent under the deadline
+could be spent again. Those operations are now supervised, and the wait is
+bounded by the remaining budget. It also showed that a marker whose write
+outlived its budget could be published by the abandoned worker after a later
+installation had completed, leaving a cache that `check` refused although the
+installation had succeeded. A marker now records the activation sequence it
+follows, and a marker below the active record is not pending. Completion always
+advances that record — activation publishes the new generation and reuse
+reissues the record it validated — so late marker work ranks below the
+activation it lost to. A marker with no readable sequence stays pending,
+because an unreadable marker is exactly the case in which the cache must not be
+assumed complete. Reuse prunes the markers its record superseded; a deferred
+prune is harmless because the leftover ranks below the active record.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -877,7 +912,7 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty more issues: the
+tests. Further candidate-bound re-assessments found thirty-two more issues: the
 runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
@@ -891,10 +926,12 @@ executable flushes with mode-before-fsync ordering, bounded staging creation
 and cleanup, a durability sweep covering recorded libraries, the component
 record and the Python root, supervised private cleanup, a stale publication
 marker whose failed removal fails the installation, a backend-inventory
-durability sweep with each required toolchain file's ancestor chain, and
-supervised generation creation and activation-record enumeration. All are
-repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and
-all publication, have not started. The consumer `install` command is
+durability sweep with each required toolchain file's ancestor chain, supervised
+generation creation and activation-record enumeration, bounded identity
+directory and lock-file creation with a lock wait limited by the remaining
+budget, and publication markers ordered against the activation they follow. All
+are repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1,
+and all publication, have not started. The consumer `install` command is
 deliberately limited to a verified local `--asset-dir` until the EP-M4 release
 transport is connected. Independent reviews covered all five requested
 specialities, with amendments recorded in the design and checked by a final

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
+import fcntl
 import io
 import logging
 import os
@@ -44,6 +46,7 @@ from rust_prover_tools.kani_snapshot.install_state import (
 from rust_prover_tools.kani_snapshot.models import FileRecord
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
+    PUBLICATION_MARKER_PREFIX,
     SnapshotRuntime,
     new_generation_name,
 )
@@ -72,7 +75,11 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from rust_prover_tools.kani_snapshot.install_model import InstallBudget
+    from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
+    from rust_prover_tools.kani_snapshot.install_model import (
+        InstallBudget,
+        ProbeRunner,
+    )
     from rust_prover_tools.kani_snapshot.models import (
         SnapshotManifest,
         SnapshotPin,
@@ -1287,7 +1294,11 @@ def test_reuse_cannot_succeed_while_the_activation_flush_fails(
     assert identity.generation.name == generation, (
         "a retry installed another generation"
     )
-    assert load_active(layout) == pointer, "a successful reuse moved the pointer"
+    reused = load_active(layout)
+    assert reused is not None, "a successful reuse left no activation record"
+    assert reused.generation == pointer.generation, (
+        "a successful reuse moved the pointer to another generation"
+    )
 
 
 def test_install_does_not_activate_when_the_payload_flush_fails(
@@ -1414,6 +1425,13 @@ def test_an_abandoned_activation_cannot_displace_a_later_one(
     check_snapshot(install_options(case), hooks)
 
 
+def _active_sequence(layout: SnapshotLayout) -> int:
+    """Return the sequence number of the active record, requiring one."""
+    pointer = load_active(layout)
+    assert pointer is not None, "the install activated no generation"
+    return pointer.sequence
+
+
 def test_an_abandoned_completion_cannot_clear_a_repair_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1471,6 +1489,7 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
                 marker=marker_a,
                 stale_markers=(),
                 names=names,
+                base_sequence=_active_sequence(layout),
             ),
             budget=Deadline(time.monotonic() + 0.5),
         )
@@ -1485,6 +1504,7 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
                 marker=marker_b,
                 stale_markers=(marker_a,),
                 names=names,
+                base_sequence=_active_sequence(layout),
             ),
             budget=_ExpiringSupervision("publication completion"),
         )
@@ -2192,3 +2212,339 @@ def test_install_deadline_bounds_a_stalled_activation_enumeration(
     assert elapsed < 10.0, f"the stalled listing outlived the budget: {elapsed:.1f}s"
     assert finished.wait(10), "the abandoned listing never resumed"
     assert load_active(layout) is None, "a stalled listing activated a generation"
+
+
+def test_install_deadline_bounds_a_stalled_identity_directory_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cache's own directory creation is bounded, not just its children.
+
+    Installation makes the identity directory before it can open the lock
+    file. A creation stalled on a hung filesystem must be abandoned like any
+    other blocking step, because the identity lock is not held yet and the
+    directory's existence is idempotent.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_mkdir = pathlib.Path.mkdir
+
+    def stalling_mkdir(
+        self: Path,
+        mode: int = 0o777,
+        *,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        """Block the identity directory creation like a hung filesystem."""
+        is_identity = (
+            self == layout.identity_dir
+            and threading.current_thread() is not threading.main_thread()
+        )
+        if not is_identity:
+            real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", stalling_mkdir)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during identity directory creation",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the identity directory creation was never attempted"
+    assert elapsed < 10.0, f"the stalled creation outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned creation never resumed"
+    assert not layout.downloads_dir.exists(), "a stalled creation published payloads"
+
+
+def test_install_lock_wait_spends_only_the_remaining_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Work before the lock reduces the lock wait instead of extending it.
+
+    Installation budgets its lock wait from the seconds left, not from the
+    configured deadline, so a slow earlier phase cannot make the whole call
+    outlive the budget.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    holder = _LockHolder(layout)
+    holder.start()
+    try:
+        assert holder.held.wait(10), "the lock holder never acquired the lock"
+        real_open_lock_file = install_state._open_lock_file
+
+        def slow_open_lock_file(path: Path, budget: InstallBudget | None) -> int:
+            """Spend part of the budget before the lock wait begins."""
+            time.sleep(1.5)
+            return real_open_lock_file(path, budget)
+
+        monkeypatch.setattr(install_state, "_open_lock_file", slow_open_lock_file)
+        options = dc.replace(
+            install_options(case),
+            deadline_seconds=2.0,
+            lock_timeout_seconds=30.0,
+        )
+        started = time.monotonic()
+        with pytest.raises(ProverToolError, match=r"installation lock"):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        holder.release.set()
+        holder.join(10)
+
+    assert elapsed < 2.5, (
+        f"the lock wait used the configured timeout, not the budget: {elapsed:.1f}s"
+    )
+    assert load_active(layout) is None, "a refused lock activated a generation"
+
+
+def test_require_activation_ready_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The runtime-file check does not hold the identity lock on a stalled stat.
+
+    Activation requires four executables to exist before the probe runs. Those
+    stats are reads, so a stalled one is abandoned rather than allowed to
+    outlive the budget.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=new_generation_name(),
+    )
+    runtime = runtime_for(layout, case.manifest)
+    release = threading.Event()
+    stalled = threading.Event()
+    real_stat = pathlib.Path.stat
+
+    def stalling_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        """Block the launcher stat like a hung filesystem."""
+        if (
+            self == runtime.launcher
+            and threading.current_thread().name == "snapshot runtime file requirements"
+        ):
+            stalled.set()
+            release.wait(30)
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(pathlib.Path, "stat", stalling_stat)
+    context = install_module._InstallContext(
+        options=install_options(case),
+        deadline=Deadline(time.monotonic() + 0.5),
+        hooks=install_hooks(case),
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during runtime file requirements",
+        ):
+            install_module._require_activation_ready(context, runtime)
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the runtime-file check never stat the launcher"
+    assert elapsed < 10.0, f"the stalled stat outlived the budget: {elapsed:.1f}s"
+
+
+def test_publication_marker_records_the_activation_it_follows(
+    tmp_path: Path,
+) -> None:
+    """A marker is pending only until a later activation record supersedes it."""
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    pointer = load_active(layout)
+    assert pointer is not None, "the install activated no generation"
+    marker = layout.publication_marker("sequence-test")
+
+    marker.write_bytes(publication.render_marker(pointer.sequence - 1))
+    assert not install_state.publication_pending(layout), (
+        "a marker below the active record was treated as pending"
+    )
+    check_snapshot(install_options(case), hooks)
+
+    marker.write_bytes(publication.render_marker(pointer.sequence))
+    assert install_state.publication_pending(layout), (
+        "a marker at the active record was not treated as pending"
+    )
+    marker.write_bytes(b"publishing\n")
+    assert install_state.publication_pending(layout), (
+        "a marker without a readable sequence was not treated as pending"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+
+class _ReuseValidationFailure:
+    """Fail the first reuse validation so the next attempt publishes.
+
+    The cache itself stays valid, so the install after the failed publication
+    reuses the generation the first install activated.
+    """
+
+    def __init__(self) -> None:
+        """Count reuse validations from zero."""
+        self.calls = 0
+
+    def __call__(
+        self,
+        options: InstallOptions,
+        manifest: SnapshotManifest,
+        layout: SnapshotLayout,
+        probe: ProbeRunner,
+        remaining_budget: cabc.Callable[[], float] | None = None,
+        *,
+        checkpoint: cabc.Callable[[], None] | None = None,
+    ) -> SnapshotIdentity:
+        """Fail once, then validate exactly as the real implementation does."""
+        self.calls += 1
+        if self.calls == 1:
+            msg = "injected reuse validation failure"
+            raise ProverToolError(msg)
+        return validate_generation(
+            options,
+            manifest,
+            layout,
+            probe,
+            remaining_budget,
+            checkpoint=checkpoint,
+        )
+
+
+class _MarkerWriteStall:
+    """Hold a publication marker's durable write, then report its publication.
+
+    The stall lives in `fsync`, inside the supervised worker that writes the
+    marker, so the installation deadline expires exactly as it would on a hung
+    filesystem and the pending marker is not yet visible.
+    """
+
+    def __init__(self) -> None:
+        """Prepare the release, stall and publication events."""
+        self.release = threading.Event()
+        self.stalled = threading.Event()
+        self.finished = threading.Event()
+        self._real_fsync = os.fsync
+        self._real_replace = pathlib.Path.replace
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Patch the filesystem calls the marker write performs."""
+
+        def stalling_fsync(descriptor: int) -> None:
+            """Hold the marker's durable write like a hung filesystem."""
+            if threading.current_thread().name == "snapshot publication marker":
+                self.stalled.set()
+                self.release.wait(30)
+            self._real_fsync(descriptor)
+
+        def marking_replace(source: Path, target: Path) -> None:
+            """Record the moment the abandoned worker publishes its marker."""
+            self._real_replace(source, target)
+            if target.name.startswith(PUBLICATION_MARKER_PREFIX):
+                self.finished.set()
+
+        monkeypatch.setattr(install_generation.os, "fsync", stalling_fsync)
+        monkeypatch.setattr(pathlib.Path, "replace", marking_replace)
+
+
+def test_a_late_marker_cannot_make_a_reused_cache_unfinished(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker published after a later reuse cannot make the cache refused.
+
+    A repair publication is abandoned while writing its marker, so no marker
+    is visible when a later install reuses and revalidates the generation.
+    When the abandoned worker finally publishes its marker, the record that
+    reuse wrote outranks it, and readers must still accept the cache.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    monkeypatch.setattr(
+        install_module,
+        "validate_generation",
+        _ReuseValidationFailure(),
+    )
+    stall = _MarkerWriteStall()
+    stall.install(monkeypatch)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    with pytest.raises(ProverToolError, match=r"deadline expired during"):
+        install_snapshot(options, hooks)
+    assert stall.stalled.is_set(), "the publication marker write was never attempted"
+    assert not layout.publication_markers(), (
+        "the abandoned write published its marker before the deadline"
+    )
+
+    reused = install_snapshot(install_options(case), hooks)
+    assert reused.generation.name == first.generation.name, (
+        "the later install did not reuse the validated generation"
+    )
+    check_snapshot(install_options(case), hooks)
+
+    try:
+        stall.release.set()
+        assert stall.finished.wait(10), "the abandoned marker write never resumed"
+    finally:
+        stall.release.set()
+
+    markers = layout.publication_markers()
+    assert len(markers) == 1, (
+        f"the abandoned write published {len(markers)} markers instead of one"
+    )
+    check_snapshot(install_options(case), hooks)
+
+    install_snapshot(install_options(case), hooks)
+    assert not layout.publication_markers(), (
+        "a later reuse left the superseded marker behind"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
+class _LockHolder(threading.Thread):
+    """Hold the identity lock from a second open file description."""
+
+    def __init__(self, layout: SnapshotLayout) -> None:
+        """Prepare the holder, its release event and its readiness event."""
+        super().__init__(name="identity lock holder", daemon=True)
+        self._layout = layout
+        self.held = threading.Event()
+        self.release = threading.Event()
+
+    def run(self) -> None:
+        """Acquire the lock, hold it until released, then unlock it."""
+        path = self._layout.identity_dir / "install.lock"
+        descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            self.held.set()
+            self.release.wait(30)
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)

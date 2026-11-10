@@ -427,27 +427,41 @@ publication silently: publication carries a durable marker, described below,
 that makes an unfinished replacement visible. Reads of the activation records,
 the cached manifest on the reuse path, the staged transport manifest and the
 cached backend inventory are supervised too, since a hung read would otherwise
-hold the identity lock past the deadline. Removal of private, uniquely named
-state — a pending activation document, a partially copied launcher or
-generation file, a staging tree — is supervised as well, and a removal that
-outlives the budget is deferred and debug-logged rather than reported as a
-failure: no reader resolves those names, so an abandoned removal cannot disturb
-a later install. Staged payloads are published under a bound rather than
-abandoned silently. Each publication owns a marker in the identity directory,
-named for that publication, made durable before the first payload is replaced
-and removed only after every replacement and its directory flush are durable.
-Because no marker name is reused, a publication that resumes after being
-abandoned can remove only its own marker; a repair that starts meanwhile writes
-a new one first and clears the older ones only once its own marker is durable,
-so the incomplete state is never unmarked. A reader refuses a cache that still
-carries any marker, and a later `install` repairs it. Directory creation, each
-replacement, both directory flushes and the marker removal are supervised. A
-replacement that outlives the budget is reported as an unknown outcome, because
-the abandoned worker may still complete that atomic rename; every payload was
-verified before publication, so the cache is then either valid or detectably
-incomplete. A stale marker whose removal fails is an installation failure
-rather than a logged deferral: readers refuse any marked cache, so continuing
-would report a usable generation the cache cannot serve.
+hold the identity lock past the deadline. So are the operations that precede
+the lock and the ones that run while it is held but were once left
+unsupervised: creating the identity directory, opening the lock file and the
+runtime-file checks that precede the probe. The lock wait itself is bounded by
+whichever is shorter, the configured timeout or the seconds the installation
+still has, so time already spent cannot be spent a second time. Removal of
+private, uniquely named state — a pending activation document, a partially
+copied launcher or generation file, a staging tree — is supervised as well, and
+a removal that outlives the budget is deferred and debug-logged rather than
+reported as a failure: no reader resolves those names, so an abandoned removal
+cannot disturb a later install. Staged payloads are published under a bound
+rather than abandoned silently. Each publication owns a marker in the identity
+directory, named for that publication, made durable before the first payload is
+replaced and removed only after every replacement and its directory flush are
+durable. Because no marker name is reused, a publication that resumes after
+being abandoned can remove only its own marker; a repair that starts meanwhile
+writes a new one first and clears the older ones only once its own marker is
+durable, so the incomplete state is never unmarked. A marker also records the
+activation record that was current when its publication began. A reader refuses
+a cache whose marker names the active record or one at least as new, and
+ignores a marker whose record a later one has superseded. Completion always
+advances that record — a repair activates its new generation and a reuse
+reissues the record it validated — so a marker written late by an abandoned
+publication ranks below the activation that overtook it and cannot make a
+completed cache look unfinished. A marker from an older installation records no
+sequence, and one whose bytes cannot be read or parsed yields none either; both
+remain pending, because an unreadable marker is exactly the case in which the
+cache must not be assumed complete. Directory creation, each replacement, both
+directory flushes and the marker removal are supervised. A replacement that
+outlives the budget is reported as an unknown outcome, because the abandoned
+worker may still complete that atomic rename; every payload was verified before
+publication, so the cache is then either valid or detectably incomplete. A
+stale marker whose removal fails is an installation failure rather than a
+logged deferral: readers refuse any marked cache, so continuing would report a
+usable generation the cache cannot serve.
 
 Activation is a create-only write into an identity-level directory of ordered
 records, never a rename onto one mutable file. The highest-numbered record
@@ -461,14 +475,17 @@ outcome for the same reason, and its private document is discarded so a worker
 that has not issued the link cannot publish at all. Records below the newest
 are pruned after the new record is durable, and a deferred prune is only a
 harmless leftover. Activation includes the directory flush: a flush that times
-out or fails raises an error naming the generation that is already visible, and
-reuse reissues that flush before reporting success, so a retry after an
-unconfirmed activation cannot report reuse until a flush succeeds. Before the
-record may move, the installer flushes every entry its runtime contract
-requires: the launcher, driver, compiler and `rustc`; the toolchain component
-record and every recorded library; every file and directory the backend
-inventory publishes, so a setup-extracted member such as `share/data.txt` is as
-durable as an executable; the directories naming them, including each required
+out or fails raises an error naming the generation that is already visible.
+Reuse reissues the record it validated, which reissues that flush, so a retry
+after an unconfirmed activation cannot report reuse until a flush succeeds.
+Reissuing the record also advances the sequence, which is what lets a later
+reader ignore a marker an abandoned publication writes after the reuse; the
+reuse then prunes the markers its record superseded. Before the record may
+move, the installer flushes every entry its runtime contract requires: the
+launcher, driver, compiler and `rustc`; the toolchain component record and
+every recorded library; every file and directory the backend inventory
+publishes, so a setup-extracted member such as `share/data.txt` is as durable
+as an executable; the directories naming them, including each required
 toolchain file's whole ancestor chain, deepest first, so the component record's
 `lib/rustlib` directory is flushed even when no recorded library sits beneath
 it; and every file and directory of the setup-created Python root. Files are

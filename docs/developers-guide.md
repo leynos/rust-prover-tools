@@ -553,11 +553,18 @@ directory the backend inventory publishes, the directories that name them
 `lib/rustlib` is flushed even without a recorded library beneath it), and every
 member of the setup-created Python root. Files are flushed before their
 directories, so a crash cannot leave a durable record naming bytes that were
-never written back. A stale publication marker whose removal fails is an
-installation failure rather than a logged deferral, because readers refuse any
-marked cache. Cache reuse rehashes the backend, inventory and launcher payloads
-and re-reads each archive's structure, so a size-preserving edit is still
-refused. A failure must leave the previous pointer and generation intact.
+never written back. A publication marker records the activation sequence it
+follows, so readers refuse a marker that names the active record or a newer one
+and ignore a marker a later activation superseded; a marker that records no
+sequence, or whose content cannot be parsed, is still pending. Because reuse
+reissues the record it validated, an abandoned publication that writes its
+marker after a reuse lands below the new record and cannot make a completed
+cache look unfinished. A stale publication marker whose removal fails is an
+installation failure rather than a logged deferral, because readers still
+refuse a cache whose marker has not been superseded. Cache reuse rehashes the
+backend, inventory and launcher payloads and re-reads each archive's structure,
+so a size-preserving edit is still refused. A failure must leave the previous
+pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).
@@ -573,11 +580,15 @@ re-runs the probes. The installation budget is passed as a checkpoint callable
 through staging, hashing, extraction, tree validation and toolchain
 verification as well as setup and the probes, so no long local phase can
 outlive the deadline. Filesystem operations that may block on a hung filesystem
-— private directory creation and removal, the staged manifest and
-cached-inventory reads, each flush, and the activation-record listing that
-allocates the next sequence number — are individually supervised, so none of
-them can hold the identity lock past the deadline. A corrupt generation is
-repaired by installing a new one; no code path deletes a previous generation.
+— creating the identity directory, opening the lock file, private directory
+creation and removal, the staged manifest and cached-inventory reads, each
+flush, the runtime-file checks that precede the probe, and the
+activation-record listing that allocates the next sequence number — are
+individually supervised, so none of them can hold the identity lock past the
+deadline. The lock wait is bounded by the remaining budget rather than only by
+`lock_timeout_seconds`, so time spent before the wait cannot extend the call
+past its deadline. A corrupt generation is repaired by installing a new one; no
+code path deletes a previous generation.
 
 `run` executes the identity returned by `check_snapshot` rather than resolving
 the activation records again, so an active generation changed between

@@ -213,14 +213,18 @@ generation is activated only after its receipt is durable, its compiler has
 been observed, and every executable, recorded library, backend inventory member
 and Python-root member it needs has been flushed. A cache whose payload
 publication did not finish is refused by `check` and `run` until `install`
-repairs it. Concurrent installs for one identity serialize on an advisory lock
-with a bounded wait (300 seconds) inside an overall 1800-second installation
-deadline. Staging, hashing, extraction, tree validation, setup and the compiler
-probes all run within that budget; the probes share the remaining time and
-refresh it before each command, and expiry terminates the whole process group.
-A stalled setup therefore cannot outlive the deadline or keep another installer
-waiting. A corrupt active generation is repaired by installing a new
-generation, and the old directory is preserved.
+repairs it; a publication overtaken by a later successful install is not
+unfinished, so a marker left behind by an abandoned attempt does not block the
+cache. Concurrent installs for one identity serialize on an advisory lock with
+a bounded wait (300 seconds) inside an overall 1800-second installation
+deadline; the wait is also bounded by the time the installation has left, so a
+slow earlier phase cannot push the call past its deadline. Staging, hashing,
+extraction, tree validation, setup and the compiler probes all run within that
+budget; the probes share the remaining time and refresh it before each command,
+and expiry terminates the whole process group. A stalled setup therefore cannot
+outlive the deadline or keep another installer waiting. A corrupt active
+generation is repaired by installing a new generation, and the old directory is
+preserved.
 
 Checking and running never repair a generation. If `check` or `run` reports a
 missing, changed or drifted snapshot, run `prover-tools kani snapshot install`

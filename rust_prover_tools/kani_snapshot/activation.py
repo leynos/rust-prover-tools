@@ -71,12 +71,15 @@ class ActivePointer:
 
     Attributes
     ----------
+    sequence : int
+        Ordering number encoded in the record's file name.
     schema_version : int
         Record schema version. Only version 1 is accepted.
     generation : str
         One safe generation directory name.
     """
 
+    sequence: int
     schema_version: int
     generation: str
 
@@ -214,7 +217,15 @@ def _parse_record(data: bytes, name: str) -> ActivePointer:
     if not is_safe_generation_name(generation):
         msg = f"snapshot activation record names an unsafe generation: {generation!r}"
         raise ProverToolError(msg)
-    return ActivePointer(schema_version=version, generation=generation)
+    sequence = _sequence_of(name)
+    if sequence is None:
+        msg = f"snapshot activation record has an unrecognised name: {name!r}"
+        raise ProverToolError(msg)
+    return ActivePointer(
+        sequence=sequence,
+        schema_version=version,
+        generation=generation,
+    )
 
 
 def _ensure_activations_dir(
