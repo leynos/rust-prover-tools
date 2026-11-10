@@ -267,6 +267,43 @@ def test_install_rejects_a_manifest_outside_the_reviewed_pin(tmp_path: Path) -> 
         install_snapshot(options, install_hooks(case))
 
 
+def test_a_seeded_manifest_digest_bypass_reaches_setup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Negative control: only the digest check keeps a rewritten release out.
+
+    The refusal test above shows a manifest rewritten after review never
+    reaches setup. If that outcome were structural rather than caused by the
+    exact-byte comparison, the refusal test would pass for the wrong reason, so
+    this control replaces the comparison with a no-op and requires the same
+    rewrite to reach the setup spy.
+    """
+    case = make_case(tmp_path)
+    reviewed = case.pin
+    rewrite_manifest_asset(
+        case,
+        "notices.tar.gz",
+        tar_bytes({"share/licences.txt": (b"unreviewed licence", 0o644)}),
+    )
+    options = InstallOptions(
+        pin=reviewed,
+        assets_dir=case.assets_dir,
+        cache_home=tmp_path,
+    )
+    calls: list[Path] = []
+    with pytest.raises(ProverToolError, match=r"manifest digest"):
+        install_snapshot(options, install_hooks(case, setup_calls=calls))
+    assert calls == [], "setup ran despite a manifest rewritten after review"
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_snapshot.install_transport.verify_manifest_digest",
+        lambda _parsed, _pin: None,
+    )
+    install_snapshot(options, install_hooks(case, setup_calls=calls))
+    assert calls, "a seeded digest bypass did not reach the setup spy"
+
+
 def test_install_rejects_a_failed_attestation(tmp_path: Path) -> None:
     """A rejected attestation stops installation before setup."""
     case = make_case(tmp_path)

@@ -134,7 +134,7 @@ EP-O1 assigns responsibility and records live evidence.
   within the stated tolerances. EP-O1 stays separately authorized.
 - [ ] EP-M1: upstream feasibility and compatibility recipe.
 - [x] (2026-11-09) EP-M2: authenticated pin/manifest contracts. Added
-  `rust_prover_tools/kani_snapshot/{models,cache_key,pins,manifest,manifest_groups,render,validation,tags,strict_json,policy,integrity}.py`
+  `rust_prover_tools/kani_snapshot/{models,cache_key,pins,manifest,manifest_groups,render,validation,tags,strict_json,policy,integrity,attestation}.py`
   and the tests `test_kani_snapshot_{pins,manifest,integrity}.py` plus
   `tests/kani_snapshot_fixtures.py`. `ruff check`/`ruff format --check` are
   clean and the three focused suites pass (72 tests). Evidence covers V1 round
@@ -596,6 +596,31 @@ EP-O1 assigns responsibility and records live evidence.
   requires `publishing base=00` to name no base, requires `check` to refuse the
   cache, then requires a subsequent install to clear the marker and `check` to
   pass.
+- [x] (2026-11-10) Remediated the eighteenth candidate-bound re-assessment at
+  `47cb5ea` (one finding, plus the verification obligations it named). The
+  attestation boundary trusted the verifier's exit status and result shape but
+  never compared the verified statement with the manifest's workflow identity,
+  and `stage_assets` discarded the returned records. `verify_attestation` now
+  takes one `AttestationRequest` — policy, artefact, bundle and the manifest's
+  `WorkflowIdentity` — and requires at least one verified record's
+  `verificationResult.statement.predicate.runDetails.metadata.invocationId` to
+  equal
+  `https://github.com/<repository>/actions/runs/<run_id>/attempts/<run_attempt>`
+  built from the policy repository and that identity, so an attestation for a
+  different run, or for another attempt of the same run, authenticates nothing.
+  The request travels through `AttestationVerifier` and `InstallHooks`, the
+  transport builds it from `parsed.manifest.workflow`, and the shared fixture
+  double refuses any other identity. The attestation boundary now lives in its
+  own `attestation.py`, with `integrity.py` keeping manifest, payload and
+  checksum verification, so the added correlation does not push a module past
+  the configured size limit. New tests cover a matching run, a wrong run, a
+  wrong attempt, and records whose statement or invocation ID is absent or
+  malformed, and the behavioural `gh` stand-in now reports the manifest's own
+  run, so the CLI scenarios exercise the correlation end to end. The seeded
+  authentication-bypass negative control required by V2 is added: with the
+  manifest digest comparison replaced by a no-op, a release rewritten after
+  review reaches the setup spy, which shows the companion refusal is caused by
+  that comparison rather than by an unreachable spy.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -1096,6 +1121,21 @@ non-canonical spelling name no base. The canonical base zero is still accepted;
 it is a spelling this module can write, even though a completion above it
 retires the marker as before.
 
+2026-11-10, correlated the verified attestation statement with the manifest's
+workflow run: the eighteenth re-assessment showed that the verifier's exit
+status only proves that some attestation satisfied the policy flags, so an
+attestation for an unrelated run, or for a rerun of the same run, could
+authenticate a manifest that records another attempt. `verify_attestation` now
+requires a verified record whose SLSA v1 `runDetails.metadata.invocationId`
+equals the run-and-attempt URL built from the policy repository and the
+manifest's own `WorkflowIdentity`, and the identity is passed explicitly
+through the hook and transport seam so no caller can omit it silently.
+Predicate fields remain user-controllable, so this is a correlation the
+verifier's signature already binds, not an independent observation: the
+certificate pins signer identity and source digest, and this comparison closes
+the remaining gap between "a trusted builder signed something" and "that
+builder signed this run's statement".
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1108,8 +1148,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found forty-two more issues: the
-runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found forty-three more issues:
+the runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -1131,17 +1171,19 @@ completion must exceed, completion records that cannot regress when an
 abandoned write lands last, completion evidence that must be canonical before
 it can retire a marker and must not be loaded whole, repair that survives a
 corrupt newest record, and bounded asset-directory, checksum, marker-listing,
-activation-directory and activation-sequence probes, and a bounded marker read
-that accepts a base only from the canonical bytes `render_marker` writes, so an
+activation-directory and activation-sequence probes, a bounded marker read that
+accepts a base only from the canonical bytes `render_marker` writes, so an
 unparsable base, an incomplete marker, a truncated tail or a non-canonical
-spelling keeps the marker pending instead of raising. All are repaired with
-tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
-have not started. The consumer `install` command is deliberately limited to a
-verified local `--asset-dir` until the EP-M4 release transport is connected.
-Independent reviews covered all five requested specialities, with amendments
-recorded in the design and checked by a final testing/consistency review.
-Planning validation passed `make fmt`, `make markdownlint` (including spelling
-and three spelling-helper tests), `make nixie`, and both working/staged
+spelling keeps the marker pending instead of raising, and attestation
+verification that accepts a result only when a verified record names the
+manifest's own run and attempt. All are repaired with tests recorded in
+Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started.
+The consumer `install` command is deliberately limited to a verified local
+`--asset-dir` until the EP-M4 release transport is connected. Independent
+reviews covered all five requested specialities, with amendments recorded in
+the design and checked by a final testing/consistency review. Planning
+validation passed `make fmt`, `make markdownlint` (including spelling and three
+spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the

@@ -14,18 +14,18 @@ import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.attestation import verify_attestation
 from rust_prover_tools.kani_snapshot.install_defaults import (
     probe_generation,
     run_local_bundle_setup,
 )
-from rust_prover_tools.kani_snapshot.integrity import verify_attestation
 from rust_prover_tools.kani_snapshot.progress import run_within
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from rust_prover_tools.kani_snapshot.attestation import AttestationRequest
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
-    from rust_prover_tools.kani_snapshot.integrity import AttestationPolicy
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
     from rust_prover_tools.kani_snapshot.receipt_model import SetupEvidence
 
@@ -123,13 +123,11 @@ class AttestationVerifier(typ.Protocol):
 
     def __call__(
         self,
-        policy: AttestationPolicy,
-        artifact: Path,
-        bundle: Path,
+        request: AttestationRequest,
         *,
         timeout_seconds: float | None = None,
     ) -> object:
-        """Verify one attestation, bounded by the remaining budget."""
+        """Verify one attestation request within the remaining budget."""
         ...
 
 

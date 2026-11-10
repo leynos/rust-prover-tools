@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import json
 import os
 import subprocess
 import sys
+import typing as typ
 from pathlib import Path
 
 from pytest_bdd import given, parsers, scenarios, then, when
@@ -13,9 +15,10 @@ from pytest_bdd import given, parsers, scenarios, then, when
 from rust_prover_tools.kani_snapshot.pins import pin_to_toml
 from tests.kani_snapshot_bundles import build_local_snapshot
 
-scenarios("../features/kani_snapshot.feature")
+if typ.TYPE_CHECKING:
+    from rust_prover_tools.kani_snapshot.models import SnapshotManifest
 
-_ATTESTATION_STUB = "#!/bin/sh\nprintf '[{\"verificationResult\": {}}]\\n'\n"
+scenarios("../features/kani_snapshot.feature")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -38,11 +41,31 @@ class CliRun:
     returncode: int
 
 
-def _write_gh_stub(directory: Path) -> Path:
-    """Write a `gh` stand-in that reports one verified attestation."""
+def _attestation_stub(manifest: SnapshotManifest) -> str:
+    """Return a `gh` stand-in reporting one attestation for the manifest run."""
+    invocation = (
+        f"https://github.com/{manifest.repository}/actions/runs/"
+        f"{manifest.workflow.run_id}/attempts/{manifest.workflow.run_attempt}"
+    )
+    record = json.dumps([
+        {
+            "verificationResult": {
+                "statement": {
+                    "predicate": {
+                        "runDetails": {"metadata": {"invocationId": invocation}}
+                    }
+                }
+            }
+        }
+    ])
+    return f"#!/bin/sh\nprintf '%s\\n' '{record}'\n"
+
+
+def _write_gh_stub(directory: Path, manifest: SnapshotManifest) -> Path:
+    """Write a `gh` stand-in that reports the manifest's verified attestation."""
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "gh"
-    path.write_text(_ATTESTATION_STUB, encoding="utf-8")
+    path.write_text(_attestation_stub(manifest), encoding="utf-8")
     path.chmod(0o755)
     return path
 
@@ -62,7 +85,7 @@ def reviewed_snapshot_pin(tmp_path: Path) -> SnapshotCase:
         pin=pin,
         assets=snapshot.assets_dir,
         cache=tmp_path / "cache",
-        shim=_write_gh_stub(tmp_path / "shim").parent,
+        shim=_write_gh_stub(tmp_path / "shim", snapshot.manifest).parent,
     )
 
 

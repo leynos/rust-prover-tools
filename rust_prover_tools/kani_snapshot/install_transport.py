@@ -20,6 +20,10 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.activation import highest_sequence
 from rust_prover_tools.kani_snapshot.archive_graph import ArchivePolicy
 from rust_prover_tools.kani_snapshot.archive_read import read_archive
+from rust_prover_tools.kani_snapshot.attestation import (
+    AttestationRequest,
+    policy_for_pin,
+)
 from rust_prover_tools.kani_snapshot.cleanup import discard_private_tree
 from rust_prover_tools.kani_snapshot.install_copy import (
     TransportFile,
@@ -43,7 +47,6 @@ from rust_prover_tools.kani_snapshot.install_model import (
     InstallOptions,
 )
 from rust_prover_tools.kani_snapshot.integrity import (
-    policy_for_pin,
     verify_asset,
     verify_checksums,
     verify_manifest_digest,
@@ -207,9 +210,12 @@ def stage_assets(
             ),
         )
         hooks.verify_attestation(
-            policy_for_pin(options.pin),
-            manifest_path,
-            attestation,
+            AttestationRequest(
+                policy_for_pin(options.pin),
+                manifest_path,
+                attestation,
+                parsed.manifest.workflow,
+            ),
             timeout_seconds=budget.remaining(),
         )
         budget.check("payload verification")

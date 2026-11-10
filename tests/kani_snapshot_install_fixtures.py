@@ -37,6 +37,7 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from rust_prover_tools.kani_snapshot.attestation import AttestationRequest
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
     from rust_prover_tools.kani_snapshot.models import (
         SnapshotManifest,
@@ -132,30 +133,42 @@ def install_hooks(
             ),
         )
 
+    return InstallHooks(
+        setup=fake_setup,
+        probe=fake_probe,
+        verify_attestation=_attestation_verifier(case, attestation),
+    )
+
+
+def _attestation_verifier(
+    case: SnapshotCase,
+    attestation: cabc.Callable[[object, Path, Path], object] | None,
+) -> cabc.Callable[..., object]:
+    """Build a verifier that checks the request before accepting it."""
+
     def fake_attestation(
-        policy: object,
-        artifact: Path,
-        bundle: Path,
+        request: AttestationRequest,
         *,
         timeout_seconds: float | None = None,
     ) -> object:
         """Accept the expected manifest and bundle, or delegate to the caller."""
         del timeout_seconds
-        if attestation is not None:
-            return attestation(policy, artifact, bundle)
-        if artifact.name != MANIFEST_NAME:
-            msg = f"unexpected manifest asset: {artifact.name}"
+        # The installer must verify against the manifest's own run, so a double
+        # that received anything else models a real installation defect.
+        if request.workflow != case.manifest.workflow:
+            msg = f"unexpected workflow identity: {request.workflow!r}"
             raise ValueError(msg)
-        if bundle.name != ATTESTATION_NAME:
-            msg = f"unexpected attestation asset: {bundle.name}"
+        if attestation is not None:
+            return attestation(request.policy, request.artifact, request.bundle)
+        if request.artifact.name != MANIFEST_NAME:
+            msg = f"unexpected manifest asset: {request.artifact.name}"
+            raise ValueError(msg)
+        if request.bundle.name != ATTESTATION_NAME:
+            msg = f"unexpected attestation asset: {request.bundle.name}"
             raise ValueError(msg)
         return ({"verificationResult": {}},)
 
-    return InstallHooks(
-        setup=fake_setup,
-        probe=fake_probe,
-        verify_attestation=fake_attestation,
-    )
+    return fake_attestation
 
 
 def install_options(

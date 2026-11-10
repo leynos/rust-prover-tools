@@ -10,12 +10,15 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
-from rust_prover_tools.kani_snapshot.integrity import (
+from rust_prover_tools.kani_snapshot.attestation import (
     AttestationPolicy,
+    AttestationRequest,
     attestation_command,
     policy_for_pin,
-    verify_asset,
     verify_attestation,
+)
+from rust_prover_tools.kani_snapshot.integrity import (
+    verify_asset,
     verify_checksums,
     verify_manifest_digest,
 )
@@ -38,9 +41,48 @@ if typ.TYPE_CHECKING:
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
-_VERIFIED = json.dumps([
-    {"attestation": {}, "verificationResult": {"signature": {"certificate": {}}}}
-])
+
+def _invocation(policy: AttestationPolicy, run_id: int, attempt: int) -> str:
+    """Return the GitHub invocation identifier of one workflow attempt."""
+    return (
+        f"https://github.com/{policy.repository}"
+        f"/actions/runs/{run_id}/attempts/{attempt}"
+    )
+
+
+def _verified(invocation_id: str) -> str:
+    """Return the verifier output for one verified record naming a run."""
+    return json.dumps([
+        {
+            "attestation": {},
+            "verificationResult": {
+                "signature": {"certificate": {}},
+                "statement": {
+                    "predicateType": "https://slsa.dev/provenance/v1",
+                    "predicate": {
+                        "runDetails": {"metadata": {"invocationId": invocation_id}}
+                    },
+                },
+            },
+        }
+    ])
+
+
+def _request(directory: Path) -> AttestationRequest:
+    """Return one attestation request naming the fixture manifest's run."""
+    return AttestationRequest(
+        policy_for_pin(make_pin()),
+        directory / "m.json",
+        directory / "b.jsonl",
+        make_manifest().workflow,
+    )
+
+
+def _matching_output() -> str:
+    """Return verifier output naming the fixture manifest's own run."""
+    policy = policy_for_pin(make_pin())
+    workflow = make_manifest().workflow
+    return _verified(_invocation(policy, workflow.run_id, workflow.run_attempt))
 
 
 def _write_asset(path: Path, data: bytes) -> AssetRecord:
@@ -202,13 +244,69 @@ def test_verified_attestation_returns_records(tmp_path: Path, cmd_mox: CmdMox) -
     def handler(invocation: Invocation) -> tuple[str, str, int]:
         """Answer the verification with one verified record."""
         assert "--bundle" in invocation.args
-        return (_VERIFIED, "", 0)
+        return (_matching_output(), "", 0)
 
     cmd_mox.stub("gh").runs(handler)
-    records = verify_attestation(
-        policy_for_pin(make_pin()), tmp_path / "m.json", tmp_path / "b.jsonl"
-    )
+    records = verify_attestation(_request(tmp_path))
     assert len(records) == 1
+
+
+def test_an_attestation_for_another_run_is_refused(
+    tmp_path: Path, cmd_mox: CmdMox
+) -> None:
+    """A verified statement naming a different run cannot authenticate."""
+    policy = policy_for_pin(make_pin())
+    workflow = make_manifest().workflow
+    other = _verified(_invocation(policy, workflow.run_id + 1, workflow.run_attempt))
+    cmd_mox.stub("gh").runs(lambda invocation: (other, "", 0))
+    with pytest.raises(ProverToolError, match="workflow run"):
+        verify_attestation(_request(tmp_path))
+
+
+def test_an_attestation_for_another_attempt_is_refused(
+    tmp_path: Path, cmd_mox: CmdMox
+) -> None:
+    """A rerun's attestation does not stand in for the recorded attempt."""
+    policy = policy_for_pin(make_pin())
+    workflow = make_manifest().workflow
+    rerun = _verified(_invocation(policy, workflow.run_id, workflow.run_attempt + 1))
+    cmd_mox.stub("gh").runs(lambda invocation: (rerun, "", 0))
+    with pytest.raises(ProverToolError, match="workflow run"):
+        verify_attestation(_request(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        json.dumps([{"attestation": {}, "verificationResult": {"signature": {}}}]),
+        json.dumps([
+            {
+                "attestation": {},
+                "verificationResult": {
+                    "statement": {
+                        "predicate": {
+                            "runDetails": {
+                                "metadata": {
+                                    "invocationId": (
+                                        "https://github.com/leynos/rust-prover-tools"
+                                        "/actions/runs/12345"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+            }
+        ]),
+    ],
+)
+def test_a_verified_record_must_name_the_manifest_run(
+    tmp_path: Path, cmd_mox: CmdMox, payload: str
+) -> None:
+    """A record without the run-and-attempt invocation is not correlated."""
+    cmd_mox.stub("gh").runs(lambda invocation: (payload, "", 0))
+    with pytest.raises(ProverToolError, match="workflow run"):
+        verify_attestation(_request(tmp_path))
 
 
 @pytest.mark.parametrize(
@@ -228,18 +326,14 @@ def test_unverified_attestation_outputs_are_refused(
     """Empty, malformed and unverified responses fail closed."""
     cmd_mox.stub("gh").runs(lambda invocation: (stdout, "", 0))
     with pytest.raises(ProverToolError, match=match):
-        verify_attestation(
-            policy_for_pin(make_pin()), tmp_path / "m.json", tmp_path / "b.jsonl"
-        )
+        verify_attestation(_request(tmp_path))
 
 
 def test_verifier_failure_is_preserved(tmp_path: Path, cmd_mox: CmdMox) -> None:
     """A nonzero verifier status is not masked as success."""
     cmd_mox.stub("gh").runs(lambda invocation: ("", "denied", 2))
     with pytest.raises(CommandFailedError):
-        verify_attestation(
-            policy_for_pin(make_pin()), tmp_path / "m.json", tmp_path / "b.jsonl"
-        )
+        verify_attestation(_request(tmp_path))
 
 
 def test_pin_bytes_are_the_reviewed_artifact() -> None:

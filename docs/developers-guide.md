@@ -531,6 +531,19 @@ the packaged `cargo-kani` from the extracted launcher with
 `execution_environment`, and the probe reads the absolute toolchain link before
 executing `rustc -vV` and `kani-compiler --version`.
 
+`attestation.py` owns the attestation boundary end to end, beside the manifest,
+payload and checksum checks in `integrity.py`. `verify_attestation` runs
+`gh attestation verify` under the fixed policy flags, parses only verified
+records, and requires at least one of them to name the manifest's own run. That
+correlation compares the SLSA v1 `runDetails.metadata.invocationId` with
+`https://github.com/<repository>/actions/runs/<run_id>/attempts/<run_attempt>`
+built from the policy repository and the manifest's `WorkflowIdentity`, so an
+attestation for another run, or for another attempt of the same run,
+authenticates nothing this installation may use. Policy, artefact, bundle and
+identity travel together as one `AttestationRequest` through
+`InstallHooks.verify_attestation`, so a test double observes exactly the run
+the manifest records rather than an assumption about it.
+
 Ordering is part of the contract. The manifest digest and pin binding are
 checked before checksums, checksums before attestation and payload copies, and
 payload digests before archive structure. `validate_archive_inventory` then

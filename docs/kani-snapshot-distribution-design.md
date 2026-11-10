@@ -152,8 +152,14 @@ Use `gh attestation verify` with a local `--bundle`, explicit policy flags and
 JSON output. Parse only successfully verified results. Correlate certificate
 identities with the pin, and the manifest's run/attempt with the verified
 statement; do not treat arbitrary predicate fields as independently observed
-facts. Trust roots come from the supported verifier distribution or separately
-provisioned trusted storage, never from the untrusted asset directory.[^1]
+facts. The verifier's exit status only shows that some attestation satisfied
+the policy flags, so at least one verified record must also name the manifest's
+own run: its `runDetails.metadata.invocationId` has to equal
+`https://github.com/<repository>/actions/runs/<run_id>/attempts/<run_attempt>`
+for the identity the manifest records. An attestation for another run, or a
+rerun of the same run, authenticates nothing this installation may use. Trust
+roots come from the supported verifier distribution or separately provisioned
+trusted storage, never from the untrusted asset directory.[^1]
 
 Trust rests on consumer review, protected builder code, GitHub's identity and
 signing infrastructure, the verifier distribution, upstream dependency
