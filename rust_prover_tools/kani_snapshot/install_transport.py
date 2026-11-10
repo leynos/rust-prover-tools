@@ -17,10 +17,10 @@ import secrets
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.activation import highest_sequence
 from rust_prover_tools.kani_snapshot.archive_graph import ArchivePolicy
 from rust_prover_tools.kani_snapshot.archive_read import read_archive
 from rust_prover_tools.kani_snapshot.cleanup import discard_private_tree
-from rust_prover_tools.kani_snapshot.completion import completion_watermark
 from rust_prover_tools.kani_snapshot.install_copy import (
     TransportFile,
     TransportLimit,
@@ -332,19 +332,20 @@ def _publication(
 ) -> Publication:
     """Own a fresh marker and every marker left by earlier publications.
 
-    The marker records the completion watermark observed now. A publication
-    that is abandoned and resumes after a later installation has completed
-    writes a marker naming an older completion, so readers can tell it has
-    already been overtaken. An unrelated late activation cannot produce that
-    evidence, which is why the watermark rather than the active record is
-    read. Both the watermark read and the marker listing are reads of shared
-    state, so each is supervised.
+    The marker records the highest activation sequence visible now, which is
+    the base a later completion must exceed to retire it. A publication that
+    is abandoned and resumes after a later installation has completed writes a
+    marker naming a base below that completion, so readers can tell it has
+    already been overtaken. The base comes from record names rather than from
+    the watermark so that a completion landing late cannot change what this
+    publication observed. Both the record listing and the marker listing are
+    reads of shared state, so each is supervised.
     """
     publication_id = f"{os.getpid():x}-{secrets.token_hex(8)}"
     marker = layout.publication_marker(publication_id)
-    completed = budget.supervise(
-        "completion watermark read",
-        functools.partial(completion_watermark, layout),
+    base = budget.supervise(
+        "activation sequence read",
+        functools.partial(highest_sequence, layout),
     )
     published = budget.supervise(
         "publication marker listing",
@@ -356,7 +357,7 @@ def _publication(
         marker=marker,
         stale_markers=tuple(path for path in published if path != marker),
         names=tuple(names),
-        completed_sequence=completed,
+        base_sequence=base,
     )
 
 

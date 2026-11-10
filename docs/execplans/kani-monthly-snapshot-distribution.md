@@ -517,6 +517,21 @@ EP-O1 assigns responsibility and records live evidence.
   performs under the lock. New tests cover the late-activation case, a
   corrupt-record repair, stalled asset-directory, checksum, marker-listing and
   activation-directory reads, and the three stalled reads `check` performs.
+- [x] (2026-11-10) Remediated the eleventh candidate-bound EP-M3 re-assessment
+  at `2045556` (one finding). A completion write that the deadline abandoned
+  and a later worker resumed could raise the watermark above the value a repair
+  read before writing its marker, retiring the repair's marker although no
+  installation had finished since it began. A marker now records its base: the
+  highest activation record the publication observed, read from record names
+  only. It stays pending until the completion watermark rises strictly above
+  that base. Because an installation links its record above every existing
+  record before recording completion, a completion above a base always belongs
+  to an installation that started after the publication, while a completion
+  whose record the publication already saw ranks at or below the base however
+  late its write lands. The activation read that supplies the base is
+  supervised as `activation sequence read`. New tests cover the
+  barrier-controlled sequence of the finding and a stalled base read under a
+  real short budget.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -932,12 +947,32 @@ confirmed durable, so no abandoned worker can advance it on its own, and a
 marker is pending unless the watermark has moved past the value the marker
 recorded. Publication reads the watermark instead of the record, which also
 removes the repair path's dependence on parsing the newest record: a corrupt
-record is replaced rather than fatal. A late watermark write can only name a
-sequence the activation order already published, which keeps markers pending
-rather than retiring them, so abandoning that write is safe. The four shared
-reads that remained unbounded under the lock — the asset-directory probe,
-checksum verification, the publication marker listing and the
-activation-directory probe — are now supervised as well.
+record is replaced rather than fatal. A late watermark write names a sequence
+the activation order already published, which was taken to keep markers pending
+rather than retiring them. The eleventh assessment showed that inference was
+wrong: a late value can exceed the watermark a later publication merely read,
+so it can retire that publication's marker; the next entry replaces the
+recorded value with the publication's base. The four shared reads that remained
+unbounded under the lock — the asset-directory probe, checksum verification,
+the publication marker listing and the activation-directory probe — are now
+supervised as well.
+
+2026-11-10, ordered publication markers by their base rather than by the
+watermark they read: the eleventh re-assessment showed that a completion write
+abandoned at the deadline and resumed later can raise the watermark above the
+value a repair read before writing its marker, retiring the repair's marker
+although no installation had finished since it began. A marker now records its
+base — the highest activation record the publication observed, taken from
+record names only — and stays pending until the completion watermark rises
+strictly above that base. Because an installation links its record above every
+existing record before it records completion, a completion above a base always
+belongs to an installation that started after the publication, while a
+completion whose record the publication already saw ranks at or below the base
+however late its write lands. The earlier fixes are preserved: records are
+still never parsed, so a corrupt newest record cannot block a repair, and an
+unrelated activation that records no completion cannot raise the watermark. The
+base read is supervised, and the watermark remains the only evidence that an
+installation finished.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
@@ -951,8 +986,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty-five more issues:
-the runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found thirty-six more issues: the
+runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -969,26 +1004,28 @@ durability sweep with each required toolchain file's ancestor chain, supervised
 generation creation and activation-record enumeration, bounded identity
 directory and lock-file creation with a lock wait limited by the remaining
 budget, publication markers ordered against a completion watermark rather than
-the activation record, repair that survives a corrupt newest record, and
-bounded asset-directory, checksum, marker-listing and activation-directory
-probes. All are repaired with tests recorded in Progress. EP-M1, EP-M4, EP-M5
-and EP-O1, and all publication, have not started. The consumer `install`
-command is deliberately limited to a verified local `--asset-dir` until the
-EP-M4 release transport is connected. Independent reviews covered all five
-requested specialities, with amendments recorded in the design and checked by a
-final testing/consistency review. Planning validation passed `make fmt`,
-`make markdownlint` (including spelling and three spelling-helper tests),
-`make nixie`, and both working/staged `git diff --check`. Earlier
-dependency-network and document spelling/line-wrap failures were resolved
-without weakening gates. Only four Markdown files changed during initial
-planning. The later requested rebase validation ran the full gate stack, as
-recorded below; implementation gates still apply to each future milestone. The
-associated draft PR records the commit, branch, upstream tracking and delivery
-link. Add red/green, smoke and conformance evidence only after approval. Only
-mark implementation roadmap entries complete when their actual acceptance
-criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
-Before status `COMPLETE`, reconcile discoveries with the approved design,
-requirements and every evidence link; do not conceal an unresolved deviation.
+the activation record, publication markers ordered by the base a later
+completion must exceed, repair that survives a corrupt newest record, and
+bounded asset-directory, checksum, marker-listing, activation-directory and
+activation-sequence probes. All are repaired with tests recorded in Progress.
+EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started. The
+consumer `install` command is deliberately limited to a verified local
+`--asset-dir` until the EP-M4 release transport is connected. Independent
+reviews covered all five requested specialities, with amendments recorded in
+the design and checked by a final testing/consistency review. Planning
+validation passed `make fmt`, `make markdownlint` (including spelling and three
+spelling-helper tests), `make nixie`, and both working/staged
+`git diff --check`. Earlier dependency-network and document spelling/line-wrap
+failures were resolved without weakening gates. Only four Markdown files
+changed during initial planning. The later requested rebase validation ran the
+full gate stack, as recorded below; implementation gates still apply to each
+future milestone. The associated draft PR records the commit, branch, upstream
+tracking and delivery link. Add red/green, smoke and conformance evidence only
+after approval. Only mark implementation roadmap entries complete when their
+actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
+operational work. Before status `COMPLETE`, reconcile discoveries with the
+approved design, requirements and every evidence link; do not conceal an
+unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired

@@ -12,27 +12,33 @@ no shared marker name is reused. Every blocking step is supervised, so the
 caller keeps to its budget, and a replacement that outlives the budget is
 reported as an unknown outcome rather than as a failure or a success.
 
-A marker also records the completion watermark it observed: the sequence of
-the last installation that finished before this publication began. Because a
-successful installation is the only writer of that watermark, and it writes it
-while holding the identity lock, a marker can be retired only by an
-installation that completed after it was written. The activation order alone
-cannot express that: an unrelated late activation can outrank the record a
-publication observed without the publication having finished. That
-distinction is what lets an abandoned marker write land after a later
-installation has already reported success without making the cache look
-unfinished, while an abandoned repair's marker still refuses the cache. A
-marker written by an older installation, or one whose content cannot be read,
-names no completion and is still treated as pending.
+A marker also records its base: the highest activation sequence its publication
+observed when it began, read from record names only. A marker is pending until
+the identity's completion watermark, which names the last installation that
+finished, rises above that base. Every installation links its activation record
+above all existing records before it records completion, so a completion above
+a marker's base always belongs to an installation that started after the
+publication did, while a late completion whose record the publication already
+saw ranks no higher than the base and cannot retire it. Comparing markers
+against the activation order directly cannot express that: an unrelated late
+activation can outrank the record a publication observed without the
+publication having finished. That distinction is what lets an abandoned
+marker write land after a later installation has already reported success
+without making the cache look unfinished, while an abandoned repair's marker
+still refuses the cache. A marker written before markers recorded a base, or
+one whose content cannot be read, names no base and is still treated as
+pending.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import functools
+import logging
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.completion import completion_watermark
 from rust_prover_tools.kani_snapshot.durability import (
     flush_directory,
     fsync_directory,
@@ -45,11 +51,22 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.install_model import InstallBudget
+    from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
-__all__ = ("Publication", "marker_completion", "publish_staged", "render_marker")
+__all__ = (
+    "Publication",
+    "marker_base_sequence",
+    "prune_superseded_markers",
+    "publication_pending",
+    "publish_staged",
+    "render_marker",
+)
+
 
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
-_MARKER_PREFIX: typ.Final[bytes] = b"publishing completed="
+_MARKER_PREFIX: typ.Final[bytes] = b"publishing base="
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -68,10 +85,10 @@ class Publication:
         Markers left by publications that are no longer running.
     names : tuple[str, ...]
         Payload file names, each already verified against the manifest.
-    completed_sequence : int
-        Completion watermark observed when this publication began, or zero
-        when no installation had completed. The marker is pending only while
-        no later installation completes.
+    base_sequence : int
+        Highest activation sequence observed when this publication began, or
+        zero when no record existed. The marker is pending until a completion
+        rises above this base.
     """
 
     staging: Path
@@ -79,24 +96,24 @@ class Publication:
     marker: Path
     stale_markers: tuple[Path, ...]
     names: tuple[str, ...]
-    completed_sequence: int
+    base_sequence: int
 
 
-def render_marker(completed_sequence: int) -> bytes:
-    """Render the marker of a publication that observed `completed_sequence`."""
-    if completed_sequence < 0:
-        msg = "snapshot publication completion sequence must not be negative"
+def render_marker(base_sequence: int) -> bytes:
+    """Render the marker of a publication whose base is `base_sequence`."""
+    if base_sequence < 0:
+        msg = "snapshot publication base sequence must not be negative"
         raise ProverToolError(msg)
-    return f"publishing completed={completed_sequence}\n".encode("ascii")
+    return f"publishing base={base_sequence}\n".encode("ascii")
 
 
-def marker_completion(marker: Path) -> int | None:
-    """Return the completion a marker observed, or `None` if unknown.
+def marker_base_sequence(marker: Path) -> int | None:
+    """Return the base a marker recorded, or `None` if unknown.
 
-    A marker written before markers recorded a completion, and one that cannot
-    be read or parsed, names no completed installation. Readers treat both as
-    pending, because an unreadable marker is exactly the case in which the
-    cache must not be assumed complete.
+    A marker written before markers recorded a base, and one that cannot be
+    read or parsed, names no base. Readers treat both as pending, because an
+    unreadable marker is exactly the case in which the cache must not be
+    assumed complete.
     """
     try:
         data = marker.read_bytes()
@@ -109,6 +126,84 @@ def marker_completion(marker: Path) -> int | None:
     if not (digits.isascii() and digits.isdigit()):
         return None
     return int(digits)
+
+
+def publication_pending(layout: SnapshotLayout) -> bool:
+    """Report whether a payload publication has not been confirmed.
+
+    The marker exists from before the first cached payload is replaced until
+    the replacements and their directory flushes are durable. A cache that
+    still carries a pending marker may be half-repaired, so readers must not
+    validate it. Only an installation that completed above the highest
+    activation the publication observed retires it, which the identity's
+    completion watermark records; a marker from an older installation names
+    no base and remains pending.
+    """
+    markers = _publication_markers(layout)
+    completed = completion_watermark(layout)
+    return any(_marker_is_pending(marker, completed) for marker in markers)
+
+
+def _publication_markers(layout: SnapshotLayout) -> tuple[Path, ...]:
+    """Return the publication markers, reporting an unreadable directory."""
+    try:
+        return layout.publication_markers()
+    except OSError as exc:
+        msg = f"failed to read snapshot publication state: {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def _marker_is_pending(marker: Path, completed: int) -> bool:
+    """Report whether `marker` still guards an unfinished publication.
+
+    A completion retires the marker only when it rises above the marker's
+    base, because every installation links its record above the activation
+    records that already exist. A completion at or below that base belongs to
+    an installation the publication already observed, including one whose
+    watermark write was abandoned and landed late.
+    """
+    base = marker_base_sequence(marker)
+    return base is None or base >= completed
+
+
+def prune_superseded_markers(
+    layout: SnapshotLayout,
+    *,
+    budget: InstallBudget | None = None,
+) -> None:
+    """Remove markers that a completed installation has superseded.
+
+    Reuse reissues the record it validated and then records its completion above
+    every marker's base, so the marker of a publication that a reuse overtook
+    becomes stale without ever being observed as pending. Removal is
+    best-effort: the leftover marker is no longer pending and therefore cannot
+    make readers refuse the cache, so a stalled or failed removal is deferred
+    rather than reported.
+    """
+
+    def prune() -> None:
+        """Remove every marker the completion watermark supersedes."""
+        markers = _publication_markers(layout)
+        completed = completion_watermark(layout)
+        for marker in markers:
+            if _marker_is_pending(marker, completed):
+                continue
+            try:
+                marker.unlink(missing_ok=True)
+            except OSError as exc:
+                _LOGGER.debug(
+                    "snapshot marker cleanup deferred: %s", type(exc).__name__
+                )
+
+    try:
+        if budget is None:
+            prune()
+        else:
+            budget.supervise("publication marker cleanup", prune)
+    except ProverToolError as exc:
+        # A marker this run could not remove is harmless once a completion
+        # supersedes it, so an expired budget defers it like any failure.
+        _LOGGER.debug("snapshot marker cleanup deferred: %s", exc)
 
 
 def publish_staged(
@@ -134,7 +229,7 @@ def publish_staged(
         progress()
         write_generation_file(
             publication.marker,
-            render_marker(publication.completed_sequence),
+            render_marker(publication.base_sequence),
             "publication marker",
             budget=budget,
         )

@@ -11,7 +11,6 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import functools
-import logging
 import os
 import time
 import typing as typ
@@ -22,7 +21,6 @@ from rust_prover_tools.kani_snapshot.activation import (
     load_active,
     write_active,
 )
-from rust_prover_tools.kani_snapshot.completion import completion_watermark
 from rust_prover_tools.kani_snapshot.durability import fsync_directory
 from rust_prover_tools.kani_snapshot.identity import (
     SnapshotIdentity,
@@ -43,7 +41,10 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
-from rust_prover_tools.kani_snapshot.publication import marker_completion
+from rust_prover_tools.kani_snapshot.publication import (
+    prune_superseded_markers,
+    publication_pending,
+)
 from rust_prover_tools.kani_snapshot.receipt import (
     load_receipt,
     validate_receipt,
@@ -79,7 +80,6 @@ __all__ = (
     "write_active",
 )
 
-_LOGGER = logging.getLogger(__name__)
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 _LOCK_POLL_SECONDS: typ.Final[float] = 0.05
@@ -194,75 +194,6 @@ def ensure_private_directory(path: Path) -> None:
     except OSError as exc:
         msg = f"failed to create snapshot cache directory '{path}': {exc}"
         raise ProverToolError(msg) from exc
-
-
-def publication_pending(layout: SnapshotLayout) -> bool:
-    """Report whether a payload publication has not been confirmed.
-
-    The marker exists from before the first cached payload is replaced until
-    the replacements and their directory flushes are durable. A cache that
-    still carries a pending marker may be half-repaired, so readers must not
-    validate it. Only an installation that completed after the marker was
-    written retires it, which the identity's completion watermark records; a
-    marker from an older installation names no completion and remains pending.
-    """
-    markers = _publication_markers(layout)
-    completed = completion_watermark(layout)
-    return any(_marker_is_pending(marker, completed) for marker in markers)
-
-
-def _publication_markers(layout: SnapshotLayout) -> tuple[Path, ...]:
-    """Return the publication markers, reporting an unreadable directory."""
-    try:
-        return layout.publication_markers()
-    except OSError as exc:
-        msg = f"failed to read snapshot publication state: {exc}"
-        raise ProverToolError(msg) from exc
-
-
-def _marker_is_pending(marker: Path, completed: int) -> bool:
-    """Report whether `marker` still guards an unfinished publication."""
-    observed = marker_completion(marker)
-    return observed is None or observed >= completed
-
-
-def prune_superseded_markers(
-    layout: SnapshotLayout,
-    *,
-    budget: InstallBudget | None = None,
-) -> None:
-    """Remove markers that a completed installation has superseded.
-
-    Reuse reissues the record it validated and then records its completion, so
-    the marker of a publication that a reuse overtook becomes stale without
-    ever being observed as pending. Removal is best-effort: the leftover
-    marker is no longer pending and therefore cannot make readers refuse the
-    cache, so a stalled or failed removal is deferred rather than reported.
-    """
-
-    def prune() -> None:
-        """Remove every marker the completion watermark supersedes."""
-        markers = _publication_markers(layout)
-        completed = completion_watermark(layout)
-        for marker in markers:
-            if _marker_is_pending(marker, completed):
-                continue
-            try:
-                marker.unlink(missing_ok=True)
-            except OSError as exc:
-                _LOGGER.debug(
-                    "snapshot marker cleanup deferred: %s", type(exc).__name__
-                )
-
-    try:
-        if budget is None:
-            prune()
-        else:
-            budget.supervise("publication marker cleanup", prune)
-    except ProverToolError as exc:
-        # A marker this run could not remove is harmless once a completion
-        # supersedes it, so an expired budget defers it like any failure.
-        _LOGGER.debug("snapshot marker cleanup deferred: %s", exc)
 
 
 def active_manifest(pin: SnapshotPin, layout: SnapshotLayout) -> SnapshotManifest:

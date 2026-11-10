@@ -325,7 +325,8 @@ def write_generation_file(
     budget expires. Two callers write identity-level shared state instead: the
     publication marker, whose whole purpose is to be visible before the first
     payload replacement, and the completion watermark, whose value is always a
-    sequence the activation order has already published.
+    sequence the activation order published before any later publication
+    observed its base.
     """
     pending = path.with_name(
         f".{path.name}-{os.getpid()}-{time.monotonic_ns()}",

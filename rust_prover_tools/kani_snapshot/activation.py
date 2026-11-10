@@ -15,7 +15,10 @@ Durability of activation is part of the contract: a record that cannot be made
 durable is reported as active but unconfirmed, and reuse reissues that flush
 before reporting success. Once the record is confirmed durable, the activation
 also advances the identity's completion watermark, which is what tells readers
-that an installation finished rather than merely that a record exists.
+that an installation finished rather than merely that a record exists. Because
+the record is linked before that watermark is written, a completion that lands
+late still ranks no higher than the base of a publication that began after the
+link, so abandoning the write cannot retire a later unfinished marker.
 """
 
 from __future__ import annotations
@@ -52,6 +55,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "ActivePointer",
+    "highest_sequence",
     "load_active",
     "write_active",
 )
@@ -82,6 +86,18 @@ class ActivePointer:
 
     schema_version: int
     generation: str
+
+
+def highest_sequence(layout: SnapshotLayout) -> int:
+    """Return the highest published activation sequence, or zero.
+
+    Only record names are read, so a damaged newest record still supplies
+    its sequence. Publication needs the ordering rather than the pointer, and
+    refusing to compute it would let a corrupt document block the repair that
+    replaces it.
+    """
+    entries = _activation_entries(layout)
+    return 0 if not entries else entries[-1][0]
 
 
 def load_active(layout: SnapshotLayout) -> ActivePointer | None:

@@ -1491,7 +1491,7 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
                 marker=marker_a,
                 stale_markers=(),
                 names=names,
-                completed_sequence=_completion(layout),
+                base_sequence=activation.highest_sequence(layout),
             ),
             budget=Deadline(time.monotonic() + 0.5),
         )
@@ -1506,7 +1506,7 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
                 marker=marker_b,
                 stale_markers=(marker_a,),
                 names=names,
-                completed_sequence=_completion(layout),
+                base_sequence=activation.highest_sequence(layout),
             ),
             budget=_ExpiringSupervision("publication completion"),
         )
@@ -1518,6 +1518,93 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
         release.set()
 
     assert marker_b.exists(), "an abandoned completion removed a later repair's marker"
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+    install_snapshot(install_options(case), hooks)
+    assert not layout.publication_markers(), (
+        "the completed repair left a publication marker behind"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
+def test_a_late_completion_write_cannot_retire_a_repair_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A watermark that lands late cannot hide a repair that began after it.
+
+    Install A links its activation record and is abandoned while the
+    supervised completion write is stalled. Repair B then observes that
+    record, publishes its own marker, and is interrupted before it replaces
+    any payload. When A's worker resumes and advances the watermark to its own
+    sequence, B's marker must still name an installation that began before
+    that completion, so readers must refuse the cache.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    names = tuple(sorted(path.name for path in layout.downloads_dir.iterdir()))
+
+    release = threading.Event()
+    stalled = threading.Event()
+    finished = threading.Event()
+    real_replace = pathlib.Path.replace
+
+    def stalling_replace(self: Path, target: Path) -> None:
+        """Hold the completion write's rename until the repair is interrupted."""
+        is_watermark = (
+            self.name.startswith(".completed-")
+            and threading.current_thread().name == "snapshot completion watermark"
+        )
+        if not is_watermark:
+            real_replace(self, target)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_replace(self, target)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "replace", stalling_replace)
+
+    # Install A publishes its activation record, then loses its deadline in
+    # the completion write. The abandoned worker keeps running and lands the
+    # watermark only after the repair below has already begun.
+    with pytest.raises(ProverToolError, match=r"completion watermark"):
+        activation.write_active(
+            layout,
+            first.generation.name,
+            budget=Deadline(time.monotonic() + 0.5),
+        )
+    assert stalled.is_set(), "the completion write was never attempted"
+
+    # Repair B observes A's record before writing its marker, then is
+    # interrupted as it publishes the first payload.
+    staging = layout.identity_dir / ".staging-test-late-completion"
+    staging.mkdir(mode=0o700)
+    for name in names:
+        shutil.copy2(layout.downloads_dir / name, staging / name)
+    with pytest.raises(ProverToolError, match=r"outcome is unknown"):
+        publication.publish_staged(
+            install_transport._publication(
+                layout,
+                staging,
+                list(names),
+                Deadline(time.monotonic() + 5.0),
+            ),
+            budget=_ExpiringSupervision("payload publication"),
+        )
+
+    try:
+        release.set()
+        assert finished.wait(10), "the abandoned completion write never resumed"
+    finally:
+        release.set()
+
+    assert layout.publication_markers(), "the interrupted repair left no marker"
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
         check_snapshot(install_options(case), hooks)
 
@@ -2512,6 +2599,53 @@ def test_install_deadline_bounds_a_stalled_marker_listing(
     assert not layout.publication_markers(), "a stalled listing published a marker"
 
 
+def test_install_deadline_bounds_a_stalled_activation_sequence_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The activation sequence a marker records is read under the budget."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    read_thread = "snapshot activation sequence read"
+    real_iterdir = pathlib.Path.iterdir
+
+    def stalling_iterdir(self: Path) -> cabc.Iterator[Path]:
+        """Block the publication's activation listing like a hung filesystem."""
+        is_records = (
+            self == layout.activations_dir
+            and threading.current_thread().name == read_thread
+        )
+        if not is_records:
+            return real_iterdir(self)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_iterdir(self)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", stalling_iterdir)
+    options = dc.replace(install_options(case), deadline_seconds=2.0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during activation sequence read",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the publication never read the activation sequence"
+    assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned read never resumed"
+    assert not layout.publication_markers(), "a stalled read published a marker"
+
+
 def test_write_active_bounds_a_stalled_activation_directory_check(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2689,36 +2823,51 @@ def test_check_deadline_bounds_a_stalled_manifest_read(
     assert finished.wait(10), "the abandoned read never resumed"
 
 
-def test_a_marker_is_pending_until_a_completion_supersedes_it(
+def test_a_marker_is_pending_until_a_completion_supersedes_its_base(
     tmp_path: Path,
 ) -> None:
-    """Only a completion that followed a marker retires it.
+    """Only a completion above a marker's base retires it.
 
-    The marker names the completion watermark its publication observed. A
-    completed installation after that point raises the watermark above it;
-    nothing else can, so a marker cannot be retired by an unrelated
-    activation, and one that names no completion at all stays pending.
+    A marker names the highest activation sequence its publication observed.
+    An installation links its record above that base and then records
+    completion, so the watermark exceeds the base only when an installation
+    finished after the publication began. A marker the watermark merely equals,
+    and one that names no base at all, both stay pending.
     """
     case = make_case(tmp_path)
     hooks = install_hooks(case)
     install_snapshot(install_options(case), hooks)
     layout = snapshot_layout(case.pin, cache_home=case.cache_home)
-    completed = _completion(layout)
+    pointer = load_active(layout)
+    assert pointer is not None, "the install activated no generation"
+    base = activation.highest_sequence(layout)
+    assert base == _completion(layout), (
+        "the completed install did not leave its own record as the highest"
+    )
     marker = layout.publication_marker("completion-test")
 
-    marker.write_bytes(publication.render_marker(completed - 1))
+    marker.write_bytes(publication.render_marker(base))
+    assert install_state.publication_pending(layout), (
+        "a marker at the last completed record was treated as superseded"
+    )
+
+    # A later installation links its record above the marker's base, so its
+    # completion supersedes the marker.
+    activation.write_active(layout, pointer.generation)
+    marker.write_bytes(publication.render_marker(base))
     assert not install_state.publication_pending(layout), (
-        "a marker before the completed installation was treated as pending"
+        "a marker below the last completion was treated as pending"
     )
     check_snapshot(install_options(case), hooks)
 
-    marker.write_bytes(publication.render_marker(completed))
+    superseding = activation.highest_sequence(layout)
+    marker.write_bytes(publication.render_marker(superseding))
     assert install_state.publication_pending(layout), (
-        "a marker at the completed installation was not treated as pending"
+        "a marker at the last completed record was not treated as pending"
     )
     marker.write_bytes(b"publishing\n")
     assert install_state.publication_pending(layout), (
-        "a marker without a readable completion was not treated as pending"
+        "a marker without a readable base was not treated as pending"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
         check_snapshot(install_options(case), hooks)

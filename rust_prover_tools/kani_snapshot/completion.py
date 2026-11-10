@@ -9,9 +9,13 @@ publication observed without that publication having completed.
 
 The watermark is one small file per identity, written only by a lock-holding
 installation after its activation record is confirmed durable. A publication
-reads it once, before writing its marker, and records the value it observed.
-A marker is pending unless the watermark has since advanced past it, so an
-absent, unreadable or malformed watermark only ever keeps a marker pending.
+records the highest activation record it observes when it begins, and its
+marker is pending until the watermark rises above that base. Because an
+installation links its record before it records completion, a watermark above
+a publication's base always names an installation that started after that
+publication, while a completion write that lands late ranks no higher than a
+base any later publication observed. An absent, unreadable or malformed
+watermark reads as zero, which only ever keeps a marker pending.
 """
 
 from __future__ import annotations
@@ -61,11 +65,13 @@ def record_completion(
 ) -> None:
     """Record `sequence` as the last completed installation.
 
-    The value always comes from the activation order, so a write abandoned at
-    the deadline can at worst publish a sequence that a later installation has
-    already passed. Lowering the watermark cannot retire a marker, because a
-    marker is pending while its own completion is not older than the
-    watermark, so that outcome is safe and the next installation corrects it.
+    The value always comes from the activation order, and the record is linked
+    before this write, so a value that lands late still ranks no higher than
+    the base of any publication that began after the link. A marker is pending
+    while the watermark has not risen above its base, so an abandoned write
+    cannot retire a later unfinished publication; a write that never lands
+    leaves the watermark low, which also keeps markers pending, and the next
+    installation corrects it.
     """
     if sequence <= 0:
         msg = "snapshot completion sequence must be positive"
