@@ -1555,7 +1555,7 @@ def test_a_late_completion_write_cannot_retire_a_repair_marker(
     def stalling_replace(self: Path, target: Path) -> None:
         """Hold the completion write's rename until the repair is interrupted."""
         is_watermark = (
-            self.name.startswith(".completed-")
+            self.name.startswith(".completed")
             and threading.current_thread().name == "snapshot completion watermark"
         )
         if not is_watermark:
@@ -1611,6 +1611,136 @@ def test_a_late_completion_write_cannot_retire_a_repair_marker(
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "the completed repair left a publication marker behind"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
+@dc.dataclass
+class _ParkedWrite:
+    """One abandoned write and the events that stall and release it."""
+
+    stalled: threading.Event = dc.field(default_factory=threading.Event)
+    release: threading.Event = dc.field(default_factory=threading.Event)
+    finished: threading.Event = dc.field(default_factory=threading.Event)
+
+    def park(
+        self,
+        replace: cabc.Callable[[Path, Path], None],
+        source: Path,
+        target: Path,
+    ) -> None:
+        """Hold one atomic replacement until the test releases it."""
+        self.stalled.set()
+        self.release.wait(30)
+        try:
+            replace(source, target)
+        finally:
+            self.finished.set()
+
+
+@dc.dataclass
+class _ParkedWrites:
+    """The completion and marker writes an abandoned-worker test parks."""
+
+    completion: _ParkedWrite = dc.field(default_factory=_ParkedWrite)
+    marker: _ParkedWrite = dc.field(default_factory=_ParkedWrite)
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Park the first completion write and the next marker write."""
+        real_replace = pathlib.Path.replace
+
+        def stalling_replace(source: Path, target: Path) -> None:
+            """Hold the parked writes and apply every other replacement."""
+            thread = threading.current_thread().name
+            is_completion = (
+                source.name.startswith(".completed")
+                and not self.completion.stalled.is_set()
+                and thread == "snapshot completion watermark"
+            )
+            if is_completion:
+                self.completion.park(real_replace, source, target)
+                return
+            is_marker = source.name.startswith(f".{PUBLICATION_MARKER_PREFIX}")
+            if is_marker and thread == "snapshot publication marker":
+                self.marker.park(real_replace, source, target)
+                return
+            real_replace(source, target)
+
+        monkeypatch.setattr(pathlib.Path, "replace", stalling_replace)
+
+
+def test_a_late_completion_write_cannot_regress_the_watermark(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A completion that lands last cannot lower the recorded evidence.
+
+    Install A links its activation record and is abandoned while its
+    completion write is stalled. Repair B observes that record and is
+    abandoned while writing its marker, so B's marker is not yet visible.
+    Install C then reuses the intact generation and records a later
+    completion. B's marker lands already superseded, and A's completion lands
+    last: lowering the watermark to A's older sequence would make B's marker
+    pending again and refuse a cache C left intact.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    first = install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    names = tuple(sorted(path.name for path in layout.downloads_dir.iterdir()))
+    writes = _ParkedWrites()
+    writes.install(monkeypatch)
+
+    # A links its record, then loses its deadline in the completion write;
+    # its worker survives this call and lands the value later.
+    with pytest.raises(ProverToolError, match=r"completion watermark"):
+        activation.write_active(
+            layout,
+            first.generation.name,
+            budget=Deadline(time.monotonic() + 0.5),
+        )
+    assert writes.completion.stalled.is_set(), (
+        "the completion write was never attempted"
+    )
+
+    # B observes A's record and is abandoned while writing its marker, so
+    # its marker is not visible to the installation that follows.
+    staging = layout.identity_dir / ".staging-test-regressed-completion"
+    staging.mkdir(mode=0o700)
+    for name in names:
+        shutil.copy2(layout.downloads_dir / name, staging / name)
+    with pytest.raises(ProverToolError, match=r"publication marker"):
+        publication.publish_staged(
+            install_transport._publication(
+                layout,
+                staging,
+                list(names),
+                Deadline(time.monotonic() + 5.0),
+            ),
+            budget=Deadline(time.monotonic() + 0.5),
+        )
+    assert writes.marker.stalled.is_set(), (
+        "the repair's marker write was never attempted"
+    )
+
+    # C reuses the intact generation and records a later completion while
+    # neither abandoned worker is visible.
+    install_snapshot(install_options(case), hooks)
+    later = _completion(layout)
+    assert later > 1, "the reuse recorded no later completion"
+
+    # B's marker lands already superseded, so it must not refuse the cache.
+    writes.marker.release.set()
+    assert writes.marker.finished.wait(10), "the repair's marker write never resumed"
+    assert layout.publication_markers(), "the resumed repair wrote no marker"
+    check_snapshot(install_options(case), hooks)
+
+    # A's completion lands last. If it lowers the watermark, B's marker
+    # becomes pending and the cache C left intact is refused.
+    writes.completion.release.set()
+    assert writes.completion.finished.wait(10), "the abandoned completion never resumed"
+    assert completion.completion_watermark(layout) == later, (
+        "a late completion regressed the watermark"
     )
     check_snapshot(install_options(case), hooks)
 

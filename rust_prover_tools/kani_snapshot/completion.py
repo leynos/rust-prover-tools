@@ -1,60 +1,66 @@
-"""The completion watermark for one snapshot identity.
+"""The completion evidence for one snapshot identity.
 
 A publication marker is retired only by an installation that finished after
-the marker was written, so the cache needs a durable record of the last
-completed installation that is independent of the activation order. The
-activation sequence cannot carry that meaning: an unrelated activation, such
-as one whose worker was abandoned after its link, can outrank the record a
-publication observed without that publication having completed.
+the marker was written, so the cache needs a durable record of completed
+installations that is independent of the activation order. The activation
+sequence cannot carry that meaning: an unrelated activation, such as one whose
+worker was abandoned after its link, can outrank the record a publication
+observed without that publication having completed.
 
-The watermark is one small file per identity, written only by a lock-holding
-installation after its activation record is confirmed durable. A publication
-records the highest activation record it observes when it begins, and its
-marker is pending until the watermark rises above that base. Because an
-installation links its record before it records completion, a watermark above
-a publication's base always names an installation that started after that
-publication, while a completion write that lands late ranks no higher than a
-base any later publication observed. An absent, unreadable or malformed
-watermark reads as zero, which only ever keeps a marker pending.
+The evidence is one create-only record per completed installation, named by the
+sequence it completed and written only by a lock-holding installation after its
+activation record is confirmed durable. A publication records the highest
+activation record it observes when it begins, and its marker is pending until
+the watermark rises above that base. Because an installation links its record
+before it records completion, a watermark above a publication's base always
+names an installation that started after that publication, while a late
+completion adds a record beneath any newer one: it cannot retire a later
+unfinished marker, and it cannot regress the evidence a later installation
+already recorded. An absent, unreadable or malformed record is ignored, and a
+watermark with no records reads as zero, which only ever keeps a marker
+pending.
 """
 
 from __future__ import annotations
 
+import logging
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.cleanup import discard_private_file
 from rust_prover_tools.kani_snapshot.install_generation import write_generation_file
 
 if typ.TYPE_CHECKING:
+    from pathlib import Path
+
     from rust_prover_tools.kani_snapshot.install_model import InstallBudget
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 __all__ = ("completion_watermark", "record_completion")
 
-_FILE_NAME: typ.Final[str] = "completed"
+_LOGGER = logging.getLogger(__name__)
+
+#: Prefix of a create-only record naming one completed installation.
+_RECORD_PREFIX: typ.Final[str] = "completed."
+_RECORD_DIGITS: typ.Final[int] = 20
 
 
 def completion_watermark(layout: SnapshotLayout) -> int:
-    """Return the sequence of the last completed installation, or zero.
+    """Return the highest completion sequence recorded, or zero.
 
-    The file is written only after a lock-holding installation confirmed its
-    activation record durable, so its value always names an installation that
-    finished. A missing, unreadable or malformed file names no completed
-    installation, and reporting zero for it only keeps markers pending, which
-    makes readers refuse the cache until an installation completes.
+    Each completed installation owns a record named by its sequence, so a
+    write that lands after a newer one adds a record this answer ignores
+    rather than lowering it. A missing directory, an unreadable entry or a
+    name that is not a completion record names no completed installation, and
+    reporting zero for those only keeps markers pending, which makes readers
+    refuse the cache until an installation completes.
     """
-    path = layout.identity_dir / _FILE_NAME
-    try:
-        data = path.read_bytes()
-    except FileNotFoundError:
-        return 0
-    except OSError as exc:
-        msg = f"failed to read snapshot completion watermark: {exc}"
-        raise ProverToolError(msg) from exc
-    text = data.strip()
-    if not (text.isascii() and text.isdigit()):
-        return 0
-    return int(text)
+    sequences = (
+        int(digits)
+        for name in _identity_entries(layout)
+        if (digits := _record_digits(name)) is not None
+    )
+    return max(sequences, default=0)
 
 
 def record_completion(
@@ -63,22 +69,82 @@ def record_completion(
     *,
     budget: InstallBudget | None = None,
 ) -> None:
-    """Record `sequence` as the last completed installation.
+    """Record `sequence` as one completed installation.
 
-    The value always comes from the activation order, and the record is linked
-    before this write, so a value that lands late still ranks no higher than
-    the base of any publication that began after the link. A marker is pending
-    while the watermark has not risen above its base, so an abandoned write
-    cannot retire a later unfinished publication; a write that never lands
-    leaves the watermark low, which also keeps markers pending, and the next
-    installation corrects it.
+    The record is named by its sequence and created once, so a write abandoned
+    at the deadline and landed after a newer installation cannot replace that
+    installation's record; it joins the order beneath it, where the watermark
+    ignores it. The activation record is linked before this write, so the
+    sequence still ranks no higher than the base of any publication that began
+    after that link: it cannot retire a later unfinished marker, while a
+    completion above a base always names an installation that started after
+    the publication. Older records are pruned after the new one is durable,
+    and a deferred prune is only a harmless leftover.
     """
     if sequence <= 0:
         msg = "snapshot completion sequence must be positive"
         raise ProverToolError(msg)
     write_generation_file(
-        layout.identity_dir / _FILE_NAME,
+        _record_path(layout, sequence),
         f"{sequence}\n".encode("ascii"),
         "completion watermark",
         budget=budget,
     )
+    _prune_superseded(layout, budget)
+
+
+def _record_path(layout: SnapshotLayout, sequence: int) -> Path:
+    """Return the create-only record naming one completed installation."""
+    return layout.identity_dir / f"{_RECORD_PREFIX}{sequence:0{_RECORD_DIGITS}d}"
+
+
+def _record_digits(name: str) -> str | None:
+    """Return the sequence digits of a completion record name, if it is one."""
+    if not name.startswith(_RECORD_PREFIX):
+        return None
+    digits = name.removeprefix(_RECORD_PREFIX)
+    return digits if digits.isascii() and digits.isdigit() else None
+
+
+def _identity_entries(layout: SnapshotLayout) -> list[str]:
+    """Return every identity entry name, or none when the directory is absent."""
+    try:
+        return [entry.name for entry in layout.identity_dir.iterdir()]
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        msg = f"failed to read snapshot completion watermark: {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def _prune_superseded(
+    layout: SnapshotLayout,
+    budget: InstallBudget | None,
+) -> None:
+    """Remove completion records ranking below the highest recorded one.
+
+    The highest value is recomputed rather than taken from the sequence just
+    written, so a worker that resumes after a newer installation completed
+    removes only records beneath that newer value and never the record readers
+    resolve. A stall is deferred: the completion is already durable and a
+    leftover record is ignored by the watermark.
+    """
+
+    def prune() -> None:
+        """Remove every record below the highest completion recorded."""
+        highest = completion_watermark(layout)
+        for name in _identity_entries(layout):
+            sequence = _record_digits(name)
+            if sequence is not None and int(sequence) < highest:
+                discard_private_file(
+                    layout.identity_dir / name,
+                    phase="completion record cleanup",
+                )
+
+    try:
+        if budget is None:
+            prune()
+        else:
+            budget.supervise("completion record cleanup", prune)
+    except ProverToolError as exc:
+        _LOGGER.debug("snapshot completion record cleanup deferred: %s", exc)

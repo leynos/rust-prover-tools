@@ -16,9 +16,11 @@ durable is reported as active but unconfirmed, and reuse reissues that flush
 before reporting success. Once the record is confirmed durable, the activation
 also advances the identity's completion watermark, which is what tells readers
 that an installation finished rather than merely that a record exists. Because
-the record is linked before that watermark is written, a completion that lands
-late still ranks no higher than the base of a publication that began after the
-link, so abandoning the write cannot retire a later unfinished marker.
+the record is linked before that completion record is written, a completion
+that lands late still ranks no higher than the base of a publication that
+began after the link, and its create-only record joins the order beneath any
+newer completion, so abandoning the write can neither retire a later
+unfinished marker nor lower the evidence a later installation recorded.
 """
 
 from __future__ import annotations

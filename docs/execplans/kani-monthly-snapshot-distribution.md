@@ -532,6 +532,17 @@ EP-O1 assigns responsibility and records live evidence.
   supervised as `activation sequence read`. New tests cover the
   barrier-controlled sequence of the finding and a stalled base read under a
   real short budget.
+- [x] (2026-11-10) Remediated the twelfth candidate-bound EP-M3 re-assessment
+  at `0574a88` (one finding). A completion write abandoned at the deadline and
+  resumed after a later installation had recorded its own could replace the
+  watermark with the older sequence, so a marker the later completion had
+  already retired looked pending again and `check` refused an intact cache.
+  Completion evidence is now one create-only record per finished installation,
+  named by the sequence it completed, so the watermark is their highest value
+  and a late write joins the order beneath a newer record instead of replacing
+  it. Older records are pruned after the new one is durable, and a deferred
+  prune is a harmless leftover. A barrier test reproduces the sequence and
+  requires `check` to accept the cache after both abandoned workers resume.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -974,6 +985,17 @@ unrelated activation that records no completion cannot raise the watermark. The
 base read is supervised, and the watermark remains the only evidence that an
 installation finished.
 
+2026-11-10, recorded completion as one create-only record per installation
+rather than one mutable watermark file: the twelfth re-assessment showed that
+an abandoned completion write resuming after a later installation's own
+completion could lower the watermark, so a marker the later completion had
+already retired became pending again and `check` refused an intact cache.
+Naming each record by the sequence it completed makes the watermark their
+highest value; a late write adds evidence beneath a newer record instead of
+replacing it, so the watermark can rise but never regress, and a marker is
+still retired only by a completion above its base. Older records are pruned
+after the new one is durable, and a deferred prune is a harmless leftover.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -986,8 +1008,8 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty-six more issues: the
-runtime-file contract before activation, `run` executing the validated
+tests. Further candidate-bound re-assessments found thirty-seven more issues:
+the runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
 the identity lock, supervised reuse reads, a durability contract that neither
@@ -1005,7 +1027,8 @@ generation creation and activation-record enumeration, bounded identity
 directory and lock-file creation with a lock wait limited by the remaining
 budget, publication markers ordered against a completion watermark rather than
 the activation record, publication markers ordered by the base a later
-completion must exceed, repair that survives a corrupt newest record, and
+completion must exceed, completion records that cannot regress when an
+abandoned write lands last, repair that survives a corrupt newest record, and
 bounded asset-directory, checksum, marker-listing, activation-directory and
 activation-sequence probes. All are repaired with tests recorded in Progress.
 EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started. The
