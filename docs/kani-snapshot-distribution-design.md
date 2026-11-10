@@ -420,13 +420,20 @@ while the installer waits no longer than the remaining budget, and abandons it
 on expiry. That is safe only because publication stays on the calling thread
 and every operation wrapped this way writes to a private staging directory or a
 unreferenced generation; the active-pointer rename is preceded by its own
-budget check after the temporary document is durable. Reuse is reported only
-after a final deadline check following the probe. The active pointer is written
-to a private temporary file, fsynced, checked against the budget, atomically
-renamed and followed by a directory fsync. A stall in that final directory
-flush happens after the rename is already visible, so it is logged as deferred
-durability rather than failing an activation that has occurred. A failed stage,
-extraction, setup or probe leaves the previous pointer untouched.
+budget check after the temporary document is durable. Reads of the pointer and
+the cached manifest on the reuse path are supervised too, since a hung read
+would otherwise hold the identity lock past the deadline and abandoning a read
+mutates nothing. Staged payloads are published on the calling thread with a
+budget check before each replacement, because a supervised publisher that timed
+out could still replace a file after the installation had reported failure.
+Reuse is reported only after a final deadline check following the probe. The
+active pointer is written to a private temporary file, fsynced, checked against
+the budget, atomically renamed and followed by a directory fsync. Activation
+includes that flush: a flush that times out or fails raises an error naming the
+generation that is already visible, so publication is never reported as failed
+when it happened and durability is never claimed when it could not be
+confirmed. A failed stage, extraction, setup or probe leaves the previous
+pointer untouched.
 
 `run` revalidates the generation, then runs the pinned launcher in the
 repository root and mirrors its stdout and stderr live. It executes the exact

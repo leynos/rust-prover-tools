@@ -358,13 +358,14 @@ EP-O1 assigns responsibility and records live evidence.
   writes in a private daemon thread and abandons them at the remaining budget;
   this is safe because those writes are private staging or unreferenced
   generations and the active-pointer rename follows an explicit
-  `pointer publication` budget check. A post-rename directory flush that times
-  out is logged as deferred durability rather than failing a visible
-  activation. (3) `check` and `run` resolve and validate the pointer while
-  holding the same bounded identity lock as installation, so a reader cannot
-  validate a cache a repair is rewriting. New tests cover a link into a sibling
-  home, a retargeted contained link, a write stalled in `fsync` under a real
-  short budget, an expiry immediately before the pointer rename with no
+  `pointer publication` budget check. (3) `check` and `run` resolve and
+  validate the pointer while holding the same bounded identity lock as
+  installation, so a reader cannot validate a cache a repair is rewriting. For
+  this candidate a post-rename directory flush that timed out was logged as
+  deferred durability; the fourth re-assessment rejected that contract, and the
+  paragraph below records the replacement. New tests cover a link into a
+  sibling home, a retargeted contained link, a write stalled in `fsync` under a
+  real short budget, an expiry immediately before the pointer rename with no
   temporary left behind, a barrier-controlled check-versus-repair refusal, and
   a repair forced by a transient probe failure and killed mid-staging where the
   previous generation still validates with healthy hooks before recovery. The
@@ -375,6 +376,25 @@ EP-O1 assigns responsibility and records live evidence.
   suppressing the check per file. The full sequential gate stack passed on the
   working tree: 1181 passed, 5 skipped, interrogate 100%, Pylint 10.00/10, `ty`
   clean, spelling, Markdown and Mermaid validation clean.
+- [x] (2026-11-10) Remediated the fourth candidate-bound EP-M3 re-assessment at
+  `8d7d0e8` (two findings). (1) The deadline now bounds every blocking
+  operation on the install path that can be bounded safely. The pointer and
+  cached-manifest reads on the reuse path are supervised, because a hung read
+  would otherwise hold the identity lock past the deadline and abandoning a
+  read mutates nothing. Staged payloads are published on the calling thread
+  with a budget check before the directory creation and before every
+  replacement: publication replaces shared files one at a time, so a supervised
+  publisher that timed out could still replace a file after the installation
+  had reported failure. The active-pointer rename stays a single synchronous
+  atomic operation issued only while the budget remains. (2) Durability is part
+  of activation again. The post-rename directory flush is bounded by the
+  remaining budget and a timeout or `OSError` raises a distinct error naming
+  the generation that is already visible, instead of logging deferred
+  durability and returning success, or reporting a publication failure after
+  the pointer had changed. New tests cover an expiry before payload
+  publication, a stalled manifest read under a real short budget, a failed
+  post-rename flush, and a flush timeout; each asserts the pointer state the
+  error describes.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -678,13 +698,27 @@ Wrapping is safe only where the output is a private staging directory or an
 unreferenced generation; every publication stays on the calling thread and the
 active-pointer rename is preceded by a `pointer publication` budget check after
 the temporary document is durable, so an abandoned worker can never make shared
-state visible. The directory flush after the rename cannot change what is
-published, so its expiry is logged as deferred durability. `check` and `run`
-now hold the bounded identity lock while resolving and validating the pointer,
-matching the design's reader rule, because a repair publishes verified payloads
-file by file under that lock. `pyroot` links must resolve inside the Python
-root because the record describes link text, not reachable content; a target in
-a sibling generation home would be neither recorded nor observed on reuse.
+state visible. `check` and `run` now hold the bounded identity lock while
+resolving and validating the pointer, matching the design's reader rule,
+because a repair publishes verified payloads file by file under that lock.
+`pyroot` links must resolve inside the Python root because the record describes
+link text, not reachable content; a target in a sibling generation home would
+be neither recorded nor observed on reuse.
+
+2026-11-10, revised D4 publication bounds and durability: the fourth
+re-assessment showed that reuse still read the pointer and manifest
+unsupervised, that staged payloads were published without a budget check, and
+that a post-rename flush failure or expiry was logged as deferred durability
+while install reported success. Reuse reads are now supervised, because
+abandoning a read mutates nothing. Payload publication checks the budget before
+the directory creation and before every replacement on the calling thread, so
+an expiry stops before the next shared file is replaced rather than abandoning
+a worker that could still replace it. Activation now includes durability: the
+post-rename directory flush is bounded by the remaining budget, and a timeout or
+`OSError` raises an error naming the generation that is already visible.
+Success therefore still means the activation was flushed, while a failure
+distinguishes visible-but-not-durable activation from a publication that never
+happened.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
@@ -698,18 +732,20 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Two further candidate-bound re-assessments found ten more issues: the
+tests. Further candidate-bound re-assessments found fifteen more issues: the
 runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
-supervised blocking work with a pre-publication budget check, and readers
-holding the identity lock. All are repaired with tests recorded in Progress.
-EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started. The
-consumer `install` command is deliberately limited to a verified local
-`--asset-dir` until the EP-M4 release transport is connected. Independent
-reviews covered all five requested specialities, with amendments recorded in
-the design and checked by a final testing/consistency review. Planning
-validation passed `make fmt`, `make markdownlint` (including spelling and three
-spelling-helper tests), `make nixie`, and both working/staged
+supervised blocking work with a pre-publication budget check, readers holding
+the identity lock, supervised reuse reads, checkpointed payload publication,
+and a durability contract that neither claims an unflushed activation nor
+reports a publication failure after the pointer changed. All are repaired with
+tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
+have not started. The consumer `install` command is deliberately limited to a
+verified local `--asset-dir` until the EP-M4 release transport is connected.
+Independent reviews covered all five requested specialities, with amendments
+recorded in the design and checked by a final testing/consistency review.
+Planning validation passed `make fmt`, `make markdownlint` (including spelling
+and three spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the
