@@ -554,6 +554,15 @@ EP-O1 assigns responsibility and records live evidence.
   test seeds every malformed shape above the real completion beside an
   unfinished marker and requires the watermark not to move and `check` to
   refuse the cache.
+- [x] (2026-11-10) Remediated the fourteenth candidate-bound EP-M3
+  re-assessment at `4d2e4f0` (one finding). A canonically named completion
+  record was read in full before its contents were compared, so an oversized
+  record could exhaust the process deciding whether a marker is pending. The
+  read now stops one byte past a canonical record, so an oversized record is
+  refused without being loaded. A test seeds a 1 MiB canonical record beside an
+  unfinished marker, records every read size through a wrapped handle, requires
+  each read to carry a bound, and requires the marker to stay pending and
+  `check` to refuse the cache.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -1017,6 +1026,13 @@ symlink, and its contents name that same sequence. Anything else is ignored,
 which keeps markers pending, so unaccountable evidence can only make readers
 refuse the cache, never accept an incomplete one.
 
+2026-11-10, bounded the completion-record read: the fourteenth re-assessment
+showed that validating record contents still read the whole file first, so a
+canonically named but oversized record could exhaust the process on the reader
+path. The read now stops one byte past a canonical record and the comparison
+happens against those bytes, so unaccountable evidence costs bounded memory as
+well as failing to retire a marker.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1029,7 +1045,7 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found thirty-eight more issues:
+tests. Further candidate-bound re-assessments found thirty-nine more issues:
 the runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
@@ -1050,16 +1066,16 @@ budget, publication markers ordered against a completion watermark rather than
 the activation record, publication markers ordered by the base a later
 completion must exceed, completion records that cannot regress when an
 abandoned write lands last, completion evidence that must be canonical before
-it can retire a marker, repair that survives a corrupt newest record, and
-bounded asset-directory, checksum, marker-listing, activation-directory and
-activation-sequence probes. All are repaired with tests recorded in Progress.
-EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started. The
-consumer `install` command is deliberately limited to a verified local
-`--asset-dir` until the EP-M4 release transport is connected. Independent
-reviews covered all five requested specialities, with amendments recorded in
-the design and checked by a final testing/consistency review. Planning
-validation passed `make fmt`, `make markdownlint` (including spelling and three
-spelling-helper tests), `make nixie`, and both working/staged
+it can retire a marker and must not be loaded whole, repair that survives a
+corrupt newest record, and bounded asset-directory, checksum, marker-listing,
+activation-directory and activation-sequence probes. All are repaired with
+tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
+have not started. The consumer `install` command is deliberately limited to a
+verified local `--asset-dir` until the EP-M4 release transport is connected.
+Independent reviews covered all five requested specialities, with amendments
+recorded in the design and checked by a final testing/consistency review.
+Planning validation passed `make fmt`, `make markdownlint` (including spelling
+and three spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the

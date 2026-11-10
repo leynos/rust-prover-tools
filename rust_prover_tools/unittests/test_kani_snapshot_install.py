@@ -3051,6 +3051,79 @@ def test_malformed_completion_evidence_cannot_retire_a_marker(
         check_snapshot(install_options(case), hooks)
 
 
+def test_an_oversized_completion_record_is_read_with_a_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A canonically named but huge record is refused without being loaded.
+
+    The watermark is read while deciding whether a marker is pending, so the
+    read is limited to one byte more than a canonical record. An oversized
+    record therefore costs no more memory than a valid one, and the marker it
+    would otherwise retire stays pending.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    completed = _completion(layout)
+    marker = layout.publication_marker("oversized-completion-test")
+    marker.write_bytes(publication.render_marker(activation.highest_sequence(layout)))
+    oversized = layout.identity_dir / f"completed.{completed + 1:020d}"
+    oversized.write_bytes(b"9" * (1 << 20))
+
+    reads: list[int] = []
+    real_open = pathlib.Path.open
+
+    class _RecordingReader:
+        """Record each read size made through the oversized record's handle."""
+
+        def __init__(self, handle: typ.BinaryIO) -> None:
+            """Wrap `handle`, recording the size of every read."""
+            self._handle = handle
+
+        def __enter__(self) -> _RecordingReader:
+            """Return the wrapper for a `with` statement."""
+            return self
+
+        def __exit__(self, *exc_info: object) -> None:
+            """Close the wrapped handle."""
+            self._handle.close()
+
+        def read(self, size: int = -1) -> bytes:
+            """Record `size` and delegate to the wrapped handle."""
+            reads.append(size)
+            return self._handle.read(size)
+
+    def recording_open(
+        self: Path,
+        mode: str = "r",
+        buffering: int = -1,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> object:
+        """Wrap only the oversized record's handle, passing others through."""
+        handle = real_open(self, mode, buffering, encoding, errors, newline)
+        if self != oversized:
+            return handle
+        return _RecordingReader(typ.cast("typ.BinaryIO", handle))
+
+    monkeypatch.setattr(pathlib.Path, "open", recording_open)
+    assert completion.completion_watermark(layout) == completed, (
+        "an oversized completion record raised the watermark"
+    )
+    assert reads, "the oversized completion record was never read"
+    assert all(size >= 0 for size in reads), (
+        f"the completion record was read without a bound: {reads}"
+    )
+    assert install_state.publication_pending(layout), (
+        "oversized completion evidence retired an unfinished marker"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+
 class _ReuseValidationFailure:
     """Fail the first reuse validation so the next attempt publishes.
 

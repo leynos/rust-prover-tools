@@ -478,13 +478,15 @@ the cache must not be assumed complete. A completion record counts only when
 its name is canonical, its entry is a regular file rather than a directory or a
 symlink, and its contents name the same sequence; anything else names no
 finished installation and is ignored, because evidence the installer cannot
-account for must not retire a marker. An identity with no readable completion
-record reports a watermark of zero, which can only keep markers pending.
-Directory creation, each replacement, both directory flushes and the marker
-removal are supervised. A replacement that outlives the budget is reported as
-an unknown outcome, because the abandoned worker may still complete that atomic
-rename; every payload was verified before publication, so the cache is then
-either valid or detectably incomplete. A stale marker whose removal fails is an
+account for must not retire a marker. Contents are read only as far as a
+canonical record, so corrupt evidence cannot exhaust the process deciding
+whether a marker is pending. An identity with no readable completion record
+reports a watermark of zero, which can only keep markers pending. Directory
+creation, each replacement, both directory flushes and the marker removal are
+supervised. A replacement that outlives the budget is reported as an unknown
+outcome, because the abandoned worker may still complete that atomic rename;
+every payload was verified before publication, so the cache is then either
+valid or detectably incomplete. A stale marker whose removal fails is an
 installation failure rather than a logged deferral: readers refuse any marked
 cache, so continuing would report a usable generation the cache cannot serve.
 

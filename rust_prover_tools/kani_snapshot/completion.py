@@ -18,9 +18,10 @@ completion adds a record beneath any newer one: it cannot retire a later
 unfinished marker, and it cannot regress the evidence a later installation
 already recorded. Only evidence this module writes counts: a record must have
 the canonical name, be a regular file, and name the same sequence in its
-contents. An absent, unreadable, mismatched or malformed record is ignored,
-and a watermark with no records reads as zero, which only ever keeps a marker
-pending.
+contents, read only as far as a canonical record so corrupt evidence cannot
+exhaust the process. An absent, unreadable, mismatched or malformed record is
+ignored, and a watermark with no records reads as zero, which only ever keeps a
+marker pending.
 """
 
 from __future__ import annotations
@@ -56,7 +57,8 @@ def completion_watermark(layout: SnapshotLayout) -> int:
     canonical, an entry that is not a regular file, and unreadable or
     mismatched contents all name no completed installation; reporting zero
     for those only keeps markers pending, which makes readers refuse the cache
-    until an installation completes.
+    until an installation completes. Each record is read only as far as one
+    byte past a canonical one, so a corrupt record cannot exhaust the caller.
     """
     sequences = (
         sequence
@@ -124,12 +126,19 @@ def _record_sequence(path: Path) -> int | None:
 
 
 def _record_names(path: Path, sequence: int) -> bool:
-    """Report whether `path` is a regular file whose bytes name `sequence`."""
+    """Report whether `path` is a regular file whose bytes name `sequence`.
+
+    The read stops one byte past a canonical record, so a canonically named
+    but arbitrarily large file is refused without being loaded: deciding
+    whether a marker is pending must not let corrupt state exhaust the
+    process.
+    """
     expected = f"{sequence}\n".encode("ascii")
     try:
         if not path.is_file(follow_symlinks=False):
             return False
-        return path.read_bytes() == expected
+        with path.open("rb") as handle:
+            return handle.read(len(expected) + 1) == expected
     except OSError:
         return False
 
