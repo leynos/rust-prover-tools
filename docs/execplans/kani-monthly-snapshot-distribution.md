@@ -586,6 +586,16 @@ EP-O1 assigns responsibility and records live evidence.
   `marker_base_sequence` to return `None`, requires `check` to refuse the
   cache, then requires a subsequent install to clear the marker and `check` to
   pass.
+- [x] (2026-11-10) Remediated the seventeenth candidate-bound EP-M3
+  re-assessment at `5bde0fd` (one finding). A complete marker was trusted for
+  its parsed base alone, so a leading zero, which `render_marker` never writes,
+  still named a base below the completion watermark and could retire itself.
+  The parser now accepts a base only when the whole file is exactly the bytes
+  `render_marker` writes for it, so any other spelling names no base and stays
+  pending. A regression requires the canonical base zero to keep parsing,
+  requires `publishing base=00` to name no base, requires `check` to refuse the
+  cache, then requires a subsequent install to clear the marker and `check` to
+  pass.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -1076,6 +1086,16 @@ longer than the longest canonical marker, requires the terminator
 stays pending, so the cache remains refused until an installation repairs it
 through publication.
 
+2026-11-10, accepted a marker base only from the canonical spelling: the
+seventeenth re-assessment showed that requiring a complete marker still trusted
+any digits that converted, so a corrupted `publishing base=10` written as
+`publishing base=00` parsed as zero, which every completion watermark
+supersedes. A marker now names a base only when the whole file is exactly the
+bytes `render_marker` writes for that base, so a leading zero and every other
+non-canonical spelling name no base. The canonical base zero is still accepted;
+it is a spelling this module can write, even though a completion above it
+retires the marker as before.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1088,7 +1108,7 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found forty-one more issues: the
+tests. Further candidate-bound re-assessments found forty-two more issues: the
 runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
@@ -1112,10 +1132,11 @@ abandoned write lands last, completion evidence that must be canonical before
 it can retire a marker and must not be loaded whole, repair that survives a
 corrupt newest record, and bounded asset-directory, checksum, marker-listing,
 activation-directory and activation-sequence probes, and a bounded marker read
-that refuses an unparsable base, an incomplete marker or a truncated tail and
-keeps the marker pending instead of raising. All are repaired with tests
-recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have
-not started. The consumer `install` command is deliberately limited to a
+that accepts a base only from the canonical bytes `render_marker` writes, so an
+unparsable base, an incomplete marker, a truncated tail or a non-canonical
+spelling keeps the marker pending instead of raising. All are repaired with
+tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication,
+have not started. The consumer `install` command is deliberately limited to a
 verified local `--asset-dir` until the EP-M4 release transport is connected.
 Independent reviews covered all five requested specialities, with amendments
 recorded in the design and checked by a final testing/consistency review.

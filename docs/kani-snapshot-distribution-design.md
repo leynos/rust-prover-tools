@@ -472,11 +472,14 @@ publication writes late names a base below the completion of any installation
 that finished after it began, so it cannot make a completed cache look
 unfinished, while the marker of an interrupted repair stays pending until an
 installation that began after it completes. A marker written before markers
-recorded a base, one whose bytes cannot be read, one that is not exactly a
-complete canonical marker, and one whose base carries more digits than an
-activation sequence, all name no base; each remains pending, because an
-unreadable or malformed marker is exactly the case in which the cache must not
-be assumed complete. The marker read stops one byte past the longest canonical
+recorded a base, one whose bytes cannot be read, one whose bytes are not
+exactly what the writer would produce for the base it appears to name, and one
+whose base carries more digits than an activation sequence, all name no base;
+each remains pending, because an unreadable or malformed marker is exactly the
+case in which the cache must not be assumed complete. A parsed base is
+therefore accepted only when the whole file is the canonical spelling, so a
+leading zero or any other non-canonical form names no base even though it
+converts to one. The marker read stops one byte past the longest canonical
 marker, so a marker that fills that read continues past what was read and its
 visible prefix is not trusted; a base longer than a sequence is unparsable
 rather than fatal. Neither case can exhaust the process or raise out of the

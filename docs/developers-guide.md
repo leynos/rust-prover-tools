@@ -571,25 +571,27 @@ installation links its record before recording completion, a completion above a
 base always belongs to an installation that started after the publication,
 while a completion whose record the publication already saw cannot retire the
 marker even when its write lands late; a marker that records no base, whose
-content cannot be parsed, that is not exactly a complete canonical marker, or
-whose base carries more digits than an activation sequence, is still pending,
-and an absent watermark, or evidence that is malformed, unreadable or
-mismatched, reads as zero. A marker is read only as far as the longest
-canonical one plus a byte, so a corrupt marker can neither exhaust the process
-nor raise out of `check`, and a marker that fills that read is refused rather
-than trusted for its visible prefix; the next install repairs the cache because
-the pending marker sends it down the publication path, which clears stale
-markers. Ordering against completions rather than the activation order matters
-because an unrelated late activation can outrank the record a publication
-observed without that publication having finished. Because reuse reissues the
-record it validated and then records its own completion above every marker's
-base, an abandoned publication that writes its marker after a reuse names a
-lower base and cannot make a completed cache look unfinished. A stale
-publication marker whose removal fails is an installation failure rather than a
-logged deferral, because readers still refuse a cache whose marker has not been
-superseded. Cache reuse rehashes the backend, inventory and launcher payloads
-and re-reads each archive's structure, so a size-preserving edit is still
-refused. A failure must leave the previous pointer and generation intact.
+content cannot be parsed, whose bytes are not exactly what the writer produces
+for the base it appears to name, or whose base carries more digits than an
+activation sequence, is still pending, and an absent watermark, or evidence
+that is malformed, unreadable or mismatched, reads as zero. A parsed base is
+accepted only from the canonical spelling of the whole file, so a leading zero
+names no base. A marker is read only as far as the longest canonical one plus a
+byte, so a corrupt marker can neither exhaust the process nor raise out of
+`check`, and a marker that fills that read is refused rather than trusted for
+its visible prefix; the next install repairs the cache because the pending
+marker sends it down the publication path, which clears stale markers. Ordering
+against completions rather than the activation order matters because an
+unrelated late activation can outrank the record a publication observed without
+that publication having finished. Because reuse reissues the record it
+validated and then records its own completion above every marker's base, an
+abandoned publication that writes its marker after a reuse names a lower base
+and cannot make a completed cache look unfinished. A stale publication marker
+whose removal fails is an installation failure rather than a logged deferral,
+because readers still refuse a cache whose marker has not been superseded.
+Cache reuse rehashes the backend, inventory and launcher payloads and re-reads
+each archive's structure, so a size-preserving edit is still refused. A failure
+must leave the previous pointer and generation intact.
 
 Proof execution mirrors the launcher's streams live and retains only a bounded
 tail of each one through `commands.TailCapture` (64 KiB per stream by default).

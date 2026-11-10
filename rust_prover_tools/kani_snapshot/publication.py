@@ -26,12 +26,12 @@ publication having finished. That distinction is what lets an abandoned
 marker write land after a later installation has already reported success
 without making the cache look unfinished, while an abandoned repair's marker
 still refuses the cache. A marker written before markers recorded a base, one
-whose content cannot be read, one that is not exactly a complete canonical
-marker, and one whose base is longer than an activation sequence, all name no
-base and are still treated as pending. The marker read is bounded and an
-unparsable or incomplete marker stays an unknown rather than an error, so
-corrupt state can only keep the cache refused until an installation repairs
-it.
+whose content cannot be read, one whose bytes are not exactly what
+`render_marker` writes for the base it appears to name, and one whose base is
+longer than an activation sequence, all name no base and are still treated as
+pending. The marker read is bounded and an unparsable, incomplete or
+non-canonical marker stays an unknown rather than an error, so corrupt state
+can only keep the cache refused until an installation repairs it.
 """
 
 from __future__ import annotations
@@ -120,9 +120,9 @@ def marker_base_sequence(marker: Path) -> int | None:
     """Return the base a marker recorded, or `None` if unknown.
 
     A marker written before markers recorded a base, one that cannot be read,
-    and one that is not exactly a complete canonical marker all name no base.
-    Readers treat each as pending, because an unreadable or malformed marker is
-    exactly the case in which the cache must not be assumed complete.
+    and one whose bytes are not exactly what `render_marker` writes all name no
+    base. Readers treat each as pending, because an unreadable or malformed
+    marker is exactly the case in which the cache must not be assumed complete.
 
     The read stops one byte past the longest canonical marker, so corrupt state
     cannot exhaust the process. A marker that fills that read continues past
@@ -141,14 +141,15 @@ def marker_base_sequence(marker: Path) -> int | None:
 
 
 def _parse_marker(data: bytes) -> int | None:
-    """Return the base a complete canonical marker names, or `None`.
+    """Return the base a marker names, or `None` unless it is canonical.
 
-    The caller reads one byte past the longest canonical marker, so a buffer
-    that reached the limit means the marker continues beyond what was read. Its
-    tail is unknown, and neither it nor a marker without the terminator
-    `render_marker` writes may be trusted for the bytes that were visible.
+    The caller reads one byte past the longest canonical marker, so a buffer at
+    the limit means the marker continues beyond what was read. A marker counts
+    only when the whole file is exactly the bytes `render_marker` would write
+    for the base it appears to name: a truncated tail, a missing terminator or
+    any other spelling, such as a leading zero, names no base.
     """
-    if len(data) > _MAX_MARKER_BYTES or not data.endswith(_MARKER_TERMINATOR):
+    if len(data) > _MAX_MARKER_BYTES:
         return None
     text = data.removesuffix(_MARKER_TERMINATOR)
     if not text.startswith(_MARKER_PREFIX):
@@ -156,9 +157,10 @@ def _parse_marker(data: bytes) -> int | None:
     digits = text.removeprefix(_MARKER_PREFIX)
     if not (digits.isascii() and digits.isdigit()):
         return None
-    if len(digits) > _MAX_BASE_DIGITS:
+    base = int(digits)
+    if data != render_marker(base):
         return None
-    return int(digits)
+    return base
 
 
 def publication_pending(layout: SnapshotLayout) -> bool:

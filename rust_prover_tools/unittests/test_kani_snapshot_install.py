@@ -3190,6 +3190,42 @@ def test_a_truncated_marker_cannot_retire_itself(tmp_path: Path) -> None:
     check_snapshot(install_options(case), hooks)
 
 
+def test_a_non_canonical_marker_cannot_retire_itself(tmp_path: Path) -> None:
+    """A marker counts only when its bytes are exactly what we would write.
+
+    A leading zero parses as the base it names but is not a spelling this
+    module ever writes. Trusting it would let a corrupted marker naming a base
+    below the completion watermark retire itself, so it must stay pending
+    while the canonical base zero it mimics is still accepted.
+    """
+    case = make_case(tmp_path)
+    hooks = install_hooks(case)
+    install_snapshot(install_options(case), hooks)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    marker = layout.publication_marker("non-canonical-marker-test")
+
+    marker.write_bytes(publication.render_marker(0))
+    assert publication.marker_base_sequence(marker) == 0, (
+        "a canonical base zero was refused"
+    )
+
+    marker.write_bytes(b"publishing base=00\n")
+    assert publication.marker_base_sequence(marker) is None, (
+        "a leading-zero marker named a base"
+    )
+    assert install_state.publication_pending(layout), (
+        "a non-canonical marker retired itself"
+    )
+    with pytest.raises(ProverToolError, match=r"publication did not finish"):
+        check_snapshot(install_options(case), hooks)
+
+    install_snapshot(install_options(case), hooks)
+    assert not layout.publication_markers(), (
+        "the repair left the non-canonical marker in place"
+    )
+    check_snapshot(install_options(case), hooks)
+
+
 class _ReuseValidationFailure:
     """Fail the first reuse validation so the next attempt publishes.
 
