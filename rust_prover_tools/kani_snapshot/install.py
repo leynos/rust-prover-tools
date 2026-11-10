@@ -264,7 +264,14 @@ def _install_generation(
     layout: SnapshotLayout,
 ) -> SnapshotIdentity:
     """Run setup in a new generation and publish it only after validation."""
-    ensure_private_directory(layout.generation_dir)
+    # The generation directory is private and unreferenced until activation,
+    # and `mkdir` is idempotent, so a creation abandoned at the deadline may
+    # still finish harmlessly. Supervision keeps a stalled mkdir from holding
+    # the identity lock past the budget.
+    context.deadline.supervise(
+        "generation directory creation",
+        functools.partial(ensure_private_directory, layout.generation_dir),
+    )
     # The generation's own directory entry lives in `generations`, so that
     # parent must be durable before the pointer can be understood to name it.
     flush_directory(

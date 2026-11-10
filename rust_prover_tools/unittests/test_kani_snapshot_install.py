@@ -41,6 +41,7 @@ from rust_prover_tools.kani_snapshot.install_state import (
     load_active,
     validate_generation,
 )
+from rust_prover_tools.kani_snapshot.models import FileRecord
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotRuntime,
@@ -53,6 +54,7 @@ from tests.kani_snapshot_bundles import (
     RUSTC_BYTES,
     payloads,
     publish_manifest,
+    sha256_hex,
     tar_bytes,
     write_file,
 )
@@ -1923,3 +1925,270 @@ def test_installation_fails_when_a_stale_publication_marker_cannot_be_removed(
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
         check_snapshot(install_options(case), hooks)
+
+
+def _record_flushes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Path]]:
+    """Record generation flushes in the order they are issued."""
+    events: list[tuple[str, Path]] = []
+    real_fsync_file = install_generation.fsync_file
+    real_fsync_directory = durability.fsync_directory
+
+    def record_file(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "file flush",
+    ) -> None:
+        """Record one file flush, then perform it."""
+        events.append(("file", path))
+        real_fsync_file(path, budget=budget, phase=phase)
+
+    def record_directory(path: Path) -> None:
+        """Record one directory flush, then perform it."""
+        events.append(("directory", path))
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(install_generation, "fsync_file", record_file)
+    monkeypatch.setattr(durability, "fsync_directory", record_directory)
+    return events
+
+
+def test_a_backend_inventory_member_is_flushed_before_its_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A backend inventory member is flushed like a named executable.
+
+    Setup extracts the backend with `tar`, so a member the manifest never
+    names individually, such as `share/data.txt`, is still payload the
+    activation record depends on. Its bytes and the directory entries naming
+    it must be durable before activation.
+    """
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=active_generation(case),
+    )
+    runtime = runtime_for(layout, case.manifest)
+    member = runtime.kani_dir / "share" / "data.txt"
+    events = _record_flushes(monkeypatch)
+
+    install_generation.flush_generation_entries(runtime, layout, case.manifest)
+
+    member_position = events.index(("file", member))
+    for directory in (member.parent, runtime.kani_dir):
+        assert member_position < events.index(("directory", directory)), (
+            f"{directory} was flushed before the inventory member it names"
+        )
+
+
+def test_install_does_not_activate_when_a_backend_member_is_unflushed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unflushed inventory member prevents activation, not just a warning."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    real_fsync_file = install_generation.fsync_file
+
+    def failing_file_flush(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "file flush",
+    ) -> None:
+        """Fail the flush of the fixture's backend inventory member."""
+        if path.name == "data.txt" and path.parent.name == "share":
+            msg = f"failed to flush snapshot file '{path.name}'"
+            raise ProverToolError(msg)
+        real_fsync_file(path, budget=budget, phase=phase)
+
+    monkeypatch.setattr(install_generation, "fsync_file", failing_file_flush)
+
+    with pytest.raises(ProverToolError, match=r"data\.txt"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    assert load_active(layout) is None, "an unflushed backend member was activated"
+
+
+def _component_case(
+    tmp_path: Path,
+) -> tuple[SnapshotCase, SnapshotLayout, SnapshotRuntime, Path, SnapshotManifest]:
+    """Install the fixture and record a library outside `lib/rustlib`."""
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    layout = snapshot_layout(
+        case.pin,
+        cache_home=case.cache_home,
+        generation=active_generation(case),
+    )
+    runtime = runtime_for(layout, case.manifest)
+    toolchain = layout.rustup_home / "toolchains" / runtime.toolchain
+    extra = toolchain / "lib" / "extra.rlib"
+    data = b"extra fixture library\n"
+    extra.write_bytes(data)
+    manifest = dc.replace(
+        case.manifest,
+        toolchain=dc.replace(
+            case.manifest.toolchain,
+            libraries=(FileRecord(path="lib/extra.rlib", sha256=sha256_hex(data)),),
+        ),
+    )
+    return case, layout, runtime, toolchain, manifest
+
+
+def test_a_component_directory_is_flushed_without_a_recorded_library(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The component record's `lib/rustlib` parent is required on its own.
+
+    Flushing only each recorded library's ancestor chain leaves a generation
+    whose component record sits in an unflushed directory whenever no recorded
+    library happens to share it.
+    """
+    _, layout, runtime, toolchain, manifest = _component_case(tmp_path)
+    extra = toolchain / "lib" / "extra.rlib"
+    events = _record_flushes(monkeypatch)
+
+    install_generation.flush_generation_entries(runtime, layout, manifest)
+
+    file_position = events.index(("file", extra))
+    for directory in (toolchain / "lib" / "rustlib", toolchain / "lib", toolchain):
+        assert file_position < events.index(("directory", directory)), (
+            f"{directory} was flushed before the library it names"
+        )
+
+
+def test_generation_flush_fails_when_the_component_directory_is_unflushed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A component directory that cannot be flushed is a fatal sweep failure."""
+    _, layout, runtime, toolchain, manifest = _component_case(tmp_path)
+    rustlib = toolchain / "lib" / "rustlib"
+    real_fsync_directory = durability.fsync_directory
+
+    def failing_directory_flush(path: Path) -> None:
+        """Fail the flush of the directory holding the component record."""
+        if path == rustlib:
+            msg = f"failed to flush snapshot directory '{path.name}'"
+            raise ProverToolError(msg)
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(durability, "fsync_directory", failing_directory_flush)
+
+    with pytest.raises(ProverToolError, match=r"rustlib"):
+        install_generation.flush_generation_entries(runtime, layout, manifest)
+
+
+def test_install_deadline_bounds_a_stalled_generation_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stalled generation-directory creation cannot hold the lock past budget."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_mkdir = pathlib.Path.mkdir
+
+    def stalling_mkdir(
+        self: Path,
+        mode: int = 0o777,
+        *,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        """Block a private generation creation like a hung filesystem."""
+        is_generation = (
+            self.parent.name == "generations"
+            and threading.current_thread() is not threading.main_thread()
+        )
+        if not is_generation:
+            real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+            return
+        stalled.set()
+        release.wait(30)
+        try:
+            real_mkdir(self, mode=mode, parents=parents, exist_ok=exist_ok)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "mkdir", stalling_mkdir)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during generation directory creation",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the generation creation was never attempted"
+    assert elapsed < 10.0, f"the stalled creation outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned creation never resumed"
+    assert load_active(layout) is None, "a stalled generation creation activated"
+
+
+def test_install_deadline_bounds_a_stalled_activation_enumeration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stalled record listing cannot hold the identity lock past the budget."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    finished = threading.Event()
+    stalled = threading.Event()
+    real_iterdir = pathlib.Path.iterdir
+
+    def stalling_iterdir(self: Path) -> cabc.Iterator[Path]:
+        """Block the activation record listing like a hung filesystem.
+
+        Installation reads the pointer once under supervision before it
+        stages payloads. That read must succeed normally, so only the listing
+        that allocates a sequence number stalls: by then this activation's
+        private `.pending-` document is already in the directory.
+        """
+        is_activation_listing = (
+            self == layout.activations_dir
+            and threading.current_thread() is not threading.main_thread()
+        )
+        if not is_activation_listing:
+            return real_iterdir(self)
+        has_pending = any(
+            entry.name.startswith(".pending-") for entry in real_iterdir(self)
+        )
+        if not has_pending:
+            return real_iterdir(self)
+        stalled.set()
+        release.wait(30)
+        try:
+            return real_iterdir(self)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(pathlib.Path, "iterdir", stalling_iterdir)
+    options = dc.replace(install_options(case), deadline_seconds=2.0)
+    started = time.monotonic()
+    try:
+        with pytest.raises(
+            ProverToolError,
+            match=r"deadline expired during activation record enumeration",
+        ):
+            install_snapshot(options, install_hooks(case))
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the activation records were never listed"
+    assert elapsed < 10.0, f"the stalled listing outlived the budget: {elapsed:.1f}s"
+    assert finished.wait(10), "the abandoned listing never resumed"
+    assert load_active(layout) is None, "a stalled listing activated a generation"

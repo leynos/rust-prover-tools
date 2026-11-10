@@ -28,6 +28,12 @@ from rust_prover_tools.kani_snapshot.durability import (
     fsync_directory,
     fsync_file,
 )
+from rust_prover_tools.kani_snapshot.inventory import load_inventory
+from rust_prover_tools.kani_snapshot.inventory_model import (
+    KIND_DIRECTORY,
+    KIND_FILE,
+    KIND_HARDLINK,
+)
 from rust_prover_tools.kani_snapshot.progress import as_checkpoint
 from rust_prover_tools.kani_snapshot.toolchain_binding import toolchain_root
 
@@ -150,12 +156,15 @@ def flush_generation_entries(
 
     Setup writes most of the generation's tree, so the installer flushes the
     state its own contract requires: the executables a consumer runs, the
-    toolchain compiler, component record and every recorded library, the
-    directories that name them, and every member of the setup-created Python
-    root. A crash therefore cannot leave a durable activation record naming a
-    generation whose launcher, library or Python payload was never written
-    back. Flushing the compiled binaries alone is not enough because a file's
-    parent directory entry is what makes the file reachable after a crash.
+    toolchain compiler, component record and every recorded library, every
+    file and directory the backend inventory publishes, the directories that
+    name them, and every member of the setup-created Python root. A crash
+    therefore cannot leave a durable activation record naming a generation
+    whose launcher, library, backend member or Python payload was never
+    written back. Flushing the compiled binaries alone is not enough because a
+    file's parent directory entry is what makes the file reachable after a
+    crash, and an inventory member such as `share/data.txt` is as load-bearing
+    as a binary even though no manifest field names it individually.
 
     Files are flushed before their directories, and directories are flushed
     deepest first, so every entry is durable before the entry that names it.
@@ -163,16 +172,23 @@ def flush_generation_entries(
     are the files and entries this pipeline requires.
     """
     toolchain = toolchain_root(runtime)
-    libraries = tuple(
-        toolchain / library.path for library in manifest.toolchain.libraries
+    toolchain_files = (
+        runtime.rustc,
+        toolchain / _TOOLCHAIN_COMPONENTS,
+        *(toolchain / library.path for library in manifest.toolchain.libraries),
+    )
+    backend_files, backend_directories = _backend_inventory_entries(
+        runtime,
+        layout,
+        manifest,
+        budget=budget,
     )
     files = (
         runtime.launcher,
         runtime.driver,
         runtime.compiler,
-        runtime.rustc,
-        toolchain / _TOOLCHAIN_COMPONENTS,
-        *libraries,
+        *toolchain_files,
+        *backend_files,
     )
     for path in files:
         fsync_file(
@@ -180,7 +196,15 @@ def flush_generation_entries(
             budget=budget,
             phase="generation file flush",
         )
-    for directory in _required_directories(runtime, layout, toolchain, libraries):
+    directories = _fixed_directories(runtime, layout, toolchain)
+    directories.update(backend_directories)
+    directories.update(_ancestor_directories(backend_files, runtime.kani_dir))
+    directories.update(_ancestor_directories(toolchain_files, toolchain))
+    for directory in sorted(
+        directories,
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
         flush_directory(
             directory,
             budget=budget,
@@ -189,20 +213,51 @@ def flush_generation_entries(
     flush_tree(runtime.python_root, budget=budget, phase="Python root flush")
 
 
-def _required_directories(
+def _backend_inventory_entries(
+    runtime: SnapshotRuntime,
+    layout: SnapshotLayout,
+    manifest: SnapshotManifest,
+    *,
+    budget: InstallBudget | None = None,
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Return the published backend's files and directories, absolute.
+
+    Setup extracts the backend archive, so its inventory is the closed list of
+    payload members the generation must keep. Symbolic links are deliberately
+    not returned as files: flushing one would open its target, and that target
+    is either another recorded member or outside this generation.
+    """
+    # `install_transport` imports `publication`, which imports this module, so
+    # the asset lookup is imported at call time to keep the graph acyclic.
+    from rust_prover_tools.kani_snapshot.install_transport import asset_by_role
+
+    read = functools.partial(
+        load_inventory,
+        layout.downloads_dir / asset_by_role(manifest, "inventory").name,
+    )
+    # Reading the cached inventory is a local read, so abandoning it at the
+    # deadline changes nothing a later attempt would observe.
+    inventory = read() if budget is None else budget.supervise("inventory read", read)
+    files = tuple(
+        runtime.kani_dir / entry.path
+        for entry in inventory.entries
+        if entry.kind in {KIND_FILE, KIND_HARDLINK}
+    )
+    directories = tuple(
+        runtime.kani_dir / entry.path
+        for entry in inventory.entries
+        if entry.kind == KIND_DIRECTORY
+    )
+    return files, directories
+
+
+def _fixed_directories(
     runtime: SnapshotRuntime,
     layout: SnapshotLayout,
     toolchain: Path,
-    libraries: cabc.Iterable[Path],
-) -> tuple[Path, ...]:
-    """Return the directories naming required state, deepest first.
-
-    A recorded library may sit several levels below the toolchain root, so each
-    ancestor between the library and the root is required as well. Sorting by
-    path depth makes the flush order children before parents; the set removes
-    duplicates without depending on filesystem enumeration order.
-    """
-    directories = {
+) -> set[Path]:
+    """Return the directories required regardless of inventory content."""
+    return {
         runtime.kani_dir / "bin",
         runtime.kani_dir,
         layout.kani_home,
@@ -213,12 +268,25 @@ def _required_directories(
         toolchain / "bin",
         toolchain / "lib",
     }
-    for library in libraries:
-        parent = library.parent
-        while parent != toolchain and parent.is_relative_to(toolchain):
+
+
+def _ancestor_directories(files: cabc.Iterable[Path], root: Path) -> set[Path]:
+    """Return every directory between each file and `root`, inclusive.
+
+    A file's parent directory entry is what makes the file reachable after a
+    crash, so a required file makes its whole ancestor chain required. The
+    chain stops at `root`, so a manifest path that escapes the tree cannot add
+    a directory outside it.
+    """
+    directories: set[Path] = set()
+    for path in files:
+        parent = path.parent
+        while parent.is_relative_to(root):
             directories.add(parent)
+            if parent == root:
+                break
             parent = parent.parent
-    return tuple(sorted(directories, key=lambda path: len(path.parts), reverse=True))
+    return directories
 
 
 def require_evidence(

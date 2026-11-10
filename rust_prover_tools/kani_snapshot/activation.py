@@ -310,7 +310,7 @@ def _publish_record(
     fail or add a lower-ranked record.
     """
     for _ in range(_MAX_SEQUENCE_ATTEMPTS):
-        sequence = _next_sequence(layout)
+        sequence = _next_sequence(layout, budget)
         target = layout.activations_dir / f"{sequence:0{_ENTRY_DIGITS}d}{_ENTRY_SUFFIX}"
         try:
             _link_record(pending, target, budget)
@@ -328,9 +328,21 @@ def _publish_record(
     raise ProverToolError(msg)
 
 
-def _next_sequence(layout: SnapshotLayout) -> int:
-    """Return one more than the highest published sequence number."""
-    entries = _activation_entries(layout)
+def _next_sequence(layout: SnapshotLayout, budget: InstallBudget | None) -> int:
+    """Return one more than the highest published sequence number.
+
+    The listing is a filesystem read performed while the identity lock is
+    held, so it is supervised like the link it precedes: a stalled directory
+    read must not hold the caller past the deadline. Abandoning the read is
+    safe because it observes the directory without changing it.
+    """
+    if budget is None:
+        entries = _activation_entries(layout)
+    else:
+        entries = budget.supervise(
+            "activation record enumeration",
+            functools.partial(_activation_entries, layout),
+        )
     return 1 if not entries else entries[-1][0] + 1
 
 
