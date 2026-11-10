@@ -158,12 +158,13 @@ own run: its `runDetails.metadata.invocationId` has to equal
 `https://github.com/<repository>/actions/runs/<run_id>/attempts/<run_attempt>`
 for the identity the manifest records. An attestation for another run, or a
 rerun of the same run, authenticates nothing this installation may use. Each
-policy dimension is exercised as a refusal: a bundle that fails the signer
-workflow, source ref, source digest or signer digest is rejected by the
-verifier, and installation stops before setup, which is the extraction
-boundary. Trust roots come from the supported verifier distribution or
-separately provisioned trusted storage, never from the untrusted asset
-directory.[^1]
+policy dimension is exercised as a refusal: a modelled bundle that fails the
+signer workflow, source ref, source digest or signer digest is rejected by the
+verifier, while a bundle matching the trusted flags is accepted, and
+installation stops before launcher extraction and setup, the points at which
+payload code would first execute. Trust roots come from the supported verifier
+distribution or separately provisioned trusted storage, never from the
+untrusted asset directory.[^1]
 
 Trust rests on consumer review, protected builder code, GitHub's identity and
 signing infrastructure, the verifier distribution, upstream dependency

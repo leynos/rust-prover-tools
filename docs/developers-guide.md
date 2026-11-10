@@ -543,10 +543,14 @@ authenticates nothing this installation may use. Policy, artefact, bundle and
 identity travel together as one `AttestationRequest` through
 `InstallHooks.verify_attestation`, so a test double observes exactly the run
 the manifest records rather than an assumption about it. The tests exercise
-each policy dimension as a refusal: a verifier double enforces the signer
-workflow, source ref, source digest and signer digest flags the way `gh` does,
-and an installation test runs the real verifier against a bundle that fails one
-dimension at a time and requires setup never to be reached.
+each policy dimension as a refusal: a shared verifier model holds the identity
+a modelled bundle claims, compares it with the trusted flags the command built,
+and accepts a matching bundle, so a wrong signer workflow, source ref, source
+digest or signer digest is refused rather than masked. An installation test
+runs the real verifier against a bundle that fails one dimension at a time and
+requires launcher extraction and setup never to be reached, because the
+launcher is extracted before setup; a matching-bundle control requires both to
+be reached, so the spies cannot pass vacuously.
 
 Ordering is part of the contract. The manifest digest and pin binding are
 checked before checksums, checksums before attestation and payload copies, and

@@ -34,7 +34,14 @@ from rust_prover_tools.kani_snapshot import (
 from rust_prover_tools.kani_snapshot import (
     install as install_module,
 )
-from rust_prover_tools.kani_snapshot.attestation import verify_attestation
+from rust_prover_tools.kani_snapshot.archive_graph import (
+    DEFAULT_ARCHIVE_LIMITS,
+    DEFAULT_ARCHIVE_POLICY,
+)
+from rust_prover_tools.kani_snapshot.attestation import (
+    policy_for_pin,
+    verify_attestation,
+)
 from rust_prover_tools.kani_snapshot.identity import runtime_for, snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
@@ -54,6 +61,7 @@ from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotRuntime,
     new_generation_name,
 )
+from tests.kani_snapshot_attestation_fixtures import REFUSALS, bundle_verifier
 from tests.kani_snapshot_bundles import (
     CHECKSUMS_NAME,
     LIBRARY_PATH,
@@ -79,8 +87,13 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    from cmd_mox import CmdMox, Invocation
+    from cmd_mox import CmdMox
 
+    from rust_prover_tools.kani_snapshot.archive_graph import (
+        ArchiveEntry,
+        ArchiveLimits,
+        ArchivePolicy,
+    )
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
     from rust_prover_tools.kani_snapshot.install_model import (
         InstallBudget,
@@ -90,6 +103,7 @@ if typ.TYPE_CHECKING:
         SnapshotManifest,
         SnapshotPin,
     )
+    from rust_prover_tools.kani_snapshot.progress import Progress
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
@@ -327,40 +341,104 @@ def test_install_rejects_a_failed_attestation(tmp_path: Path) -> None:
     assert calls == [], "setup ran despite a rejected attestation"
 
 
-@pytest.mark.parametrize(
-    ("flag", "refusal"),
-    [
-        ("--signer-workflow", "the certificate's workflow is not trusted"),
-        ("--source-ref", "the statement's source ref is not trusted"),
-        ("--source-digest", "the statement's source digest is not trusted"),
-    ],
+#: One wrong value per policy dimension a bundle can fail.
+_WRONG_IDENTITIES: tuple[tuple[str, str], ...] = (
+    (
+        "signer_workflow",
+        "leynos/rust-prover-tools/.github/workflows/other.yml",
+    ),
+    ("source_ref", "refs/heads/feature"),
+    ("source_digest", "f" * 40),
+    ("signer_digest", "f" * 40),
 )
-def test_install_stops_before_setup_when_the_verifier_refuses_a_policy_dimension(
-    tmp_path: Path, cmd_mox: CmdMox, flag: str, refusal: str
-) -> None:
-    """Each policy refusal from the real verifier stops installation.
 
-    The policy is the trusted one; the modelled bundle is what fails a single
-    dimension, which is the real wrong-signer, wrong-source and wrong-ref
-    scenario. The real `verify_attestation` runs, so the refusal travels the
-    same path a genuine `gh` failure would.
+
+def _spy_on_extraction(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Record every launcher extraction the installer performs.
+
+    The installer extracts the launcher archive before calling setup, so a
+    refusal must stop both: extraction is the first point at which a refused
+    payload would execute. The spy delegates to the real extraction, so the
+    same hook also proves that an accepted installation reaches it.
+    """
+    calls: list[Path] = []
+    real = install_module.extract_archive
+
+    def record(
+        archive_path: Path,
+        destination: Path,
+        *,
+        limits: ArchiveLimits = DEFAULT_ARCHIVE_LIMITS,
+        policy: ArchivePolicy = DEFAULT_ARCHIVE_POLICY,
+        checkpoint: Progress | None = None,
+    ) -> tuple[ArchiveEntry, ...]:
+        """Record the extraction and then perform it."""
+        calls.append(archive_path)
+        return real(
+            archive_path,
+            destination,
+            limits=limits,
+            policy=policy,
+            checkpoint=checkpoint,
+        )
+
+    monkeypatch.setattr(install_module, "extract_archive", record)
+    return calls
+
+
+@pytest.mark.parametrize(("attribute", "wrong"), _WRONG_IDENTITIES)
+def test_install_stops_before_extraction_and_setup_for_a_wrong_bundle_identity(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+    attribute: str,
+    wrong: str,
+) -> None:
+    """Each wrong bundle identity stops installation before any payload runs.
+
+    The command carries the trusted policy and the modelled bundle is what
+    fails one dimension, which is the real wrong-signer, wrong-source and
+    wrong-ref scenario. The real `verify_attestation` runs, so the refusal
+    travels the same path a genuine `gh` refusal would. Extraction and setup
+    are both spied because the launcher is extracted before setup is called.
     """
     case = make_case(tmp_path)
-    calls: list[Path] = []
-
-    def refuse(invocation: Invocation) -> tuple[str, str, int]:
-        """Model a bundle that fails one policy dimension."""
-        assert flag in invocation.args, f"{flag} was not sent to the verifier"
-        return ("", f"no matching attestations: {refusal}", 1)
-
-    cmd_mox.stub("gh").runs(refuse)
+    trusted = policy_for_pin(case.pin)
+    cmd_mox.stub("gh").runs(
+        bundle_verifier(
+            trusted,
+            workflow=case.manifest.workflow,
+            bundle=dc.replace(trusted, **{attribute: wrong}),
+        )
+    )
+    setup_calls: list[Path] = []
+    extractions = _spy_on_extraction(monkeypatch)
     hooks = dc.replace(
-        install_hooks(case, setup_calls=calls),
+        install_hooks(case, setup_calls=setup_calls),
         verify_attestation=verify_attestation,
     )
-    with pytest.raises(ProverToolError, match="no matching attestations"):
+    with pytest.raises(ProverToolError, match=REFUSALS[attribute]):
         install_snapshot(install_options(case), hooks)
-    assert calls == [], "setup ran despite a refused attestation"
+    assert extractions == [], "launcher extraction ran despite a refused attestation"
+    assert setup_calls == [], "setup ran despite a refused attestation"
+
+
+def test_a_matching_bundle_reaches_extraction_and_setup(
+    tmp_path: Path, cmd_mox: CmdMox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal spies are not vacuous: an accepted bundle reaches both."""
+    case = make_case(tmp_path)
+    trusted = policy_for_pin(case.pin)
+    cmd_mox.stub("gh").runs(bundle_verifier(trusted, workflow=case.manifest.workflow))
+    setup_calls: list[Path] = []
+    extractions = _spy_on_extraction(monkeypatch)
+    hooks = dc.replace(
+        install_hooks(case, setup_calls=setup_calls),
+        verify_attestation=verify_attestation,
+    )
+    install_snapshot(install_options(case), hooks)
+    assert extractions, "the extraction spy missed a successful install"
+    assert setup_calls, "the setup spy missed a successful install"
 
 
 def test_install_rejects_a_checksum_mismatch(tmp_path: Path) -> None:

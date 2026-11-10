@@ -636,6 +636,23 @@ EP-O1 assigns responsibility and records live evidence.
   verification remains EP-M5's boundary. Stale duplicated checksum constants
   and an out-of-date parameter list in `attestation_command`'s docstring were
   removed in the same change.
+- [x] (2026-11-10) Closed the twentieth candidate-bound re-assessment's V2
+  evidence gap. The previous verifier double compared the command's flags with
+  a policy the test itself supplied, and the installation double always
+  refused, so neither modelled a bundle identity. A shared
+  `tests/kani_snapshot_attestation_fixtures.py` now models
+  `gh attestation verify`: it holds the identity a bundle claims, reads the
+  trusted flags from the argument vector the production code built, refuses the
+  first dimension where the two disagree, and accepts a matching bundle.
+  Parametrized tests require a wrong signer workflow, source ref, source digest
+  and signer digest to be refused, require a command that requests an untrusted
+  identity to be refused, and require a matching bundle to pass, so the model
+  is not vacuous. The installation test now runs the real `verify_attestation`
+  against a modelled bundle that fails one dimension at a time and spies on
+  launcher extraction as well as setup, because the installer extracts the
+  launcher before calling setup; both spies must stay empty for every refusal,
+  and a matching-bundle control requires both to be reached. Real signature
+  verification remains EP-M5's boundary.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -668,7 +685,7 @@ verification.
 Hosted `lint` runs `interrogate` under Python 3.13 even though the project
 targets Python 3.14, because the tool's Python is whatever the runner's `uv`
 resolves rather than a pinned interpreter. `ruff format` with
-`target-version = "py314"` rewrites a parenthesised multiple-exception clause
+`target-version = "py314"` rewrites a parenthesized multiple-exception clause
 without an `as` binding to the parenthesis-free PEP 758 form, which Python 3.13
 cannot parse, so the local `make lint` passed while the hosted run failed with
 `SyntaxError: multiple exception types must be parenthesized`. Source must stay
@@ -1176,6 +1193,18 @@ These modelled refusals are evidence about this code's propagation and
 ordering, not about a real signature verification, which remains EP-M5's real
 verifier boundary.
 
+2026-11-10, modelled the bundle identity rather than the request: the twentieth
+re-assessment observed that the verifier double was parameterized by the policy
+under test, so it never compared trusted flags with a bundle, and that the
+installation double always refused regardless of identity. The shared verifier
+model now holds the identity a modelled bundle claims, compares it with the
+flags the trusted command built, and accepts a matching identity, so the
+wrong-signer, wrong-source and wrong-ref cases are refusals of a bundle rather
+than of the request. Because the launcher is extracted before setup,
+installation evidence now spies on extraction as well as setup and requires
+both to remain uncalled for every refusal, with a matching-bundle control that
+reaches both so the spies cannot pass vacuously.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.
@@ -1188,7 +1217,7 @@ and EP-M3 (isolated install, check and run) are implemented, gated and through
 their milestone CLI review. A hosted ExecPlan assessment of EP-M3 supplied
 eight findings and four evidence gaps; all twelve were repaired or closed as
 recorded in Progress, and the resulting tree passes the full gate with 1143
-tests. Further candidate-bound re-assessments found forty-four more issues: the
+tests. Further candidate-bound re-assessments found forty-five more issues: the
 runtime-file contract before activation, `run` executing the validated
 generation, contained toolchain and Python-root records, rehashed payloads,
 supervised blocking work with a pre-publication budget check, readers holding
@@ -1217,14 +1246,16 @@ unparsable base, an incomplete marker, a truncated tail or a non-canonical
 spelling keeps the marker pending instead of raising, and attestation
 verification that accepts a result only when a verified record names the
 manifest's own run and attempt, and V2 wrong-signer, wrong-source and wrong-ref
-refusal evidence at the verifier and installation boundaries. All are repaired
-with tests recorded in Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all
-publication, have not started. The consumer `install` command is deliberately
-limited to a verified local `--asset-dir` until the EP-M4 release transport is
-connected. Independent reviews covered all five requested specialities, with
-amendments recorded in the design and checked by a final testing/consistency
-review. Planning validation passed `make fmt`, `make markdownlint` (including
-spelling and three spelling-helper tests), `make nixie`, and both working/staged
+refusal evidence at the verifier and installation boundaries, modelled as a
+bundle identity that a matching command accepts and a wrong one is refused
+before launcher extraction and setup. All are repaired with tests recorded in
+Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started.
+The consumer `install` command is deliberately limited to a verified local
+`--asset-dir` until the EP-M4 release transport is connected. Independent
+reviews covered all five requested specialities, with amendments recorded in
+the design and checked by a final testing/consistency review. Planning
+validation passed `make fmt`, `make markdownlint` (including spelling and three
+spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the

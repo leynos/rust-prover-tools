@@ -24,6 +24,7 @@ from rust_prover_tools.kani_snapshot.integrity import (
 )
 from rust_prover_tools.kani_snapshot.manifest import parse_manifest
 from rust_prover_tools.kani_snapshot.models import AssetRecord
+from tests.kani_snapshot_attestation_fixtures import REFUSALS, bundle_verifier
 from tests.kani_snapshot_fixtures import (
     BUILDER_COMMIT,
     make_manifest,
@@ -83,54 +84,6 @@ def _matching_output() -> str:
     policy = policy_for_pin(make_pin())
     workflow = make_manifest().workflow
     return _verified(_invocation(policy, workflow.run_id, workflow.run_attempt))
-
-
-#: The policy flags `gh attestation verify` enforces, with their policy fields.
-_POLICY_FLAGS: tuple[tuple[str, str], ...] = (
-    ("--signer-workflow", "signer_workflow"),
-    ("--source-ref", "source_ref"),
-    ("--source-digest", "source_digest"),
-    ("--signer-digest", "signer_digest"),
-)
-
-
-def _flag_value(args: cabc.Sequence[str], flag: str) -> str | None:
-    """Return the value following `flag`, or `None` when it is absent.
-
-    The two failure modes are kept apart rather than caught as one tuple: the
-    hosted `interrogate` tool parses this tree under Python 3.13, which cannot
-    read the parenthesis-free multiple-exception form that `ruff format`
-    produces for the project's 3.14 target.
-    """
-    try:
-        index = args.index(flag)
-    except ValueError:
-        return None
-    following = index + 1
-    return args[following] if following < len(args) else None
-
-
-def _policy_enforcing(
-    policy: AttestationPolicy,
-) -> cabc.Callable[[Invocation], tuple[str, str, int]]:
-    """Return a verifier double that enforces every policy flag like `gh`.
-
-    `gh attestation verify` refuses a bundle whose certificate or statement
-    does not satisfy the flags it was given. The double models that refusal so
-    a test can show each policy dimension reaches the verifier and that its
-    refusal is surfaced rather than masked. It accepts the trusted policy, so
-    it is not simply always failing.
-    """
-
-    def handler(invocation: Invocation) -> tuple[str, str, int]:
-        """Refuse the first policy flag that names an untrusted value."""
-        for flag, attribute in _POLICY_FLAGS:
-            actual = _flag_value(invocation.args, flag)
-            if actual != getattr(policy, attribute):
-                return ("", f"no matching attestations: {flag} {actual}", 1)
-        return (_matching_output(), "", 0)
-
-    return handler
 
 
 def _write_asset(path: Path, data: bytes) -> AssetRecord:
@@ -323,38 +276,61 @@ def test_an_attestation_for_another_attempt_is_refused(
         verify_attestation(_request(tmp_path))
 
 
-@pytest.mark.parametrize(
-    ("flag", "attribute", "wrong"),
-    [
-        (
-            "--signer-workflow",
-            "signer_workflow",
-            "leynos/rust-prover-tools/.github/workflows/other.yml",
-        ),
-        ("--source-ref", "source_ref", "refs/heads/feature"),
-        ("--source-digest", "source_digest", "f" * 40),
-        ("--signer-digest", "signer_digest", "f" * 40),
-    ],
+#: One wrong value per policy dimension a bundle can fail.
+_WRONG_IDENTITIES: tuple[tuple[str, str], ...] = (
+    (
+        "signer_workflow",
+        "leynos/rust-prover-tools/.github/workflows/other.yml",
+    ),
+    ("source_ref", "refs/heads/feature"),
+    ("source_digest", "f" * 40),
+    ("signer_digest", "f" * 40),
 )
-def test_a_wrong_policy_identity_is_refused(
-    tmp_path: Path, cmd_mox: CmdMox, flag: str, attribute: str, wrong: str
+
+
+@pytest.mark.parametrize(("attribute", "wrong"), _WRONG_IDENTITIES)
+def test_a_bundle_with_a_wrong_identity_is_refused(
+    tmp_path: Path, cmd_mox: CmdMox, attribute: str, wrong: str
 ) -> None:
-    """A verifier refusal for each policy dimension is surfaced, not masked."""
+    """A bundle that fails one policy dimension is refused for that dimension.
+
+    The command carries the trusted policy, so the refusal comes from the
+    modelled bundle's identity, which is the real wrong-signer, wrong-source
+    and wrong-ref scenario rather than a test that changes what is asked for.
+    """
     trusted = policy_for_pin(make_pin())
-    cmd_mox.stub("gh").runs(_policy_enforcing(trusted))
+    cmd_mox.stub("gh").runs(
+        bundle_verifier(
+            trusted,
+            workflow=make_manifest().workflow,
+            bundle=dc.replace(trusted, **{attribute: wrong}),
+        )
+    )
+    with pytest.raises(CommandFailedError, match=REFUSALS[attribute]):
+        verify_attestation(_request(tmp_path))
+
+
+@pytest.mark.parametrize(("attribute", "wrong"), _WRONG_IDENTITIES)
+def test_a_command_that_requests_an_untrusted_identity_is_refused(
+    tmp_path: Path, cmd_mox: CmdMox, attribute: str, wrong: str
+) -> None:
+    """A weakened policy is refused even when the bundle claims that identity."""
+    trusted = policy_for_pin(make_pin())
+    cmd_mox.stub("gh").runs(bundle_verifier(trusted, workflow=make_manifest().workflow))
     request = dc.replace(
         _request(tmp_path),
         policy=dc.replace(trusted, **{attribute: wrong}),
     )
-    with pytest.raises(CommandFailedError, match=flag):
+    with pytest.raises(CommandFailedError, match=REFUSALS[attribute]):
         verify_attestation(request)
 
 
-def test_the_policy_double_accepts_the_trusted_identity(
+def test_a_bundle_matching_the_trusted_flags_is_accepted(
     tmp_path: Path, cmd_mox: CmdMox
 ) -> None:
-    """The enforcing double is not vacuous: the trusted policy passes it."""
-    cmd_mox.stub("gh").runs(_policy_enforcing(policy_for_pin(make_pin())))
+    """The verifier model is not vacuous: a matching bundle passes it."""
+    trusted = policy_for_pin(make_pin())
+    cmd_mox.stub("gh").runs(bundle_verifier(trusted, workflow=make_manifest().workflow))
     assert verify_attestation(_request(tmp_path))
 
 
