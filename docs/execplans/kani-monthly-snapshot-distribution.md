@@ -697,6 +697,10 @@ EP-O1 assigns responsibility and records live evidence.
   to a new cohesive `archive_paths.py` instead of raising the limit; the
   transport's per-payload loop likewise moved into `_stage_payloads` to keep
   `stage_assets` within the local-variable limit. All seven gates then passed.
+  Hosted CI then caught that the stalled-sweep test patched the shared `shutil`
+  module, so Python 3.14.10's `tempfile` cleanup reached the stub with `dir_fd`;
+  `cleanup` now imports `rmtree` directly and both stalling tests patch only
+  that reference.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

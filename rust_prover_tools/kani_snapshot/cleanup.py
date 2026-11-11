@@ -29,9 +29,9 @@ import functools
 import logging
 import os
 import secrets
-import shutil
 import time
 import typing as typ
+from shutil import rmtree
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.progress import run_within
@@ -108,13 +108,13 @@ def discard_private_tree(
 
     The tree is private, uniquely named and referenced by no reader, so an
     abandoned removal cannot disturb a later install. Removal failures are
-    already suppressed by `shutil.rmtree`; a timeout is deferred like any other
+    already suppressed by `rmtree`; a timeout is deferred like any other
     private cleanup.
     """
 
     def discard() -> None:
         """Remove the private tree, tolerating a partial removal."""
-        shutil.rmtree(path, ignore_errors=True)
+        rmtree(path, ignore_errors=True)
 
     _supervise(phase, budget, discard, path)
 

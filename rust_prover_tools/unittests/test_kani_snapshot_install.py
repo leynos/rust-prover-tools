@@ -2183,7 +2183,7 @@ def test_install_deadline_defers_a_stalled_staging_cleanup(
         finally:
             finished.set()
 
-    monkeypatch.setattr(cleanup.shutil, "rmtree", stalling_rmtree)
+    monkeypatch.setattr(cleanup, "rmtree", stalling_rmtree)
     options = dc.replace(install_options(case), deadline_seconds=2.0)
     started = time.monotonic()
     with caplog.at_level(
@@ -3933,18 +3933,17 @@ def test_a_stalled_sweep_cannot_consume_the_installation_budget(
         path: str | Path,
         *,
         ignore_errors: bool = False,
-        onexc: cabc.Callable[..., object] | None = None,
     ) -> None:
         """Block only the deferred tree, leaving the install's own cleanup free."""
         target = pathlib.Path(path)
         if target != abandoned:
-            real_rmtree(target, ignore_errors=ignore_errors, onexc=onexc)
+            real_rmtree(target, ignore_errors=ignore_errors)
             return
         stalled.set()
         release.wait(30)
-        real_rmtree(target, ignore_errors=ignore_errors, onexc=onexc)
+        real_rmtree(target, ignore_errors=ignore_errors)
 
-    monkeypatch.setattr(cleanup.shutil, "rmtree", stalling_rmtree)
+    monkeypatch.setattr(cleanup, "rmtree", stalling_rmtree)
     monkeypatch.setattr(cleanup, "_SWEEP_SECONDS", 0.2)
     try:
         with caplog.at_level(
