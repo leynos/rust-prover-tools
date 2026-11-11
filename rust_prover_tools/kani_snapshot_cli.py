@@ -22,6 +22,7 @@ from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snap
 from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 from rust_prover_tools.kani_snapshot.pins import load_pin
 from rust_prover_tools.kani_snapshot.run import RunOptions, run_snapshot
+from rust_prover_tools.path_resolution import resolve_configured_path
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
@@ -60,8 +61,8 @@ def _paths(
     root = resolve_repo_root(repo_root)
     return _Paths(
         root=root,
-        pin=pin if pin is not None else root / DEFAULT_PIN,
-        cache=cache_dir if cache_dir is not None else root / DEFAULT_CACHE_DIR,
+        pin=resolve_configured_path(pin, root, root / DEFAULT_PIN),
+        cache=resolve_configured_path(cache_dir, root, root / DEFAULT_CACHE_DIR),
     )
 
 
@@ -70,7 +71,7 @@ def _identity_lines(verb: str, identity: SnapshotIdentity) -> tuple[str, ...]:
     return (
         f"snapshot {identity.tag} {verb} at {identity.generation}",
         f"rustc: {identity.rustc_vv}",
-        f"kani-compiler: {identity.backend_version}",
+        f"kani: {identity.backend_version}",
     )
 
 

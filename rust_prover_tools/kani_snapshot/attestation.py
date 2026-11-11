@@ -14,10 +14,16 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import logging
 import typing as typ
 
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.workflow_run import (
+    WorkflowRun,
+    require_workflow_run,
+)
+from rust_prover_tools.observability import operation_span
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -30,11 +36,15 @@ __all__ = (
     "SIGNER_WORKFLOW_PATH",
     "AttestationPolicy",
     "AttestationRequest",
+    "WorkflowRun",
     "attestation_command",
     "policy_for_pin",
+    "require_workflow_run",
     "verify_attestation",
 )
 
+
+_LOGGER = logging.getLogger(__name__)
 
 #: The trusted OIDC issuer for GitHub Actions attestations.
 GITHUB_OIDC_ISSUER: typ.Final[str] = "https://token.actions.githubusercontent.com"
@@ -157,14 +167,6 @@ def attestation_command(
     return tuple(argv)
 
 
-def _expected_invocation(policy: AttestationPolicy, workflow: WorkflowIdentity) -> str:
-    """Return the run invocation URL a manifest's own attestation must name."""
-    return (
-        f"https://github.com/{policy.repository}"
-        f"/actions/runs/{workflow.run_id}/attempts/{workflow.run_attempt}"
-    )
-
-
 def _member(value: object, key: str) -> object:
     """Return `key` from a JSON object value, or `None` if it is not one."""
     if not isinstance(value, dict):
@@ -246,12 +248,15 @@ def verify_attestation(
         Raised when the verifier fails, prints invalid JSON, returns no
         verified result, or verifies no attestation of the recorded run.
     """
-    result = run_checked(
-        CommandSpec(
-            attestation_command(request.policy, request.artifact, request.bundle),
-            timeout_seconds=timeout_seconds,
+    # The verifier is an external process, so its boundary is timed separately
+    # from the correlation work that follows it.
+    with operation_span(_LOGGER, "kani.snapshot.attestation"):
+        result = run_checked(
+            CommandSpec(
+                attestation_command(request.policy, request.artifact, request.bundle),
+                timeout_seconds=timeout_seconds,
+            )
         )
-    )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -266,11 +271,21 @@ def verify_attestation(
             msg = "gh attestation verify returned an unverified record"
             raise ProverToolError(msg)
         records.append(typ.cast("dict[str, object]", item))
-    expected = _expected_invocation(request.policy, request.workflow)
-    if not any(_verified_invocation(record) == expected for record in records):
-        msg = (
-            "gh attestation verify did not verify the manifest's workflow run "
-            f"{request.workflow.run_id} attempt {request.workflow.run_attempt}"
-        )
-        raise ProverToolError(msg)
+    runs = tuple(
+        run
+        for record in records
+        if (run := _record_run(record, request.policy.repository)) is not None
+    )
+    require_workflow_run(runs, request.workflow)
     return tuple(records)
+
+
+def _record_run(
+    record: dict[str, object],
+    repository: str,
+) -> WorkflowRun | None:
+    """Return the run one verified record names, or `None`."""
+    invocation = _verified_invocation(record)
+    if invocation is None:
+        return None
+    return WorkflowRun.from_invocation(invocation, repository)

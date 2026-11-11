@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import dataclasses as dc
 
+from rust_prover_tools.errors import ProverToolError
+
 __all__ = ("ComponentRecord", "FileRecord", "ToolchainIdentity")
 
 
@@ -88,3 +90,19 @@ class ToolchainIdentity:
     rustc_sha256: str = ""
     rustup_components_sha256: str = ""
     libraries: tuple[FileRecord, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Require the library evidence every toolchain identity must carry.
+
+        An empty list would leave every installed shared library unverified,
+        and a repeated path would make one digest ambiguous. Both are domain
+        invariants, so they hold for any constructed identity rather than only
+        for one parsed from manifest bytes.
+        """
+        if not self.libraries:
+            msg = "toolchain libraries must record at least one extracted library"
+            raise ProverToolError(msg)
+        paths = [library.path for library in self.libraries]
+        if len(set(paths)) != len(paths):
+            msg = "toolchain libraries records a path more than once"
+            raise ProverToolError(msg)

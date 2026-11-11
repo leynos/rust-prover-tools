@@ -91,8 +91,8 @@ def identity_lock(
     options: InstallOptions,
     *,
     timeout: float,
-    clock: cabc.Callable[[], float] = time.monotonic,
     budget: InstallBudget | None = None,
+    read_only: bool = False,
 ) -> cabc.Generator[None]:
     """Hold the per-identity advisory lock, waiting at most `timeout`.
 
@@ -103,18 +103,49 @@ def identity_lock(
     already done under that budget is not spent twice. The wait never exceeds
     what remains: a lock acquired at the last second would leave no time for
     the installation it protects.
+
+    In `read_only` mode the lock is shared and the cache is never created: a
+    missing directory or lock file means no installation has ever run for this
+    identity, so there is no state an installer could be mutating and nothing
+    to synchronize with. When the lock exists, a shared acquisition waits for
+    any exclusive installation or repair holding it, so a check never reads a
+    half-repaired cache.
     """
     identity_dir = identity_directory(options.pin, cache_home=options.cache_home)
-    _create_identity_directory(identity_dir, budget)
     path = identity_dir / "install.lock"
-    descriptor = _open_lock_file(path, budget)
+    if read_only:
+        descriptor = _open_existing_lock_file(path, budget)
+        if descriptor is None:
+            yield
+            return
+        _hold_lock(descriptor, timeout, budget, shared=True)
+    else:
+        _create_identity_directory(identity_dir, budget)
+        descriptor = _open_lock_file(path, budget)
+        _hold_lock(descriptor, timeout, budget, shared=False)
     try:
-        _await_lock(descriptor, timeout, clock, budget)
         yield
     finally:
         with contextlib.suppress(OSError):
             fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+def _hold_lock(
+    descriptor: int,
+    timeout: float,
+    budget: InstallBudget | None,
+    *,
+    shared: bool,
+) -> None:
+    """Acquire the descriptor, releasing it if the wait fails."""
+    try:
+        _await_lock(descriptor, timeout, budget, shared=shared)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+        raise
 
 
 def _create_identity_directory(
@@ -166,20 +197,44 @@ def _open_lock_file(path: Path, budget: InstallBudget | None) -> int:
         raise ProverToolError(msg) from exc
 
 
+def _open_existing_lock_file(path: Path, budget: InstallBudget | None) -> int | None:
+    """Open an existing lock file read-only, or report that none exists.
+
+    A read-only caller must not create the cache, so a missing file is an
+    ordinary absence rather than an error.
+    """
+
+    def open_existing() -> int | None:
+        """Open the lock file without creating it, or return `None`."""
+        try:
+            return os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            msg = f"failed to open snapshot install lock '{path}': {exc}"
+            raise ProverToolError(msg) from exc
+
+    if budget is None:
+        return open_existing()
+    return budget.supervise("lock file open", open_existing)
+
+
 def _await_lock(
     descriptor: int,
     timeout: float,
-    clock: cabc.Callable[[], float],
     budget: InstallBudget | None,
+    *,
+    shared: bool = False,
 ) -> None:
     """Acquire the lock, waiting no longer than `timeout` or the budget."""
     wait = timeout if budget is None else min(timeout, budget.remaining())
-    deadline = clock() + wait
+    deadline = time.monotonic() + wait
+    mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
     while True:
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
         except BlockingIOError:
-            if clock() >= deadline:
+            if time.monotonic() >= deadline:
                 msg = "timed out waiting for the snapshot installation lock"
                 raise ProverToolError(msg) from None
             time.sleep(_LOCK_POLL_SECONDS)

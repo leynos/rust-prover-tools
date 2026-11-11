@@ -15,6 +15,7 @@ from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
     validate_binding,
 )
+from rust_prover_tools.kani_snapshot.models import FileRecord, ToolchainIdentity
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from tests.kani_snapshot_fixtures import (
     make_manifest,
@@ -322,6 +323,29 @@ def test_toolchain_library_paths_must_stay_contained(path: str) -> None:
     _toolchain_document(document)["libraries"][0]["path"] = path
     with pytest.raises(ProverToolError, match="contained relative path"):
         parse_manifest(_encode(document))
+
+
+def _toolchain(libraries: tuple[FileRecord, ...]) -> ToolchainIdentity:
+    """Build one domain toolchain identity with the supplied libraries."""
+    return ToolchainIdentity(
+        identifier="nightly-2026-09-23",
+        rustc_vv="rustc 1.100.0-nightly (abc 2026-09-23)",
+        kani_compiler="kani-compiler 0.67.0",
+        libraries=libraries,
+    )
+
+
+def test_toolchain_domain_requires_a_library() -> None:
+    """The invariant holds for a constructed identity, not only parsed bytes."""
+    with pytest.raises(ProverToolError, match="at least one extracted library"):
+        _toolchain(())
+
+
+def test_toolchain_domain_rejects_a_repeated_library_path() -> None:
+    """A repeated path is refused without rendering a manifest."""
+    record = FileRecord(path="lib/libstd.so", sha256="0" * 64)
+    with pytest.raises(ProverToolError, match="path more than once"):
+        _toolchain((record, record))
 
 
 def test_toolchain_must_record_at_least_one_library() -> None:

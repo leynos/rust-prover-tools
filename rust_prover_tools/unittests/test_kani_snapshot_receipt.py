@@ -19,6 +19,7 @@ from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     BuildInputs,
     CacheObservation,
+    FileRecord,
     ResourceObservation,
     RuntimeIdentity,
     SnapshotManifest,
@@ -80,6 +81,12 @@ def _manifest() -> SnapshotManifest:
             identifier="nightly-2026-09-23",
             rustc_vv="rustc 1.100.0-nightly (abc 2026-09-23)",
             kani_compiler="kani-compiler 0.66.0",
+            libraries=(
+                FileRecord(
+                    path="lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd.so",
+                    sha256="0" * 64,
+                ),
+            ),
         ),
         launcher_package_version="0.66.0",
         backend=BackendIdentity(version="0.66.0", revision="b" * 40),

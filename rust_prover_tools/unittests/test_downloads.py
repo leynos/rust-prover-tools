@@ -928,12 +928,16 @@ def test_sha256_file_reports_an_unreadable_path(tmp_path: Path) -> None:
 
 
 def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
-    """A filesystem error while writing the body is reported."""
+    """A filesystem error while writing the body is a storage failure.
+
+    Opening or writing the destination cannot be repaired by asking the same
+    server again, so the error must not be classified as a transient download.
+    """
     destination = tmp_path / "asset.bin"
     destination.mkdir()
     response = FakeResponse(chunks=(b"payload",))
 
-    with pytest.raises(ProverToolError, match="failed to download"):
+    with pytest.raises(ProverToolError, match="failed to store"):
         download_stream._stream(
             response,
             destination,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses as dc
 import hashlib
 import json
+import logging
 import typing as typ
 
 import pytest
@@ -13,8 +14,10 @@ from rust_prover_tools.errors import CommandFailedError, ProverToolError
 from rust_prover_tools.kani_snapshot.attestation import (
     AttestationPolicy,
     AttestationRequest,
+    WorkflowRun,
     attestation_command,
     policy_for_pin,
+    require_workflow_run,
     verify_attestation,
 )
 from rust_prover_tools.kani_snapshot.integrity import (
@@ -33,6 +36,7 @@ from tests.kani_snapshot_fixtures import (
     pin_bytes,
     with_manifest,
 )
+from tests.kani_snapshot_install_fixtures import events_from
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -404,6 +408,92 @@ def test_verifier_failure_is_preserved(tmp_path: Path, cmd_mox: CmdMox) -> None:
         verify_attestation(_request(tmp_path))
 
 
+def test_an_invocation_parses_into_a_domain_run() -> None:
+    """The verifier's URL becomes the run and attempt the domain compares."""
+    policy = policy_for_pin(make_pin())
+    invocation = _invocation(policy, 987, 3)
+
+    run = WorkflowRun.from_invocation(invocation, policy.repository)
+
+    assert run == WorkflowRun(run_id=987, run_attempt=3)
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        "http://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+        "https://example.test/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+        "https://github.com/someone/else/actions/runs/1/attempts/1",
+        (
+            "https://github.com/leynos/rust-prover-tools"
+            "/actions/runs/1/attempts/1?next=2"
+        ),
+        (
+            "https://github.com/leynos/rust-prover-tools"
+            "/actions/runs/1/attempts/1#fragment"
+        ),
+        "https://github.com/leynos/rust-prover-tools/actions/runs/one/attempts/1",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/many",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/0/attempts/1",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/0",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/extra",
+        "",
+    ],
+)
+def test_a_non_canonical_invocation_names_no_run(invocation: str) -> None:
+    """Only this repository's exact run-and-attempt path is a domain run."""
+    assert WorkflowRun.from_invocation(invocation, "leynos/rust-prover-tools") is None
+
+
+def test_the_run_policy_is_enforced_before_the_attempt() -> None:
+    """A record for another run cannot satisfy the attempt policy."""
+    workflow = make_manifest().workflow
+    other = WorkflowRun(run_id=workflow.run_id + 1, run_attempt=workflow.run_attempt)
+
+    with pytest.raises(ProverToolError, match=f"workflow run {workflow.run_id}"):
+        require_workflow_run([other], workflow)
+
+
+def test_the_attempt_policy_is_enforced_separately() -> None:
+    """The right run at another attempt is reported as an attempt mismatch."""
+    workflow = make_manifest().workflow
+    rerun = WorkflowRun(run_id=workflow.run_id, run_attempt=workflow.run_attempt + 1)
+
+    with pytest.raises(ProverToolError, match="another attempt"):
+        require_workflow_run([rerun], workflow)
+
+
+def test_a_matching_run_and_attempt_satisfies_both_policies() -> None:
+    """The matched domain run passes without any verifier output."""
+    workflow = make_manifest().workflow
+    run = WorkflowRun(run_id=workflow.run_id, run_attempt=workflow.run_attempt)
+
+    require_workflow_run([run], workflow)
+
+
 def test_pin_bytes_are_the_reviewed_artifact() -> None:
     """The pin renderer remains the byte source the digest covers."""
     assert pin_bytes(make_pin()).startswith(b"schema_version = 1")
+
+
+def test_attestation_verification_reports_a_process_span(
+    tmp_path: Path,
+    cmd_mox: CmdMox,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The verifier process boundary is a correlated, timed span."""
+    cmd_mox.stub("gh").runs(lambda invocation: (_matching_output(), "", 0))
+
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        verify_attestation(_request(tmp_path))
+
+    events = [
+        event
+        for event in events_from(caplog)
+        if str(event["event"]).startswith("kani.snapshot.attestation.")
+    ]
+    assert [event["event"] for event in events] == [
+        "kani.snapshot.attestation.start",
+        "kani.snapshot.attestation.complete",
+    ], "the attestation verifier boundary did not report a correlated span"

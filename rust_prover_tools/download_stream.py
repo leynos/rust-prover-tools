@@ -133,11 +133,20 @@ def _stream(
     _reject_declared_oversize(limits, expected)
     try:
         with destination.open("wb") as output:
-            written = _copy_body(response, output, limits)
-    except (OSError, http.client.HTTPException) as exc:
-        _log_failure(_LOGGER, name, "stream_error")
-        msg = f"failed to download {name}: {exc}"
-        raise TransientDownloadError(msg) from exc
+            try:
+                written = _copy_body(response, output, limits)
+            except (OSError, http.client.HTTPException) as exc:
+                # Only response reads reach here: `_copy_body` converts local
+                # write failures first, so retrying this one may help.
+                _log_failure(_LOGGER, name, "stream_error")
+                msg = f"failed to download {name}: {exc}"
+                raise TransientDownloadError(msg) from exc
+    except OSError as exc:
+        # Opening, flushing or closing the destination is a local storage
+        # failure; a retry of the same request cannot repair it.
+        _log_failure(_LOGGER, name, "storage_error")
+        msg = f"failed to store {name} at {destination}: {exc}"
+        raise ProverToolError(msg) from exc
     _require_complete_body(limits, written, expected)
     return written
 
@@ -215,7 +224,13 @@ def _copy_body(
                 f"streamed size exceeded the {limits.max_bytes}-byte limit"
             )
             raise ProverToolError(msg)
-        output.write(chunk)
+        try:
+            output.write(chunk)
+        except OSError as exc:
+            # A local disk error must not be retried as a flaky connection.
+            _log_failure(_LOGGER, limits.name, "storage_error", written=written)
+            msg = f"failed to store {limits.name}: {exc}"
+            raise ProverToolError(msg) from exc
 
 
 def _raise_deadline(

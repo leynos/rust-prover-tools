@@ -140,6 +140,44 @@ def test_tail_capture_rejects_a_non_positive_limit() -> None:
         TailCapture(limit=0)
 
 
+def test_tail_capture_bounds_one_oversized_line() -> None:
+    """A single line longer than the budget must not exceed it when joined."""
+    tail = TailCapture(limit=16)
+
+    tail(cuprum.LineEvent("stdout", 0.0, "start-" + "x" * 4096))
+
+    retained = tail.text("stdout")
+    assert len(retained.encode("utf-8")) <= 16, "oversized line exceeded the limit"
+    assert retained.endswith("x\n"), "collector dropped the newest bytes"
+
+
+def test_tail_capture_keeps_one_byte_for_a_tiny_limit() -> None:
+    """The terminator alone fits a one-byte budget without crashing."""
+    tail = TailCapture(limit=1)
+
+    tail(cuprum.LineEvent("stdout", 0.0, "overflowing"))
+
+    assert tail.text("stdout") == "\n", "one-byte budget should retain the terminator"
+
+
+def test_tail_capture_budgets_each_stream_independently() -> None:
+    """Standard output and standard error each get their own byte limit."""
+    tail = TailCapture(limit=32)
+
+    for index in range(50):
+        tail(cuprum.LineEvent("stdout", 0.0, f"out-{index:03d}"))
+        tail(cuprum.LineEvent("stderr", 0.0, f"err-{index:03d}"))
+
+    stdout = tail.text("stdout")
+    stderr = tail.text("stderr")
+    for stream, retained in (("stdout", stdout), ("stderr", stderr)):
+        assert len(retained.encode("utf-8")) <= 32, f"{stream} exceeded its limit"
+    assert "out-049" in stdout, "stdout dropped its newest output"
+    assert "err-049" in stderr, "stderr dropped its newest output"
+    assert "out-" not in stderr, "stderr received standard output"
+    assert "err-" not in stdout, "stdout received standard error"
+
+
 def test_run_checked_echoes_output_when_requested(
     cmd_mox: CmdMox,
     capsys: pytest.CaptureFixture[str],

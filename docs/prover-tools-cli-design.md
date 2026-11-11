@@ -87,26 +87,38 @@ downloader records `download.start`, `download.complete`, `download.cache_hit`,
 marker, setup, and verification boundaries (`z3.extract.complete`,
 `z3.marker.recorded`, `kani.extract.complete`, `kani.setup.complete`,
 `kani.verify.complete`, `verus.extract.start`, and `verus.extract.complete`).
-Snapshot installation reports `kani.install.staged`, `kani.install.repair`
-(with a bounded exception class name as its reason), and
-`kani.install.activated`, and reports reuse as `kani.install.reuse`. When
-removing a temporary file fails while another failure is in flight, the cleanup
-failure is recorded as `download.cleanup_failed` or `<tool>.cleanup_failed` and
-the primary failure is preserved; a cleanup failure on its own is reported as
-the download or installer failure instead. Kani names its cleanup reasons
-explicitly: `cleanup_error` for a pending extraction file that could not be
-removed, `rollback_error` for a backup that could not be restored or a
-published executable that could not be removed during rollback, and
-`backup_error` for a backup that could not be removed after both executables
-were published. A `rollback_error` is always secondary to the extraction
-failure it accompanies, so it is recorded and the extraction error is
-re-raised. A `backup_error` is standalone: it is recorded and then raised, so
-`kani.install.complete` is never reported. Completion events carry the
-transferred byte count and the elapsed seconds. Records carry an `event_data`
-mapping rather than free text. The library installs no handlers, so an
-application opts in by lowering the level of the relevant `rust_prover_tools`
-module logger. User-facing status lines and `ProverToolError` messages remain
-the primary interface.
+Snapshot commands report timed spans as correlated start and completion events.
+`kani.snapshot.install` closes with an `outcome` of `activated` or `reused` and
+a `cache` of `miss` or `hit`; `kani.snapshot.check` closes with
+`outcome="valid"`; and `kani.snapshot.run` closes with an `outcome` of
+`success` or `failure` and the launcher's `exit_code`. The internal
+`kani.snapshot.stage`, `kani.snapshot.setup`, `kani.snapshot.probe`,
+`kani.snapshot.publish`, and `kani.snapshot.launch` boundaries each report
+their own span, so a slow setup is distinguishable from slow validation. Every
+closing event adds `elapsed_seconds`; a failure replaces the completion with a
+`failed` event that names only the exception class as `reason`.
+`kani.snapshot.install.repair` records a bounded repair trigger, and
+`kani.install.staged` records the staged tag and asset count. Those fields are
+the metric source: `outcome`, `cache`, and `reason` are closed category sets,
+`elapsed_seconds` is a duration, and `exit_code` is an integer, so no event
+introduces an unbounded metric label. No event carries a path, URL, argument
+list, digest, or payload. When removing a temporary file fails while another
+failure is in flight, the cleanup failure is recorded as
+`download.cleanup_failed` or `<tool>.cleanup_failed` and the primary failure is
+preserved; a cleanup failure on its own is reported as the download or
+installer failure instead. Kani names its cleanup reasons explicitly:
+`cleanup_error` for a pending extraction file that could not be removed,
+`rollback_error` for a backup that could not be restored or a published
+executable that could not be removed during rollback, and `backup_error` for a
+backup that could not be removed after both executables were published. A
+`rollback_error` is always secondary to the extraction failure it accompanies,
+so it is recorded and the extraction error is re-raised. A `backup_error` is
+standalone: it is recorded and then raised, so `kani.install.complete` is never
+reported. Completion events carry the transferred byte count and the elapsed
+seconds. Records carry an `event_data` mapping rather than free text. The
+library installs no handlers, so an application opts in by lowering the level
+of the relevant `rust_prover_tools` module logger. User-facing status lines and
+`ProverToolError` messages remain the primary interface.
 
 ### Verified download sequence
 

@@ -12,6 +12,7 @@ its exit status.
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import os
 import typing as typ
 from pathlib import Path
@@ -29,12 +30,15 @@ from rust_prover_tools.kani_snapshot.identity import (
 )
 from rust_prover_tools.kani_snapshot.install import InstallOptions, check_snapshot
 from rust_prover_tools.kani_snapshot.verification_env import proof_environment
+from rust_prover_tools.observability import operation_span
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.install_model import InstallHooks
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 __all__ = ("RunOptions", "run_snapshot")
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -88,44 +92,52 @@ def run_snapshot(
         manifest, the forwarded arguments would replace the backend, or the
         repository's Cargo routing cannot be proved safe.
     """
-    validate_forwarded_args(options.args)
-    # The identity names the exact generation that was just validated.
-    # Resolving the activation records again would let a concurrent repair
-    # switch the active generation between the check and the launch, so
-    # execution uses the checked identity rather than a second, unvalidated
-    # resolution.
-    identity = check_snapshot(
-        InstallOptions(pin=options.pin, cache_home=options.cache_home),
-        hooks,
-    )
-    layout = snapshot_layout(
-        options.pin,
-        cache_home=options.cache_home,
-        generation=identity.generation.name,
-    )
-    runtime = SnapshotRuntime(
-        layout=layout,
-        toolchain=identity.toolchain,
-        backend_version=identity.backend_version,
-    )
-    working_directory = Path.cwd() if options.cwd is None else options.cwd
-    env = proof_environment(runtime, os.environ, cwd=working_directory.resolve())
-    # `echo=True` mirrors each stream live, so the CLI must not replay the
-    # result. Capture stays off because a proof log can be arbitrarily large;
-    # the line hook keeps only the tail that explains an outcome.
-    tail = TailCapture()
-    result = run_command(
-        CommandSpec(
-            (str(runtime.launcher), *options.args),
-            cwd=options.cwd,
-            env=env,
-            echo=True,
-            capture=False,
-            on_line=tail,
+    with operation_span(_LOGGER, "kani.snapshot.run") as span:
+        validate_forwarded_args(options.args)
+        # The identity names the exact generation that was just validated.
+        # Resolving the activation records again would let a concurrent repair
+        # switch the active generation between the check and the launch, so
+        # execution uses the checked identity rather than a second,
+        # unvalidated resolution.
+        identity = check_snapshot(
+            InstallOptions(pin=options.pin, cache_home=options.cache_home),
+            hooks,
         )
-    )
-    return CommandResult(
-        stdout=tail.text("stdout"),
-        stderr=tail.text("stderr"),
-        exit_code=result.exit_code,
-    )
+        layout = snapshot_layout(
+            options.pin,
+            cache_home=options.cache_home,
+            generation=identity.generation.name,
+        )
+        runtime = SnapshotRuntime(
+            layout=layout,
+            toolchain=identity.toolchain,
+            backend_version=identity.backend_version,
+        )
+        working_directory = Path.cwd() if options.cwd is None else options.cwd
+        env = proof_environment(runtime, os.environ, cwd=working_directory.resolve())
+        # `echo=True` mirrors each stream live, so the CLI must not replay the
+        # result. Capture stays off because a proof log can be arbitrarily
+        # large; the line hook keeps only the tail that explains an outcome.
+        tail = TailCapture()
+        # The launcher is the process boundary a proof spends its time in, so
+        # it gets its own span inside the overall run.
+        with operation_span(_LOGGER, "kani.snapshot.launch"):
+            result = run_command(
+                CommandSpec(
+                    (str(runtime.launcher), *options.args),
+                    cwd=options.cwd,
+                    env=env,
+                    echo=True,
+                    capture=False,
+                    on_line=tail,
+                )
+            )
+        span.finish(
+            "success" if result.exit_code == 0 else "failure",
+            exit_code=result.exit_code,
+        )
+        return CommandResult(
+            stdout=tail.text("stdout"),
+            stderr=tail.text("stderr"),
+            exit_code=result.exit_code,
+        )

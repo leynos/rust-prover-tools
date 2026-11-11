@@ -114,6 +114,71 @@ def test_run_rejects_the_lean_backend(
     assert "Lean backend" in captured.err
 
 
+def test_relative_paths_resolve_below_the_repository_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A relative pin and cache anchor at the root, not the caller's cwd."""
+    _write_pin(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    status = app(
+        [
+            "kani",
+            "snapshot",
+            "check",
+            "--repo-root",
+            str(tmp_path),
+            "--pin",
+            "snapshot.toml",
+            "--cache-dir",
+            "cache",
+        ],
+        exit_on_error=False,
+    )
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "not installed" in captured.err, "the relative pin did not resolve"
+    assert not (elsewhere / "cache").exists(), "the cache resolved against the cwd"
+
+
+def test_absolute_paths_ignore_the_repository_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An absolute pin stays where the caller put it, even outside the root."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    absolute_pin = _write_pin(outside)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    status = app(
+        [
+            "kani",
+            "snapshot",
+            "check",
+            "--repo-root",
+            str(root),
+            "--pin",
+            str(absolute_pin),
+            "--cache-dir",
+            "cache",
+        ],
+        exit_on_error=False,
+    )
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "not installed" in captured.err, "the absolute pin was re-anchored"
+
+
 def test_snapshot_flags_do_not_inherit_generic_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

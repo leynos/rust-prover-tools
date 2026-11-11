@@ -8,12 +8,15 @@ The package is split by concern:
   `validation` parse untrusted bytes into those records; `render` reproduces
   manifest bytes.
 - `integrity` verifies manifests, assets and build attestations.
-- Later milestones add the consumer feature (`download`, `archive`, `install`,
-  `identity`, `run`) and producer automation (`build`, `resolution`,
+- The consumer feature is implemented by `download`, `archive`, `install`,
+  `identity` and `run`, with `attestation`, `publication` and `activation`
+  supplying the authenticated publication protocol those commands rely on.
+- Later milestones add the producer automation (`build`, `resolution`,
   `publish`); those modules do not exist yet.
 
 Consumer commands never compile Kani or a solver, and never fall back to the
-legacy release installer or a source build.
+legacy release installer or a source build. Attestation is verified by a
+separate GitHub CLI process rather than by code in this package.
 """
 
 from __future__ import annotations

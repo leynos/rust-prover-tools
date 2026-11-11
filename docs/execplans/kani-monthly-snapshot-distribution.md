@@ -1206,6 +1206,48 @@ installation evidence now spies on extraction as well as setup and requires
 both to remain uncalled for every refusal, with a matching-bundle control that
 reaches both so the spies cannot pass vacuously.
 
+2026-11-11, added the verification the hosted review found missing: the
+observability review asked for bounded operation and failure events for
+snapshot install, check and run, and for correlated, timed spans at the new
+process and storage boundaries. `rust_prover_tools/observability.py` gained
+`operation_span`, which emits a start event and one completion or failure event
+carrying `elapsed_seconds`; install, check, stage, setup, probe, publish, run,
+launch and attestation now report spans whose `outcome`, `cache` and `reason`
+fields are drawn from closed category sets or a number, never a path, URL,
+argument or digest. A failure event names only the exception class, because the
+message can carry a path. The unit and behavioural tests assert the correlated
+pairs rather than the log text, and the design and developer guides record the
+span vocabulary and why the fields are bounded.
+
+The testing review asked for two further boundaries. The download boundary is
+now exercised end to end: `tests/test_kani_snapshot_download_e2e.py` serves
+scripted responses from a real loopback HTTPS server with a test certificate
+trusted through `SSL_CERT_FILE`, and drives the production `download_asset`
+through a successful streamed body, an allowed redirect, a refused redirect, a
+transient 503 that is retried over a new connection, and a digest mismatch that
+never reaches the final path. Only the URL policy is test-local, because the
+production policy pins `github.com` on the default HTTPS port; the connection,
+redirect and digest code is not replaced. The publication protocol is now
+modelled directly: `tests/test_kani_snapshot_publication_model.py` runs a
+Hypothesis state machine over one identity's real marker, activation and
+completion writers and readers, interleaving interrupted publications, late
+marker and completion writes, resumed repairs, pruning and unlinked activation
+documents. Its invariants assert that the completion watermark never regresses
+and that an unfinished publication stays pending until a later completion rises
+above the base its marker recorded, with a concrete witness for the same
+sequence.
+
+The same round cleared the lint gate the new code had broken. `identity_lock`
+lost its unused injectable `clock` parameter, which brought it and its two
+private helpers back under the four-argument limit; the timeout tests already
+monkeypatch `time.monotonic`, so nothing lost determinism. Two modules had
+grown past the 400-line limit, so each was split along a seam it already
+described: `check.py` now owns the read-only `check_snapshot` path, re-exported
+from `install.py` so every caller and test keeps its import, and
+`workflow_run.py` owns the run-correlation half of the attestation boundary,
+re-exported from `attestation.py`. The four check-path tests that spy on the
+deadline and the supervised reads now patch the module that owns them.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.

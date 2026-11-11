@@ -110,10 +110,9 @@ def _validate_installed_launcher(
 ) -> None:
     """Compare installed launcher files with the digest-pinned archive."""
     archive = layout.downloads_dir / asset_by_role(manifest, "launcher").name
-    with tempfile.TemporaryDirectory(
-        prefix=".launcher-check-",
-        dir=layout.generation_dir,
-    ) as scratch:
+    # Validation must not mutate the cache it is reading, so the scratch tree
+    # lives in the system temporary directory rather than beside the generation.
+    with tempfile.TemporaryDirectory(prefix="launcher-check-") as scratch:
         extracted = Path(scratch) / "launcher"
         extract_archive(
             archive,

@@ -143,6 +143,14 @@ application opts in by lowering the level of the relevant `rust_prover_tools`
 module logger. `docs/prover-tools-cli-design.md` owns the system-design record
 for the event vocabulary.
 
+A process or storage boundary that should be timed uses
+`operation_span(logger, event, **fields)` from the same module. It emits
+`event.start` and a matching `event.complete` or `event.failed`; the closing
+event repeats the start fields, adds `elapsed_seconds`, and, on success, the
+bounded outcome recorded by `span.finish(outcome, **fields)`. A failure names
+only the exception's class as `reason`, because an exception message can embed
+a filesystem path.
+
 When adding a pinned asset, update `binary_assets` with the exact URL, digest,
 byte ceiling, and archive member, and add a test that builds a local archive of
 the expected shape. Never let a download path skip `download_pinned`, and do
@@ -531,11 +539,12 @@ the packaged `cargo-kani` from the extracted launcher with
 `execution_environment`, and the probe reads the absolute toolchain link before
 executing `rustc -vV` and `kani-compiler --version`.
 
-`attestation.py` owns the attestation boundary end to end, beside the manifest,
-payload and checksum checks in `integrity.py`. `verify_attestation` runs
-`gh attestation verify` under the fixed policy flags, parses only verified
-records, and requires at least one of them to name the manifest's own run. That
-correlation compares the SLSA v1 `runDetails.metadata.invocationId` with
+`attestation.py` owns the attestation boundary, beside the manifest, payload
+and checksum checks in `integrity.py`, and `workflow_run.py` owns its
+run-correlation half. `verify_attestation` runs `gh attestation verify` under
+the fixed policy flags, parses only verified records, and requires at least one
+of them to name the manifest's own run. That correlation compares the SLSA v1
+`runDetails.metadata.invocationId` with
 `https://github.com/<repository>/actions/runs/<run_id>/attempts/<run_attempt>`
 built from the policy repository and the manifest's `WorkflowIdentity`, so an
 attestation for another run, or for another attempt of the same run,
@@ -648,8 +657,12 @@ rather than inherited.
 The snapshot CLI uses `config=()` on its sub-applications so Cyclopts does not
 inherit generic `INPUT_*` bindings. `run` must keep `Path` as a runtime import
 because Cyclopts evaluates annotations when it builds the command. The
-attestation verifier is `/usr/bin/gh` only in production; tests put a `gh` stub
-first on `PATH` for behavioural runs.
+attestation verifier is the bare executable name `gh`, resolved through the
+caller's `PATH`; tests put a `gh` stub first on `PATH` for behavioural runs.
+Production therefore trusts whatever `gh` the caller's `PATH` selects, and a
+`PATH` entry under an untrusted directory can replace the verifier. Run
+snapshot installation with a `PATH` that resolves `gh` to the reviewed GitHub
+CLI installation.
 
 Test layers are deliberate. Unit tests in
 `rust_prover_tools/unittests/test_kani_snapshot_install.py` cover activation,
@@ -659,10 +672,15 @@ working `cargo-kani setup` stub, so `tests/steps/test_kani_snapshot_steps.py`
 can install through the real CLI and then run the pinned launcher.
 `tests/test_kani_snapshot_activation.py` drives two identities through a
 Hypothesis rule-based state machine over the real install pipeline,
-`tests/test_kani_snapshot_concurrency.py` uses real processes for the advisory
-lock, overlapping installs, a killed owner and a bounded timeout, and
-`tests/test_kani_snapshot_interruption.py` kills an installer mid-staging and
-seeds a setup fault while a peer waits.
+`tests/test_kani_snapshot_publication_model.py` drives interrupted and late
+marker, activation and completion writes through the real publication,
+activation and completion readers, and
+`tests/test_kani_snapshot_download_e2e.py` downloads through a real loopback
+HTTPS server so the TLS handshake, redirect policy, retry loop and digest check
+are not replaced. `tests/test_kani_snapshot_concurrency.py` uses real processes
+for the advisory lock, overlapping installs, a killed owner and a bounded
+timeout, and `tests/test_kani_snapshot_interruption.py` kills an installer
+mid-staging and seeds a setup fault while a peer waits.
 `rust_prover_tools/unittests/test_kani_snapshot_archive.py` adds generated
 member graphs checked against an independent expected-tree oracle. Keep these
 fixtures structural: they must exercise the production parsers rather than

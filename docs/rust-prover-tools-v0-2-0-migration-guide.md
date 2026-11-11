@@ -101,6 +101,28 @@ per-asset ceiling, and applies one monotonic deadline. It connects directly and
 does not read proxy environment variables such as `HTTPS_PROXY`, which differs
 from the external `curl` command the Verus installer used previously.
 
+## Snapshot installation and execution (opt-in)
+
+0.2.0 also adds an opt-in snapshot consumer path. It does not change the
+defaults of any existing command, so existing Kani users need not migrate.
+Adopt it only when a repository wants a reviewed, immutable Kani build rather
+than the pinned legacy release:
+
+```bash
+prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+prover-tools kani snapshot check
+prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
+```
+
+`snapshot install` verifies the reviewed pin, the manifest bytes, the
+attestation bundle and every payload digest before running the packaged
+launcher's `setup`. `snapshot check` revalidates the active generation without
+running setup, and `kani run` executes the validated identity. Installation
+requires a local `--asset-dir`; the commands never fall back to the legacy
+release installer or a source build. The
+[users' guide](users-guide.md#kani-snapshot-commands) documents the pin,
+manifest and attestation requirements.
+
 No action is needed for existing `kani exec` callers. Repositories that relied
 on the old `cargo install` route only for `kani install` should either accept
 the pinned prebuilt release or add `--compile` to keep building from source.

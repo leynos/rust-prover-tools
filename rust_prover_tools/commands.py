@@ -105,8 +105,11 @@ class TailCapture:
 
     def __call__(self, event: LineEvent) -> None:
         """Record one decoded line, dropping the oldest bytes if necessary."""
-        text = _bounded_suffix(event.text, self._limit)
         # The terminator is retained too, so joining restores real log lines.
+        # Reserve its byte here: `text()` appends it, and a line truncated to
+        # the full limit would otherwise exceed the promised budget by one.
+        room = self._limit - 1
+        text = _bounded_suffix(event.text, room) if room > 0 else ""
         cost = len(text.encode("utf-8")) + 1
         lines = self._lines[event.stream]
         lines.append((cost, text))

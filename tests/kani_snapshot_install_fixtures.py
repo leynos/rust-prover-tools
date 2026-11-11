@@ -37,6 +37,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    import pytest
+
     from rust_prover_tools.kani_snapshot.attestation import AttestationRequest
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
     from rust_prover_tools.kani_snapshot.models import (
@@ -48,6 +50,7 @@ __all__ = (
     "PYTHON_ROOT_FILE",
     "SnapshotCase",
     "active_generation",
+    "events_from",
     "install_hooks",
     "install_options",
     "make_case",
@@ -57,6 +60,26 @@ __all__ = (
 #: One setup-created Python payload, recorded with the root's content contract.
 PYTHON_ROOT_FILE: typ.Final[str] = "site/kani/__init__.py"
 _PYTHON_ROOT_BYTES: typ.Final[bytes] = b'"""Fixture Kani Python payload."""\n'
+
+
+def events_from(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    """Return the structured events captured by `caplog`, in order.
+
+    Parameters
+    ----------
+    caplog : pytest.LogCaptureFixture
+        Capture fixture for the test asserting on the events.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        One `event_data` mapping per structured record.
+    """
+    return [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
 
 
 @dc.dataclass(slots=True)

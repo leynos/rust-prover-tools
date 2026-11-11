@@ -65,7 +65,9 @@ _SETUP_FLAGS: typ.Final[tuple[str, ...]] = (
 )
 
 #: Short flag that enables unstable Kani features, including `lean`.
-_UNSTABLE_FLAG: typ.Final[str] = "-Z"
+#: Upstream spellings of the unstable-feature selector. Kani's Clap
+#: definition exposes both a short `-Z` and a long `--unstable` alias.
+_UNSTABLE_FLAGS: typ.Final[tuple[str, ...]] = ("-Z", "--unstable")
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -228,11 +230,13 @@ def _is_setup_command(args: cabc.Sequence[str]) -> bool:
 def _selects_lean(args: cabc.Sequence[str], index: int) -> bool:
     """Return whether the flag at `index` enables the Lean backend."""
     arg = args[index]
-    if arg == _UNSTABLE_FLAG:
-        following = args[index + 1] if index + 1 < len(args) else ""
-        return _has_lean_feature(following)
-    if arg.startswith(_UNSTABLE_FLAG) and len(arg) > len(_UNSTABLE_FLAG):
-        return _has_lean_feature(arg[len(_UNSTABLE_FLAG) :].lstrip("="))
+    for flag in _UNSTABLE_FLAGS:
+        if arg == flag:
+            following = args[index + 1] if index + 1 < len(args) else ""
+            return _has_lean_feature(following)
+        if arg.startswith(flag) and len(arg) > len(flag):
+            value = arg[len(flag) :].lstrip("=")
+            return _has_lean_feature(value)
     return False
 
 

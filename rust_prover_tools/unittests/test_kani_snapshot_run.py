@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import shutil
 import typing as typ
 
@@ -18,6 +19,7 @@ from rust_prover_tools.kani_snapshot.install import (
 from rust_prover_tools.kani_snapshot.install_state import write_active
 from rust_prover_tools.kani_snapshot.run import RunOptions, run_snapshot
 from tests.kani_snapshot_install_fixtures import (
+    events_from,
     install_hooks,
     install_options,
     make_case,
@@ -186,3 +188,38 @@ def test_run_refuses_unprovable_cargo_routing(
             ),
             hooks,
         )
+
+
+def test_run_reports_correlated_process_spans(
+    installed: tuple[RunOptions, InstallHooks],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The overall run and the launcher each report a timed span."""
+    options, hooks = installed
+
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        run_snapshot(options, hooks)
+
+    events = events_from(caplog)
+    launches = [
+        event
+        for event in events
+        if str(event["event"]).startswith("kani.snapshot.launch.")
+    ]
+    assert [event["event"] for event in launches] == [
+        "kani.snapshot.launch.start",
+        "kani.snapshot.launch.complete",
+    ], "the launcher process boundary did not report a correlated span"
+    runs = [
+        event
+        for event in events
+        if str(event["event"]).startswith("kani.snapshot.run.")
+    ]
+    assert [event["event"] for event in runs] == [
+        "kani.snapshot.run.start",
+        "kani.snapshot.run.complete",
+    ]
+    completion = runs[1]
+    assert completion["outcome"] == "failure", "a nonzero proof exit read as success"
+    assert completion["exit_code"] == 7, "the reported exit code was not the launcher's"
+    assert typ.cast("float", completion["elapsed_seconds"]) >= 0.0

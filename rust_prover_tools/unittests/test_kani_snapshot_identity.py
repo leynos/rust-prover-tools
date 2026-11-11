@@ -28,6 +28,7 @@ from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     BuildInputs,
     CacheObservation,
+    FileRecord,
     ResourceObservation,
     RuntimeIdentity,
     SnapshotManifest,
@@ -75,6 +76,12 @@ def _manifest() -> SnapshotManifest:
             identifier="nightly-2026-09-23",
             rustc_vv="rustc 1.100.0-nightly (abc 2026-09-23)",
             kani_compiler="kani-compiler 0.66.0",
+            libraries=(
+                FileRecord(
+                    path="lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd.so",
+                    sha256="0" * 64,
+                ),
+            ),
         ),
         launcher_package_version="0.66.0",
         backend=BackendIdentity(version="0.66.0", revision="b" * 40),
@@ -297,7 +304,10 @@ def test_execution_environment_does_not_duplicate_its_own_entries(
         ("-Z", "lean"),
         ("-Zlean",),
         ("-Z=lean",),
+        ("--unstable", "lean"),
+        ("--unstable=lean",),
         ("--harness", "x", "-Z", "lean"),
+        ("--harness", "x", "--unstable", "lean"),
     ],
 )
 def test_setup_and_backend_selector_arguments_are_rejected(
@@ -317,6 +327,8 @@ def test_setup_and_backend_selector_arguments_are_rejected(
         ("--solver", "kissat"),
         ("-Z", "function-contracts", "--harness", "proofs::ok"),
         ("-Zfunction-contracts",),
+        ("--unstable", "function-contracts", "--harness", "proofs::ok"),
+        ("--unstable=function-contracts",),
         ("--cbmc-args", "--unwind", "4"),
     ],
 )

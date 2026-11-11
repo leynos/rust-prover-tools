@@ -17,6 +17,7 @@ import typing as typ
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.activation import write_active
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
+from rust_prover_tools.kani_snapshot.check import check_snapshot
 from rust_prover_tools.kani_snapshot.durability import flush_directory
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
@@ -57,7 +58,7 @@ from rust_prover_tools.kani_snapshot.snapshot_layout import (
     new_generation_name,
 )
 from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
-from rust_prover_tools.observability import log_event
+from rust_prover_tools.observability import log_event, operation_span
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.identity import SnapshotIdentity
@@ -111,93 +112,45 @@ def install_snapshot(
         generation that is already active rather than claiming that nothing
         was published.
     """
-    chosen = InstallHooks() if hooks is None else hooks
-    if options.assets_dir is None:
-        msg = (
-            "snapshot installation requires --asset-dir until the producer "
-            "release transport is available"
-        )
-        raise ProverToolError(msg)
-    deadline = Deadline(time.monotonic() + options.deadline_seconds)
-    deadline.check("installation start")
-    layout = snapshot_layout(options.pin, cache_home=options.cache_home)
-    context = _InstallContext(options=options, deadline=deadline, hooks=chosen)
-    # `identity_lock` creates the identity directory under this budget, so the
-    # installation needs no separate creation step before taking the lock.
-    with identity_lock(
-        options,
-        timeout=options.lock_timeout_seconds,
-        budget=deadline,
-    ):
-        reusable = _reuse_active(context)
-        if reusable is not None:
-            return reusable
-        deadline.check("asset staging")
-        manifest = stage_assets(
-            options,
-            layout,
-            chosen,
-            budget=deadline,
-        )
-        generation = snapshot_layout(
-            options.pin,
-            cache_home=options.cache_home,
-            generation=new_generation_name(),
-        )
-        return _install_generation(context, manifest, generation)
-
-
-def check_snapshot(
-    options: InstallOptions,
-    hooks: InstallHooks | None = None,
-) -> SnapshotIdentity:
-    """Validate and report the active generation without installing.
-
-    The pointer is resolved and the generation validated while the identity
-    lock is held. A repair publishes its cached payloads file by file under
-    that same lock, so reading without it could validate a half-repaired cache
-    and report a failure that the running repair is about to resolve. The
-    shared reads that establish the pointer are supervised like the lock, so a
-    hung filesystem cannot hold it past the deadline.
-
-    Raises
-    ------
-    ProverToolError
-        Raised when no generation is active, the identity lock cannot be
-        acquired within its bounded wait, or any receipt, payload, toolchain
-        or compiler check fails.
-    """
-    chosen = InstallHooks() if hooks is None else hooks
-    deadline = Deadline(time.monotonic() + options.deadline_seconds)
-    with identity_lock(
-        options,
-        timeout=options.lock_timeout_seconds,
-        budget=deadline,
-    ):
+    with operation_span(_LOGGER, "kani.snapshot.install") as span:
+        chosen = InstallHooks() if hooks is None else hooks
+        if options.assets_dir is None:
+            msg = (
+                "snapshot installation requires --asset-dir until the producer "
+                "release transport is available"
+            )
+            raise ProverToolError(msg)
+        deadline = Deadline(time.monotonic() + options.deadline_seconds)
+        deadline.check("installation start")
         layout = snapshot_layout(options.pin, cache_home=options.cache_home)
-        if deadline.supervise(
-            "publication state read",
-            functools.partial(publication_pending, layout),
+        context = _InstallContext(options=options, deadline=deadline, hooks=chosen)
+        # `identity_lock` creates the identity directory under this budget, so
+        # the installation needs no separate creation step before the lock.
+        with identity_lock(
+            options,
+            timeout=options.lock_timeout_seconds,
+            budget=deadline,
         ):
-            msg = "snapshot cache publication did not finish; run install to repair"
-            raise ProverToolError(msg)
-        pointer = deadline.supervise(
-            "active pointer read",
-            functools.partial(load_active, layout),
-        )
-        if pointer is None:
-            msg = "snapshot is not installed; run install first"
-            raise ProverToolError(msg)
-        manifest = deadline.supervise(
-            "manifest read",
-            functools.partial(active_manifest, options.pin, layout),
-        )
-        generation = snapshot_layout(
-            options.pin,
-            cache_home=options.cache_home,
-            generation=pointer.generation,
-        )
-        return validate_generation(options, manifest, generation, chosen.probe)
+            reusable = _reuse_active(context)
+            if reusable is not None:
+                span.finish("reused", cache="hit")
+                return reusable
+            deadline.check("asset staging")
+            with operation_span(_LOGGER, "kani.snapshot.stage"):
+                manifest = stage_assets(
+                    options,
+                    layout,
+                    chosen,
+                    budget=deadline,
+                )
+            generation = snapshot_layout(
+                options.pin,
+                cache_home=options.cache_home,
+                generation=new_generation_name(),
+            )
+            identity = _install_generation(context, manifest, generation)
+            span.finish("activated", cache="miss")
+            return identity
 
 
 def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
@@ -214,7 +167,11 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
         ):
             # A cache carrying the marker may be half-repaired, so reuse would
             # validate a state that a later publication is still changing.
-            log_event(_LOGGER, "kani.install.repair", reason="PublicationPending")
+            log_event(
+                _LOGGER,
+                "kani.snapshot.install.repair",
+                reason="PublicationPending",
+            )
             return None
         pointer = context.deadline.supervise(
             "active pointer read",
@@ -251,7 +208,11 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             raise
         # The exception text can embed filesystem paths, so the event carries
         # only the bounded class name as its reason category.
-        log_event(_LOGGER, "kani.install.repair", reason=type(exc).__name__)
+        log_event(
+            _LOGGER,
+            "kani.snapshot.install.repair",
+            reason=type(exc).__name__,
+        )
         return None
     # The probe was bounded by the budget left when it started, so a probe
     # that spent all of it must not report a successful reuse.
@@ -266,7 +227,6 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
     write_active(layout, pointer.generation, budget=context.deadline)
     prune_superseded_markers(layout, budget=context.deadline)
     context.deadline.check("active generation reuse")
-    log_event(_LOGGER, "kani.install.reuse", generation=pointer.generation)
     return identity
 
 
@@ -321,8 +281,11 @@ def _install_generation(
     context.deadline.check("setup")
     backend = layout.downloads_dir / asset_by_role(manifest, "backend").name
     # Setup and the probe run external processes, so each receives the
-    # remaining budget rather than merely being checked before and after.
-    context.hooks.setup(runtime, backend, context.deadline.remaining())
+    # remaining budget rather than merely being checked before and after. Each
+    # process boundary is a timed span so a slow setup is distinguishable from
+    # slow validation in the event stream.
+    with operation_span(_LOGGER, "kani.snapshot.setup"):
+        context.hooks.setup(runtime, backend, context.deadline.remaining())
     context.deadline.check("setup")
     install_launcher_binaries(
         runtime,
@@ -368,7 +331,8 @@ def _install_generation(
             checkpoint=context.deadline.checkpoint("toolchain verification"),
         ),
     )
-    evidence = context.hooks.probe(runtime, context.deadline.remaining())
+    with operation_span(_LOGGER, "kani.snapshot.probe"):
+        evidence = context.hooks.probe(runtime, context.deadline.remaining())
     require_evidence(evidence, manifest, runtime)
     identity = build_identity_report(context.options.pin, manifest, runtime)
     receipt = build_receipt(context.options.pin, manifest, identity, evidence)
@@ -382,16 +346,12 @@ def _install_generation(
     # Every required entry inside the generation is now durable, so the
     # activation record cannot survive a crash while naming a partially
     # flushed generation.
-    flush_generation_entries(
-        runtime,
-        layout,
-        manifest,
-        budget=context.deadline,
-    )
-    write_active(layout, layout.generation_dir.name, budget=context.deadline)
-    log_event(
-        _LOGGER,
-        "kani.install.activated",
-        generation=layout.generation_dir.name,
-    )
+    with operation_span(_LOGGER, "kani.snapshot.publish"):
+        flush_generation_entries(
+            runtime,
+            layout,
+            manifest,
+            budget=context.deadline,
+        )
+        write_active(layout, layout.generation_dir.name, budget=context.deadline)
     return identity

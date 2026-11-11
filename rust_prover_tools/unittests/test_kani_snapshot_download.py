@@ -250,6 +250,71 @@ def test_download_asset_never_retries_an_integrity_error(
     assert not sleeps, "no backoff occurs for a permanent failure"
 
 
+def test_download_asset_does_not_retry_an_unwritable_pending_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local storage failure is reported once as the base error class."""
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    class FakeResponse:
+        """A successful response whose body is never written."""
+
+        status = 200
+
+        def getheader(self, name: str, default: str | None = None) -> str | None:
+            """Return the declared body length."""
+            if name == "Content-Length":
+                return "7"
+            return default
+
+        def read(self, amt: int | None = None) -> bytes:
+            """Return the body once, then end the stream."""
+            del amt
+            return b"payload"
+
+    class FakeConnection:
+        """A connection double that records closure."""
+
+        def close(self) -> None:
+            """Close the connection."""
+
+    def fake_open(
+        url: str,
+        limits: download_transport.DownloadLimits,
+        deadline: float,
+        *,
+        asset_name: str,
+    ) -> tuple[FakeResponse, FakeConnection]:
+        """Record the attempt and return a successful response."""
+        del url, limits, deadline, asset_name
+        calls.append(1)
+        return FakeResponse(), FakeConnection()
+
+    monkeypatch.setattr(download_transport, "_open", fake_open)
+    # A directory at the pending path makes the local open fail with EISDIR,
+    # which is deterministic and needs no privileged filesystem setup.
+    (tmp_path / "asset.download").mkdir()
+
+    with pytest.raises(ProverToolError) as raised:
+        download_asset(
+            _asset(),
+            tmp_path / "asset",
+            _policy(),
+            settings=DownloadSettings(
+                retry=DownloadRetryPolicy(attempts=3, backoff_seconds=0.0),
+                sleep=sleeps.append,
+            ),
+        )
+
+    assert not isinstance(raised.value, TransientDownloadError), (
+        "a local storage failure must not be classified as transient"
+    )
+    assert len(calls) == 1, "a local storage failure is never retried"
+    assert not sleeps, "no backoff occurs for a local storage failure"
+
+
 def test_download_asset_reports_the_last_transient_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

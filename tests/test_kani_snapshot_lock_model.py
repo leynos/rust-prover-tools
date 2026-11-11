@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import functools
+import shutil
 import tempfile
 import typing as typ
 from pathlib import Path
@@ -68,6 +70,7 @@ class _TwoActorStateMachine(RuleBasedStateMachine):
         for stack in self.held.values():
             stack.close()
         self.held.clear()
+        shutil.rmtree(self.root, ignore_errors=True)
         super().teardown()
 
     def pointer(self) -> str | None:
@@ -130,11 +133,7 @@ class _TwoActorStateMachine(RuleBasedStateMachine):
 
 def _machine_factory(root: Path) -> type[RuleBasedStateMachine]:
     """Return a zero-argument factory for the two-actor machine."""
-
-    def build() -> _TwoActorStateMachine:
-        """Create the machine with its own fixture directory."""
-        return _TwoActorStateMachine(root)
-
+    build = functools.partial(_TwoActorStateMachine, root)
     return typ.cast("type[RuleBasedStateMachine]", build)
 
 

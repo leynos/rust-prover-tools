@@ -1,7 +1,12 @@
 # Kani snapshot distribution design
 
-Status: Proposed; explicit plan approval is required before implementation.
-Revision: 4, 2026-11-08. Scope: `leynos/rust-prover-tools` only.
+Status: Partly implemented. The consumer milestones EP-M2 (authenticated
+pin/manifest contracts) and EP-M3 (isolated installation, identity checking and
+execution) are implemented: snapshot install, snapshot check and `kani run`
+exist. EP-M1 (upstream feasibility), EP-M4 (publication automation) and EP-M5
+(monitoring and recovery) remain proposed and require explicit plan approval
+before implementation. Revision: 5, 2026-11-11. Scope:
+`leynos/rust-prover-tools` only.
 
 ## Purpose and boundaries
 
@@ -31,8 +36,8 @@ installation behaviour retain their contracts. Main now defaults to bounded
 prebuilt release installation, with source installation only under `--compile`.
 Preserve its existing release-qualified `kani exec` API as well. Its 0.67.0
 qualification does not demonstrate the snapshot compiler floor. Snapshot
-installation never enters either release installer fallback. Add these proposed
-commands; they are not existing APIs:
+installation never enters either release installer fallback. These consumer
+commands are implemented and are existing APIs:
 
 ```bash
 prover-tools kani snapshot install --pin tools/kani/snapshot.toml
@@ -300,7 +305,7 @@ bytes before running identity probes; version text alone is spoofable.
 Establish this ordering against actual Rustup in EP-M1 or block for a design
 deviation. Enable controlled prebuilt toolchain installation only during
 explicit install; set `RUSTUP_AUTO_INSTALL=0` for check/run and test that
-missing toolchains fail without network repair.[^4]
+missing toolchains fail without network repair.[^2]
 
 Under the cache key, use an advisory `fcntl.flock` lock on a stable lock file,
 with a bounded wait and automatic kernel release on process death. Create an
@@ -569,11 +574,18 @@ contained link chains and the refusal cases; they complement the fixed hostile
 fixtures rather than replacing them. A Hypothesis rule-based state machine over
 two identities exercises install, transient failure, corruption and repair
 against the real pipeline, and seeded premature-pointer and post-setup-move
-tests show that validation detects both faults. Two-process fault tests kill an
-installer while it stages repair payloads and seed a setup failure while a peer
-waits, showing that neither interruption publishes a pointer and both recover.
-POSIX locking, rename durability and private cache ownership remain axioms
-tested at the process boundary, not formally proven.
+tests show that validation detects both faults. A second, single-identity state
+machine drives the publication protocol directly, interleaving interrupted and
+late marker, activation and completion writes with the real repair and prune
+paths; it asserts that the completion watermark never regresses and that an
+unfinished publication stays pending until a later completion rises above the
+base its marker recorded. The download boundary is exercised end to end against
+a real loopback HTTPS server, so the TLS handshake, redirect policy, transient
+retry and digest check run without a replaced connection. Two-process fault
+tests kill an installer while it stages repair payloads and seed a setup
+failure while a peer waits, showing that neither interruption publishes a
+pointer and both recover. POSIX locking, rename durability and private cache
+ownership remain axioms tested at the process boundary, not formally proven.
 
 ## D5: Workflow and immutable publication
 
@@ -639,7 +651,7 @@ allocation, with `cancel-in-progress: false` and a snapshot-specific
 concurrency group. Recheck identity availability before create. Use the default
 single pending slot and document that later runs can replace pending work; this
 is not a durable monthly queue. Monitor cancelled/missed runs and recover
-manually rather than promise exactly-once scheduling.[^5] Selection compares a
+manually rather than promise exactly-once scheduling.[^3] Selection compares a
 full build-input fingerprint, not upstream HEAD alone. Fingerprint source and
 recursive submodules, builder/recipe, toolchain, dependency locks, prerequisite
 digests, target and relevant build configuration. Exclude observed run/attempt,
@@ -674,7 +686,7 @@ notes. Require a non-empty expected wheel inventory; missing/extra assets,
 interrupted drafts, published no-ops and collisions receive regression tests.
 Add narrowly scoped lifecycle tests; this is necessary because the current
 workflow creates a public release before uploading wheels. GitHub documents
-draft-first publication for immutable assets and tags.[^2]
+draft-first publication for immutable assets and tags.[^4]
 
 ## D6: Evidence and operational handoff
 
@@ -690,7 +702,7 @@ only fixture transport where the upstream script assumes a checkout.
 Require named positive harnesses, a deliberately false assertion whose harness
 ran and failed verification (not compilation), and a small compiler-floor
 fixture requiring Rust 1.94 or newer. Use slice `array_windows::<2>()`,
-documented as stable since 1.94, in a named successful Kani harness.[^6] Add a
+documented as stable since 1.94, in a named successful Kani harness.[^5] Add a
 pure-Rust version of that same function for the Rust 1.93 negative control:
 failure must be the unavailable API, not Cargo's `rust-version`, Kani
 annotations or dependency configuration. This control and the actual Kani
@@ -725,7 +737,7 @@ run and first publication, downloads the public assets into another clean
 environment, verifies release immutability/provenance, and enables the schedule
 only after that succeeds. GitHub schedules can be delayed or dropped, run from
 the default branch, and may be disabled after inactivity in public
-repositories; monitor missed months and document manual recovery.[^3]
+repositories; monitor missed months and document manual recovery.[^6]
 
 ## Review record
 
@@ -763,12 +775,12 @@ execution plan. No prototype, build, workflow dispatch, repository setting
 change or publication is authorized by this document's proposed status.
 
 [^1]: [GitHub CLI attestation verification](https://cli.github.com/manual/gh_attestation_verify).
-[^2]: [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-[^3]: [GitHub workflow schedule events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+[^2]: [Rustup environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
+[^3]: [GitHub workflow concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 
-[^4]: [Rustup environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
-[^5]: [GitHub workflow concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
-[^6]: [Rust slice ArrayWindows](https://doc.rust-lang.org/std/slice/struct.ArrayWindows.html).
+[^4]: [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+[^5]: [Rust slice ArrayWindows](https://doc.rust-lang.org/std/slice/struct.ArrayWindows.html).
+[^6]: [GitHub workflow schedule events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
 Revision 4 integration note (2026-11-08): the execution plan records main's new
 prebuilt release installer, `kani exec`, Cuprum 0.2 and shared validation

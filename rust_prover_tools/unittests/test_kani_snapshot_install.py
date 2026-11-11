@@ -32,6 +32,9 @@ from rust_prover_tools.kani_snapshot import (
     publication,
 )
 from rust_prover_tools.kani_snapshot import (
+    check as check_module,
+)
+from rust_prover_tools.kani_snapshot import (
     install as install_module,
 )
 from rust_prover_tools.kani_snapshot.archive_graph import (
@@ -77,6 +80,7 @@ from tests.kani_snapshot_install_fixtures import (
     PYTHON_ROOT_FILE,
     SnapshotCase,
     active_generation,
+    events_from,
     install_hooks,
     install_options,
     make_case,
@@ -522,6 +526,118 @@ def test_check_reports_the_active_generation(tmp_path: Path) -> None:
     identity = install_snapshot(install_options(case), install_hooks(case))
     checked = check_snapshot(install_options(case), install_hooks(case))
     assert checked == identity, "check reported a different identity"
+
+
+def test_check_supervises_active_generation_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The compiler probe and tree validation run under the check deadline."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    real_deadline = check_module.Deadline
+    budgets: list[_RecordingBudget] = []
+    seen: dict[str, object] = {}
+    real_validate = check_module.validate_generation
+
+    class _RecordingBudget:
+        """A real budget that records every supervised phase."""
+
+        def __init__(self, inner: Deadline) -> None:
+            """Wrap `inner` and start with no recorded phases."""
+            self.inner = inner
+            self.phases: list[str] = []
+
+        def check(self, phase: str) -> None:
+            """Delegate the phase check to the wrapped deadline."""
+            self.inner.check(phase)
+
+        def remaining(self) -> float:
+            """Return the seconds the wrapped deadline has left."""
+            return self.inner.remaining()
+
+        def checkpoint(self, phase: str) -> cabc.Callable[[], None]:
+            """Return the wrapped deadline's checkpoint callback for `phase`."""
+            return self.inner.checkpoint(phase)
+
+        def supervise(
+            self,
+            phase: str,
+            operation: cabc.Callable[[], _T],
+        ) -> _T:
+            """Record `phase` and supervise `operation` through the deadline."""
+            self.phases.append(phase)
+            return self.inner.supervise(phase, operation)
+
+    def recording_deadline(expires_at: float) -> _RecordingBudget:
+        """Build a deadline that records every supervised phase."""
+        budget = _RecordingBudget(real_deadline(expires_at))
+        budgets.append(budget)
+        return budget
+
+    def spy_validate(
+        options: InstallOptions,
+        manifest: SnapshotManifest,
+        generation: SnapshotLayout,
+        probe: ProbeRunner,
+        remaining_budget: cabc.Callable[[], float] | None = None,
+        *,
+        checkpoint: cabc.Callable[[], None] | None = None,
+    ) -> SnapshotIdentity:
+        """Record the validation seams and delegate to the real validator."""
+        seen["remaining"] = remaining_budget
+        seen["checkpoint"] = checkpoint
+        return real_validate(
+            options,
+            manifest,
+            generation,
+            probe,
+            remaining_budget,
+            checkpoint=checkpoint,
+        )
+
+    monkeypatch.setattr(check_module, "Deadline", recording_deadline)
+    monkeypatch.setattr(check_module, "validate_generation", spy_validate)
+
+    assert check_snapshot(install_options(case), install_hooks(case)) == identity
+    assert "active generation validation" in budgets[0].phases, (
+        "check ran validation without supervising it"
+    )
+    remaining = typ.cast("cabc.Callable[[], float]", seen["remaining"])
+    assert remaining() > 0, "check passed no probe budget"
+    assert callable(seen["checkpoint"]), "check passed no validation checkpoint"
+
+
+def _cache_state(root: Path) -> dict[str, tuple[int, int]]:
+    """Return each path's size and modification time below `root`."""
+    return {
+        str(path.relative_to(root)): (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+    }
+
+
+def test_check_does_not_create_a_missing_cache(tmp_path: Path) -> None:
+    """Checking an identity that was never installed leaves no directories."""
+    case = make_case(tmp_path)
+    cache = tmp_path / "missing-cache"
+    options = dc.replace(install_options(case), cache_home=cache)
+
+    with pytest.raises(ProverToolError, match=r"not installed"):
+        check_snapshot(options, install_hooks(case))
+
+    assert not cache.exists(), "check created the cache it was only reading"
+
+
+def test_check_leaves_an_installed_cache_unchanged(tmp_path: Path) -> None:
+    """A successful check mutates neither the cache nor the lock file."""
+    case = make_case(tmp_path)
+    identity = install_snapshot(install_options(case), install_hooks(case))
+    cache = case.cache_home
+    before = _cache_state(cache)
+
+    assert check_snapshot(install_options(case), install_hooks(case)) == identity
+
+    assert _cache_state(cache) == before, "check mutated the snapshot cache"
 
 
 def test_check_rejects_a_missing_active_pointer(tmp_path: Path) -> None:
@@ -2992,7 +3108,7 @@ def test_check_deadline_bounds_a_stalled_publication_state_read(
     finished = threading.Event()
     stalled = threading.Event()
     phase_thread = "snapshot publication state read"
-    real_pending = install_module.publication_pending
+    real_pending = check_module.publication_pending
 
     def stalling_pending(layout: SnapshotLayout) -> bool:
         """Block the publication-state read like a hung filesystem."""
@@ -3005,7 +3121,7 @@ def test_check_deadline_bounds_a_stalled_publication_state_read(
         finally:
             finished.set()
 
-    monkeypatch.setattr(install_module, "publication_pending", stalling_pending)
+    monkeypatch.setattr(check_module, "publication_pending", stalling_pending)
     options = dc.replace(install_options(case), deadline_seconds=0.5)
     started = time.monotonic()
     try:
@@ -3033,7 +3149,7 @@ def test_check_deadline_bounds_a_stalled_active_pointer_read(
     finished = threading.Event()
     stalled = threading.Event()
     phase_thread = "snapshot active pointer read"
-    real_load = install_module.load_active
+    real_load = check_module.load_active
 
     def stalling_load(layout: SnapshotLayout) -> activation.ActivePointer | None:
         """Block the pointer read like a hung filesystem."""
@@ -3046,7 +3162,7 @@ def test_check_deadline_bounds_a_stalled_active_pointer_read(
         finally:
             finished.set()
 
-    monkeypatch.setattr(install_module, "load_active", stalling_load)
+    monkeypatch.setattr(check_module, "load_active", stalling_load)
     options = dc.replace(install_options(case), deadline_seconds=0.5)
     started = time.monotonic()
     try:
@@ -3075,7 +3191,7 @@ def test_check_deadline_bounds_a_stalled_manifest_read(
     finished = threading.Event()
     stalled = threading.Event()
     phase_thread = "snapshot manifest read"
-    real_manifest = install_module.active_manifest
+    real_manifest = check_module.active_manifest
 
     def stalling_manifest(
         pin: SnapshotPin,
@@ -3091,7 +3207,7 @@ def test_check_deadline_bounds_a_stalled_manifest_read(
         finally:
             finished.set()
 
-    monkeypatch.setattr(install_module, "active_manifest", stalling_manifest)
+    monkeypatch.setattr(check_module, "active_manifest", stalling_manifest)
     options = dc.replace(install_options(case), deadline_seconds=0.5)
     started = time.monotonic()
     try:
@@ -3619,3 +3735,100 @@ class _LockHolder(threading.Thread):
             with contextlib.suppress(OSError):
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             os.close(descriptor)
+
+
+def _span_events(
+    caplog: pytest.LogCaptureFixture, prefix: str
+) -> list[dict[str, object]]:
+    """Return the events whose name starts with `prefix`."""
+    return [
+        event for event in events_from(caplog) if str(event["event"]).startswith(prefix)
+    ]
+
+
+def test_install_reports_correlated_operation_spans(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Install and reuse are timed spans with bounded outcome and cache fields."""
+    case = make_case(tmp_path)
+    options = install_options(case)
+    hooks = install_hooks(case)
+
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        install_snapshot(options, hooks)
+        install_snapshot(options, hooks)
+
+    installs = _span_events(caplog, "kani.snapshot.install.")
+    assert [event["event"] for event in installs] == [
+        "kani.snapshot.install.start",
+        "kani.snapshot.install.complete",
+        "kani.snapshot.install.start",
+        "kani.snapshot.install.complete",
+    ], "install did not report one correlated span per invocation"
+    activated, reused = installs[1], installs[3]
+    assert (activated["outcome"], activated["cache"]) == ("activated", "miss")
+    assert (reused["outcome"], reused["cache"]) == ("reused", "hit")
+    for event in installs[1::2]:
+        elapsed = typ.cast("float", event["elapsed_seconds"])
+        assert elapsed >= 0.0, "a span reported negative latency"
+
+
+def test_install_reports_the_storage_and_process_boundaries(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Staging, setup, probing and publication each report a timed span."""
+    case = make_case(tmp_path)
+
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    for boundary in ("stage", "setup", "probe", "publish"):
+        events = _span_events(caplog, f"kani.snapshot.{boundary}.")
+        assert [event["event"] for event in events] == [
+            f"kani.snapshot.{boundary}.start",
+            f"kani.snapshot.{boundary}.complete",
+        ], f"the {boundary} boundary did not report a correlated span"
+
+
+def test_check_reports_a_valid_span(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A successful check reports its outcome and latency."""
+    case = make_case(tmp_path)
+    options = install_options(case)
+    hooks = install_hooks(case)
+    install_snapshot(options, hooks)
+
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        check_snapshot(options, hooks)
+
+    checks = _span_events(caplog, "kani.snapshot.check.")
+    assert [event["event"] for event in checks] == [
+        "kani.snapshot.check.start",
+        "kani.snapshot.check.complete",
+    ]
+    assert checks[1]["outcome"] == "valid"
+    assert typ.cast("float", checks[1]["elapsed_seconds"]) >= 0.0
+
+
+def test_check_reports_a_bounded_failure_event(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed check names the exception class, never its path-bearing text."""
+    case = make_case(tmp_path)
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="rust_prover_tools"),
+        pytest.raises(ProverToolError, match="not installed"),
+    ):
+        check_snapshot(install_options(case), install_hooks(case))
+
+    checks = _span_events(caplog, "kani.snapshot.check.")
+    assert [event["event"] for event in checks] == [
+        "kani.snapshot.check.start",
+        "kani.snapshot.check.failed",
+    ]
+    assert checks[1]["reason"] == "ProverToolError"
+    assert not any(str(tmp_path) in str(value) for value in checks[1].values()), (
+        "the failure event leaked a filesystem path"
+    )
