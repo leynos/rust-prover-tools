@@ -104,5 +104,9 @@ def check_snapshot(
                     checkpoint=deadline.checkpoint("active generation validation"),
                 ),
             )
+            # `run_within` returns as soon as its worker has finished, and that
+            # can be after the budget expired, so a validation that spent the
+            # whole budget must not report a successful check.
+            deadline.check("active generation validation")
         span.finish("valid")
         return identity

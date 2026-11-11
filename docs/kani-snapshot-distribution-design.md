@@ -453,9 +453,12 @@ while it holds the lock, since a hung read would otherwise hold that lock past
 the deadline. So are the operations that precede the lock and the ones that run
 while it is held but were once left unsupervised: creating the identity
 directory, opening the lock file and the runtime-file checks that precede the
-probe. The lock wait itself is bounded by whichever is shorter, the configured
-timeout or the seconds the installation still has, so time already spent cannot
-be spent a second time. Removal of private, uniquely named state — a pending
+probe. A supervised call can return a result its worker finished after the
+budget expired, so `check` re-reads the budget once the active generation has
+been validated and reports the deadline rather than a successful validation.
+The lock wait itself is bounded by whichever is shorter, the configured timeout
+or the seconds the installation still has, so time already spent cannot be
+spent a second time. Removal of private, uniquely named state — a pending
 activation document, a partially copied launcher or generation file, a staging
 tree — is supervised as well, and a removal that outlives the budget is
 deferred and debug-logged rather than reported as a failure: no reader resolves

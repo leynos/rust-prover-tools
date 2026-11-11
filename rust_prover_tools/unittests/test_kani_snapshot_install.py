@@ -168,6 +168,42 @@ class _ExpiringSupervision:
         return operation()
 
 
+class _ExpiringAfterValidation:
+    """A budget that expires as soon as generation validation returns.
+
+    `run_within` can return a result its worker finished after the budget
+    expired, so a check must re-read the budget after supervision rather than
+    trusting the supervised call to have failed.
+    """
+
+    def __init__(self, expires_at: float = 0.0) -> None:
+        """Start unexpired, with no validation completed yet."""
+        del expires_at
+        self._validated = False
+
+    def check(self, phase: str) -> None:
+        """Expire once validation has returned."""
+        if self._validated and phase == "active generation validation":
+            msg = f"snapshot installation deadline expired during {phase}"
+            raise ProverToolError(msg)
+
+    def remaining(self) -> float:
+        """Report a budget that has not expired."""
+        return 60.0
+
+    def checkpoint(self, phase: str) -> cabc.Callable[[], None]:
+        """Accept every cooperative checkpoint."""
+        del phase
+        return lambda: None
+
+    def supervise(self, phase: str, operation: cabc.Callable[[], _T]) -> _T:
+        """Run the operation, expiring the budget once validation returns."""
+        result = operation()
+        if phase == "active generation validation":
+            self._validated = True
+        return result
+
+
 def _same_version_case(directory: Path, *, cache_home: Path) -> SnapshotCase:
     """Return a second snapshot that reports the first one's versions.
 
@@ -3380,6 +3416,27 @@ def test_check_deadline_bounds_a_stalled_manifest_read(
     assert stalled.is_set(), "the manifest was never read"
     assert elapsed < 10.0, f"the stalled read outlived the budget: {elapsed:.1f}s"
     assert finished.wait(10), "the abandoned read never resumed"
+
+
+def test_a_check_that_validates_after_expiry_reports_the_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validation that finishes after the budget expired is not a success.
+
+    `run_within` returns a result its worker finished, even when the budget
+    expired while that worker was still running, so `check` must re-read the
+    budget after supervision instead of reporting the validated generation.
+    """
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    monkeypatch.setattr(check_module, "Deadline", _ExpiringAfterValidation)
+
+    with pytest.raises(
+        ProverToolError,
+        match=r"deadline expired during active generation validation",
+    ):
+        check_snapshot(install_options(case), install_hooks(case))
 
 
 def test_a_marker_is_pending_until_a_completion_supersedes_its_base(

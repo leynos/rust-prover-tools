@@ -721,7 +721,12 @@ EP-O1 assigns responsibility and records live evidence.
   when it stops, so a second sweep skips every tree instead of racing the
   first. New tests cover an interrupted copy that keeps, then frees, its claim
   before a later sweep reclaims the tree, descriptor closure on an ordinary
-  staging failure, and a sweep skipped while an abandoned sweep holds the claim.
+  staging failure, and a sweep skipped while an abandoned sweep holds the
+  claim. The same round's Codex finding required `check` to re-read the budget
+  after validating the active generation: `run_within` can return a result its
+  worker finished after the budget expired, so a validation that spent the
+  whole budget must report the deadline rather than a successful check. A
+  regression test drives a validation that completes after expiry.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
