@@ -33,6 +33,12 @@ from rust_prover_tools.kani_snapshot.archive_graph import (
     ArchiveLimits,
     ArchivePolicy,
 )
+from rust_prover_tools.kani_snapshot.archive_paths import (
+    DIRECTORY_MODE,
+    create_hard_links,
+    create_symbolic_links,
+    target_path,
+)
 from rust_prover_tools.kani_snapshot.archive_read import (
     _entry_from_member,
     open_tar_archive,
@@ -47,7 +53,6 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("extract_archive",)
 
-_DIRECTORY_MODE: typ.Final[int] = 0o755
 _LINK_KINDS: typ.Final[frozenset[str]] = frozenset({KIND_SYMLINK, KIND_HARDLINK})
 _LOGGER = logging.getLogger(__name__)
 
@@ -180,6 +185,17 @@ class _Extraction:
             msg = "snapshot archive changed after validation"
             raise ProverToolError(msg)
 
+    def require_complete(self, index: int) -> None:
+        """Refuse a pass that ended before the validated graph did.
+
+        A shorter stream whose prefix still matches would otherwise publish a
+        tree missing members validation accepted, so each pass must consume
+        every validated member.
+        """
+        if index != len(self.entries):
+            msg = "snapshot archive changed after validation"
+            raise ProverToolError(msg)
+
 
 def _materialize_files(extraction: _Extraction) -> None:
     """Create directories and regular files, skipping links."""
@@ -195,11 +211,11 @@ def _materialize_files(extraction: _Extraction) -> None:
             index += 1
             if entry.kind in _LINK_KINDS:
                 continue
-            target = _target_path(extraction.root, entry.path)
+            target = target_path(extraction.root, entry.path)
             if entry.kind == KIND_DIRECTORY:
-                target.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
+                target.mkdir(mode=DIRECTORY_MODE, parents=True, exist_ok=True)
                 continue
-            target.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
+            target.parent.mkdir(mode=DIRECTORY_MODE, parents=True, exist_ok=True)
             write = _MemberWrite(
                 archive=archive,
                 member=member,
@@ -212,6 +228,7 @@ def _materialize_files(extraction: _Extraction) -> None:
                 extraction.limits,
                 extraction.checkpoint,
             )
+    extraction.require_complete(index)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -289,62 +306,9 @@ def _materialize_links(extraction: _Extraction) -> None:
                 symbolic.append(entry)
             elif entry.kind == KIND_HARDLINK:
                 hard.append(entry)
-    _create_symbolic_links(symbolic, extraction.root)
-    _create_hard_links(hard, extraction.root)
-
-
-def _create_symbolic_links(entries: cabc.Sequence[ArchiveEntry], root: Path) -> None:
-    """Create planned symbolic links below `root`."""
-    for entry in entries:
-        target = _target_path(root, entry.path)
-        link_target = entry.link_target
-        if link_target is None:
-            msg = f"snapshot symbolic link '{entry.path}' has no target"
-            raise ProverToolError(msg)
-        try:
-            # The graph permits a link below a directory the archive never
-            # lists, so the parent has to be created before the link.
-            target.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
-            target.symlink_to(link_target)
-        except OSError as exc:
-            msg = f"failed to create snapshot symbolic link '{entry.path}': {exc}"
-            raise ProverToolError(msg) from exc
-
-
-def _create_hard_links(entries: cabc.Sequence[ArchiveEntry], root: Path) -> None:
-    """Create planned hard links to files materialized earlier."""
-    for entry in entries:
-        source = _target_path(root, entry.link_target or "")
-        target = _target_path(root, entry.path)
-        try:
-            # Hard-link parents are implicit for the same reason as symbolic
-            # ones: only the members themselves need to be listed.
-            target.parent.mkdir(mode=_DIRECTORY_MODE, parents=True, exist_ok=True)
-            os.link(source, target, follow_symlinks=False)
-        except OSError as exc:
-            msg = f"failed to create snapshot hard link '{entry.path}': {exc}"
-            raise ProverToolError(msg) from exc
-
-
-def _target_path(root: Path, relative: str) -> Path:
-    """Return a lexically contained path below `root`.
-
-    The graph validator already refuses `..`, absolute and empty components,
-    and a member may not sit below a planned link, so no component can redirect
-    the join. A lexical check keeps that guarantee cheap for large archives.
-    """
-    parts = relative.split("/")
-    if not _is_contained_path(relative, parts):
-        msg = f"snapshot archive path escapes the extraction root: {relative!r}"
-        raise ProverToolError(msg)
-    return root.joinpath(*parts)
-
-
-def _is_contained_path(relative: str, parts: cabc.Sequence[str]) -> bool:
-    """Return whether every path component is a plain relative name."""
-    if not relative or relative.startswith("/"):
-        return False
-    return ".." not in parts and "" not in parts
+    extraction.require_complete(index)
+    create_symbolic_links(symbolic, extraction.root)
+    create_hard_links(hard, extraction.root)
 
 
 def _apply_modes(
@@ -371,7 +335,7 @@ def _apply_modes(
 
 def _apply_mode(root: Path, entry: ArchiveEntry, *, is_directory: bool) -> None:
     """Set one entry's mode through an already-open descriptor."""
-    target = _target_path(root, entry.path)
+    target = target_path(root, entry.path)
     flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if is_directory else 0)
     try:
         descriptor = os.open(target, flags)

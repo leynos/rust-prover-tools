@@ -459,17 +459,23 @@ be spent a second time. Removal of private, uniquely named state — a pending
 activation document, a partially copied launcher or generation file, a staging
 tree — is supervised as well, and a removal that outlives the budget is
 deferred and debug-logged rather than reported as a failure: no reader resolves
-those names, so an abandoned removal cannot disturb a later install. Staged
-payloads are published under a bound rather than abandoned silently. Each
-publication owns a marker in the identity directory, named for that
-publication, made durable before the first payload is replaced and removed only
-after every replacement and its directory flush are durable. Because no marker
-name is reused, a publication that resumes after being abandoned can remove
-only its own marker; a repair that starts meanwhile writes a new one first and
-clears the older ones only once its own marker is durable, so the incomplete
-state is never unmarked. A marker also records its base: the highest activation
-record its publication observed when it began, read from record names rather
-than their contents. The completion watermark is the highest of one small
+those names, so an abandoned removal cannot disturb a later install. A staging
+tree is further protected by an advisory exclusive claim that its worker holds
+for as long as it may use the tree: the kernel releases the claim when the
+process exits, so a later sweep can distinguish a killed worker from one the
+deadline abandoned but did not stop, and removes a tree only when it can take
+the claim. A deferred sweep runs in a capped slice of the installation budget,
+so reclaiming disk cannot starve the install that triggered it. Staged payloads
+are published under a bound rather than abandoned silently. Each publication
+owns a marker in the identity directory, named for that publication, made
+durable before the first payload is replaced and removed only after every
+replacement and its directory flush are durable. Because no marker name is
+reused, a publication that resumes after being abandoned can remove only its
+own marker; a repair that starts meanwhile writes a new one first and clears
+the older ones only once its own marker is durable, so the incomplete state is
+never unmarked. A marker also records its base: the highest activation record
+its publication observed when it began, read from record names rather than
+their contents. The completion watermark is the highest of one small
 create-only record per completed installation, each named by the sequence it
 completed and written only by a lock-holding installation after its activation
 record is confirmed durable. A record therefore names an installation that

@@ -25,7 +25,10 @@ from rust_prover_tools.kani_snapshot.attestation import (
     policy_for_pin,
 )
 from rust_prover_tools.kani_snapshot.cleanup import (
+    claim_staging_ownership,
     discard_private_tree,
+    new_staging_directory,
+    release_staging_ownership,
     sweep_deferred_staging,
 )
 from rust_prover_tools.kani_snapshot.install_copy import (
@@ -78,7 +81,6 @@ if typ.TYPE_CHECKING:
 __all__ = ("asset_by_role", "bundle_policy", "stage_assets")
 
 _LOGGER = logging.getLogger(__name__)
-_PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 
 #: Design envelopes for one compressed payload and for the inventory document.
 PAYLOAD_MAX_BYTES: typ.Final[int] = 2 * 1024 * 1024 * 1024
@@ -158,8 +160,12 @@ def stage_assets(
         msg = f"snapshot asset directory does not exist: {source}"
         raise ProverToolError(msg)
     sweep_deferred_staging(layout.identity_dir, budget)
-    staging = _new_staging_directory(layout, budget)
-    names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
+    staging = new_staging_directory(layout.identity_dir, budget)
+    # Hold the claim while this worker may still touch the tree (see cleanup).
+    owner = budget.supervise(
+        "staging ownership claim",
+        functools.partial(claim_staging_ownership, staging),
+    )
     checkpoints = _Checkpoints.for_budget(budget)
     try:
         manifest_path = budget.supervise(
@@ -223,27 +229,7 @@ def stage_assets(
             timeout_seconds=budget.remaining(),
         )
         budget.check("payload verification")
-        for asset in parsed.manifest.assets:
-            path = budget.supervise(
-                "payload staging",
-                functools.partial(
-                    _copy_asset,
-                    source,
-                    staging,
-                    asset,
-                    checkpoints.payload,
-                ),
-            )
-            budget.supervise(
-                "payload verification",
-                functools.partial(
-                    verify_asset,
-                    path,
-                    asset,
-                    checkpoint=checkpoints.digest,
-                ),
-            )
-            names.append(asset.name)
+        names = _stage_payloads(source, staging, parsed.manifest, budget)
         budget.supervise(
             "archive structure validation",
             functools.partial(
@@ -264,6 +250,7 @@ def stage_assets(
             checkpoint=checkpoints.publish,
         )
     finally:
+        release_staging_ownership(owner)
         discard_private_tree(staging, budget=budget, phase="staging cleanup")
     log_event(
         _LOGGER,
@@ -277,6 +264,39 @@ def stage_assets(
 def bundle_policy(version: str) -> ArchivePolicy:
     """Return the strip-and-root policy producer bundles use."""
     return ArchivePolicy(strip_components=1, required_root=f"kani-{version}")
+
+
+def _stage_payloads(
+    source: Path,
+    staging: Path,
+    manifest: SnapshotManifest,
+    budget: InstallBudget,
+) -> tuple[str, ...]:
+    """Copy and verify every manifest payload, naming what was published."""
+    checkpoints = _Checkpoints.for_budget(budget)
+    names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
+    for asset in manifest.assets:
+        path = budget.supervise(
+            "payload staging",
+            functools.partial(
+                _copy_asset,
+                source,
+                staging,
+                asset,
+                checkpoints.payload,
+            ),
+        )
+        budget.supervise(
+            "payload verification",
+            functools.partial(
+                verify_asset,
+                path,
+                asset,
+                checkpoint=checkpoints.digest,
+            ),
+        )
+        names.append(asset.name)
+    return tuple(names)
 
 
 def _copy_asset(
@@ -337,7 +357,7 @@ def asset_by_role(manifest: SnapshotManifest, role: str) -> AssetRecord:
 def _publication(
     layout: SnapshotLayout,
     staging: Path,
-    names: list[str],
+    names: tuple[str, ...],
     budget: InstallBudget,
 ) -> Publication:
     """Own a fresh marker and every marker left by earlier publications.
@@ -366,27 +386,6 @@ def _publication(
         downloads=layout.downloads_dir,
         marker=marker,
         stale_markers=tuple(path for path in published if path != marker),
-        names=tuple(names),
+        names=names,
         base_sequence=base,
     )
-
-
-def _new_staging_directory(layout: SnapshotLayout, budget: InstallBudget) -> Path:
-    """Return a fresh private staging directory beside the downloads.
-
-    The directory is private and uniquely named, so a creation that outlives
-    the budget may be abandoned: it exposes nothing, and a later install uses
-    a different name.
-    """
-    staging = layout.identity_dir / f".staging-{os.getpid()}-{secrets.token_hex(8)}"
-
-    def create() -> None:
-        """Create the private staging directory."""
-        staging.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=False)
-
-    try:
-        budget.supervise("staging directory creation", create)
-    except OSError as exc:
-        msg = f"failed to create snapshot staging directory '{staging}': {exc}"
-        raise ProverToolError(msg) from exc
-    return staging

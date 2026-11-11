@@ -495,6 +495,44 @@ def test_a_materialization_pass_must_match_the_validated_members(
     assert not destination.exists(), "a refused extraction published a tree"
 
 
+@pytest.mark.parametrize("short_pass", [1, 2])
+def test_a_shortened_archive_is_refused_in_either_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    short_pass: int,
+) -> None:
+    """A stream that ends early cannot publish a tree missing validated members.
+
+    A shorter archive whose prefix still matches the validated graph would
+    otherwise leave the omitted links uncreated while extraction succeeded.
+    Each pass must therefore consume every validated member.
+    """
+    archive = _write_archive(tmp_path / "asset.tar.gz", _valid_members())
+    prefix = _write_archive(tmp_path / "prefix.tar.gz", _valid_members()[:3])
+    real_open = archive_extract._open_archive
+    opened = 0
+
+    @contextlib.contextmanager
+    def alternating_open(
+        archive_path: Path,
+        checkpoint: Progress,
+    ) -> cabc.Generator[tarfile.TarFile]:
+        """Serve the full archive except on the chosen materialization pass."""
+        nonlocal opened
+        opened += 1
+        effective = prefix if opened == short_pass else archive_path
+        with real_open(effective, checkpoint) as archive_handle:
+            yield archive_handle
+
+    monkeypatch.setattr(archive_extract, "_open_archive", alternating_open)
+    destination = tmp_path / "out"
+
+    with pytest.raises(ProverToolError, match="changed after validation"):
+        extract_archive(archive, destination)
+
+    assert not destination.exists(), "a refused extraction published a tree"
+
+
 def test_member_order_permutations_preserve_the_result(tmp_path: Path) -> None:
     """Files are created before links regardless of header order."""
     members = _valid_members()

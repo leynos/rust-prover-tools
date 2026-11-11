@@ -682,7 +682,21 @@ EP-O1 assigns responsibility and records live evidence.
   `install_transport.py` past pylint's 400-line module limit, and the seam
   chosen was the sweep's shared subject, not a raised limit. Every one of the
   22 threads was answered, including evidence-backed rebuttals of two
-  LanguageTool false positives.
+  LanguageTool false positives. The next CodeRabbit pass raised two valid
+  follow-ups, both fixed. Each materialization pass now requires that it
+  consumed the whole validated graph, so a shortened archive whose prefix
+  matches cannot publish a tree missing members; a parametrized test covers
+  either pass. A staging tree is claimed with an advisory exclusive lock held
+  by its worker, so a sweep can tell a killed worker from an
+  abandoned-but-running one and removes a tree only when it can take the claim,
+  and a deferred sweep runs in a capped slice of the budget so a hung sweep
+  cannot starve the install. Tests cover a live claim being preserved and then
+  released, and a stalled sweep whose installation still completes. Requiring
+  each pass to consume the whole graph grew `archive_extract.py` past pylint's
+  400-line module limit, so the contained-path and planned-link helpers moved
+  to a new cohesive `archive_paths.py` instead of raising the limit; the
+  transport's per-payload loop likewise moved into `_stage_payloads` to keep
+  `stage_assets` within the local-variable limit. All seven gates then passed.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

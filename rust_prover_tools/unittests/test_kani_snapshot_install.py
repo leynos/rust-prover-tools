@@ -1864,7 +1864,7 @@ def test_a_late_completion_write_cannot_retire_a_repair_marker(
             install_transport._publication(
                 layout,
                 staging,
-                list(names),
+                tuple(names),
                 Deadline(time.monotonic() + 5.0),
             ),
             budget=_ExpiringSupervision("payload publication"),
@@ -1986,7 +1986,7 @@ def test_a_late_completion_write_cannot_regress_the_watermark(
             install_transport._publication(
                 layout,
                 staging,
-                list(names),
+                tuple(names),
                 Deadline(time.monotonic() + 5.0),
             ),
             budget=Deadline(time.monotonic() + 0.5),
@@ -3873,6 +3873,93 @@ def test_a_later_install_sweeps_a_stale_staging_tree(tmp_path: Path) -> None:
     install_snapshot(install_options(case), install_hooks(case))
 
     assert not abandoned.exists(), "a stale staging tree survived a later install"
+
+
+def test_a_sweep_preserves_a_staging_tree_its_worker_still_holds(
+    tmp_path: Path,
+) -> None:
+    """An abandoned worker that is still running keeps its claimed tree.
+
+    Age cannot prove a worker stopped: `run_within` abandons a blocked worker
+    without killing it. The claim it holds must keep the sweep away until the
+    lock is released, and the next sweep must then reclaim the tree.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    abandoned = layout.identity_dir / ".staging-claimed"
+    abandoned.mkdir(mode=0o700)
+    (abandoned / "payload.bin").write_bytes(b"partial")
+    owner = cleanup.claim_staging_ownership(abandoned)
+    stale = time.time() - cleanup.STAGING_GRACE_SECONDS - 60.0
+    os.utime(abandoned, (stale, stale))
+    try:
+        cleanup.sweep_deferred_staging(
+            layout.identity_dir,
+            Deadline(expires_at=time.monotonic() + 60.0),
+        )
+        assert abandoned.is_dir(), "a sweep removed a live worker's tree"
+    finally:
+        cleanup.release_staging_ownership(owner)
+
+    cleanup.sweep_deferred_staging(
+        layout.identity_dir,
+        Deadline(expires_at=time.monotonic() + 60.0),
+    )
+
+    assert not abandoned.exists(), "a released tree survived the next sweep"
+
+
+def test_a_stalled_sweep_cannot_consume_the_installation_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A hung sweep is deferred within its own slice, and the install proceeds."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    abandoned = layout.identity_dir / ".staging-stalled"
+    abandoned.mkdir(mode=0o700)
+    (abandoned / "payload.bin").write_bytes(b"partial")
+    stale = time.time() - cleanup.STAGING_GRACE_SECONDS - 60.0
+    os.utime(abandoned, (stale, stale))
+
+    release = threading.Event()
+    stalled = threading.Event()
+    real_rmtree = shutil.rmtree
+
+    def stalling_rmtree(
+        path: str | Path,
+        *,
+        ignore_errors: bool = False,
+        onexc: cabc.Callable[..., object] | None = None,
+    ) -> None:
+        """Block only the deferred tree, leaving the install's own cleanup free."""
+        target = pathlib.Path(path)
+        if target != abandoned:
+            real_rmtree(target, ignore_errors=ignore_errors, onexc=onexc)
+            return
+        stalled.set()
+        release.wait(30)
+        real_rmtree(target, ignore_errors=ignore_errors, onexc=onexc)
+
+    monkeypatch.setattr(cleanup.shutil, "rmtree", stalling_rmtree)
+    monkeypatch.setattr(cleanup, "_SWEEP_SECONDS", 0.2)
+    try:
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="rust_prover_tools.kani_snapshot.cleanup",
+        ):
+            install_snapshot(install_options(case), install_hooks(case))
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the sweep never reached the deferred tree"
+    assert load_active(layout) is not None, "a stalled sweep stopped the install"
+    assert "deferred staging sweep" in caplog.text, (
+        "the deferred sweep was not recorded"
+    )
 
 
 def test_a_later_install_preserves_a_fresh_staging_tree(tmp_path: Path) -> None:
