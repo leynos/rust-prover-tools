@@ -44,14 +44,20 @@ def test_operation_span_correlates_start_and_completion(
         span.finish("activated", cache="miss")
 
     start, complete = _events(caplog)
-    assert start["event"] == "kani.snapshot.install.start"
-    assert start["tag"] == "t1"
-    assert complete["event"] == "kani.snapshot.install.complete"
-    assert complete["tag"] == "t1"
-    assert complete["outcome"] == "activated"
-    assert complete["cache"] == "miss"
+    assert start["event"] == "kani.snapshot.install.start", (
+        "the span must open with a start event"
+    )
+    assert start["tag"] == "t1", "the start event must repeat the span fields"
+    assert complete["event"] == "kani.snapshot.install.complete", (
+        "the span must close with a completion event"
+    )
+    assert complete["tag"] == "t1", "the completion must repeat the span fields"
+    assert complete["outcome"] == "activated", "the completion must report the outcome"
+    assert complete["cache"] == "miss", "the completion must report its own fields"
     assert complete["span_id"] == start["span_id"], "the pair must share an id"
-    assert typ.cast("float", complete["elapsed_seconds"]) >= 0.0
+    assert typ.cast("float", complete["elapsed_seconds"]) >= 0.0, (
+        "a span must report non-negative latency"
+    )
 
 
 def test_concurrent_spans_get_distinct_ids(
@@ -102,9 +108,13 @@ def test_operation_span_reports_a_failure_without_the_message(
         raise ValueError(message)
 
     start, failed = _events(caplog)
-    assert start["event"] == "kani.snapshot.check.start"
-    assert failed["event"] == "kani.snapshot.check.failed"
-    assert failed["reason"] == "ValueError"
+    assert start["event"] == "kani.snapshot.check.start", (
+        "the span must open with a start event"
+    )
+    assert failed["event"] == "kani.snapshot.check.failed", (
+        "the span must close with a failure event"
+    )
+    assert failed["reason"] == "ValueError", "the failure must name the exception class"
     assert failed["span_id"] == start["span_id"], "the failure must pair with its start"
-    assert "secret path" not in str(failed)
+    assert "secret path" not in str(failed), "the failure must not leak the message"
     assert typ.cast("float", failed["elapsed_seconds"]) >= 0.0

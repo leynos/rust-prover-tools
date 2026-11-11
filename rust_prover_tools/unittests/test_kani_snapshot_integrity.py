@@ -477,7 +477,9 @@ _NON_CANONICAL_INVOCATIONS: tuple[str, ...] = (
 @pytest.mark.parametrize("invocation", _NON_CANONICAL_INVOCATIONS)
 def test_a_non_canonical_invocation_names_no_run(invocation: str) -> None:
     """Only this repository's exact run-and-attempt path names a domain run."""
-    assert run_from_invocation(invocation, "leynos/rust-prover-tools") is None
+    assert run_from_invocation(invocation, "leynos/rust-prover-tools") is None, (
+        f"a non-canonical invocation named a run: {invocation!r}"
+    )
 
 
 #: Non-canonical forms parameterised by the fixture's real run and attempt, so

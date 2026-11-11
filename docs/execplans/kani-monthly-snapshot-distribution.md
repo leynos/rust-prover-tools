@@ -799,7 +799,11 @@ name verified provenance rather than the verifier command.
   a separately constructed policy and pinned asset, so the name is not a closed
   category; the event carries only the attempt and delay, and a test asserts
   those exact fields. The design's observability paragraph now states that
-  boundary and that collection remains host-owned.
+  boundary and that collection remains host-owned. The formal review of
+  `fd5ec12` then raised four findings: the malformed-URL fix above (already
+  present in `0049b70`), and three assertion-message nits in the download,
+  integrity and observability tests. Every changed bare assertion now carries a
+  failure message, and the focused modules pass (119 tests).
 
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.

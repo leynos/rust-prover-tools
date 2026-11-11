@@ -302,7 +302,7 @@ def test_download_asset_retries_a_connection_failure(
             ),
         )
 
-    assert result == tmp_path / "asset"
+    assert result == tmp_path / "asset", "the download must return its destination"
     assert connections.opened == 2, "a dropped connection must be retried"
     assert sleeps == [0.5], "the retry waits the configured backoff"
     assert result.read_bytes() == payload, "the retry must store the payload"
@@ -344,7 +344,7 @@ def test_download_asset_retries_a_body_read_failure(
         ),
     )
 
-    assert result == tmp_path / "asset"
+    assert result == tmp_path / "asset", "the download must return its destination"
     assert connections.opened == 2, "a failed body read must be retried"
     assert sleeps == [0.5], "the retry waits the configured backoff"
     assert result.read_bytes() == payload, "the retry must store the payload"
@@ -467,7 +467,7 @@ def test_download_asset_retries_a_transient_http_status(
         ),
     )
 
-    assert result == tmp_path / "asset"
+    assert result == tmp_path / "asset", "the download must return its destination"
     assert len(calls) == 2, "a transient status must be retried"
     assert sleeps == [0.0], "the retry waits the configured backoff"
 
@@ -512,7 +512,7 @@ def test_download_asset_retries_transient_failures_with_bounded_backoff(
         ),
     )
 
-    assert result == tmp_path / "asset"
+    assert result == tmp_path / "asset", "the download must return its destination"
     assert len(calls) == 3, "the third attempt should succeed"
     assert sleeps == [0.5, 0.75], "backoff must double but stay capped"
 
