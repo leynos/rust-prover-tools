@@ -3832,3 +3832,59 @@ def test_check_reports_a_bounded_failure_event(
     assert not any(str(tmp_path) in str(value) for value in checks[1].values()), (
         "the failure event leaked a filesystem path"
     )
+
+
+def test_private_cache_directories_ignore_a_permissive_umask(tmp_path: Path) -> None:
+    """A cache chain created under umask 0002 is still owner-only.
+
+    `Path.mkdir(parents=True)` would give each missing level the default mode
+    masked by the umask, leaving a `0o775` ancestor that extraction refuses as
+    attacker-writable. The cache helper must create every level 0700.
+    """
+    target = tmp_path / "cache" / "kani" / "identity"
+
+    previous = os.umask(0o002)
+    try:
+        install_state.ensure_private_directory(target)
+    finally:
+        os.umask(previous)
+
+    for directory in (tmp_path / "cache", tmp_path / "cache" / "kani", target):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700, (
+            f"{directory.name} was created with the umask default"
+        )
+
+
+def test_a_later_install_sweeps_a_stale_staging_tree(tmp_path: Path) -> None:
+    """A staging tree abandoned by a killed worker is removed once stale.
+
+    The sweep only reclaims trees older than its grace period, so a worker
+    that is still filling its staging directory keeps it.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    abandoned = layout.identity_dir / ".staging-abandoned"
+    abandoned.mkdir(mode=0o700)
+    (abandoned / "payload.bin").write_bytes(b"partial")
+    stale = time.time() - cleanup.STAGING_GRACE_SECONDS - 60.0
+    os.utime(abandoned, (stale, stale))
+
+    install_snapshot(install_options(case), install_hooks(case))
+
+    assert not abandoned.exists(), "a stale staging tree survived a later install"
+
+
+def test_a_later_install_preserves_a_fresh_staging_tree(tmp_path: Path) -> None:
+    """A staging tree young enough to belong to a live worker is not swept."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    running = layout.identity_dir / ".staging-running"
+    running.mkdir(mode=0o700)
+    (running / "payload.bin").write_bytes(b"in progress")
+
+    install_snapshot(install_options(case), install_hooks(case))
+
+    assert running.is_dir(), "an install swept a live worker's staging tree"
+    assert (running / "payload.bin").read_bytes() == b"in progress"

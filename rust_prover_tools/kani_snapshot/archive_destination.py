@@ -50,11 +50,29 @@ def prepare_destination(destination: Path) -> Path:
         ancestor is unsafe, or the destination cannot be inspected.
     """
     _require_absent_or_empty(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    _create_private_parents(destination.parent)
     _require_private_ancestors(destination.parent)
     return destination.with_name(
         f".{destination.name}.extract-{os.getpid()}-{time.monotonic_ns()}"
     )
+
+
+def _create_private_parents(path: Path) -> None:
+    """Create each missing ancestor of `path` with private permissions.
+
+    `Path.mkdir(parents=True)` gives every intermediate directory the default
+    mode masked by the process umask, so a umask of `0002` would create
+    `0o775` parents that `_require_private_ancestors` then rejects. Creating
+    each level explicitly keeps the whole chain owner-only.
+    """
+    try:
+        missing = [entry for entry in path.parents if not entry.exists()]
+        for directory in reversed(missing):
+            directory.mkdir(mode=PRIVATE_DIRECTORY_MODE, exist_ok=True)
+        path.mkdir(mode=PRIVATE_DIRECTORY_MODE, exist_ok=True)
+    except OSError as exc:
+        msg = f"failed to create snapshot extraction parent '{path}': {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def _require_absent_or_empty(destination: Path) -> None:

@@ -108,6 +108,7 @@ def extract_archive(  # ruff: ignore[too-many-arguments] - one parameter per arc
         limits=limits,
         policy=policy,
         checkpoint=progress,
+        entries=entries,
     )
     try:
         staging.mkdir(mode=PRIVATE_DIRECTORY_MODE, parents=False)
@@ -165,16 +166,34 @@ class _Extraction:
     limits: ArchiveLimits
     policy: ArchivePolicy
     checkpoint: Progress
+    entries: tuple[ArchiveEntry, ...]
+
+    def require_validated(self, entry: ArchiveEntry, index: int) -> None:
+        """Refuse a pass member that differs from the validated graph.
+
+        Each pass re-opens the archive, so a file replaced after validation
+        could otherwise introduce a link the graph rules never saw. Comparing
+        the member at its validated position keeps every pass bound to the
+        graph `read_archive` approved.
+        """
+        if index >= len(self.entries) or self.entries[index] != entry:
+            msg = "snapshot archive changed after validation"
+            raise ProverToolError(msg)
 
 
 def _materialize_files(extraction: _Extraction) -> None:
     """Create directories and regular files, skipping links."""
     total = 0
+    index = 0
     with _open_archive(extraction.archive_path, extraction.checkpoint) as archive:
         for member in archive:
             extraction.checkpoint()
             entry = _entry_from_member(member, extraction.limits, extraction.policy)
-            if entry is None or entry.kind in _LINK_KINDS:
+            if entry is None:
+                continue
+            extraction.require_validated(entry, index)
+            index += 1
+            if entry.kind in _LINK_KINDS:
                 continue
             target = _target_path(extraction.root, entry.path)
             if entry.kind == KIND_DIRECTORY:
@@ -257,12 +276,15 @@ def _materialize_links(extraction: _Extraction) -> None:
     """Create symbolic links, then hard links to already written files."""
     symbolic: list[ArchiveEntry] = []
     hard: list[ArchiveEntry] = []
+    index = 0
     with _open_archive(extraction.archive_path, extraction.checkpoint) as archive:
         for member in archive:
             extraction.checkpoint()
             entry = _entry_from_member(member, extraction.limits, extraction.policy)
             if entry is None:
                 continue
+            extraction.require_validated(entry, index)
+            index += 1
             if entry.kind == KIND_SYMLINK:
                 symbolic.append(entry)
             elif entry.kind == KIND_HARDLINK:

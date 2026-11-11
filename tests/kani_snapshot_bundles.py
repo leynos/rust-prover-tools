@@ -69,7 +69,7 @@ CHECKSUMS_NAME: typ.Final[str] = "SHA256SUMS"
 ATTESTATION_NAME: typ.Final[str] = "manifest.sigstore.jsonl"
 
 #: role, file name, media type and bytes for one published asset.
-Payload = tuple[str, str, str, bytes]
+type Payload = tuple[str, str, str, bytes]
 
 #: Exact bytes setup installs as `bin/rustc`. The manifest records their
 #: digest, so the fixture compiler is the bytes a probe would execute.

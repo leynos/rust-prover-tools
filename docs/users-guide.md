@@ -152,6 +152,11 @@ commands and never fall back to a host Kani installation.
 prover-tools kani snapshot install --asset-dir dist/kani-snapshot
 ```
 
+Installation requires the prebuilt GitHub CLI (`gh`) on the caller's `PATH`;
+the installer runs `gh attestation verify` and bundles no verifier of its own. A
+`PATH` entry under a directory another user can write can replace `gh`, so run
+the command with a `PATH` whose entries you trust.
+
 Installation requires `--asset-dir` until the release download transport is
 implemented. The directory must contain `manifest.json`,
 `manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the manifest names. The

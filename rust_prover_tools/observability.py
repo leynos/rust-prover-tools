@@ -115,20 +115,20 @@ def operation_span(
     try:
         yield span
     except Exception as exc:
-        # Only the class name is bounded; the message may carry a path.
-        log_event(
-            logger,
-            f"{event}.failed",
+        # Only the class name is bounded; the message may carry a path. One
+        # mapping means a start field with the same name is overridden rather
+        # than raising a duplicate-keyword TypeError after the body succeeded.
+        failed = {
             **fields,
-            reason=type(exc).__name__,
-            elapsed_seconds=_elapsed_seconds(started),
-        )
+            "reason": type(exc).__name__,
+            "elapsed_seconds": _elapsed_seconds(started),
+        }
+        log_event(logger, f"{event}.failed", **failed)
         raise
-    log_event(
-        logger,
-        f"{event}.complete",
+    complete = {
         **fields,
         **span.fields,
-        outcome=span.outcome,
-        elapsed_seconds=_elapsed_seconds(started),
-    )
+        "outcome": span.outcome,
+        "elapsed_seconds": _elapsed_seconds(started),
+    }
+    log_event(logger, f"{event}.complete", **complete)

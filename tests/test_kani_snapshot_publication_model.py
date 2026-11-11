@@ -99,8 +99,12 @@ class _PublicationStateMachine(RuleBasedStateMachine):
     @invariant()
     def watermark_never_regresses(self) -> None:
         """Require the completion watermark to rise but never regress."""
-        assert completion_watermark(self.layout) >= self.watermark
-        assert highest_sequence(self.layout) >= self.watermark
+        assert completion_watermark(self.layout) >= self.watermark, (
+            "the completion watermark regressed"
+        )
+        assert highest_sequence(self.layout) >= self.watermark, (
+            "the highest activation sequence regressed"
+        )
 
     @invariant()
     def markers_match_the_model(self) -> None:
@@ -110,14 +114,16 @@ class _PublicationStateMachine(RuleBasedStateMachine):
         for marker, base in self.markers.items():
             assert marker_base_sequence(marker) == base, "marker bytes lost the base"
         any_pending = any(base >= self.watermark for base in self.markers.values())
-        assert publication_pending(self.layout) is any_pending
+        assert publication_pending(self.layout) is any_pending, (
+            "the pending verdict disagreed with the marker bases"
+        )
 
     @invariant()
     def active_matches_the_model(self) -> None:
         """Activation resolves to the generation the model last recorded."""
         pointer = load_active(self.layout)
         active = None if pointer is None else pointer.generation
-        assert active == self.expected_active
+        assert active == self.expected_active, "the active pointer drifted"
 
     @rule()
     def begin_publication(self) -> None:
@@ -127,7 +133,9 @@ class _PublicationStateMachine(RuleBasedStateMachine):
         assert publication_pending(self.layout), (
             "an unfinished publication did not keep the cache pending"
         )
-        assert completion_watermark(self.layout) == self.watermark
+        assert completion_watermark(self.layout) == self.watermark, (
+            "recording a marker moved the completion watermark"
+        )
 
     @rule(index=st.integers(min_value=0, max_value=8))
     def late_marker(self, index: int) -> None:
@@ -142,11 +150,15 @@ class _PublicationStateMachine(RuleBasedStateMachine):
         write_active(self.layout, generation)
         sequence = highest_sequence(self.layout)
         assert sequence == self.highest + 1, "activation did not take the next slot"
-        assert completion_watermark(self.layout) == sequence
+        assert completion_watermark(self.layout) == sequence, (
+            "the completion watermark did not follow the new activation"
+        )
         assert not publication_pending(self.layout), (
             "a completion above every marker base left the cache pending"
         )
-        assert all(not record.exists() for record in self.late_records)
+        assert all(not record.exists() for record in self.late_records), (
+            "a superseded private completion record survived the prune"
+        )
         self.late_records.clear()
         self.sequences.append(sequence)
         self.highest = sequence
@@ -226,11 +238,15 @@ class _PublicationStateMachine(RuleBasedStateMachine):
         )
         pending.write_text(f"{document}\n", encoding="ascii")
 
-        assert highest_sequence(self.layout) == self.highest
-        assert completion_watermark(self.layout) == self.watermark
+        assert highest_sequence(self.layout) == self.highest, (
+            "an unlinked activation document took a sequence slot"
+        )
+        assert completion_watermark(self.layout) == self.watermark, (
+            "an unlinked activation document moved the watermark"
+        )
         pointer = load_active(self.layout)
         active = None if pointer is None else pointer.generation
-        assert active == self.expected_active
+        assert active == self.expected_active, "an unlinked document became active"
 
 
 _MACHINE_SETTINGS = settings(

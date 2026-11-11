@@ -6,6 +6,7 @@ import contextlib
 import dataclasses as dc
 import gzip
 import io
+import os
 import posixpath
 import random
 import stat
@@ -19,6 +20,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot import archive_extract
 from rust_prover_tools.kani_snapshot.archive import (
     ArchiveLimits,
     ArchivePolicy,
@@ -29,6 +31,8 @@ from rust_prover_tools.kani_snapshot.archive import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from rust_prover_tools.kani_snapshot.progress import Progress
 
 
 def _info(
@@ -424,6 +428,71 @@ def test_destination_must_be_empty(tmp_path: Path) -> None:
         extract_archive(archive, destination)
 
     assert (destination / "existing").read_text(encoding="utf-8") == "keep"
+
+
+def test_missing_extraction_parents_are_created_private(tmp_path: Path) -> None:
+    """Parents created under a permissive umask are still owner-only.
+
+    `Path.mkdir(parents=True)` would give each missing level the default mode
+    masked by the umask, so a umask of `0002` would produce `0o775` parents
+    that the ancestor check rejects. Extraction must create them 0700.
+    """
+    archive = _write_archive(tmp_path / "asset.tar.gz", _valid_members())
+    destination = tmp_path / "cache" / "downloads" / "launcher"
+
+    previous = os.umask(0o002)
+    try:
+        extract_archive(archive, destination)
+    finally:
+        os.umask(previous)
+
+    for parent in (tmp_path / "cache", tmp_path / "cache" / "downloads"):
+        assert stat.S_IMODE(parent.stat().st_mode) == 0o700, (
+            f"extraction created {parent.name} with the umask default"
+        )
+    assert (destination / "share/data.txt").read_bytes() == b"data\n"
+
+
+def test_a_materialization_pass_must_match_the_validated_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file replaced after validation cannot introduce an unseen member.
+
+    Both materialization passes re-open the archive, so a swap between
+    validation and the second pass would otherwise smuggle in a link the graph
+    rules never approved. Here the replacement only changes a symbolic link's
+    target, which the second pass must refuse.
+    """
+    archive = _write_archive(tmp_path / "asset.tar.gz", _valid_members())
+    changed_members = _valid_members()
+    changed_members[3] = (
+        _info("share/alias.txt", kind=tarfile.SYMTYPE, linkname="../../etc"),
+        b"",
+    )
+    changed = _write_archive(tmp_path / "changed.tar.gz", changed_members)
+
+    real_open = archive_extract._open_archive
+    opened: list[Path] = []
+
+    @contextlib.contextmanager
+    def alternating_open(
+        archive_path: Path,
+        checkpoint: Progress,
+    ) -> cabc.Generator[tarfile.TarFile]:
+        """Serve the validated archive first, then the replacement."""
+        effective = archive_path if not opened else changed
+        opened.append(effective)
+        with real_open(effective, checkpoint) as archive_handle:
+            yield archive_handle
+
+    monkeypatch.setattr(archive_extract, "_open_archive", alternating_open)
+    destination = tmp_path / "out"
+
+    with pytest.raises(ProverToolError, match="changed after validation"):
+        extract_archive(archive, destination)
+
+    assert not destination.exists(), "a refused extraction published a tree"
 
 
 def test_member_order_permutations_preserve_the_result(tmp_path: Path) -> None:

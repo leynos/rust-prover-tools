@@ -154,7 +154,10 @@ def check(
 
 run_app: cyclopts.App = cyclopts.App(
     "run",
-    help="Run a proof through the exact installed snapshot",
+    help=(
+        "Run a proof through the exact installed snapshot. "
+        "Place -- before verifier arguments."
+    ),
     config=(),
 )
 

@@ -24,7 +24,10 @@ from rust_prover_tools.kani_snapshot.attestation import (
     AttestationRequest,
     policy_for_pin,
 )
-from rust_prover_tools.kani_snapshot.cleanup import discard_private_tree
+from rust_prover_tools.kani_snapshot.cleanup import (
+    discard_private_tree,
+    sweep_deferred_staging,
+)
 from rust_prover_tools.kani_snapshot.install_copy import (
     TransportFile,
     TransportLimit,
@@ -154,6 +157,7 @@ def stage_assets(
     if not budget.supervise("asset directory check", source.is_dir):
         msg = f"snapshot asset directory does not exist: {source}"
         raise ProverToolError(msg)
+    sweep_deferred_staging(layout.identity_dir, budget)
     staging = _new_staging_directory(layout, budget)
     names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
     checkpoints = _Checkpoints.for_budget(budget)

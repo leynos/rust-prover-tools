@@ -280,6 +280,22 @@ def test_an_attestation_for_another_attempt_is_refused(
         verify_attestation(_request(tmp_path))
 
 
+def test_an_attestation_for_another_repository_is_refused(
+    tmp_path: Path, cmd_mox: CmdMox
+) -> None:
+    """A verified record for another repository names no run of this one."""
+    workflow = make_manifest().workflow
+    elsewhere = (
+        "https://github.com/someone/else"
+        f"/actions/runs/{workflow.run_id}/attempts/{workflow.run_attempt}"
+    )
+    cmd_mox.stub("gh").runs(lambda invocation: (_verified(elsewhere), "", 0))
+    with pytest.raises(
+        ProverToolError, match="did not verify the manifest's workflow run"
+    ):
+        verify_attestation(_request(tmp_path))
+
+
 #: One wrong value per policy dimension a bundle can fail.
 _WRONG_IDENTITIES: tuple[tuple[str, str], ...] = (
     (

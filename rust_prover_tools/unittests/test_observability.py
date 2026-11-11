@@ -52,6 +52,21 @@ def test_operation_span_correlates_start_and_completion(
     assert typ.cast("float", complete["elapsed_seconds"]) >= 0.0
 
 
+def test_a_completion_field_overrides_the_start_field_of_the_same_name(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A repeated field name is overridden, not a duplicate-keyword crash."""
+    with (
+        caplog.at_level(logging.DEBUG, logger=_LOGGER.name),
+        operation_span(_LOGGER, "kani.snapshot.install", tag="start") as span,
+    ):
+        span.finish("activated", tag="complete")
+
+    start, complete = _events(caplog)
+    assert start["tag"] == "start", "the start event lost its own field"
+    assert complete["tag"] == "complete", "the completion field did not override"
+
+
 def test_operation_span_reports_a_failure_without_the_message(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

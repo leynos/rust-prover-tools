@@ -16,8 +16,10 @@ reuses, does not belong here: those removals must complete or be reported.
 
 from __future__ import annotations
 
+import functools
 import logging
 import shutil
+import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
@@ -28,9 +30,20 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_snapshot.install_model import InstallBudget
 
-__all__ = ("discard_private_file", "discard_private_tree")
+__all__ = (
+    "STAGING_GRACE_SECONDS",
+    "discard_private_file",
+    "discard_private_tree",
+    "sweep_deferred_staging",
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+#: A staging tree younger than this may belong to a worker the deadline
+#: abandoned but did not stop, so sweeping it could corrupt that worker's copy.
+#: The grace exceeds the 30-minute installation deadline, so a tree from a live
+#: install is never a candidate.
+STAGING_GRACE_SECONDS: typ.Final[float] = 60 * 60.0
 
 
 def discard_private_file(
@@ -80,6 +93,41 @@ def discard_private_tree(
         shutil.rmtree(path, ignore_errors=True)
 
     _supervise(phase, budget, discard, path)
+
+
+def sweep_deferred_staging(identity_dir: Path, budget: InstallBudget) -> None:
+    """Remove staging trees an earlier attempt deferred and never revisited.
+
+    A cleanup that outlives the deadline is abandoned rather than retried, and
+    each attempt uses a fresh name, so without this sweep a repeated timeout
+    would leave every payload it copied in the cache. The sweep is bounded by
+    the same budget and defers like any other private cleanup, so a slow
+    filesystem cannot fail the installation that triggered it.
+    """
+    try:
+        stale = budget.supervise(
+            "deferred staging sweep",
+            functools.partial(_stale_staging_trees, identity_dir),
+        )
+    except ProverToolError as exc:
+        _LOGGER.debug("snapshot deferred staging sweep skipped: %s", exc)
+        return
+    for tree in stale:
+        discard_private_tree(tree, budget=budget, phase="deferred staging cleanup")
+
+
+def _stale_staging_trees(identity_dir: Path) -> tuple[Path, ...]:
+    """Return staging trees old enough that no abandoned worker can use them."""
+    now = time.time()
+    stale: list[Path] = []
+    for entry in identity_dir.glob(".staging-*"):
+        try:
+            age = now - entry.lstat().st_mtime
+        except OSError:
+            continue
+        if age >= STAGING_GRACE_SECONDS:
+            stale.append(entry)
+    return tuple(stale)
 
 
 def _supervise(

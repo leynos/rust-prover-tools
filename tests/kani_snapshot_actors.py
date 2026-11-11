@@ -13,6 +13,7 @@ import dataclasses as dc
 import time
 import typing as typ
 from pathlib import Path
+from unittest import mock
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import install_transport, publication
@@ -161,9 +162,9 @@ def repair_and_stall_before_publishing(
 
     # `stage_assets` resolves the helper from the module namespace at call
     # time, so this substitution needs no seam in production code.
-    vars(install_transport)["publish_staged"] = stalling_publish
-    try:
-        install_snapshot(install_options(case), install_hooks(case))
-        outcomes.put("repaired")
-    except Exception as exc:  # ruff: ignore[blind-except] - the parent reports it
-        outcomes.put(f"error:{type(exc).__name__}:{exc}")
+    with mock.patch.object(install_transport, "publish_staged", stalling_publish):
+        try:
+            install_snapshot(install_options(case), install_hooks(case))
+            outcomes.put("repaired")
+        except Exception as exc:  # ruff: ignore[blind-except] - the parent reports it
+            outcomes.put(f"error:{type(exc).__name__}:{exc}")

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
+
 from rust_prover_tools.cli import app
 from tests.kani_snapshot_fixtures import make_pin, pin_bytes
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _write_pin(tmp_path: Path) -> Path:
@@ -39,8 +39,8 @@ def test_check_reports_a_missing_installation(
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1
-    assert "not installed" in captured.err
+    assert status == 1, "a missing installation must exit with status 1"
+    assert "not installed" in captured.err, "stderr did not report the empty cache"
 
 
 def test_install_without_assets_reports_the_missing_transport(
@@ -62,15 +62,35 @@ def test_install_without_assets_reports_the_missing_transport(
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1
-    assert "--asset-dir" in captured.err
+    assert status == 1, "a missing transport must exit with status 1"
+    assert "--asset-dir" in captured.err, "stderr did not name the missing flag"
 
 
-def test_run_rejects_setup_before_looking_for_an_installation(
+#: Forwarded spellings that would replace the pinned backend, with the phrase
+#: the refusal must contain. Each is refused before a generation is consulted.
+_BACKEND_REPLACEMENTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("setup",), "setup command"),
+    (("kani", "setup"), "setup command"),
+    (("--use-local-bundle", "bundle.tar.gz"), "setup flag"),
+    (("--use-local-bundle=bundle.tar.gz",), "setup flag"),
+    (("--use-local-toolchain", "/opt/toolchain"), "setup flag"),
+    (("--use-local-toolchain=/opt/toolchain",), "setup flag"),
+    (("-Zlean",), "Lean backend"),
+    (("-Z", "lean"), "Lean backend"),
+    (("-Z=lean",), "Lean backend"),
+    (("--unstable", "lean"), "Lean backend"),
+    (("--unstable=lean",), "Lean backend"),
+)
+
+
+@pytest.mark.parametrize(("forwarded", "reason"), _BACKEND_REPLACEMENTS)
+def test_run_rejects_a_backend_replacing_argument(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    forwarded: tuple[str, ...],
+    reason: str,
 ) -> None:
-    """A forwarded setup command cannot replace the pinned backend."""
+    """A forwarded argument that replaces the pinned backend is refused."""
     pin = _write_pin(tmp_path)
     status = app(
         [
@@ -81,37 +101,13 @@ def test_run_rejects_setup_before_looking_for_an_installation(
             "--cache-dir",
             str(tmp_path / "cache"),
             "--",
-            "setup",
+            *forwarded,
         ],
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1
-    assert "setup command" in captured.err
-
-
-def test_run_rejects_the_lean_backend(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The Lean backend is refused before any generation is consulted."""
-    pin = _write_pin(tmp_path)
-    status = app(
-        [
-            "kani",
-            "run",
-            "--snapshot-pin",
-            str(pin),
-            "--cache-dir",
-            str(tmp_path / "cache"),
-            "--",
-            "-Zlean",
-        ],
-        exit_on_error=False,
-    )
-    captured = capsys.readouterr()
-    assert status == 1
-    assert "Lean backend" in captured.err
+    assert status == 1, "the refusal must exit with status 1"
+    assert reason in captured.err, f"stderr did not mention {reason!r}"
 
 
 def test_relative_paths_resolve_below_the_repository_root(
@@ -140,7 +136,7 @@ def test_relative_paths_resolve_below_the_repository_root(
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1
+    assert status == 1, "a missing installation must exit with status 1"
     assert "not installed" in captured.err, "the relative pin did not resolve"
     assert not (elsewhere / "cache").exists(), "the cache resolved against the cwd"
 
@@ -175,7 +171,7 @@ def test_absolute_paths_ignore_the_repository_root(
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1
+    assert status == 1, "a missing installation must exit with status 1"
     assert "not installed" in captured.err, "the absolute pin was re-anchored"
 
 
@@ -200,6 +196,6 @@ def test_snapshot_flags_do_not_inherit_generic_environment(
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1
-    assert "not installed" in captured.err
-    assert "absent.toml" not in captured.err
+    assert status == 1, "a missing installation must exit with status 1"
+    assert "not installed" in captured.err, "stderr did not report the empty cache"
+    assert "absent.toml" not in captured.err, "a generic INPUT_PIN redirected the run"

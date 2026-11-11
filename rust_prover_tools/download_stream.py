@@ -144,7 +144,7 @@ def _stream(
     except OSError as exc:
         # Opening, flushing or closing the destination is a local storage
         # failure; a retry of the same request cannot repair it.
-        _log_failure(_LOGGER, name, "storage_error")
+        _log_failure(_LOGGER, name, "store_error")
         msg = f"failed to store {name} at {destination}: {exc}"
         raise ProverToolError(msg) from exc
     _require_complete_body(limits, written, expected)
@@ -228,7 +228,7 @@ def _copy_body(
             output.write(chunk)
         except OSError as exc:
             # A local disk error must not be retried as a flaky connection.
-            _log_failure(_LOGGER, limits.name, "storage_error", written=written)
+            _log_failure(_LOGGER, limits.name, "store_error", written=written)
             msg = f"failed to store {limits.name}: {exc}"
             raise ProverToolError(msg) from exc
 

@@ -64,7 +64,6 @@ _SETUP_FLAGS: typ.Final[tuple[str, ...]] = (
     "--use-local-toolchain",
 )
 
-#: Short flag that enables unstable Kani features, including `lean`.
 #: Upstream spellings of the unstable-feature selector. Kani's Clap
 #: definition exposes both a short `-Z` and a long `--unstable` alias.
 _UNSTABLE_FLAGS: typ.Final[tuple[str, ...]] = ("-Z", "--unstable")

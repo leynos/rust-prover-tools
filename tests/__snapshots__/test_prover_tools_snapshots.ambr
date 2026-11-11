@@ -57,7 +57,8 @@
   '''
   Usage: prover-tools kani run --snapshot-pin PATH [OPTIONS] [ARGS...]
   
-  Run a proof through the exact installed snapshot
+  Run a proof through the exact installed snapshot. Place -- before verifier 
+  arguments.
   
   ╭─ Arguments ──────────────────────────────────────────────────────────────────╮
   │ ARGS                                                                         │

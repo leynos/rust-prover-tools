@@ -40,7 +40,8 @@ installation never enters either release installer fallback. These consumer
 commands are implemented and are existing APIs:
 
 ```bash
-prover-tools kani snapshot install --pin tools/kani/snapshot.toml
+prover-tools kani snapshot install --pin tools/kani/snapshot.toml \
+  --asset-dir dist/kani-snapshot
 prover-tools kani snapshot check --pin tools/kani/snapshot.toml
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
 ```
@@ -772,7 +773,8 @@ retrying). A fourth test concern, setup compiling a launcher invisibly, is
 addressed by descendant-process evidence rather than adapter mocks alone.
 Upstream source evidence and bounded feasibility questions are recorded in the
 execution plan. No prototype, build, workflow dispatch, repository setting
-change or publication is authorized by this document's proposed status.
+change or publication is authorized by the proposed status of EP-M1, EP-M4 and
+EP-M5.
 
 [^1]: [GitHub CLI attestation verification](https://cli.github.com/manual/gh_attestation_verify).
 [^2]: [Rustup environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
@@ -785,8 +787,9 @@ change or publication is authorized by this document's proposed status.
 Revision 4 integration note (2026-11-08): the execution plan records main's new
 prebuilt release installer, `kani exec`, Cuprum 0.2 and shared validation
 boundaries. Future Python and test helpers require complete interrogate
-docstrings; use the vendored uv gate and current Makefile targets. This remains
-proposed design pending explicit implementation approval.
+docstrings; use the vendored uv gate and current Makefile targets. The design
+work covered by EP-M1, EP-M4 and EP-M5 remains proposed pending explicit
+implementation approval.
 
 Cuprum 0.2 exposes `EnvMode.REPLACE`, `UNSET` and run-level timeouts. Extend
 the typed command adapter using those supported primitives, not custom

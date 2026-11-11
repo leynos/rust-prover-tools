@@ -243,9 +243,19 @@ def _await_lock(
 
 
 def ensure_private_directory(path: Path) -> None:
-    """Create one cache directory with private permissions."""
+    """Create one cache directory with private permissions.
+
+    Every missing level is created explicitly. `Path.mkdir(parents=True)` gives
+    intermediate directories the default mode masked by the umask, so a umask
+    of `0002` would leave a `0o775` cache parent that later extraction refuses
+    as attacker-writable. The final `mkdir` still rejects an existing
+    non-directory target.
+    """
     try:
-        path.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
+        missing = [entry for entry in path.parents if not entry.exists()]
+        for directory in reversed(missing):
+            directory.mkdir(mode=_PRIVATE_DIRECTORY_MODE, exist_ok=True)
+        path.mkdir(mode=_PRIVATE_DIRECTORY_MODE, exist_ok=True)
     except OSError as exc:
         msg = f"failed to create snapshot cache directory '{path}': {exc}"
         raise ProverToolError(msg) from exc

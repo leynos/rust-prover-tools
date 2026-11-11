@@ -654,6 +654,29 @@ EP-O1 assigns responsibility and records live evidence.
   setup; both spies must stay empty for every refusal, and a matching-bundle
   control requires both to be reached. Real signature verification remains
   EP-M5's boundary.
+- [x] (2026-11-11) Remediated the tenth hosted CodeRabbit review's 22
+  findings. Accepted and fixed: `storage_error` became the documented
+  `store_error`; `operation_span` merges start and completion fields into one
+  mapping so a repeated name overrides instead of raising a duplicate-keyword
+  `TypeError`; extraction creates missing parents 0700 instead of inheriting
+  the umask, and both materialization passes compare every member with the
+  validated graph so a file swapped after validation is refused; the cache
+  directory helper creates each level 0700; a later install sweeps `.staging-*`
+  trees older than a one-hour grace, which exceeds the 30-minute installation
+  deadline; the `kani run` help names the `--` separator; the duplicated
+  `_UNSTABLE_FLAGS` comment is gone; the CLI refusal tests cover all eleven
+  documented spellings and assert their reasons; assertion messages were added
+  across the behavioural and model tests; the `gh` stand-in is patched with
+  `mock.patch.object` instead of mutating the module mapping; and the design,
+  developer and user documents now describe the implemented commands, the
+  `--asset-dir` requirement, the `gh` `PATH` trust requirement, `url_policy` and
+  `download.retry`. Declined with evidence: accepting ancestors writable by
+  the installing user's group needs mutable NSS group lookups and still gives
+  no durable guarantee, while the design requires no attacker-writable ancestor
+  and the error names the remedy. New tests cover the umask-0002 parent modes,
+  the post-validation archive swap, stale and fresh staging sweeps, the
+  completion-field override, and an attestation for another repository; the
+  `kani run` help snapshot was regenerated.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -1247,6 +1270,17 @@ from `install.py` so every caller and test keeps its import, and
 `workflow_run.py` owns the run-correlation half of the attestation boundary,
 re-exported from `attestation.py`. The four check-path tests that spy on the
 deadline and the supervised reads now patch the module that owns them.
+
+2026-11-11, declined ancestor group-writability: a review asked extraction to
+accept an ancestor writable by the installing user's group as well as one
+writable only by that user. Distinguishing the two requires the process's
+supplementary group membership from NSS at check time. That lookup can block on
+a remote directory service, can change after the check, and does not make the
+ancestor stable for the rename that follows. The distribution design requires
+extraction below a private directory with no attacker-writable ancestor, so the
+boundary stays membership-agnostic: a group- or other-writable ancestor without
+the sticky bit is refused, and the error tells the operator to choose a private
+`--cache-dir` or correct the ancestor's mode.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline

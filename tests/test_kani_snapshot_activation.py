@@ -89,7 +89,9 @@ class _InstallStateMachine(RuleBasedStateMachine):
     def pointer_matches_expectation(self) -> None:
         """Require the active pointer to name only the expected generation."""
         for identity in _IDENTITIES:
-            assert self.pointer(identity) == self.expectations[identity].generation
+            assert self.pointer(identity) == self.expectations[identity].generation, (
+                f"active pointer for {identity} drifted from the model"
+            )
 
     @rule(identity=st.sampled_from(_IDENTITIES))
     def install(self, identity: str) -> None:

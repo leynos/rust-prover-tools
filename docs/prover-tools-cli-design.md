@@ -30,10 +30,11 @@ registration. Command functions are thin adapters: they construct option
 dataclasses, delegate to feature modules, and translate expected errors to
 process exit codes. Commands with a wide parameter table live in a dedicated
 adapter module so the application module stays readable:
-`rust_prover_tools.kani_exec_cli` for legacy Kani execution and
-`rust_prover_tools.verus_run_cli` for `verus run`. An adapter module owns its
-Cyclopts and environment-variable binding, output printing, and exit-code
-mapping.
+`rust_prover_tools.kani_exec_cli` for legacy Kani execution,
+`rust_prover_tools.kani_snapshot_cli` for `kani snapshot install`,
+`kani snapshot check` and `kani run`, and `rust_prover_tools.verus_run_cli` for
+`verus run`. An adapter module owns its Cyclopts and environment-variable
+binding, output printing, and exit-code mapping.
 
 `rust_prover_tools.commands` is the only module that invokes external
 programmes. It builds Cuprum `CommandSpec` values and returns a small
@@ -80,24 +81,27 @@ downloader records `download.start`, `download.complete`, `download.cache_hit`,
 `download.verified`, and `download.failed` with a bounded reason category
 (`redirect_limit`, `redirect_target`, `redirect_location`, `http_status`,
 `invalid_content_length`, `content_length`, `size_limit`, `deadline`,
-`incomplete_body`, `stream_error`, `transport_error`, `digest_mismatch`,
-`digest_read`, `store_error`, or `cleanup_error`). Each installer also records
-`<tool>.install.start`, `<tool>.install.reuse`, `<tool>.install.complete`, and
-`<tool>.install.failed` with a bounded phase, together with the extraction,
-marker, setup, and verification boundaries (`z3.extract.complete`,
-`z3.marker.recorded`, `kani.extract.complete`, `kani.setup.complete`,
-`kani.verify.complete`, `verus.extract.start`, and `verus.extract.complete`).
-Snapshot commands report timed spans as correlated start and completion events.
-`kani.snapshot.install` closes with an `outcome` of `activated` or `reused` and
-a `cache` of `miss` or `hit`; `kani.snapshot.check` closes with
-`outcome="valid"`; and `kani.snapshot.run` closes with an `outcome` of
-`success` or `failure` and the launcher's `exit_code`. The internal
-`kani.snapshot.stage`, `kani.snapshot.setup`, `kani.snapshot.probe`,
-`kani.snapshot.publish`, and `kani.snapshot.launch` boundaries each report
-their own span, so a slow setup is distinguishable from slow validation. Every
-closing event adds `elapsed_seconds`; a failure replaces the completion with a
-`failed` event that names only the exception class as `reason`.
-`kani.snapshot.install.repair` records a bounded repair trigger, and
+`incomplete_body`, `stream_error`, `transport_error`, `url_policy`,
+`digest_mismatch`, `digest_read`, `store_error`, or `cleanup_error`). The
+snapshot download retry loop records `download.retry` with the asset name, the
+failed attempt number and the delay before the next attempt, so a transient
+failure is visible without adding an unbounded reason. Each installer also
+records `<tool>.install.start`, `<tool>.install.reuse`,
+`<tool>.install.complete`, and `<tool>.install.failed` with a bounded phase,
+together with the extraction, marker, setup, and verification boundaries
+(`z3.extract.complete`, `z3.marker.recorded`, `kani.extract.complete`,
+`kani.setup.complete`, `kani.verify.complete`, `verus.extract.start`, and
+`verus.extract.complete`). Snapshot commands report timed spans as correlated
+start and completion events. `kani.snapshot.install` closes with an `outcome` of
+`activated` or `reused` and a `cache` of `miss` or `hit`;
+`kani.snapshot.check` closes with `outcome="valid"`; and `kani.snapshot.run`
+closes with an `outcome` of `success` or `failure` and the launcher's
+`exit_code`. The internal `kani.snapshot.stage`, `kani.snapshot.setup`,
+`kani.snapshot.probe`, `kani.snapshot.publish`, and `kani.snapshot.launch`
+boundaries each report their own span, so a slow setup is distinguishable from
+slow validation. Every closing event adds `elapsed_seconds`; a failure replaces
+the completion with a `failed` event that names only the exception class as
+`reason`. `kani.snapshot.install.repair` records a bounded repair trigger, and
 `kani.install.staged` records the staged tag and asset count. Those fields are
 the metric source: `outcome`, `cache`, and `reason` are closed category sets,
 `elapsed_seconds` is a duration, and `exit_code` is an integer, so no event
@@ -429,14 +433,14 @@ not the default `make test` gate.
 ## Explicit legacy release execution
 
 The separate `kani exec` verb executes a selected complete release without
-installing it, while leaving the snapshot-only `kani run` command described
-under [Kani snapshot commands](#kani-snapshot-commands) unchanged. The initial
-compatibility boundary is Linux x86_64 Kani 0.67.0 and its exact release
-compiler metadata. Runtime lookup is child scoped; compiler identity queries
-and subsequent Cargo compilation retain every configured admission wrapper.
-Wrappers are optional when absent; the runtime does not create a substitute on
-hosted runners. Environment and Cargo configuration validation reject malformed
-selections and unproved backend or wrapper routes.
+installing it. It does not alias, wrap or replace the snapshot-only `kani run`
+command described under [Kani snapshot commands](#kani-snapshot-commands). The
+initial compatibility boundary is Linux x86_64 Kani 0.67.0 and its exact
+release compiler metadata. Runtime lookup is child scoped; compiler identity
+queries and subsequent Cargo compilation retain every configured admission
+wrapper. Wrappers are optional when absent; the runtime does not create a
+substitute on hosted runners. Environment and Cargo configuration validation
+reject malformed selections and unproved backend or wrapper routes.
 
 Profile backends are classified by position, not by name. Discovery returns a
 `VerificationConfig` holding an immutable `BackendSelection` for each string

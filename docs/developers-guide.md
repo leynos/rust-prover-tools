@@ -103,6 +103,10 @@ gets its own adapter module, which owns its parameter binding, environment
 variables, output printing, and exit-code mapping:
 
 - `rust_prover_tools.kani_exec_cli` for legacy Kani execution.
+- `rust_prover_tools.kani_snapshot_cli` for `kani snapshot install`,
+  `kani snapshot check` and `kani run`. It binds the pin, cache and asset
+  directories and keeps every argument after `--` as a forwarded verifier
+  argument.
 - `rust_prover_tools.verus_run_cli` for `verus run`. It binds `--proof-file`
   as a repeatable tuple, keeps `VERUS_PROOF_FILE` and `INPUT_PROOF_FILE` as
   single-file environment bindings, and supplies `env_var_split` so a path

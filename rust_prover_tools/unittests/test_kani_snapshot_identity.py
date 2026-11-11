@@ -301,6 +301,7 @@ def test_execution_environment_does_not_duplicate_its_own_entries(
         ("--use-local-bundle", "b.tar.gz"),
         ("--use-local-bundle=b.tar.gz",),
         ("--use-local-toolchain", "/opt/toolchain"),
+        ("--use-local-toolchain=/opt/toolchain",),
         ("-Z", "lean"),
         ("-Zlean",),
         ("-Z=lean",),

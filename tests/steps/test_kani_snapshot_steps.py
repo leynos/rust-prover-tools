@@ -300,8 +300,8 @@ def stderr_reports_changed_asset(cli_run: CliRun) -> None:
 @then("the previous generation directory is preserved")
 def previous_generation_is_preserved(previous_generation: Path) -> None:
     """Assert a failed attempt never removes the previous generation."""
-    assert previous_generation.is_dir()
-    assert (previous_generation / "receipt.json").is_file()
+    assert previous_generation.is_dir(), "the previous generation was removed"
+    assert (previous_generation / "receipt.json").is_file(), "the receipt was removed"
 
 
 @then("stderr refuses the setup command")
