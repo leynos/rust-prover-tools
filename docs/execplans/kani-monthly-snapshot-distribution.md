@@ -751,6 +751,26 @@ EP-O1 assigns responsibility and records live evidence.
   admission route the proof uses, so the probe is an explicit `InstallHooks`
   dependency the caller may replace, and it writes nothing to the snapshot
   cache, which is why a check leaves the cache exactly as it found it.
+
+The same reconciliation cleared the five warning rows. The observability row
+was already satisfied by the earlier `operation_span` round. The users' guide
+now states the version 1 pin key set and the single supported target, links to
+design D1 for the tag grammar, and explains that `snapshot run` discovers the
+proof's Cargo configuration and refuses a malformed tool selection, unresolved
+include, ambiguous configuration pair, conflicting wrapper, protected routing
+override or unreadable configuration before execution. The developers' guide
+had claimed that removing an inherited variable needs `EnvMode.REPLACE`; it now
+documents `cuprum.UNSET` under the default `OVERLAY`, and adds the `capture`,
+`on_line` and `timeout_seconds` contract, the two-stage `UrlPolicy` check, and
+the rule that only `TransientDownloadError` is retried. A Hypothesis property
+test now generates prefix-free file trees and their matching inventories and
+asserts that a matching tree validates, that a changed member and an unrecorded
+member are refused, that an allowed extra passes, and that a similarly named
+sibling is still refused. The domain-architecture row was also valid: the
+attestation adapter now parses `invocationId` into a `WorkflowRun` through
+`run_from_invocation`, so the domain model holds data only and its refusals
+name verified provenance rather than the verifier command.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

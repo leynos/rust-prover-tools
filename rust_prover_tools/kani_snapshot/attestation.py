@@ -16,6 +16,7 @@ import dataclasses as dc
 import json
 import logging
 import typing as typ
+import urllib.parse
 
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.errors import ProverToolError
@@ -40,6 +41,7 @@ __all__ = (
     "attestation_command",
     "policy_for_pin",
     "require_workflow_run",
+    "run_from_invocation",
     "verify_attestation",
 )
 
@@ -288,4 +290,73 @@ def _record_run(
     invocation = _verified_invocation(record)
     if invocation is None:
         return None
-    return WorkflowRun.from_invocation(invocation, repository)
+    return run_from_invocation(invocation, repository)
+
+
+def _run_attempt_segments(
+    invocation: str,
+    repository: str,
+) -> tuple[str, str] | None:
+    """Return the run and attempt segments of a canonical invocation URL.
+
+    Parameters
+    ----------
+    invocation : str
+        `invocationId` value from a verified provenance statement.
+    repository : str
+        `owner/repo` the invocation must belong to.
+
+    Returns
+    -------
+    tuple[str, str] | None
+        The run and attempt path segments, or `None` when the value is not
+        this repository's canonical run-and-attempt URL.
+    """
+    parsed = urllib.parse.urlsplit(invocation)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        return None
+    if parsed.query or parsed.fragment:
+        return None
+    parts = parsed.path.strip("/").split("/")
+    prefix = [*repository.split("/"), "actions", "runs"]
+    if parts[: len(prefix)] != prefix or len(parts) != len(prefix) + 3:
+        return None
+    if parts[len(prefix) + 1] != "attempts":
+        return None
+    return parts[len(prefix)], parts[len(prefix) + 2]
+
+
+def run_from_invocation(
+    invocation: str,
+    repository: str,
+) -> WorkflowRun | None:
+    """Parse one provenance invocation URL into the run it names.
+
+    The verifier's output is external data, so a value that is not this
+    repository's canonical run-and-attempt URL names no run rather than
+    raising. Parsing lives in this adapter so the domain model compares runs
+    without knowing the verifier's URL syntax.
+
+    Parameters
+    ----------
+    invocation : str
+        `invocationId` value from a verified provenance statement.
+    repository : str
+        `owner/repo` the invocation must belong to.
+
+    Returns
+    -------
+    WorkflowRun | None
+        The named run, or `None` when the value is not this repository's
+        canonical run-and-attempt URL.
+    """
+    segments = _run_attempt_segments(invocation, repository)
+    if segments is None:
+        return None
+    try:
+        run_id, attempt = (int(segment) for segment in segments)
+    except ValueError:
+        return None
+    if run_id <= 0 or attempt <= 0:
+        return None
+    return WorkflowRun(run_id=run_id, run_attempt=attempt)

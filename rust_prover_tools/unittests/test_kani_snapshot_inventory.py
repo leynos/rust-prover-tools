@@ -6,8 +6,11 @@ import hashlib
 import json
 import os
 import typing as typ
+import uuid
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.inventory import (
@@ -273,3 +276,89 @@ def test_inventory_entry_is_hashable_and_explicit() -> None:
     assert entry == InventoryEntry(
         path="a", kind=KIND_FILE, mode=0o644, size=1, sha256=_SHA
     )
+
+
+_SAFE_SEGMENT = st.from_regex(r"[a-z][a-z0-9_]{0,7}", fullmatch=True)
+
+
+def _prefix_free_files(files: dict[str, bytes]) -> dict[str, bytes]:
+    """Drop paths that would make one file an ancestor of another."""
+    kept: dict[str, bytes] = {}
+    for path in sorted(files, key=lambda item: (item.count("/"), item)):
+        if not any(path.startswith(f"{parent}/") for parent in kept):
+            kept[path] = files[path]
+    return kept
+
+
+def _generated_files() -> st.SearchStrategy[dict[str, bytes]]:
+    """Generate a prefix-free mapping of safe relative paths to payloads."""
+    paths = st.lists(_SAFE_SEGMENT, min_size=1, max_size=3).map("/".join)
+    return st.dictionaries(
+        keys=paths,
+        values=st.binary(max_size=32),
+        min_size=1,
+        max_size=6,
+    ).map(_prefix_free_files)
+
+
+def _materialise_tree(
+    root: Path,
+    files: dict[str, bytes],
+) -> list[dict[str, object]]:
+    """Create the generated files and return their matching inventory entries."""
+    directories = {
+        "/".join(path.split("/")[:depth])
+        for path in files
+        for depth in range(1, path.count("/") + 1)
+    }
+    for directory in sorted(directories):
+        target = root / directory
+        target.mkdir(parents=True, exist_ok=True)
+        target.chmod(0o755)
+    entries: list[dict[str, object]] = [
+        {"path": directory, "kind": KIND_DIRECTORY, "mode": 0o755}
+        for directory in sorted(directories)
+    ]
+    for relative, payload in sorted(files.items()):
+        target = root / relative
+        target.write_bytes(payload)
+        target.chmod(0o644)
+        entries.append(_file(relative, payload))
+    return entries
+
+
+@settings(
+    max_examples=25,
+    deadline=None,
+    suppress_health_check=(
+        HealthCheck.function_scoped_fixture,
+        HealthCheck.too_slow,
+    ),
+)
+@given(files=_generated_files())
+def test_validate_tree_matches_generated_inventory_and_allowances(
+    tmp_path: Path,
+    files: dict[str, bytes],
+) -> None:
+    """A generated tree validates, and only exact allowances are exempt."""
+    # `tmp_path` is shared across examples, so each input gets its own tree.
+    root = tmp_path / f"tree-{uuid.uuid4().hex}"
+    root.mkdir()
+    inventory = parse_inventory(_document(_materialise_tree(root, files)))
+
+    validate_tree(inventory, root)
+
+    modified = min(files)
+    (root / modified).write_bytes(files[modified] + b"!")
+    with pytest.raises(ProverToolError):
+        validate_tree(inventory, root)
+    (root / modified).write_bytes(files[modified])
+
+    (root / "allowed-extra").write_bytes(b"extra")
+    with pytest.raises(ProverToolError, match="not recorded"):
+        validate_tree(inventory, root)
+    validate_tree(inventory, root, allowed_extra=("allowed-extra",))
+
+    (root / "allowed-extra-sibling").write_bytes(b"sibling")
+    with pytest.raises(ProverToolError, match="not recorded"):
+        validate_tree(inventory, root, allowed_extra=("allowed-extra",))

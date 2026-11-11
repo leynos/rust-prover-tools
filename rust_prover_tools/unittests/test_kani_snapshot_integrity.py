@@ -18,6 +18,7 @@ from rust_prover_tools.kani_snapshot.attestation import (
     attestation_command,
     policy_for_pin,
     require_workflow_run,
+    run_from_invocation,
     verify_attestation,
 )
 from rust_prover_tools.kani_snapshot.integrity import (
@@ -291,7 +292,7 @@ def test_an_attestation_for_another_repository_is_refused(
     )
     cmd_mox.stub("gh").runs(lambda invocation: (_verified(elsewhere), "", 0))
     with pytest.raises(
-        ProverToolError, match="did not verify the manifest's workflow run"
+        ProverToolError, match="does not name the manifest's workflow run"
     ):
         verify_attestation(_request(tmp_path))
 
@@ -425,11 +426,11 @@ def test_verifier_failure_is_preserved(tmp_path: Path, cmd_mox: CmdMox) -> None:
 
 
 def test_an_invocation_parses_into_a_domain_run() -> None:
-    """The verifier's URL becomes the run and attempt the domain compares."""
+    """The adapter turns the verifier's URL into the run the domain compares."""
     policy = policy_for_pin(make_pin())
     invocation = _invocation(policy, 987, 3)
 
-    run = WorkflowRun.from_invocation(invocation, policy.repository)
+    run = run_from_invocation(invocation, policy.repository)
 
     assert run == WorkflowRun(run_id=987, run_attempt=3)
 
@@ -458,8 +459,8 @@ def test_an_invocation_parses_into_a_domain_run() -> None:
     ],
 )
 def test_a_non_canonical_invocation_names_no_run(invocation: str) -> None:
-    """Only this repository's exact run-and-attempt path is a domain run."""
-    assert WorkflowRun.from_invocation(invocation, "leynos/rust-prover-tools") is None
+    """Only this repository's exact run-and-attempt path names a domain run."""
+    assert run_from_invocation(invocation, "leynos/rust-prover-tools") is None
 
 
 def test_the_run_policy_is_enforced_before_the_attempt() -> None:

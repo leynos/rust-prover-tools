@@ -145,6 +145,14 @@ The snapshot commands install, check and run one immutable, reviewed Kani
 build. They are independent of the legacy `kani check-version` and `kani exec`
 commands and never fall back to a host Kani installation.
 
+A version 1 pin is a TOML document that requires exactly `schema_version`,
+`repository`, `tag`, `upstream_commit`, `builder_commit`, `target` and
+`manifest_sha256`. The only supported target is `x86_64-unknown-linux-gnu`.
+Unknown keys, wrong types, duplicate keys, unsupported schema versions and
+malformed identities fail closed. See
+[D1: Explicit selection and immutable identity](kani-snapshot-distribution-design.md#d1-explicit-selection-and-immutable-identity)
+for the tag grammar and field constraints.
+
 `prover-tools kani snapshot install` materializes the identity named by
 `tools/kani/snapshot.toml`:
 
@@ -247,6 +255,16 @@ trusted; keep their files and Cargo configuration unchanged until this command
 and its nested Cargo children finish. Cargo still runs build scripts and
 procedural macros with the caller's permissions, so this compatibility route is
 not a sandbox for untrusted projects.
+
+Before execution, `snapshot run` validates the proof's Cargo configuration
+discovered from the proof working directory and its ancestors, plus the
+generation's private Cargo home. A malformed tool selection, an unresolved
+include, an ambiguous configuration pair, a conflicting wrapper, a protected
+routing override, or an unreadable configuration fails before execution.
+Correct or remove the offending `.cargo/config.toml` or manifest profile and
+run from the proof package. The
+[Explicit legacy Kani execution](#explicit-legacy-kani-execution) section gives
+the detailed rules.
 
 ### Verus commands
 

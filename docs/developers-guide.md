@@ -160,6 +160,17 @@ byte ceiling, and archive member, and add a test that builds a local archive of
 the expected shape. Never let a download path skip `download_pinned`, and do
 not extract archive members that are not named in the manifest.
 
+`UrlPolicy` receives two separate checks per download: `check_initial` sees the
+first URL and `check_redirect` sees every redirect target before it is opened,
+so a redirect cannot relax the policy. The snapshot implementation,
+`ReleaseUrlPolicy`, requires the initial URL to be the exact release URL for
+the pinned repository, tag and asset, with no query. Every redirect must use
+HTTPS, stay on a documented GitHub asset host, use the default HTTPS port, and
+carry no credentials or fragment, and its path must be contained.
+`download_asset` retries only `TransientDownloadError`, with a bounded attempt
+count and capped exponential backoff; storage, integrity and policy failures
+are reported after one attempt.
+
 Public helpers exported from `rust_prover_tools.verus` should keep structured
 NumPy-style docstrings. That package is the stable import facade for tests and
 future callers. The proof-run flow is split across three exported steps so each
@@ -238,9 +249,27 @@ contract reads the expected version from `pyproject.toml` and fails if any
 dependency path disagrees.
 
 `ExecutionContext.env` is an overlay on the parent environment, not a
-replacement. A workflow that must remove inherited variables needs
-`EnvMode.REPLACE`, which is imported from `cuprum.context` rather than from the
-package root.
+replacement. `CommandSpec` therefore accepts `env` values that are either a
+string or `cuprum.UNSET`: under the default `EnvMode.OVERLAY`, an `UNSET`
+marker removes that variable from the child without mutating this process's
+environment. `EnvMode.REPLACE` instead starts the child from an empty
+environment, so it discards every inherited variable except those listed.
+`EnvMode` is imported from `cuprum.context` rather than from the package root.
+
+`CommandSpec.capture` stores stdout and stderr on the returned `CommandResult`.
+Set it to `False` for output whose size the caller does not control, because a
+verbose verifier would otherwise size the CLI's memory. `on_line` accepts a
+`cuprum.LineHook` called once per decoded line, independently of `capture`. For
+a long stream, pair `capture=False` with a bounded collector such as
+`TailCapture`, so the hook sees every line while only a fixed byte budget is
+retained.
+
+`timeout_seconds` is the wall-clock budget for the whole child process tree.
+`None` leaves the command unbounded unless an enclosing Cuprum scope supplies a
+default, which `run_command` resolves before deciding how to launch the child.
+Whenever an effective timeout applies, the child is placed in its own process
+group, so expiry terminates every descendant it started rather than leaving a
+setup tool to outlive the caller's budget.
 
 The two vendored guides under `docs/` are converted copies of the upstream
 cuprum documents at the pinned tag, not this project's prose. Their wording is
