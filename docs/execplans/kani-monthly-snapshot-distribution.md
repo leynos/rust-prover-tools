@@ -708,7 +708,20 @@ EP-O1 assigns responsibility and records live evidence.
   spends the budget the installation itself needs. New tests cover the retained
   claim, the late claim, and the skipped sweep. The CLI relative-path test now
   asserts the resolved `cache_home` rather than only the absence of a cache
-  under the caller's directory.
+  under the caller's directory. The tenth review round then found two races in
+  that protocol. The staging claim was released by the failure path while the
+  operation the deadline abandoned could still be writing, so the removal that
+  followed could unlink the tree under a live copy; the sweep's own removal was
+  also unprotected against a second sweep starting while an abandoned one was
+  still deleting. `StagingClaim` now counts the supervised workers that may use
+  the tree: `ClaimedBudget` wraps every operation the install supervises, the
+  failure path removes the tree only when no worker remains, and the last
+  abandoned worker closes the descriptor itself when it stops. The sweep takes
+  a non-blocking per-identity `.sweep.lock` inside its worker and releases it
+  when it stops, so a second sweep skips every tree instead of racing the
+  first. New tests cover an interrupted copy that keeps, then frees, its claim
+  before a later sweep reclaims the tree, descriptor closure on an ordinary
+  staging failure, and a sweep skipped while an abandoned sweep holds the claim.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

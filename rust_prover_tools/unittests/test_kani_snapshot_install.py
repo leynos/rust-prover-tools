@@ -2194,6 +2194,119 @@ def test_a_timed_out_staging_worker_keeps_its_claim(
     )
 
 
+def test_an_abandoned_staging_copy_releases_its_claim_when_it_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An interrupted copy keeps its tree claimed, then frees it when it stops.
+
+    `run_within` abandons the copy rather than stopping it, so the failure path
+    must not remove the tree while that worker can still write to it. The
+    worker closes the claim itself when it stops, and only then may a later
+    sweep reclaim the tree.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    stalled = threading.Event()
+    released = threading.Event()
+    real_copy = install_copy.copy_local
+    real_release = cleanup.release_staging_ownership
+
+    def stalling_copy(
+        source: Path,
+        destination_dir: Path,
+        file: install_copy.TransportFile,
+        checkpoint: Progress | None = None,
+    ) -> Path:
+        """Block the first staged copy like a hung filesystem."""
+        stalled.set()
+        release.wait(30)
+        return real_copy(source, destination_dir, file, checkpoint)
+
+    def recording_release(descriptor: int) -> None:
+        """Record that a staging claim closed its descriptor."""
+        real_release(descriptor)
+        released.set()
+
+    monkeypatch.setattr(install_transport, "_copy_local", stalling_copy)
+    monkeypatch.setattr(cleanup, "release_staging_ownership", recording_release)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    trees: list[Path] = []
+    try:
+        with pytest.raises(ProverToolError, match=r"deadline expired"):
+            install_snapshot(options, install_hooks(case))
+        # A tree that survived the failure was never removed: the claim kept
+        # the failure path away from a copy the abandoned worker could still be
+        # writing.
+        trees = list(layout.identity_dir.glob(".staging-*"))
+        assert len(trees) == 1, f"unexpected staging leftovers: {trees}"
+        assert cleanup._has_live_worker(trees[0]), (
+            "the abandoned copy did not keep its claim"
+        )
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the staged copy was never attempted"
+    assert released.wait(10), "the abandoned copy never released its claim"
+    assert not cleanup._has_live_worker(trees[0]), (
+        "the claim outlived the worker that held it"
+    )
+
+    monkeypatch.setattr(cleanup, "STAGING_GRACE_SECONDS", 0.0)
+    cleanup.sweep_deferred_staging(
+        layout.identity_dir,
+        Deadline(expires_at=time.monotonic() + 60.0),
+    )
+
+    assert not trees[0].exists(), "a stopped worker's tree survived the next sweep"
+
+
+def test_a_failed_staging_step_closes_its_claim_before_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An ordinary failure removes the tree only after closing its claim.
+
+    A supervised step that fails outright leaves no worker behind, so the
+    failure path may remove the staging tree at once; it must close the claim
+    first, or the removal would race a descriptor the install still held.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    claimed_during_cleanup: list[bool] = []
+    real_discard = install_transport.discard_private_tree
+
+    def recording_discard(
+        path: Path,
+        *,
+        budget: InstallBudget | None = None,
+        phase: str = "private cleanup",
+    ) -> None:
+        """Record whether the tree was still claimed when removal began."""
+        claimed_during_cleanup.append(cleanup._has_live_worker(path))
+        real_discard(path, budget=budget, phase=phase)
+
+    def failing_parse(data: bytes) -> typ.NoReturn:
+        """Fail an ordinary staging step without touching the tree."""
+        del data
+        msg = "simulated staging failure"
+        raise ProverToolError(msg)
+
+    monkeypatch.setattr(install_transport, "discard_private_tree", recording_discard)
+    monkeypatch.setattr(install_transport, "parse_manifest", failing_parse)
+
+    with pytest.raises(ProverToolError, match=r"simulated staging failure"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    assert claimed_during_cleanup == [False], (
+        "the failure path removed the tree before closing its claim"
+    )
+    assert list(layout.identity_dir.glob(".staging-*")) == [], (
+        "a failed staging step left its tree behind"
+    )
+
+
 def test_install_deadline_defers_a_stalled_staging_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4003,6 +4116,70 @@ def test_a_stalled_sweep_cannot_consume_the_installation_budget(
     assert "deferred staging sweep" in caplog.text, (
         "the deferred sweep was not recorded"
     )
+
+
+def test_a_sweep_is_skipped_while_an_abandoned_sweep_holds_its_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A later sweep leaves every tree alone while an abandoned one still runs.
+
+    A stalled sweep is abandoned without being stopped, so its removal keeps
+    running in the worker. A second sweep must not start a competing removal of
+    the same tree; it reports the per-identity sweep claim as held and returns.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    abandoned = layout.identity_dir / ".staging-stalled"
+    abandoned.mkdir(mode=0o700)
+    (abandoned / "payload.bin").write_bytes(b"partial")
+    stale = time.time() - cleanup.STAGING_GRACE_SECONDS - 60.0
+    os.utime(abandoned, (stale, stale))
+
+    release = threading.Event()
+    stalled = threading.Event()
+    finished = threading.Event()
+    removals: list[str] = []
+    real_rmtree = shutil.rmtree
+
+    def stalling_rmtree(
+        path: str | Path,
+        *,
+        ignore_errors: bool = False,
+    ) -> None:
+        """Block the first removal of the deferred tree."""
+        target = pathlib.Path(path)
+        removals.append(target.name)
+        stalled.set()
+        release.wait(30)
+        try:
+            real_rmtree(target, ignore_errors=ignore_errors)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(cleanup, "rmtree", stalling_rmtree)
+    monkeypatch.setattr(cleanup, "_SWEEP_SECONDS", 0.2)
+    budget = Deadline(expires_at=time.monotonic() + 600.0)
+    try:
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="rust_prover_tools.kani_snapshot.cleanup",
+        ):
+            cleanup.sweep_deferred_staging(layout.identity_dir, budget)
+            assert stalled.is_set(), "the sweep never reached the tree"
+            cleanup.sweep_deferred_staging(layout.identity_dir, budget)
+    finally:
+        release.set()
+
+    assert "another sweep holds the claim" in caplog.text, (
+        "the second sweep did not report the held claim"
+    )
+    assert removals == [abandoned.name], (
+        f"a second sweep raced the abandoned removal: {removals}"
+    )
+    assert finished.wait(10), "the abandoned removal never finished"
 
 
 def test_a_late_staging_claim_closes_its_descriptor(tmp_path: Path) -> None:

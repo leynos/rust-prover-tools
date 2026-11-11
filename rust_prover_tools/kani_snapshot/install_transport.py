@@ -1,10 +1,9 @@
 """Bounded local transport staging and archive/inventory agreement.
 
 Every release file is copied into the identity's private downloads directory
-through an exclusive pending file, under the size rule the reviewed manifest
-states, before any other byte is trusted. The backend archive must then match
-the published inventory structurally, so setup consumes exactly the tree the
-producer described.
+through an exclusive pending file, under the reviewed manifest's size rule,
+before any other byte is trusted. The backend archive must then match the
+published inventory structurally, so setup consumes exactly the described tree.
 """
 
 from __future__ import annotations
@@ -47,6 +46,7 @@ from rust_prover_tools.kani_snapshot.install_model import (
     CHECKSUMS_MAX_BYTES,
     MANIFEST_ASSET_NAME,
     MANIFEST_MAX_BYTES,
+    ClaimedBudget,
     InstallBudget,
     InstallHooks,
     InstallOptions,
@@ -90,8 +90,7 @@ INVENTORY_MAX_BYTES: typ.Final[int] = 64 * 1024 * 1024
 class _Checkpoints:
     """Deadline checkpoints for the transport's long phases.
 
-    Grouping the phase names keeps `stage_assets` within its local-variable
-    limit and names the set as one concept.
+    One name per phase keeps `stage_assets` within its local-variable limit.
     """
 
     staging: Progress
@@ -133,9 +132,8 @@ def stage_assets(
     hooks : InstallHooks
         Attestation verifier.
     budget : InstallBudget
-        Shared installation budget. Its check raises once a phase starts too
-        late, and attestation verification is bounded by what remains so an
-        unresponsive `gh` cannot outlive the installation.
+        Shared installation budget; attestation verification is bounded by
+        what remains so an unresponsive `gh` cannot outlive it.
 
     Returns
     -------
@@ -152,27 +150,17 @@ def stage_assets(
     if source is None:
         msg = "snapshot installation requires --asset-dir until remote transport exists"
         raise ProverToolError(msg)
-    # The probe runs while the identity lock is held, and a hung filesystem
-    # must not hold that lock past the deadline. Abandoning it mutates nothing.
+    # A hung probe must not hold the identity lock, and abandoning a read is safe.
     if not budget.supervise("asset directory check", source.is_dir):
         msg = f"snapshot asset directory does not exist: {source}"
         raise ProverToolError(msg)
     sweep_deferred_staging(layout.identity_dir, budget)
     staging = new_staging_directory(layout.identity_dir, budget)
-    # Hold the claim while this worker may still touch the tree (see cleanup).
-    claim = StagingClaim()
-    try:
-        budget.supervise(
-            "staging ownership claim",
-            functools.partial(claim.take, staging),
-        )
-    except BaseException:
-        # A claim that finishes after this deadline closes its own descriptor.
-        claim.cancel()
-        raise
+    # Supervised work is abandoned, not stopped; this budget holds the claim for it.
+    claimed = _claim_staging(staging, budget)
     checkpoints = _Checkpoints.for_budget(budget)
     try:
-        manifest_path = budget.supervise(
+        manifest_path = claimed.supervise(
             "transport staging",
             functools.partial(
                 _copy_local,
@@ -183,18 +171,17 @@ def stage_assets(
             ),
         )
         budget.check("manifest verification")
-        # Reading the staged manifest is blocking work on a shared budget, and
-        # abandoning a read mutates nothing, so it is supervised rather than
-        # left to hold the identity lock past the deadline.
+        # Reading the staged manifest is blocking work on a shared budget;
+        # abandoning a read mutates nothing, so it is supervised.
         parsed = parse_manifest(
-            budget.supervise(
+            claimed.supervise(
                 "manifest read",
                 manifest_path.read_bytes,
             ),
         )
         verify_manifest_digest(parsed, options.pin)
         validate_binding(options.pin, parsed.manifest)
-        attestation = budget.supervise(
+        attestation = claimed.supervise(
             "transport staging",
             functools.partial(
                 _copy_local,
@@ -204,7 +191,7 @@ def stage_assets(
                 checkpoints.staging,
             ),
         )
-        checksums = budget.supervise(
+        checksums = claimed.supervise(
             "transport staging",
             functools.partial(
                 _copy_local,
@@ -214,7 +201,7 @@ def stage_assets(
                 checkpoints.staging,
             ),
         )
-        budget.supervise(
+        claimed.supervise(
             "checksum verification",
             functools.partial(
                 verify_checksums,
@@ -233,8 +220,8 @@ def stage_assets(
             timeout_seconds=budget.remaining(),
         )
         budget.check("payload verification")
-        names = _stage_payloads(source, staging, parsed.manifest, budget)
-        budget.supervise(
+        names = _stage_payloads(source, staging, parsed.manifest, claimed)
+        claimed.supervise(
             "archive structure validation",
             functools.partial(
                 _verify_bundle_structures,
@@ -243,24 +230,21 @@ def stage_assets(
                 checkpoint=checkpoints.archive,
             ),
         )
-        # Only fully verified evidence is published. A failed repair therefore
-        # leaves the previously staged payloads and the active pointer alone.
-        # The marker makes a publication that was not confirmed visible to
-        # readers, so an abandoned replacement can never pass for a complete
-        # cache.
+        # Publishing is the last step, so only fully verified evidence reaches the
+        # cache; the marker makes an abandoned replacement visibly incomplete.
         publish_staged(
-            _publication(layout, staging, names, budget),
-            budget=budget,
+            _publication(layout, staging, names, claimed),
+            budget=claimed,
             checkpoint=checkpoints.publish,
         )
     except BaseException:
-        # A supervised operation may still be writing after its deadline, so
-        # the claim stays held until process exit and a later sweep removes
-        # the tree rather than racing that worker.
-        discard_private_tree(staging, budget=budget, phase="staging cleanup")
+        # Only a claim no worker holds lets this run remove the tree; an
+        # abandoned worker releases it when it stops for a later sweep.
+        if claimed.finish():
+            discard_private_tree(staging, budget=budget, phase="staging cleanup")
         raise
-    claim.release()
-    discard_private_tree(staging, budget=budget, phase="staging cleanup")
+    if claimed.finish():
+        discard_private_tree(staging, budget=budget, phase="staging cleanup")
     log_event(
         _LOGGER,
         "kani.install.staged",
@@ -268,6 +252,24 @@ def stage_assets(
         assets=len(parsed.manifest.assets),
     )
     return parsed.manifest
+
+
+def _claim_staging(staging: Path, budget: InstallBudget) -> ClaimedBudget:
+    """Claim a staging tree and return a budget that keeps it held.
+
+    The claim is taken under the budget, and one that finishes after that
+    deadline closes the descriptor it opened, so cancelling cannot leak it.
+    """
+    claim = StagingClaim()
+    try:
+        budget.supervise(
+            "staging ownership claim",
+            functools.partial(claim.take, staging),
+        )
+    except BaseException:
+        claim.cancel()
+        raise
+    return ClaimedBudget(budget, claim)
 
 
 def bundle_policy(version: str) -> ArchivePolicy:
@@ -316,9 +318,8 @@ def _copy_asset(
 ) -> Path:
     """Copy one manifest payload under its design envelope.
 
-    The manifest's declared size is exact, but it is not the only bound: the
-    inventory document and every other payload also have design ceilings that
-    a compromised manifest cannot raise.
+    The declared size is exact but not the only bound: the inventory document
+    and every payload also have ceilings a compromised manifest cannot raise.
     """
     envelope = INVENTORY_MAX_BYTES if asset.role == "inventory" else PAYLOAD_MAX_BYTES
     return _copy_local(
@@ -371,13 +372,11 @@ def _publication(
 ) -> Publication:
     """Own a fresh marker and every marker left by earlier publications.
 
-    The marker records the highest activation sequence visible now, which is
-    the base a later completion must exceed to retire it. A publication that
-    is abandoned and resumes after a later installation has completed writes a
-    marker naming a base below that completion, so readers can tell it has
-    already been overtaken. The base comes from record names rather than from
-    the watermark so that a completion landing late cannot change what this
-    publication observed. Both the record listing and the marker listing are
+    The marker records the highest activation sequence visible now: the base a
+    later completion must exceed to retire it. A publication resumed after a
+    later installation completed writes a lower base, so readers see it was
+    overtaken. The base comes from record names, not the watermark, so a late
+    completion cannot change what this publication observed. Both listings are
     reads of shared state, so each is supervised.
     """
     publication_id = f"{os.getpid():x}-{secrets.token_hex(8)}"

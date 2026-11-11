@@ -36,12 +36,14 @@ __all__ = (
     "CHECKSUMS_ASSET_NAME",
     "MANIFEST_ASSET_NAME",
     "AttestationVerifier",
+    "ClaimedBudget",
     "Deadline",
     "InstallBudget",
     "InstallHooks",
     "InstallOptions",
     "ProbeRunner",
     "SetupRunner",
+    "StagingGuard",
 )
 
 #: The release manifest whose exact bytes the pin hashes.
@@ -116,6 +118,50 @@ class Deadline:
     ) -> _T:
         """Run one blocking local operation without exceeding the budget."""
         return run_within(operation, remaining=self.remaining, phase=phase)
+
+
+class StagingGuard(typ.Protocol):
+    """A claim a supervised worker holds while it may use a staging tree."""
+
+    def guard(self, operation: cabc.Callable[[], _T]) -> cabc.Callable[[], _T]:
+        """Wrap `operation` so its worker holds the claim until it stops."""
+
+    def finish(self) -> bool:
+        """Release the claim, reporting whether no worker can still use it."""
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ClaimedBudget:
+    """An installation budget whose supervised operations hold a claim.
+
+    Every operation this budget supervises may outlive the caller that
+    abandoned it, so each one is wrapped with `StagingGuard.guard`. A helper
+    that supervises its own work, such as payload staging or publication, can
+    therefore extend the claim without changing its signature.
+    """
+
+    budget: InstallBudget
+    claim: StagingGuard
+
+    def check(self, phase: str) -> None:
+        """Raise when the shared budget has expired during `phase`."""
+        self.budget.check(phase)
+
+    def remaining(self) -> float:
+        """Return the seconds the shared budget has left."""
+        return self.budget.remaining()
+
+    def supervise(
+        self,
+        phase: str,
+        operation: cabc.Callable[[], _T],
+    ) -> _T:
+        """Run one possibly blocking operation under the claim and budget."""
+        return self.budget.supervise(phase, self.claim.guard(operation))
+
+    def finish(self) -> bool:
+        """Release the claim, reporting whether its tree may be removed."""
+        return self.claim.finish()
 
 
 class AttestationVerifier(typ.Protocol):

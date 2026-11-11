@@ -16,7 +16,10 @@ cannot decide liveness. The worker takes an advisory exclusive lock, held for as
 long as it may touch the tree; the kernel releases that lock when the process
 exits, so a killed worker leaves a claim that a sweep can take. A sweep removes
 only a tree whose claim it can take, and only within its own budget slice, so a
-hung sweep cannot consume the installation that triggered it.
+hung sweep cannot consume the installation that triggered it. A sweep itself may
+be abandoned while it is still deleting, so it holds a per-identity sweep claim
+until its worker stops; a later sweep that cannot take that claim leaves every
+tree alone rather than racing a removal that is still in progress.
 
 Cleanup of anything a reader resolves, or of a shared name that a later attempt
 reuses, does not belong here: those removals must complete or be reported.
@@ -46,6 +49,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "STAGING_GRACE_SECONDS",
     "STAGING_OWNER_NAME",
+    "SWEEP_OWNER_NAME",
     "StagingClaim",
     "claim_staging_ownership",
     "discard_private_file",
@@ -54,6 +58,8 @@ __all__ = (
     "release_staging_ownership",
     "sweep_deferred_staging",
 )
+
+_T = typ.TypeVar("_T")
 
 _LOGGER = logging.getLogger(__name__)
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
@@ -66,6 +72,9 @@ STAGING_GRACE_SECONDS: typ.Final[float] = 60 * 60.0
 
 #: The claim file a staging worker holds locked while it may use its tree.
 STAGING_OWNER_NAME: typ.Final[str] = ".owner.lock"
+
+#: The claim file a sweep holds locked while it may remove staging trees.
+SWEEP_OWNER_NAME: typ.Final[str] = ".sweep.lock"
 
 #: Longest a deferred sweep may take. It is a fraction of the installation
 #: budget: reclaiming disk must not starve the install that triggered the sweep.
@@ -178,20 +187,25 @@ def release_staging_ownership(descriptor: int) -> None:
 
 
 class StagingClaim:
-    """An exclusive claim on a staging tree that survives abandonment.
+    """An exclusive claim on a staging tree tied to the workers using it.
 
     `run_within` abandons a stalled operation without stopping it, so a claim
-    that finishes after its caller gave up must close the descriptor it
-    opened. `cancel` marks the claim abandoned and closes a descriptor already
-    taken; `take` closes one that arrives afterwards, so a late claim neither
-    leaks a descriptor nor keeps the tree claimed forever.
+    acquired or held by a supervised worker must outlive the caller that gave
+    up. `guard` counts the worker that may use the tree; `finish` releases the
+    claim only when no such worker remains, and reports whether it did, so the
+    caller removes the tree only once nothing can still write to it. A claim
+    that finishes after its caller gave up must also close the descriptor it
+    opened: `cancel` marks the claim abandoned and closes a descriptor already
+    taken, and `take` closes one that arrives afterwards.
     """
 
     def __init__(self) -> None:
-        """Start an untaken, uncancelled claim."""
+        """Start an untaken, uncancelled claim with no worker using it."""
         self._lock = threading.Lock()
         self._descriptor: int | None = None
+        self._workers = 0
         self._cancelled = False
+        self._finished = False
 
     def take(self, staging: Path) -> None:
         """Claim `staging`, or refuse if the caller already gave up."""
@@ -203,6 +217,26 @@ class StagingClaim:
                 raise ProverToolError(msg)
             self._descriptor = descriptor
 
+    def guard(self, operation: cabc.Callable[[], _T]) -> cabc.Callable[[], _T]:
+        """Wrap `operation` so the claim is held while its worker runs.
+
+        The count lives in the worker thread, because that is what `run_within`
+        abandons and what eventually stops. The claim decides only when the
+        descriptor closes, never whether work that already started may run.
+        """
+
+        @functools.wraps(operation)
+        def guarded() -> _T:
+            """Run the operation, holding the claim until it returns."""
+            with self._lock:
+                self._workers += 1
+            try:
+                return operation()
+            finally:
+                self._worker_stopped()
+
+        return guarded
+
     def cancel(self) -> None:
         """Give up the claim, closing a descriptor taken before or after."""
         with self._lock:
@@ -211,9 +245,28 @@ class StagingClaim:
         if descriptor is not None:
             release_staging_ownership(descriptor)
 
-    def release(self) -> None:
-        """Release a claim this worker still holds."""
+    def finish(self) -> bool:
+        """Release the claim once no worker can still use the tree.
+
+        Returns ``True`` when the claim is closed and the tree may be removed.
+        ``False`` reports an abandoned worker still running: it closes the
+        claim when it stops, so the tree is left for a later sweep.
+        """
         with self._lock:
+            self._finished = True
+            if self._workers:
+                return False
+            descriptor, self._descriptor = self._descriptor, None
+        if descriptor is not None:
+            release_staging_ownership(descriptor)
+        return True
+
+    def _worker_stopped(self) -> None:
+        """Close a finished claim when its last worker stops."""
+        with self._lock:
+            self._workers -= 1
+            if self._workers or not self._finished:
+                return
             descriptor, self._descriptor = self._descriptor, None
         if descriptor is not None:
             release_staging_ownership(descriptor)
@@ -246,9 +299,46 @@ def sweep_deferred_staging(identity_dir: Path, budget: InstallBudget) -> None:
 
 
 def _sweep_deferred_trees(identity_dir: Path) -> None:
-    """Remove every staging tree whose owner claim this sweep can take."""
-    for tree in _stale_staging_trees(identity_dir):
-        discard_private_tree(tree, phase="deferred staging cleanup")
+    """Remove every staging tree whose owner claim this sweep can take.
+
+    The sweep claim is taken inside this worker and closed when it stops, not
+    when its caller's deadline expires: an abandoned removal keeps holding it,
+    so a later sweep skips instead of racing it, and the claim is separate from
+    the install lock a stalled sweep must not hold past the deadline.
+    """
+    if not _stale_staging_trees(identity_dir):
+        return
+    descriptor = _claim_sweep(identity_dir)
+    if descriptor is None:
+        _LOGGER.debug(
+            "snapshot deferred staging sweep skipped: another sweep holds the claim",
+        )
+        return
+    try:
+        for tree in _stale_staging_trees(identity_dir):
+            discard_private_tree(tree, phase="deferred staging cleanup")
+    finally:
+        os.close(descriptor)
+
+
+def _claim_sweep(identity_dir: Path) -> int | None:
+    """Take this identity's sweep claim, or `None` if another sweep holds it."""
+    try:
+        descriptor = os.open(
+            identity_dir / SWEEP_OWNER_NAME,
+            os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+        )
+    except OSError as exc:
+        _LOGGER.debug("snapshot deferred staging sweep could not claim: %s", exc)
+        return None
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        _LOGGER.debug("snapshot deferred staging sweep claim unavailable: %s", exc)
+        os.close(descriptor)
+        return None
+    return descriptor
 
 
 def _stale_staging_trees(identity_dir: Path) -> tuple[Path, ...]:
