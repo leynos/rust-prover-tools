@@ -435,44 +435,58 @@ def test_an_invocation_parses_into_a_domain_run() -> None:
     assert run == WorkflowRun(run_id=987, run_attempt=3)
 
 
-@pytest.mark.parametrize(
-    "invocation",
-    [
-        "http://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
-        "https://example.test/leynos/rust-prover-tools/actions/runs/1/attempts/1",
-        "https://github.com/someone/else/actions/runs/1/attempts/1",
-        (
-            "https://github.com/leynos/rust-prover-tools"
-            "/actions/runs/1/attempts/1?next=2"
-        ),
-        (
-            "https://github.com/leynos/rust-prover-tools"
-            "/actions/runs/1/attempts/1#fragment"
-        ),
-        "https://github.com/leynos/rust-prover-tools/actions/runs/one/attempts/1",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/many",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/0/attempts/1",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/0",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/extra",
-        # A port, credentials or a different host spelling is a different URL.
-        "https://github.com:443/leynos/rust-prover-tools/actions/runs/1/attempts/1",
-        "https://user@github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
-        "https://GitHub.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
-        # A trailing slash, doubled slash or percent-encoding changes the path.
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/",
-        "https://github.com//leynos/rust-prover-tools/actions/runs/1/attempts/1",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1%20",
-        # `int` accepts these, but the documented URL does not contain them.
-        "https://github.com/leynos/rust-prover-tools/actions/runs/01/attempts/1",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/01",
-        "https://github.com/leynos/rust-prover-tools/actions/runs/+1/attempts/1",
-        "",
-    ],
+#: Values that are not this repository's exact run-and-attempt URL. Each is
+#: either a different URL or a spelling `int` would accept but the design's
+#: canonical string does not contain.
+_NON_CANONICAL_INVOCATIONS: tuple[str, ...] = (
+    "http://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+    "https://example.test/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+    "https://github.com/someone/else/actions/runs/1/attempts/1",
+    ("https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1?next=2"),
+    ("https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1#fragment"),
+    "https://github.com/leynos/rust-prover-tools/actions/runs/one/attempts/1",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/many",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/0/attempts/1",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/0",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/extra",
+    # A port, credentials or a different host spelling is a different URL.
+    "https://github.com:443/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+    "https://user@github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+    "https://GitHub.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+    # A trailing slash, doubled slash or percent-encoding changes the path.
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/",
+    "https://github.com//leynos/rust-prover-tools/actions/runs/1/attempts/1",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1%20",
+    # `int` accepts these, but the documented URL does not contain them.
+    "https://github.com/leynos/rust-prover-tools/actions/runs/01/attempts/1",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/01",
+    "https://github.com/leynos/rust-prover-tools/actions/runs/+1/attempts/1",
+    "",
 )
+
+
+@pytest.mark.parametrize("invocation", _NON_CANONICAL_INVOCATIONS)
 def test_a_non_canonical_invocation_names_no_run(invocation: str) -> None:
     """Only this repository's exact run-and-attempt path names a domain run."""
     assert run_from_invocation(invocation, "leynos/rust-prover-tools") is None
+
+
+@pytest.mark.parametrize("invocation", _NON_CANONICAL_INVOCATIONS)
+def test_a_non_canonical_verified_invocation_is_refused(
+    tmp_path: Path, cmd_mox: CmdMox, invocation: str
+) -> None:
+    """The verifier's own output cannot smuggle in a non-canonical URL.
+
+    The parser is exercised directly above; this test proves the refusal
+    survives the whole `verify_attestation` path, where the value arrives as
+    external verifier output rather than a caller-supplied argument.
+    """
+    cmd_mox.stub("gh").runs(lambda _invocation: (_verified(invocation), "", 0))
+    with pytest.raises(
+        ProverToolError, match="does not name the manifest's workflow run"
+    ):
+        verify_attestation(_request(tmp_path))
 
 
 def test_the_run_policy_is_enforced_before_the_attempt() -> None:

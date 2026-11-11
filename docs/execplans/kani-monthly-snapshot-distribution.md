@@ -771,6 +771,20 @@ attestation adapter now parses `invocationId` into a `WorkflowRun` through
 `run_from_invocation`, so the domain model holds data only and its refusals
 name verified provenance rather than the verifier command.
 
+- [x] (2026-11-11) Closed the two remaining explicit asks from the same
+  assessment. The non-canonical invocation cases are now one shared
+  `_NON_CANONICAL_INVOCATIONS` table exercised twice: once against
+  `run_from_invocation` and once through the whole `verify_attestation` path,
+  where the value arrives as external verifier output rather than a
+  caller-supplied argument. The second test stubs `gh` with a verified record
+  naming each non-canonical URL and requires the refusal, so credentials,
+  ports, extra slashes, leading zeroes and malformed URLs are proven to be
+  rejected at the verifier boundary, not only by the parser. A new
+  `test_the_staged_event_carries_only_bounded_fields` asserts the
+  `kani.install.staged` event is exactly `{"event", "assets"}`, so the
+  per-release snapshot tag cannot reappear as an unbounded metric label. All
+  seven gates passed on the resulting candidate (1365 passed, 5 skipped).
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

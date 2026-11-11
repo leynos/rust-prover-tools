@@ -4102,6 +4102,29 @@ def test_install_reports_the_storage_and_process_boundaries(
         ], f"the {boundary} boundary did not report a correlated span"
 
 
+def test_the_staged_event_carries_only_bounded_fields(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The staged event is a metric source, so its labels cannot grow per release."""
+    case = make_case(tmp_path)
+
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        install_snapshot(install_options(case), install_hooks(case))
+
+    staged = [
+        event
+        for event in events_from(caplog)
+        if event["event"] == "kani.install.staged"
+    ]
+    assert staged, "a completed install never reported staging"
+    # The snapshot tag changes with every release; emitting it would grow a
+    # metric label without bound. `assets` is bounded by the manifest schema.
+    assert staged[-1] == {
+        "event": "kani.install.staged",
+        "assets": len(case.manifest.assets),
+    }, "the staged event carried a per-release label such as the snapshot tag"
+
+
 def test_check_reports_a_valid_span(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
