@@ -455,6 +455,18 @@ def test_an_invocation_parses_into_a_domain_run() -> None:
         "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/0",
         "https://github.com/leynos/rust-prover-tools/actions/runs/1",
         "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/extra",
+        # A port, credentials or a different host spelling is a different URL.
+        "https://github.com:443/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+        "https://user@github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+        "https://GitHub.com/leynos/rust-prover-tools/actions/runs/1/attempts/1",
+        # A trailing slash, doubled slash or percent-encoding changes the path.
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1/",
+        "https://github.com//leynos/rust-prover-tools/actions/runs/1/attempts/1",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/1%20",
+        # `int` accepts these, but the documented URL does not contain them.
+        "https://github.com/leynos/rust-prover-tools/actions/runs/01/attempts/1",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/01",
+        "https://github.com/leynos/rust-prover-tools/actions/runs/+1/attempts/1",
         "",
     ],
 )

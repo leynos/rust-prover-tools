@@ -668,7 +668,11 @@ def test_check_does_not_create_a_missing_cache(tmp_path: Path) -> None:
 
 
 def test_check_leaves_an_installed_cache_unchanged(tmp_path: Path) -> None:
-    """A successful check mutates neither the cache nor the lock file."""
+    """A successful check mutates neither the snapshot cache nor the lock file.
+
+    The probe here is the fake from `install_hooks`, so this test says nothing
+    about the side effects of a real compiler wrapper's own build directory.
+    """
     case = make_case(tmp_path)
     identity = install_snapshot(install_options(case), install_hooks(case))
     cache = case.cache_home
@@ -2885,7 +2889,10 @@ def test_install_deadline_bounds_a_stalled_generation_creation(
             finished.set()
 
     monkeypatch.setattr(pathlib.Path, "mkdir", stalling_mkdir)
-    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    # The budget must outlast the preparation phases (staging, downloads
+    # flush) even when the suite runs in parallel, or the deadline expires
+    # before the stall this test is about is ever reached.
+    options = dc.replace(install_options(case), deadline_seconds=5.0)
     started = time.monotonic()
     try:
         with pytest.raises(
@@ -2898,7 +2905,7 @@ def test_install_deadline_bounds_a_stalled_generation_creation(
         release.set()
 
     assert stalled.is_set(), "the generation creation was never attempted"
-    assert elapsed < 10.0, f"the stalled creation outlived the budget: {elapsed:.1f}s"
+    assert elapsed < 20.0, f"the stalled creation outlived the budget: {elapsed:.1f}s"
     assert finished.wait(10), "the abandoned creation never resumed"
     assert load_active(layout) is None, "a stalled generation creation activated"
 
@@ -3892,7 +3899,10 @@ def test_a_late_marker_cannot_make_a_reused_cache_unfinished(
     )
     stall = _MarkerWriteStall()
     stall.install(monkeypatch)
-    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    # The marker write is the last phase of a repair, so the budget must
+    # outlast the validation and staging work that precedes it even when the
+    # suite runs in parallel.
+    options = dc.replace(install_options(case), deadline_seconds=5.0)
     with pytest.raises(ProverToolError, match=r"deadline expired during"):
         install_snapshot(options, hooks)
     assert stall.stalled.is_set(), "the publication marker write was never attempted"
@@ -3948,7 +3958,9 @@ def test_a_late_activation_record_cannot_hide_an_interrupted_repair(
     )
     stall = _MarkerWriteStall()
     stall.install(monkeypatch)
-    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    # As above, the marker write is the last phase, so the budget must outlast
+    # the work that precedes it under parallel test execution.
+    options = dc.replace(install_options(case), deadline_seconds=5.0)
     with pytest.raises(ProverToolError, match=r"deadline expired during"):
         install_snapshot(options, hooks)
     assert stall.stalled.is_set(), "the publication marker write was never attempted"

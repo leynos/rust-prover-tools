@@ -384,6 +384,13 @@ never carry proof paths, arguments, or verifier output, and the module installs
 no logger or handler, so the CLI's normal stream is unchanged unless the host
 application enables logging.
 
+Download events name the asset they transfer. That name is bounded by the
+attested manifest's closed asset list and validated as a safe path segment, so
+it is not caller input; the snapshot tag is deliberately not logged because it
+changes with every release. Operation spans also carry a process-local
+`span_id` so concurrent spans of one operation can be paired; it is unique per
+span and therefore log-only, never a metric label.
+
 Binary discovery is split from installation at the API boundary.
 `resolve_verus_bin` is the read-only probe that returns `None` when no
 executable is found; `ensure_run_binary` owns the install fallback and is named

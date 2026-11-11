@@ -279,6 +279,22 @@ def test_inventory_entry_is_hashable_and_explicit() -> None:
 
 
 _SAFE_SEGMENT = st.from_regex(r"[a-z][a-z0-9_]{0,7}", fullmatch=True)
+#: Nine characters, so a generated segment (at most eight) can never equal it.
+_ALLOWANCE_ROOT = "allowance"
+
+
+def _allowed_directory() -> st.SearchStrategy[str]:
+    """Generate an allowance below a root the generated tree cannot name."""
+    inner = st.lists(_SAFE_SEGMENT, min_size=1, max_size=2).map("/".join)
+    return inner.map(lambda path: f"{_ALLOWANCE_ROOT}/{path}")
+
+
+def _materialise_allowance(root: Path, allowance: str) -> None:
+    """Create allowed content, including a directory below the allowance."""
+    for relative in (f"{allowance}/plugin.py", f"{allowance}/nested/module.py"):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"setup")
 
 
 def _prefix_free_files(files: dict[str, bytes]) -> dict[str, bytes]:
@@ -335,10 +351,11 @@ def _materialise_tree(
         HealthCheck.too_slow,
     ),
 )
-@given(files=_generated_files())
+@given(files=_generated_files(), allowance=_allowed_directory())
 def test_validate_tree_matches_generated_inventory_and_allowances(
     tmp_path: Path,
     files: dict[str, bytes],
+    allowance: str,
 ) -> None:
     """A generated tree validates, and only exact allowances are exempt."""
     # `tmp_path` is shared across examples, so each input gets its own tree.
@@ -354,11 +371,28 @@ def test_validate_tree_matches_generated_inventory_and_allowances(
         validate_tree(inventory, root)
     (root / modified).write_bytes(files[modified])
 
-    (root / "allowed-extra").write_bytes(b"extra")
+    removed = max(files)
+    payload = (root / removed).read_bytes()
+    (root / removed).unlink()
+    with pytest.raises(ProverToolError, match="missing"):
+        validate_tree(inventory, root)
+    (root / removed).write_bytes(payload)
+    (root / removed).chmod(0o644)
+
+    (root / "unapproved-extra").write_bytes(b"extra")
     with pytest.raises(ProverToolError, match="not recorded"):
         validate_tree(inventory, root)
-    validate_tree(inventory, root, allowed_extra=("allowed-extra",))
+    (root / "unapproved-extra").unlink()
 
-    (root / "allowed-extra-sibling").write_bytes(b"sibling")
+    # An allowance exempts its descendants and its implicit parents, but the
+    # allowance itself must still be named.
+    _materialise_allowance(root, allowance)
     with pytest.raises(ProverToolError, match="not recorded"):
-        validate_tree(inventory, root, allowed_extra=("allowed-extra",))
+        validate_tree(inventory, root)
+    validate_tree(inventory, root, allowed_extra=(allowance,))
+
+    # A sibling subtree that merely shares the allowance's name is not exempt.
+    sibling = f"{allowance}-sibling"
+    _materialise_allowance(root, sibling)
+    with pytest.raises(ProverToolError, match="not recorded"):
+        validate_tree(inventory, root, allowed_extra=(allowance,))

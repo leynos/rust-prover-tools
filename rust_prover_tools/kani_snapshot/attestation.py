@@ -313,17 +313,25 @@ def _run_attempt_segments(
         this repository's canonical run-and-attempt URL.
     """
     parsed = urllib.parse.urlsplit(invocation)
-    if parsed.scheme != "https" or parsed.hostname != "github.com":
+    # `netloc`, not `hostname`, so a port or userinfo makes the value
+    # non-canonical instead of being silently ignored.
+    if parsed.scheme != "https" or parsed.netloc != "github.com":
         return None
     if parsed.query or parsed.fragment:
         return None
-    parts = parsed.path.strip("/").split("/")
+    parts = parsed.path.split("/")
     prefix = [*repository.split("/"), "actions", "runs"]
-    if parts[: len(prefix)] != prefix or len(parts) != len(prefix) + 3:
+    # The path must be exactly `/<prefix>/<run>/attempts/<attempt>`: a leading
+    # or trailing slash, or any extra segment, is a different string.
+    # `parts[0]` must be the empty string before the leading slash; a path
+    # that does not start with `/` is not the canonical URL.
+    if len(parts) != len(prefix) + 4 or parts[0]:
         return None
-    if parts[len(prefix) + 1] != "attempts":
+    if parts[1 : 1 + len(prefix)] != prefix:
         return None
-    return parts[len(prefix)], parts[len(prefix) + 2]
+    if parts[len(prefix) + 2] != "attempts":
+        return None
+    return parts[len(prefix) + 1], parts[len(prefix) + 3]
 
 
 def run_from_invocation(
@@ -358,5 +366,12 @@ def run_from_invocation(
     except ValueError:
         return None
     if run_id <= 0 or attempt <= 0:
+        return None
+    # The design requires the invocation to equal this exact string, so a
+    # leading zero or any other spelling `int` would accept names no run.
+    canonical = (
+        f"https://github.com/{repository}/actions/runs/{run_id}/attempts/{attempt}"
+    )
+    if invocation != canonical:
         return None
     return WorkflowRun(run_id=run_id, run_attempt=attempt)

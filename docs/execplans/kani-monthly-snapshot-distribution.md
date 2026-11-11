@@ -1376,6 +1376,37 @@ boundary stays membership-agnostic: a group- or other-writable ancestor without
 the sticky bit is refused, and the error tells the operator to choose a private
 `--cache-dir` or correct the ancestor's mode.
 
+2026-11-11, closed the partial-review findings on the provenance, download,
+inventory and observability boundaries. `run_from_invocation` now requires the
+invocation to equal the canonical URL the design fixes: it compares `netloc`
+rather than `hostname` so a port or userinfo is refused, rejects a query or
+fragment, requires exactly the expected path segments, and re-renders the URL
+from the parsed integers so a leading zero or `+1` cannot name a run `int`
+would accept. Nine non-canonical spellings join the rejection cases. The
+download tests now drive the production transport into a dropped connection and
+a failed body read, each retried with the configured backoff and a stored
+payload, plus a destination write failure that is reported as the base error
+after exactly one attempt and no backoff. The Hypothesis inventory test now
+generates an allowance directory with descendants and implicit parents, and
+requires its subtree to pass while an unapproved addition, a similarly named
+sibling subtree, a removed member and a changed member all fail.
+`operation_span` now carries a process-local `span_id` on every start,
+completion and failure event so concurrent spans of one operation can be
+paired; it is documented as log-only and never a metric label, with tests for
+distinct concurrent ids and for pairing. The unbounded snapshot `tag` field is
+gone from `kani.install.staged`; asset names remain because they come from the
+attested manifest's closed list. The check module now says only that it writes
+nothing to the snapshot cache, because the admission probe's configured
+compiler wrapper may write to its own caches, and the fake-probe test says so
+explicitly.
+
+The full gate run also exposed a timing assumption in
+`test_install_deadline_bounds_a_stalled_generation_creation`: its 0.5-second
+budget could expire during the downloads-directory flush under parallel test
+execution, so the stall the test is about was never reached. The budget is now
+five seconds, which still bounds the stalled creation but outlasts the
+preparation phases, and the elapsed ceiling rose with it.
+
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline
 transport before publication and actual public HTTP transport during bootstrap.

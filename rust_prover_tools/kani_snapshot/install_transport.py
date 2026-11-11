@@ -245,10 +245,11 @@ def stage_assets(
         raise
     if claimed.finish():
         discard_private_tree(staging, budget=budget, phase="staging cleanup")
+    # The snapshot tag is omitted: it changes per release and would grow a
+    # metric label without bound.
     log_event(
         _LOGGER,
         "kani.install.staged",
-        tag=options.pin.tag,
         assets=len(parsed.manifest.assets),
     )
     return parsed.manifest

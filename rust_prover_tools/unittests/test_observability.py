@@ -44,12 +44,34 @@ def test_operation_span_correlates_start_and_completion(
         span.finish("activated", cache="miss")
 
     start, complete = _events(caplog)
-    assert start == {"event": "kani.snapshot.install.start", "tag": "t1"}
+    assert start["event"] == "kani.snapshot.install.start"
+    assert start["tag"] == "t1"
     assert complete["event"] == "kani.snapshot.install.complete"
     assert complete["tag"] == "t1"
     assert complete["outcome"] == "activated"
     assert complete["cache"] == "miss"
+    assert complete["span_id"] == start["span_id"], "the pair must share an id"
     assert typ.cast("float", complete["elapsed_seconds"]) >= 0.0
+
+
+def test_concurrent_spans_get_distinct_ids(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two overlapping spans of one operation keep separate identities."""
+    with (
+        caplog.at_level(logging.DEBUG, logger=_LOGGER.name),
+        operation_span(_LOGGER, "kani.snapshot.install") as outer,
+        operation_span(_LOGGER, "kani.snapshot.install") as inner,
+    ):
+        inner.finish("activated")
+        outer.finish("activated")
+
+    start_outer, start_inner, complete_inner, complete_outer = _events(caplog)
+    first = start_outer["span_id"]
+    second = start_inner["span_id"]
+    assert first != second, "concurrent spans must not share an identifier"
+    assert complete_inner["span_id"] == second, "the inner span must pair"
+    assert complete_outer["span_id"] == first, "the outer span must pair"
 
 
 def test_a_completion_field_overrides_the_start_field_of_the_same_name(
@@ -80,8 +102,9 @@ def test_operation_span_reports_a_failure_without_the_message(
         raise ValueError(message)
 
     start, failed = _events(caplog)
-    assert start == {"event": "kani.snapshot.check.start"}
+    assert start["event"] == "kani.snapshot.check.start"
     assert failed["event"] == "kani.snapshot.check.failed"
     assert failed["reason"] == "ValueError"
+    assert failed["span_id"] == start["span_id"], "the failure must pair with its start"
     assert "secret path" not in str(failed)
     assert typ.cast("float", failed["elapsed_seconds"]) >= 0.0

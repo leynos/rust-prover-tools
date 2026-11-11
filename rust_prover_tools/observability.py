@@ -9,17 +9,24 @@ collector can read fields without parsing the message text.
 Events are also the metric source: outcome, latency and cache fields carry a
 closed set of short category strings or a number, never a path, URL, argument
 list, digest or payload. A collector can therefore aggregate them directly
-without unbounded label growth.
+without unbounded label growth. The one exception is ``span_id``: it is unique
+per operation, so it is a log-only correlation key and must never become a
+metric label.
 """
 
 from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import itertools
 import time
 import typing as typ
 
 __all__ = ("OperationSpan", "log_event", "operation_span")
+
+#: Process-local span counter. `next` on a `count` is atomic, so concurrent
+#: spans never share an identifier.
+_SPAN_IDS = itertools.count(1)
 
 if typ.TYPE_CHECKING:
     # Annotations are strings, so these modules are needed only for checking.
@@ -93,6 +100,12 @@ def operation_span(
     the span with the exception's class name rather than its message, because a
     message can embed a path.
 
+    Every event also carries a process-local ``span_id``. Concurrent spans of
+    the same operation would otherwise be indistinguishable once their events
+    interleave, and a collector could pair one operation's start with another's
+    completion. The identifier is unique per span, so it is log-only: never
+    emit it as a metric label, which would grow without bound.
+
     Parameters
     ----------
     logger : logging.Logger
@@ -109,8 +122,9 @@ def operation_span(
     OperationSpan
         Mutable completion facts for the operation body.
     """
+    span_id = f"span-{next(_SPAN_IDS)}"
     started = time.monotonic()
-    log_event(logger, f"{event}.start", **fields)
+    log_event(logger, f"{event}.start", **{**fields, "span_id": span_id})
     span = OperationSpan()
     try:
         yield span
@@ -120,6 +134,7 @@ def operation_span(
         # than raising a duplicate-keyword TypeError after the body succeeded.
         failed = {
             **fields,
+            "span_id": span_id,
             "reason": type(exc).__name__,
             "elapsed_seconds": _elapsed_seconds(started),
         }
@@ -128,6 +143,7 @@ def operation_span(
     complete = {
         **fields,
         **span.fields,
+        "span_id": span_id,
         "outcome": span.outcome,
         "elapsed_seconds": _elapsed_seconds(started),
     }
