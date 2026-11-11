@@ -16,7 +16,7 @@ from rust_prover_tools.downloads import (
     download_pinned,
     sha256_file,
 )
-from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 
 if typ.TYPE_CHECKING:
     import os
@@ -1064,7 +1064,7 @@ def test_open_reports_a_failed_request(
         FailingConnection,
     )
 
-    with pytest.raises(ProverToolError, match="failed to download"):
+    with pytest.raises(TransientDownloadError, match="failed to download"):
         download_transport._open(
             "https://example.test/asset.bin",
             DownloadLimits(),
@@ -1184,22 +1184,30 @@ def test_download_reports_a_missing_redirect_location(
     } in events, "a bad redirect should report its status and bounded reason"
 
 
+@pytest.mark.parametrize(
+    ("status", "status_class", "is_transient"),
+    [(503, "5xx", True), (404, "4xx", False)],
+)
 def test_download_reports_an_http_status_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    status: int,
+    status_class: str,
+    *,
+    is_transient: bool,
 ) -> None:
-    """A non-success response reports its status and status class."""
+    """A non-success response reports its status and whether it is transient."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
     connection = FakeConnection()
-    response = FakeResponse(status=503)
+    response = FakeResponse(status=status)
     monkeypatch.setattr(
         download_transport,
         "_open",
         lambda url, limits, deadline, *, asset_name: (response, connection),
     )
 
-    with pytest.raises(ProverToolError, match="HTTP status 503"):
+    with pytest.raises(ProverToolError, match=f"HTTP status {status}") as raised:
         download_transport._download(
             download_request(
                 "https://example.test/asset.bin",
@@ -1210,18 +1218,16 @@ def test_download_reports_an_http_status_class(
             DownloadLimits(),
         )
 
-    events = [
-        typ.cast("dict[str, object]", record.event_data)
-        for record in caplog.records
-        if hasattr(record, "event_data")
-    ]
+    assert isinstance(raised.value, TransientDownloadError) is is_transient, (
+        "only a retryable status may be classified as transient"
+    )
     assert {
         "event": "download.failed",
         "asset": "asset.bin",
         "reason": "http_status",
-        "status": 503,
-        "status_class": "5xx",
-    } in events, "a failed response should report a bounded status class"
+        "status": status,
+        "status_class": status_class,
+    } in events_from(caplog), "a failed response should report a bounded status class"
 
 
 def test_download_reports_a_stream_error(
@@ -1241,7 +1247,7 @@ def test_download_reports_a_stream_error(
 
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
 
-    with pytest.raises(ProverToolError, match=r"failed to download asset\.bin"):
+    with pytest.raises(TransientDownloadError, match=r"failed to download asset\.bin"):
         download_stream._stream(
             FailingResponse(),
             tmp_path / "asset.bin",

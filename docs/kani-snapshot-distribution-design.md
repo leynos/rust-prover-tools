@@ -456,6 +456,11 @@ directory, opening the lock file and the runtime-file checks that precede the
 probe. A supervised call can return a result its worker finished after the
 budget expired, so `check` re-reads the budget once the active generation has
 been validated and reports the deadline rather than a successful validation.
+
+`check` reads the publication state, pointer and manifest through
+identity-level paths, so it never invents a generation name before the pointer
+names the generation it validates.
+
 The lock wait itself is bounded by whichever is shorter, the configured timeout
 or the seconds the installation still has, so time already spent cannot be
 spent a second time. Removal of private, uniquely named state — a pending

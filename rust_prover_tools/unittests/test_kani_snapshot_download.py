@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import typing as typ
 
 import pytest
@@ -165,6 +166,85 @@ def test_transport_checks_every_redirect_before_opening_it(
     assert connection.closed, "the redirecting connection must close"
 
 
+class _Response:
+    """A canned response that satisfies the transport's response protocol."""
+
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        """Store the status and the body to return once."""
+        self.status = status
+        self._body = body
+        self._read = False
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        """Return the declared body length."""
+        if name == "Content-Length":
+            return str(len(self._body))
+        return default
+
+    def read(self, amt: int | None = None) -> bytes:
+        """Return the body once, then end the stream."""
+        del amt
+        if self._read:
+            return b""
+        self._read = True
+        return self._body
+
+
+class _Connection:
+    """A connection double that only needs to close."""
+
+    def close(self) -> None:
+        """Close the connection."""
+
+
+@pytest.mark.parametrize("status", [408, 429])
+def test_download_asset_retries_a_transient_http_status(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
+    """A 408 or 429 response is retried and the next attempt is used."""
+    payload = b"payload"
+    asset = PinnedAsset(
+        name=_ASSET,
+        url=_RELEASE_URL,
+        sha256=hashlib.sha256(payload).hexdigest(),
+        max_bytes=1024,
+    )
+    calls: list[int] = []
+    sleeps: list[float] = []
+
+    def fake_open(
+        url: str,
+        limits: download_transport.DownloadLimits,
+        deadline: float,
+        *,
+        asset_name: str,
+    ) -> tuple[_Response, _Connection]:
+        """Return the transient status first, then the payload."""
+        del url, limits, deadline, asset_name
+        calls.append(1)
+        if len(calls) == 1:
+            return _Response(status), _Connection()
+        return _Response(200, payload), _Connection()
+
+    monkeypatch.setattr(download_transport, "_open", fake_open)
+
+    result = download_asset(
+        asset,
+        tmp_path / "asset",
+        _policy(),
+        settings=DownloadSettings(
+            retry=DownloadRetryPolicy(attempts=2, backoff_seconds=0.0),
+            sleep=sleeps.append,
+        ),
+    )
+
+    assert result == tmp_path / "asset"
+    assert len(calls) == 2, "a transient status must be retried"
+    assert sleeps == [0.0], "the retry waits the configured backoff"
+
+
 def test_download_asset_retries_transient_failures_with_bounded_backoff(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -258,39 +338,17 @@ def test_download_asset_does_not_retry_an_unwritable_pending_path(
     calls: list[int] = []
     sleeps: list[float] = []
 
-    class FakeResponse:
-        """A successful response whose body is never written."""
-
-        status = 200
-
-        def getheader(self, name: str, default: str | None = None) -> str | None:
-            """Return the declared body length."""
-            if name == "Content-Length":
-                return "7"
-            return default
-
-        def read(self, amt: int | None = None) -> bytes:
-            """Return the body once, then end the stream."""
-            del amt
-            return b"payload"
-
-    class FakeConnection:
-        """A connection double that records closure."""
-
-        def close(self) -> None:
-            """Close the connection."""
-
     def fake_open(
         url: str,
         limits: download_transport.DownloadLimits,
         deadline: float,
         *,
         asset_name: str,
-    ) -> tuple[FakeResponse, FakeConnection]:
+    ) -> tuple[_Response, _Connection]:
         """Record the attempt and return a successful response."""
         del url, limits, deadline, asset_name
         calls.append(1)
-        return FakeResponse(), FakeConnection()
+        return _Response(200, b"payload"), _Connection()
 
     monkeypatch.setattr(download_transport, "_open", fake_open)
     # A directory at the pending path makes the local open fail with EISDIR,

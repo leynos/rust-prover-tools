@@ -28,6 +28,7 @@ __all__ = (
     "SnapshotLayout",
     "SnapshotRuntime",
     "identity_directory",
+    "identity_layout",
     "is_safe_generation_name",
     "new_generation_name",
     "runtime_for",
@@ -210,6 +211,25 @@ def is_safe_generation_name(name: str) -> bool:
     if not name.isprintable():
         return False
     return all(char in _GENERATION_ALPHABET for char in name)
+
+
+def identity_layout(
+    pin: SnapshotPin,
+    *,
+    cache_home: Path | None = None,
+) -> SnapshotLayout:
+    """Return the identity-level layout without naming a generation.
+
+    A query that reads only identity-level state must not invent a generation
+    name: the name would be unused, and generating it spends the wall clock and
+    the random source for nothing. The generation directory is the shared
+    parent, which such a caller never touches.
+    """
+    identity_dir = identity_directory(pin, cache_home=cache_home)
+    return SnapshotLayout(
+        identity_dir=identity_dir,
+        generation_dir=identity_dir / "generations",
+    )
 
 
 def snapshot_layout(

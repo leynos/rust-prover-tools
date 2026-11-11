@@ -7,7 +7,8 @@ The package is split by concern:
 - `pins`, `manifest`, `manifest_groups`, `tags`, `strict_json`, `policy` and
   `validation` parse untrusted bytes into those records; `render` reproduces
   manifest bytes.
-- `integrity` verifies manifests, assets and build attestations.
+- `integrity` verifies manifests, assets and checksums; `attestation` invokes
+  the GitHub CLI and checks the verified workflow identity.
 - The consumer feature is implemented by `download`, `archive`, `install`,
   `identity` and `run`, with `attestation`, `publication` and `activation`
   supplying the authenticated publication protocol those commands rely on.

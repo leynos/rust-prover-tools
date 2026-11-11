@@ -733,7 +733,24 @@ EP-O1 assigns responsibility and records live evidence.
   the worker was still about to use it. A worker that enters `guard` after the
   claim finished is now refused instead of allowed to run, and a regression
   test pauses a worker before it counts itself, lets the deadline expire, and
-  asserts the resumed worker never reaches the copy.
+  asserts the resumed worker never reaches the copy. The saved pre-merge rows
+  were then reconciled against that head. `check` had been building a full
+  layout before it knew the pointer, which generated a generation name it never
+  used; the new `identity_layout` helper supplies the identity-level paths
+  without touching the random source, and a regression test fails if a check
+  ever asks for a fresh name. The package docstring named the wrong module for
+  manifest and checksum verification and now names `integrity`. The download
+  tests that covered classification were weak: the connection and body-read
+  cases asserted only the base error class, and the status-class case tested
+  one non-retryable status body rather than the retry route. They now assert
+  `TransientDownloadError` for the transient cases, distinguish a retryable 503
+  from a permanent 404, and drive `download_asset` through 408 and 429
+  responses to prove a retry actually happens. The remaining row asked that the
+  read-only query be separated from the effectful compiler verification; that
+  is rejected with evidence. The design requires the probe to exercise the same
+  admission route the proof uses, so the probe is an explicit `InstallHooks`
+  dependency the caller may replace, and it writes nothing to the snapshot
+  cache, which is why a check leaves the cache exactly as it found it.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

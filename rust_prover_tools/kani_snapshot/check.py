@@ -14,7 +14,7 @@ import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.identity import snapshot_layout
+from rust_prover_tools.kani_snapshot.identity import identity_layout, snapshot_layout
 from rust_prover_tools.kani_snapshot.install_model import (
     Deadline,
     InstallHooks,
@@ -66,7 +66,9 @@ def check_snapshot(
             budget=deadline,
             read_only=True,
         ):
-            layout = snapshot_layout(options.pin, cache_home=options.cache_home)
+            # The pointer is not known yet, and the reads below are
+            # identity-level, so no generation name is invented for them.
+            layout = identity_layout(options.pin, cache_home=options.cache_home)
             if deadline.supervise(
                 "publication state read",
                 functools.partial(publication_pending, layout),

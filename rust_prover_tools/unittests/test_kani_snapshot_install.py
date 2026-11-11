@@ -37,6 +37,9 @@ from rust_prover_tools.kani_snapshot import (
 from rust_prover_tools.kani_snapshot import (
     install as install_module,
 )
+from rust_prover_tools.kani_snapshot import (
+    snapshot_layout as layout_module,
+)
 from rust_prover_tools.kani_snapshot.archive_graph import (
     DEFAULT_ARCHIVE_LIMITS,
     DEFAULT_ARCHIVE_POLICY,
@@ -3496,6 +3499,30 @@ def test_a_check_that_validates_after_expiry_reports_the_deadline(
         match=r"deadline expired during active generation validation",
     ):
         check_snapshot(install_options(case), install_hooks(case))
+
+
+def test_a_check_does_not_generate_a_generation_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A check reads identity-level state without inventing a generation name.
+
+    The pointer decides which generation is validated, so a name generated
+    before it is read would be unused. A query must not spend the wall clock
+    and the random source on a name it cannot use.
+    """
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+
+    def refuse() -> str:
+        """Fail when a query asks for a fresh generation name."""
+        msg = "a check must not generate a generation name"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(layout_module, "new_generation_name", refuse)
+    identity = check_snapshot(install_options(case), install_hooks(case))
+
+    assert identity.tag == case.pin.tag, "the check did not report the pinned tag"
 
 
 def test_a_marker_is_pending_until_a_completion_supersedes_its_base(
