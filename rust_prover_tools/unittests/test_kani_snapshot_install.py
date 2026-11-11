@@ -2298,6 +2298,65 @@ def test_an_abandoned_staging_copy_releases_its_claim_when_it_stops(
     assert not trees[0].exists(), "a stopped worker's tree survived the next sweep"
 
 
+def test_a_worker_paused_before_its_claim_cannot_use_a_finished_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker that starts after the claim finished must leave the tree alone.
+
+    `run_within` starts its worker before `guard` counts it, so a caller that
+    gives up in that window can finish the claim and hand the tree to cleanup.
+    A later entry must then refuse to run rather than write into a tree that is
+    no longer private to it.
+    """
+    case = make_case(tmp_path)
+    proceed = threading.Event()
+    stopped = threading.Event()
+    copied = threading.Event()
+    real_guard = cleanup.StagingClaim.guard
+
+    def pausing_guard(
+        self: cleanup.StagingClaim,
+        operation: cabc.Callable[[], object],
+    ) -> cabc.Callable[[], object]:
+        """Hold the worker before it counts itself against the claim."""
+        guarded = real_guard(self, operation)
+
+        def paused() -> object:
+            """Wait until the caller has given up, then try to start."""
+            proceed.wait(30)
+            try:
+                return guarded()
+            finally:
+                stopped.set()
+
+        return paused
+
+    def recording_copy(
+        source: Path,
+        destination_dir: Path,
+        file: install_copy.TransportFile,
+        checkpoint: Progress | None = None,
+    ) -> Path:
+        """Record that a worker reached the copy."""
+        copied.set()
+        return install_copy.copy_local(source, destination_dir, file, checkpoint)
+
+    monkeypatch.setattr(cleanup.StagingClaim, "guard", pausing_guard)
+    monkeypatch.setattr(install_transport, "_copy_local", recording_copy)
+    try:
+        with pytest.raises(ProverToolError, match=r"deadline expired"):
+            install_snapshot(
+                dc.replace(install_options(case), deadline_seconds=0.5),
+                install_hooks(case),
+            )
+    finally:
+        proceed.set()
+
+    assert stopped.wait(10), "the paused worker never resumed"
+    assert not copied.is_set(), "a worker used a tree its claim had finished"
+
+
 def test_a_failed_staging_step_closes_its_claim_before_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

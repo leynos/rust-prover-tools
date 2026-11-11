@@ -472,50 +472,53 @@ claim is counted against every supervised operation that may outlive its
 caller: a failure path removes the tree only once no such worker remains, and
 the last abandoned worker closes the descriptor itself when it stops, so the
 tree is left for a later sweep rather than deleted under a copy still running.
-A claim that finishes after its deadline releases the descriptor itself, so a
-late claim neither leaks it nor keeps the tree claimed forever. A deferred
-sweep runs in a capped slice of the installation budget and is skipped when
-less than its own cap plus a fixed reserve remains, so reclaiming disk cannot
-starve the install that triggered it. The sweep takes a non-blocking
-per-identity claim inside its own worker and closes it when it stops, separate
-from the installation lock: an abandoned sweep keeps holding it, so a later
-sweep skips every tree instead of racing a removal still in progress, and a
-stalled sweep never holds the installation lock past the deadline. Staged
-payloads are published under a bound rather than abandoned silently. Each
-publication owns a marker in the identity directory, named for that
-publication, made durable before the first payload is replaced and removed only
-after every replacement and its directory flush are durable. Because no marker
-name is reused, a publication that resumes after being abandoned can remove
-only its own marker; a repair that starts meanwhile writes a new one first and
-clears the older ones only once its own marker is durable, so the incomplete
-state is never unmarked. A marker also records its base: the highest activation
-record its publication observed when it began, read from record names rather
-than their contents. The completion watermark is the highest of one small
-create-only record per completed installation, each named by the sequence it
-completed and written only by a lock-holding installation after its activation
-record is confirmed durable. A record therefore names an installation that
-finished rather than merely one that published a record, and a write that lands
-after a newer one joins the order beneath it instead of replacing it, so the
-watermark can rise but never regress. A reader refuses a cache until the
-watermark rises above a marker's base, and ignores a marker a later completion
-has passed. Every installation links its record above all existing records
-before it records completion, so a completion above a base always belongs to an
-installation that started after the publication did, while a completion write
-that lands late names a sequence the publication already observed and cannot
-retire its marker. The activation order cannot carry that meaning on its own:
-an unrelated late activation can outrank the record a publication observed
-without that publication having finished, so ordering markers against records
-alone could retire the marker of an unfinished repair. A marker that a
-publication writes late names a base below the completion of any installation
-that finished after it began, so it cannot make a completed cache look
-unfinished, while the marker of an interrupted repair stays pending until an
-installation that began after it completes. A marker written before markers
-recorded a base, one whose bytes cannot be read, one whose bytes are not
-exactly what the writer would produce for the base it appears to name, and one
-whose base carries more digits than an activation sequence, all name no base;
-each remains pending, because an unreadable or malformed marker is exactly the
-case in which the cache must not be assumed complete. A parsed base is
-therefore accepted only when the whole file is the canonical spelling, so a
+A worker that has not yet counted itself when the claim finishes is refused
+instead of allowed to use the tree: the caller has already given up, so the
+window between starting a worker and counting it cannot let a late copy write
+into a tree that cleanup has taken. A claim that finishes after its deadline
+releases the descriptor itself, so a late claim neither leaks it nor keeps the
+tree claimed forever. A deferred sweep runs in a capped slice of the
+installation budget and is skipped when less than its own cap plus a fixed
+reserve remains, so reclaiming disk cannot starve the install that triggered
+it. The sweep takes a non-blocking per-identity claim inside its own worker and
+closes it when it stops, separate from the installation lock: an abandoned
+sweep keeps holding it, so a later sweep skips every tree instead of racing a
+removal still in progress, and a stalled sweep never holds the installation
+lock past the deadline. Staged payloads are published under a bound rather than
+abandoned silently. Each publication owns a marker in the identity directory,
+named for that publication, made durable before the first payload is replaced
+and removed only after every replacement and its directory flush are durable.
+Because no marker name is reused, a publication that resumes after being
+abandoned can remove only its own marker; a repair that starts meanwhile writes
+a new one first and clears the older ones only once its own marker is durable,
+so the incomplete state is never unmarked. A marker also records its base: the
+highest activation record its publication observed when it began, read from
+record names rather than their contents. The completion watermark is the
+highest of one small create-only record per completed installation, each named
+by the sequence it completed and written only by a lock-holding installation
+after its activation record is confirmed durable. A record therefore names an
+installation that finished rather than merely one that published a record, and
+a write that lands after a newer one joins the order beneath it instead of
+replacing it, so the watermark can rise but never regress. A reader refuses a
+cache until the watermark rises above a marker's base, and ignores a marker a
+later completion has passed. Every installation links its record above all
+existing records before it records completion, so a completion above a base
+always belongs to an installation that started after the publication did, while
+a completion write that lands late names a sequence the publication already
+observed and cannot retire its marker. The activation order cannot carry that
+meaning on its own: an unrelated late activation can outrank the record a
+publication observed without that publication having finished, so ordering
+markers against records alone could retire the marker of an unfinished repair.
+A marker that a publication writes late names a base below the completion of
+any installation that finished after it began, so it cannot make a completed
+cache look unfinished, while the marker of an interrupted repair stays pending
+until an installation that began after it completes. A marker written before
+markers recorded a base, one whose bytes cannot be read, one whose bytes are
+not exactly what the writer would produce for the base it appears to name, and
+one whose base carries more digits than an activation sequence, all name no
+base; each remains pending, because an unreadable or malformed marker is
+exactly the case in which the cache must not be assumed complete. A parsed base
+is therefore accepted only when the whole file is the canonical spelling, so a
 leading zero or any other non-canonical form names no base even though it
 converts to one. The marker read stops one byte past the longest canonical
 marker, so a marker that fills that read continues past what was read and its

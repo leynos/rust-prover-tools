@@ -726,7 +726,14 @@ EP-O1 assigns responsibility and records live evidence.
   after validating the active generation: `run_within` can return a result its
   worker finished after the budget expired, so a validation that spent the
   whole budget must report the deadline rather than a successful check. A
-  regression test drives a validation that completes after expiry.
+  regression test drives a validation that completes after expiry. The
+  follow-up review then found the last window in the claim protocol:
+  `run_within` starts its worker before `guard` counts it, so a caller that
+  gave up in between could finish the claim and hand the tree to cleanup while
+  the worker was still about to use it. A worker that enters `guard` after the
+  claim finished is now refused instead of allowed to run, and a regression
+  test pauses a worker before it counts itself, lets the deadline expire, and
+  asserts the resumed worker never reaches the copy.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

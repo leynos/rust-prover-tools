@@ -3,23 +3,21 @@
 An installation may time out while a file or tree it wrote is still only its
 own: a pending activation document, a partially copied launcher, or a staging
 directory. Removing that state is necessary bookkeeping, but the removal itself
-can stall on a hung filesystem. Because each of these names is unique to one
-attempt and no reader interprets it, a removal that outlives the budget may be
-abandoned and is not retried by anyone else. Reporting it as an installation
-failure would be untrue, and holding the identity lock for it would exceed the
-deadline, so a deferred removal is debug-logged and left to the next sweep that
-recognises its name.
+can stall on a hung filesystem. Because each name is unique to one attempt and
+no reader interprets it, a removal that outlives the budget may be abandoned
+and is not retried by anyone else. Reporting it as a failure would be untrue
+and holding the identity lock would exceed the deadline, so it is debug-logged
+and left to the next sweep that recognises its name.
 
 A staging tree must not be swept while the worker that created it can still use
-it, and a timeout abandons a worker without stopping it. Age alone therefore
-cannot decide liveness. The worker takes an advisory exclusive lock, held for as
-long as it may touch the tree; the kernel releases that lock when the process
-exits, so a killed worker leaves a claim that a sweep can take. A sweep removes
-only a tree whose claim it can take, and only within its own budget slice, so a
-hung sweep cannot consume the installation that triggered it. A sweep itself may
-be abandoned while it is still deleting, so it holds a per-identity sweep claim
-until its worker stops; a later sweep that cannot take that claim leaves every
-tree alone rather than racing a removal that is still in progress.
+it, and a timeout abandons a worker without stopping it, so age alone cannot
+decide liveness. The worker takes an advisory exclusive lock for as long as it
+may touch the tree; the kernel releases it when the process exits, so a killed
+worker leaves a claim a sweep can take. A sweep removes only a tree whose claim
+it can take, within its own budget slice, so a hung sweep cannot consume the
+installation that triggered it. A sweep may itself be abandoned while deleting,
+so it holds a per-identity claim until its worker stops; a later sweep that
+cannot take that claim leaves every tree alone rather than racing the removal.
 
 Cleanup of anything a reader resolves, or of a shared name that a later attempt
 reuses, does not belong here: those removals must complete or be reported.
@@ -221,14 +219,17 @@ class StagingClaim:
         """Wrap `operation` so the claim is held while its worker runs.
 
         The count lives in the worker thread, because that is what `run_within`
-        abandons and what eventually stops. The claim decides only when the
-        descriptor closes, never whether work that already started may run.
+        abandons and what eventually stops. A worker that has not counted
+        itself when `finish` runs is refused: its caller has given up.
         """
 
         @functools.wraps(operation)
         def guarded() -> _T:
             """Run the operation, holding the claim until it returns."""
             with self._lock:
+                if self._finished:
+                    msg = "staging ownership claim finished before its worker ran"
+                    raise ProverToolError(msg)
                 self._workers += 1
             try:
                 return operation()
