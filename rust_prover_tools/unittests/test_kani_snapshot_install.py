@@ -2150,6 +2150,50 @@ def test_install_deadline_bounds_a_stalled_staging_creation(
     )
 
 
+def test_a_timed_out_staging_worker_keeps_its_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker the deadline abandoned keeps its tree claimed.
+
+    `run_within` abandons a stalled operation without stopping it, so the copy
+    that outlives the deadline may still be writing into the staging tree.
+    Releasing the claim on the failure path would let the next sweep delete a
+    tree that worker is still filling, so the claim must stay held.
+    """
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    release = threading.Event()
+    stalled = threading.Event()
+    real_copy = install_copy.copy_local
+
+    def stalling_copy(
+        source: Path,
+        destination_dir: Path,
+        file: install_copy.TransportFile,
+        checkpoint: Progress | None = None,
+    ) -> Path:
+        """Block the first staged copy like a hung filesystem."""
+        stalled.set()
+        release.wait(30)
+        return real_copy(source, destination_dir, file, checkpoint)
+
+    monkeypatch.setattr(install_transport, "_copy_local", stalling_copy)
+    options = dc.replace(install_options(case), deadline_seconds=0.5)
+    try:
+        with pytest.raises(ProverToolError, match=r"deadline expired"):
+            install_snapshot(options, install_hooks(case))
+    finally:
+        release.set()
+
+    assert stalled.is_set(), "the staged copy was never attempted"
+    trees = list(layout.identity_dir.glob(".staging-*"))
+    assert len(trees) == 1, f"unexpected staging leftovers: {trees}"
+    assert cleanup._has_live_worker(trees[0]), (
+        "a timed-out worker released its staging claim"
+    )
+
+
 def test_install_deadline_defers_a_stalled_staging_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3959,6 +4003,55 @@ def test_a_stalled_sweep_cannot_consume_the_installation_budget(
     assert "deferred staging sweep" in caplog.text, (
         "the deferred sweep was not recorded"
     )
+
+
+def test_a_late_staging_claim_closes_its_descriptor(tmp_path: Path) -> None:
+    """A claim that finishes after its deadline releases the tree itself.
+
+    The claim runs under supervision, so a cancelled call can return before
+    the claim is taken. The late claim must not leave the tree claimed forever:
+    it closes the descriptor it opened and reports that its caller gave up.
+    """
+    staging = tmp_path / ".staging-late"
+    staging.mkdir(mode=0o700)
+    claim = cleanup.StagingClaim()
+    claim.cancel()
+
+    with pytest.raises(ProverToolError, match=r"after the deadline"):
+        claim.take(staging)
+
+    assert not cleanup._has_live_worker(staging), (
+        "a late claim kept the staging tree claimed"
+    )
+
+
+def test_a_sweep_with_no_slice_left_is_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A sweep never spends the reserve the installation itself needs."""
+    case = make_case(tmp_path)
+    layout = snapshot_layout(case.pin, cache_home=case.cache_home)
+    install_state.ensure_private_directory(layout.identity_dir)
+    abandoned = layout.identity_dir / ".staging-abandoned"
+    abandoned.mkdir(mode=0o700)
+    (abandoned / "payload.bin").write_bytes(b"partial")
+    stale = time.time() - cleanup.STAGING_GRACE_SECONDS - 60.0
+    os.utime(abandoned, (stale, stale))
+    monkeypatch.setattr(cleanup, "_SWEEP_SECONDS", 15.0)
+
+    with caplog.at_level(
+        logging.DEBUG,
+        logger="rust_prover_tools.kani_snapshot.cleanup",
+    ):
+        cleanup.sweep_deferred_staging(
+            layout.identity_dir,
+            Deadline(expires_at=time.monotonic() + 10.0),
+        )
+
+    assert abandoned.is_dir(), "a sweep ran inside the installation's reserve"
+    assert "sweep skipped" in caplog.text, "the skipped sweep was not recorded"
 
 
 def test_a_later_install_preserves_a_fresh_staging_tree(tmp_path: Path) -> None:

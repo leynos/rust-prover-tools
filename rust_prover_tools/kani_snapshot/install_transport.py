@@ -25,10 +25,9 @@ from rust_prover_tools.kani_snapshot.attestation import (
     policy_for_pin,
 )
 from rust_prover_tools.kani_snapshot.cleanup import (
-    claim_staging_ownership,
+    StagingClaim,
     discard_private_tree,
     new_staging_directory,
-    release_staging_ownership,
     sweep_deferred_staging,
 )
 from rust_prover_tools.kani_snapshot.install_copy import (
@@ -91,9 +90,8 @@ INVENTORY_MAX_BYTES: typ.Final[int] = 64 * 1024 * 1024
 class _Checkpoints:
     """Deadline checkpoints for the transport's long phases.
 
-    Each phase name is separate so an expiry reports which piece of staging
-    was interrupted; grouping them keeps `stage_assets` below the local-variable
-    ceiling and names the set as one concept.
+    Grouping the phase names keeps `stage_assets` within its local-variable
+    limit and names the set as one concept.
     """
 
     staging: Progress
@@ -162,10 +160,16 @@ def stage_assets(
     sweep_deferred_staging(layout.identity_dir, budget)
     staging = new_staging_directory(layout.identity_dir, budget)
     # Hold the claim while this worker may still touch the tree (see cleanup).
-    owner = budget.supervise(
-        "staging ownership claim",
-        functools.partial(claim_staging_ownership, staging),
-    )
+    claim = StagingClaim()
+    try:
+        budget.supervise(
+            "staging ownership claim",
+            functools.partial(claim.take, staging),
+        )
+    except BaseException:
+        # A claim that finishes after this deadline closes its own descriptor.
+        claim.cancel()
+        raise
     checkpoints = _Checkpoints.for_budget(budget)
     try:
         manifest_path = budget.supervise(
@@ -249,9 +253,14 @@ def stage_assets(
             budget=budget,
             checkpoint=checkpoints.publish,
         )
-    finally:
-        release_staging_ownership(owner)
+    except BaseException:
+        # A supervised operation may still be writing after its deadline, so
+        # the claim stays held until process exit and a later sweep removes
+        # the tree rather than racing that worker.
         discard_private_tree(staging, budget=budget, phase="staging cleanup")
+        raise
+    claim.release()
+    discard_private_tree(staging, budget=budget, phase="staging cleanup")
     log_event(
         _LOGGER,
         "kani.install.staged",

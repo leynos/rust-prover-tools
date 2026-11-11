@@ -6,11 +6,15 @@ import typing as typ
 
 import pytest
 
+from rust_prover_tools import kani_snapshot_cli
 from rust_prover_tools.cli import app
+from rust_prover_tools.errors import ProverToolError
 from tests.kani_snapshot_fixtures import make_pin, pin_bytes
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
+
+    from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 
 
 def _write_pin(tmp_path: Path) -> Path:
@@ -120,6 +124,16 @@ def test_relative_paths_resolve_below_the_repository_root(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
+    seen: list[Path] = []
+
+    def recording_check(options: InstallOptions) -> typ.NoReturn:
+        """Record the resolved cache, then refuse as an empty cache would."""
+        assert options.cache_home is not None, "the CLI resolved no cache directory"
+        seen.append(options.cache_home)
+        msg = "snapshot is not installed"
+        raise ProverToolError(msg)
+
+    monkeypatch.setattr(kani_snapshot_cli, "check_snapshot", recording_check)
 
     status = app(
         [
@@ -138,6 +152,7 @@ def test_relative_paths_resolve_below_the_repository_root(
     captured = capsys.readouterr()
     assert status == 1, "a missing installation must exit with status 1"
     assert "not installed" in captured.err, "the relative pin did not resolve"
+    assert seen == [tmp_path / "cache"], f"the cache resolved to {seen}"
     assert not (elsewhere / "cache").exists(), "the cache resolved against the cwd"
 
 

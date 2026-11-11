@@ -29,6 +29,7 @@ import functools
 import logging
 import os
 import secrets
+import threading
 import time
 import typing as typ
 from shutil import rmtree
@@ -45,6 +46,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "STAGING_GRACE_SECONDS",
     "STAGING_OWNER_NAME",
+    "StagingClaim",
     "claim_staging_ownership",
     "discard_private_file",
     "discard_private_tree",
@@ -68,6 +70,11 @@ STAGING_OWNER_NAME: typ.Final[str] = ".owner.lock"
 #: Longest a deferred sweep may take. It is a fraction of the installation
 #: budget: reclaiming disk must not starve the install that triggered the sweep.
 _SWEEP_SECONDS: typ.Final[float] = 15.0
+
+#: Time a deferred sweep must leave behind. The sweep runs before staging
+#: starts, so giving it the whole remaining budget would leave nothing for the
+#: install; with less than this plus `_SWEEP_SECONDS` left, it is skipped.
+_SWEEP_RESERVE_SECONDS: typ.Final[float] = 15.0
 
 
 def discard_private_file(
@@ -170,18 +177,61 @@ def release_staging_ownership(descriptor: int) -> None:
     os.close(descriptor)
 
 
+class StagingClaim:
+    """An exclusive claim on a staging tree that survives abandonment.
+
+    `run_within` abandons a stalled operation without stopping it, so a claim
+    that finishes after its caller gave up must close the descriptor it
+    opened. `cancel` marks the claim abandoned and closes a descriptor already
+    taken; `take` closes one that arrives afterwards, so a late claim neither
+    leaks a descriptor nor keeps the tree claimed forever.
+    """
+
+    def __init__(self) -> None:
+        """Start an untaken, uncancelled claim."""
+        self._lock = threading.Lock()
+        self._descriptor: int | None = None
+        self._cancelled = False
+
+    def take(self, staging: Path) -> None:
+        """Claim `staging`, or refuse if the caller already gave up."""
+        descriptor = claim_staging_ownership(staging)
+        with self._lock:
+            if self._cancelled:
+                release_staging_ownership(descriptor)
+                msg = "staging ownership claim completed after the deadline"
+                raise ProverToolError(msg)
+            self._descriptor = descriptor
+
+    def cancel(self) -> None:
+        """Give up the claim, closing a descriptor taken before or after."""
+        with self._lock:
+            self._cancelled = True
+            descriptor, self._descriptor = self._descriptor, None
+        if descriptor is not None:
+            release_staging_ownership(descriptor)
+
+    def release(self) -> None:
+        """Release a claim this worker still holds."""
+        with self._lock:
+            descriptor, self._descriptor = self._descriptor, None
+        if descriptor is not None:
+            release_staging_ownership(descriptor)
+
+
 def sweep_deferred_staging(identity_dir: Path, budget: InstallBudget) -> None:
     """Remove staging trees an earlier attempt deferred and never revisited.
 
     A cleanup that outlives the deadline is abandoned rather than retried, and
     each attempt uses a fresh name, so without this sweep a repeated timeout
     would leave every payload it copied in the cache. The sweep gets its own
-    slice of the budget, never more than `_SWEEP_SECONDS`, so a hung removal
-    defers the sweep instead of consuming the installation that triggered it.
-    A tree is removed only when its owner claim can be taken, so an abandoned
-    worker that is still running keeps its copy.
+    slice of the budget, never more than `_SWEEP_SECONDS` and never the last
+    `_SWEEP_RESERVE_SECONDS`, so a hung removal defers the sweep instead of
+    consuming the installation that triggered it. A tree is removed only when
+    its owner claim can be taken, so an abandoned worker that is still running
+    keeps its copy.
     """
-    allowance = min(budget.remaining(), _SWEEP_SECONDS)
+    allowance = min(_SWEEP_SECONDS, budget.remaining() - _SWEEP_RESERVE_SECONDS)
     if allowance <= 0.0:
         _LOGGER.debug("snapshot deferred staging sweep skipped: no budget")
         return

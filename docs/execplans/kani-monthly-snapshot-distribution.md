@@ -700,7 +700,15 @@ EP-O1 assigns responsibility and records live evidence.
   Hosted CI then caught that the stalled-sweep test patched the shared `shutil`
   module, so Python 3.14.10's `tempfile` cleanup reached the stub with `dir_fd`;
   `cleanup` now imports `rmtree` directly and both stalling tests patch only
-  that reference.
+  that reference. Two sub-issues from the same review round are fixed next: a
+  worker that fails keeps its staging claim, because the operation the deadline
+  abandoned may still be writing, and a claim that completes after that
+  deadline closes its own descriptor through `StagingClaim`; the deferred sweep
+  is skipped when less than its cap plus a fixed reserve remains, so it never
+  spends the budget the installation itself needs. New tests cover the retained
+  claim, the late claim, and the skipped sweep. The CLI relative-path test now
+  asserts the resolved `cache_home` rather than only the absence of a cache
+  under the caller's directory.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
