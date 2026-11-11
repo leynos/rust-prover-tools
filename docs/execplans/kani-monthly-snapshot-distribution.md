@@ -676,7 +676,13 @@ EP-O1 assigns responsibility and records live evidence.
   and the error names the remedy. New tests cover the umask-0002 parent modes,
   the post-validation archive swap, stale and fresh staging sweeps, the
   completion-field override, and an attestation for another repository; the
-  `kani run` help snapshot was regenerated.
+  `kani run` help snapshot was regenerated. Published as 692491e after all
+  seven gates passed. The deferred-staging sweep lives in `cleanup.py` beside
+  the other bounded private removals: the added code took
+  `install_transport.py` past pylint's 400-line module limit, and the seam
+  chosen was the sweep's shared subject, not a raised limit. Every one of the
+  22 threads was answered, including evidence-backed rebuttals of two
+  LanguageTool false positives.
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
