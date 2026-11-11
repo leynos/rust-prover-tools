@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import logging
 import pathlib
 import typing as typ
 
@@ -20,6 +21,7 @@ from rust_prover_tools.kani_snapshot.download import (
     download_asset,
 )
 from tests.kani_snapshot_fixtures import TAG
+from tests.kani_snapshot_install_fixtures import events_from
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -274,6 +276,7 @@ def _hashed_asset(payload: bytes) -> PinnedAsset:
 def test_download_asset_retries_a_connection_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A dropped connection is retried through the production transport."""
     payload = b"payload"
@@ -288,20 +291,28 @@ def test_download_asset_retries_a_connection_failure(
         connections,
     )
 
-    result = download_asset(
-        _hashed_asset(payload),
-        tmp_path / "asset",
-        _policy(),
-        settings=DownloadSettings(
-            retry=DownloadRetryPolicy(attempts=2, backoff_seconds=0.5),
-            sleep=sleeps.append,
-        ),
-    )
+    with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
+        result = download_asset(
+            _hashed_asset(payload),
+            tmp_path / "asset",
+            _policy(),
+            settings=DownloadSettings(
+                retry=DownloadRetryPolicy(attempts=2, backoff_seconds=0.5),
+                sleep=sleeps.append,
+            ),
+        )
 
     assert result == tmp_path / "asset"
     assert connections.opened == 2, "a dropped connection must be retried"
     assert sleeps == [0.5], "the retry waits the configured backoff"
     assert result.read_bytes() == payload, "the retry must store the payload"
+    retries = [
+        event for event in events_from(caplog) if event["event"] == "download.retry"
+    ]
+    # The asset name is not a closed category, so it must not be a label.
+    assert retries == [
+        {"event": "download.retry", "attempt": 1, "delay_seconds": 0.5}
+    ], "the retry event carried an unbounded label such as the asset name"
 
 
 def test_download_asset_retries_a_body_read_failure(

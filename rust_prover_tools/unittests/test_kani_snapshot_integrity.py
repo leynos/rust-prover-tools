@@ -56,8 +56,8 @@ def _invocation(policy: AttestationPolicy, run_id: int, attempt: int) -> str:
     )
 
 
-def _verified(invocation_id: str) -> str:
-    """Return the verifier output for one verified record naming a run."""
+def _verified(*invocation_ids: str) -> str:
+    """Return verifier output with one verified record per invocation."""
     return json.dumps([
         {
             "attestation": {},
@@ -71,6 +71,7 @@ def _verified(invocation_id: str) -> str:
                 },
             },
         }
+        for invocation_id in invocation_ids
     ])
 
 
@@ -84,11 +85,16 @@ def _request(directory: Path) -> AttestationRequest:
     )
 
 
-def _matching_output() -> str:
-    """Return verifier output naming the fixture manifest's own run."""
+def _matching_invocation() -> str:
+    """Return the canonical invocation of the fixture manifest's own run."""
     policy = policy_for_pin(make_pin())
     workflow = make_manifest().workflow
-    return _verified(_invocation(policy, workflow.run_id, workflow.run_attempt))
+    return _invocation(policy, workflow.run_id, workflow.run_attempt)
+
+
+def _matching_output() -> str:
+    """Return verifier output naming the fixture manifest's own run."""
+    return _verified(_matching_invocation())
 
 
 def _write_asset(path: Path, data: bytes) -> AssetRecord:
@@ -462,6 +468,8 @@ _NON_CANONICAL_INVOCATIONS: tuple[str, ...] = (
     "https://github.com/leynos/rust-prover-tools/actions/runs/01/attempts/1",
     "https://github.com/leynos/rust-prover-tools/actions/runs/1/attempts/01",
     "https://github.com/leynos/rust-prover-tools/actions/runs/+1/attempts/1",
+    # A malformed authority raises inside `urlsplit` rather than parsing.
+    "https://[::1",
     "",
 )
 
@@ -472,21 +480,111 @@ def test_a_non_canonical_invocation_names_no_run(invocation: str) -> None:
     assert run_from_invocation(invocation, "leynos/rust-prover-tools") is None
 
 
-@pytest.mark.parametrize("invocation", _NON_CANONICAL_INVOCATIONS)
+#: Non-canonical forms parameterised by the fixture's real run and attempt, so
+#: a refusal cannot be explained by a run mismatch instead of the spelling.
+_VERIFIER_NON_CANONICAL_FORMS: tuple[tuple[str, str], ...] = (
+    ("http_scheme", "http://github.com/{repo}/actions/runs/{run}/attempts/{attempt}"),
+    (
+        "foreign_host",
+        "https://example.test/{repo}/actions/runs/{run}/attempts/{attempt}",
+    ),
+    (
+        "credentials",
+        "https://user@github.com/{repo}/actions/runs/{run}/attempts/{attempt}",
+    ),
+    (
+        "port",
+        "https://github.com:443/{repo}/actions/runs/{run}/attempts/{attempt}",
+    ),
+    (
+        "query",
+        "https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}?next=2",
+    ),
+    (
+        "fragment",
+        "https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}#fragment",
+    ),
+    (
+        "trailing_slash",
+        "https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}/",
+    ),
+    (
+        "doubled_slash",
+        "https://github.com//{repo}/actions/runs/{run}/attempts/{attempt}",
+    ),
+    (
+        "percent_encoded",
+        "https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}%20",
+    ),
+    (
+        "leading_zero_run",
+        "https://github.com/{repo}/actions/runs/0{run}/attempts/{attempt}",
+    ),
+    (
+        "leading_zero_attempt",
+        "https://github.com/{repo}/actions/runs/{run}/attempts/0{attempt}",
+    ),
+    (
+        "plus_signed_run",
+        "https://github.com/{repo}/actions/runs/+{run}/attempts/{attempt}",
+    ),
+    (
+        "extra_segment",
+        "https://github.com/{repo}/actions/runs/{run}/attempts/{attempt}/extra",
+    ),
+    ("missing_attempt", "https://github.com/{repo}/actions/runs/{run}"),
+    (
+        "wrong_repository",
+        "https://github.com/someone/else/actions/runs/{run}/attempts/{attempt}",
+    ),
+    ("malformed_authority", "https://[::1"),
+    ("empty", ""),
+)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        pytest.param(template, id=name)
+        for name, template in _VERIFIER_NON_CANONICAL_FORMS
+    ],
+)
 def test_a_non_canonical_verified_invocation_is_refused(
-    tmp_path: Path, cmd_mox: CmdMox, invocation: str
+    tmp_path: Path, cmd_mox: CmdMox, template: str
 ) -> None:
     """The verifier's own output cannot smuggle in a non-canonical URL.
 
     The parser is exercised directly above; this test proves the refusal
     survives the whole `verify_attestation` path, where the value arrives as
-    external verifier output rather than a caller-supplied argument.
+    external verifier output rather than a caller-supplied argument. Each form
+    names the fixture's real run and attempt, so only the malformation can
+    explain the refusal.
     """
+    policy = policy_for_pin(make_pin())
+    workflow = make_manifest().workflow
+    invocation = template.format(
+        repo=policy.repository,
+        run=workflow.run_id,
+        attempt=workflow.run_attempt,
+    )
     cmd_mox.stub("gh").runs(lambda _invocation: (_verified(invocation), "", 0))
     with pytest.raises(
         ProverToolError, match="does not name the manifest's workflow run"
     ):
         verify_attestation(_request(tmp_path))
+
+
+def test_a_malformed_record_does_not_hide_a_later_valid_one(
+    tmp_path: Path, cmd_mox: CmdMox
+) -> None:
+    """An unparseable record names no run, so a later matching record still wins."""
+    cmd_mox.stub("gh").runs(
+        lambda _invocation: (_verified("https://[::1", _matching_invocation()), "", 0)
+    )
+
+    records = verify_attestation(_request(tmp_path))
+
+    assert len(records) == 2, "the malformed record must not abort the scan"
 
 
 def test_the_run_policy_is_enforced_before_the_attempt() -> None:

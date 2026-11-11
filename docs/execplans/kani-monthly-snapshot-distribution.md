@@ -785,6 +785,22 @@ name verified provenance rather than the verifier command.
   per-release snapshot tag cannot reappear as an unbounded metric label. All
   seven gates passed on the resulting candidate (1365 passed, 5 skipped).
 
+- [x] (2026-11-11) Remediated the follow-up review of that candidate. A
+  malformed authority such as `https://[::1` makes `urlsplit` raise, and the
+  `ValueError` escaped the fail-closed path; `_run_attempt_segments` now treats
+  it as naming no run, so a malformed record cannot abort the scan before a
+  later valid record is examined. The verifier-level non-canonical cases are
+  now built from the fixture's real run and attempt, so a refusal cannot be
+  explained by a run mismatch instead of the malformation, and a new test
+  places a malformed record before a matching one. The `check` docstring now
+  describes the actual probe (`rustc -vV` and `kani-compiler --version` through
+  the admission chain) while keeping the wrapper-side-effect warning. The
+  snapshot retry event no longer logs the asset name: `download_asset` accepts
+  a separately constructed policy and pinned asset, so the name is not a closed
+  category; the event carries only the attempt and delay, and a test asserts
+  those exact fields. The design's observability paragraph now states that
+  boundary and that collection remains host-owned.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

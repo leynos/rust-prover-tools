@@ -312,12 +312,22 @@ def _run_attempt_segments(
         The run and attempt path segments, or `None` when the value is not
         this repository's canonical run-and-attempt URL.
     """
-    parsed = urllib.parse.urlsplit(invocation)
-    # `netloc`, not `hostname`, so a port or userinfo makes the value
-    # non-canonical instead of being silently ignored.
-    if parsed.scheme != "https" or parsed.netloc != "github.com":
+    try:
+        parsed = urllib.parse.urlsplit(invocation)
+    except ValueError:
+        # A malformed authority such as `https://[::1` raises rather than
+        # parsing. The verifier's output is external data, so an unparseable
+        # value must name no run instead of escaping as a raw `ValueError`.
         return None
-    if parsed.query or parsed.fragment:
+    # `netloc`, not `hostname`, so a port or userinfo makes the value
+    # non-canonical instead of being silently ignored. A query or fragment is
+    # not part of the documented URL either.
+    if (parsed.scheme, parsed.netloc, parsed.query, parsed.fragment) != (
+        "https",
+        "github.com",
+        "",
+        "",
+    ):
         return None
     parts = parsed.path.split("/")
     prefix = [*repository.split("/"), "actions", "runs"]

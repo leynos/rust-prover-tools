@@ -83,9 +83,9 @@ downloader records `download.start`, `download.complete`, `download.cache_hit`,
 `invalid_content_length`, `content_length`, `size_limit`, `deadline`,
 `incomplete_body`, `stream_error`, `transport_error`, `url_policy`,
 `digest_mismatch`, `digest_read`, `store_error`, or `cleanup_error`). The
-snapshot download retry loop records `download.retry` with the asset name, the
-failed attempt number and the delay before the next attempt, so a transient
-failure is visible without adding an unbounded reason. Each installer also
+snapshot download retry loop records `download.retry` with the failed attempt
+number and the delay before the next attempt, so a transient failure is visible
+without adding an unbounded reason or an asset-name label. Each installer also
 records `<tool>.install.start`, `<tool>.install.reuse`,
 `<tool>.install.complete`, and `<tool>.install.failed` with a bounded phase,
 together with the extraction, marker, setup, and verification boundaries
@@ -384,12 +384,16 @@ never carry proof paths, arguments, or verifier output, and the module installs
 no logger or handler, so the CLI's normal stream is unchanged unless the host
 application enables logging.
 
-Download events name the asset they transfer. That name is bounded by the
-attested manifest's closed asset list and validated as a safe path segment, so
-it is not caller input; the snapshot tag is deliberately not logged because it
-changes with every release. Operation spans also carry a process-local
-`span_id` so concurrent spans of one operation can be paired; it is unique per
-span and therefore log-only, never a metric label.
+The generic downloader's events name the asset they transfer, because those
+names are fixed per tool. The snapshot retry event does not: `download_asset`
+accepts a separately constructed policy and pinned asset, so a snapshot asset
+name is not a closed category and must not become a metric label. The snapshot
+tag is likewise not logged because it changes with every release. Operation
+spans carry a process-local `span_id` so concurrent spans of one operation can
+be paired; it is unique per span and therefore log-only, never a metric label.
+This package installs no metrics client or log-to-metric pipeline: it emits
+bounded structured fields that a host-owned collector may map, and collection
+remains the host's responsibility.
 
 Binary discovery is split from installation at the API boundary.
 `resolve_verus_bin` is the read-only probe that returns `None` when no

@@ -4,9 +4,10 @@ A check takes the identity lock in shared mode and revalidates the pointer,
 manifest, receipt, cached payloads, toolchain link and effective compiler under
 the caller's deadline. It writes nothing to the snapshot cache, so a failed
 check leaves that cache exactly as it found it and the caller can install to
-repair. The admission probe is outside that guarantee: it asks the effective
-compiler to compile a fixture, so a wrapper the operator has configured may
-write to its own caches or build directory while the probe runs.
+repair. The admission probe is outside that guarantee: it runs the effective
+`rustc -vV` and `kani-compiler --version` through the configured admission
+chain, so a wrapper the operator has configured may write to its own caches or
+build directory while the probe runs.
 """
 
 from __future__ import annotations

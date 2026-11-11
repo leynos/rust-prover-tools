@@ -346,13 +346,13 @@ def download_asset(
             if attempt == settings.retry.attempts:
                 raise
             delay = settings.retry.delay(attempt)
-            # The asset name is bounded: it comes from the attested manifest's
-            # closed asset list and is validated as a safe path segment, so it
-            # is not caller input and does not grow a metric label per run.
+            # The asset name is deliberately not logged: `download_asset`
+            # accepts a separately constructed policy and pinned asset, so the
+            # name is not a closed category and would grow a metric label per
+            # manifest. The attempt and delay are bounded.
             log_event(
                 _LOGGER,
                 "download.retry",
-                asset=asset.name,
                 attempt=attempt,
                 delay_seconds=delay,
             )
