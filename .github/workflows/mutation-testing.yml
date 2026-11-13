@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: read
       id-token: write # OIDC workflow-source resolution
-    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@0eabb6bc07148981de5da395e30cd78d83f5c7c2
+    uses: leynos/shared-actions/.github/workflows/mutation-mutmut.yml@9ed445010fe26a7facb708d7a9ba4d5bd0fa57ca
     with:
       # Flat package layout: mutable source lives directly under
       # rust_prover_tools/, so change detection watches that prefix and
