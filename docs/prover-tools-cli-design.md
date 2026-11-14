@@ -122,9 +122,17 @@ so it is recorded and the extraction error is re-raised. A `backup_error` is
 standalone: it is recorded and then raised, so `kani.install.complete` is never
 reported. Completion events carry the transferred byte count and the elapsed
 seconds. Records carry an `event_data` mapping rather than free text. The
-library installs no handlers, so an application opts in by lowering the level
-of the relevant `rust_prover_tools` module logger. User-facing status lines and
-`ProverToolError` messages remain the primary interface.
+library itself installs no handlers and exports no metrics client. The consumer
+of the event stream is therefore the embedding application: whoever configures
+logging for the process, such as the CLI's host or an operator-run harness,
+lowers the level of the relevant `rust_prover_tools` module logger and attaches
+the handler, which turns each `event_data` mapping into a log record or a
+metric increment. Because every field that reaches that consumer is a closed
+category (`outcome`, `cache`, `reason`, the retry `attempt`), a number
+(`elapsed_seconds`, `exit_code`, `delay_seconds`, byte counts) or a log-only
+identifier (`span_id`), the receiving side needs no per-release mapping.
+User-facing status lines and `ProverToolError` messages remain the primary
+interface.
 
 ### Verified download sequence
 
