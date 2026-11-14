@@ -852,6 +852,19 @@ name verified provenance rather than the verifier command.
   `span_id` — and the existing tests assert that `download.complete` and
   `download.retry` carry exactly those bounded fields.
 
+- [x] (2026-11-14) Made the probe's child environment derive from the injected
+  mapping. `execution_environment` returns a Cuprum overlay, and an overlay
+  keeps every variable it does not name at its live value, so a probe given a
+  narrow mapping still received the rest of the host's environment. The probe
+  now resolves that overlay into a replacement mapping and runs both identity
+  commands with `EnvMode.REPLACE`; `_probe_environment` is the only place the
+  resolution happens. The behavioural test
+  `test_probe_children_receive_only_the_injected_environment` records the
+  environment a real wrapper child receives and asserts the injected value is
+  present and a host-only variable is absent; removing `EnvMode.REPLACE` makes
+  it fail. Setup keeps its overlay, because it is meant to inherit the host and
+  remove only the extraction option it must not pass on.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

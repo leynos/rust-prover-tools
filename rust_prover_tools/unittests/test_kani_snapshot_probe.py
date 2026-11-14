@@ -6,6 +6,7 @@ import os
 import typing as typ
 
 import pytest
+from cuprum.context import EnvMode
 
 from rust_prover_tools import commands
 from rust_prover_tools.errors import ProverToolError
@@ -142,6 +143,9 @@ def test_probe_ignores_the_host_environment(
         assert spec.env is not None, "the probe discarded its environment"
         assert spec.env["LD_LIBRARY_PATH"] == expected, (
             "the probe inherited the host's library path instead of the injected one"
+        )
+        assert spec.env_mode is EnvMode.REPLACE, (
+            "the probe overlaid the host environment instead of replacing it"
         )
 
 

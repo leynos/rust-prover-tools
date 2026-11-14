@@ -12,7 +12,7 @@ import os
 import time
 import typing as typ
 
-from cuprum.context import UNSET
+from cuprum.context import UNSET, EnvMode, UnsetType
 
 from rust_prover_tools.commands import CommandSpec, run_checked
 from rust_prover_tools.errors import ProverToolError
@@ -97,10 +97,12 @@ def probe_generation(
     """Observe the installed compiler identities and toolchain link.
 
     This function runs two processes, so it is the effectful half of a
-    snapshot check; `rust_prover_tools.kani_snapshot.install_state.
+    snapshot check; `rust_prover_tools.kani_snapshot.install_validation.
     validate_generation` remains the process-free query. The environment and
     the admission resolver are injected rather than read from `os.environ`, so
-    a caller can prove which environment the probe used. Use
+    a caller can prove which environment the probe used. The children receive
+    exactly that mapping, resolved through the generation's own homes, rather
+    than an overlay that would keep unset host variables alive. Use
     `probe_host_generation` to run against the host's own environment.
 
     Parameters
@@ -143,7 +145,7 @@ def probe_generation(
     if not target.is_relative_to(expected):
         msg = f"snapshot toolchain link escapes the private toolchains: {target}"
         raise ProverToolError(msg)
-    env = execution_environment(runtime, environment)
+    env = _probe_environment(runtime, environment)
     # The probe must load the same libraries the proof will load. An inherited
     # `LD_LIBRARY_PATH` could otherwise shadow the verified toolchain, so the
     # pinned directory goes first and other Rustup toolchain libraries are
@@ -172,6 +174,7 @@ def probe_generation(
         CommandSpec(
             (*chain, str(runtime.rustc), "-vV"),
             env=env,
+            env_mode=EnvMode.REPLACE,
             timeout_seconds=remaining_budget(),
         )
     )
@@ -179,6 +182,7 @@ def probe_generation(
         CommandSpec(
             (*chain, str(runtime.compiler), "--version"),
             env=env,
+            env_mode=EnvMode.REPLACE,
             timeout_seconds=remaining_budget(),
         )
     )
@@ -189,6 +193,30 @@ def probe_generation(
         ),
         toolchain_link_target=target,
     )
+
+
+def _probe_environment(
+    runtime: SnapshotRuntime,
+    environment: cabc.Mapping[str, str],
+) -> dict[str, str]:
+    """Return the probe's child environment, derived only from `environment`.
+
+    `execution_environment` returns an overlay, and an overlay leaves every
+    variable it does not name at the value the live process holds. The probe
+    must run in the environment its caller supplied, so the overlay is resolved
+    here into a replacement mapping: the generation's own homes and toolchain
+    are set, the selectors it must not inherit are dropped, and every other
+    variable is the caller's value. A caller that passes `os.environ` therefore
+    gets the host environment, and one that passes a narrow mapping does not
+    silently inherit the rest of the host's.
+    """
+    child = dict(environment)
+    for name, value in execution_environment(runtime, environment).items():
+        if isinstance(value, UnsetType):
+            child.pop(name, None)
+        else:
+            child[name] = value
+    return child
 
 
 def probe_host_generation(
