@@ -878,6 +878,15 @@ name verified provenance rather than the verifier command.
   connections, one backoff and the full payload on disk; the `_Response` double
   gained a `declared_length` so the truncation is expressible.
 
+- [x] (2026-11-14) Corrected the event-field guidance to match the closed-set
+  rule. `log_event`'s docstring offered an asset name as an example of a
+  bounded value, and `docs/developers-guide.md` listed asset names among the
+  permitted fields, although callers supply the names and they are therefore
+  not a closed set. Both now name closed categories such as a phase name and
+  say explicitly why an asset name is excluded. Every emitted field follows
+  that rule already; this is a documentation correction, and the design record
+  in `docs/prover-tools-cli-design.md` already stated it.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

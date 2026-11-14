@@ -45,8 +45,10 @@ def log_event(logger: logging.Logger, event: str, **fields: object) -> None:
     event : str
         Stable dotted event name, such as ``download.failed``.
     **fields : object
-        Bounded values such as the asset name or a limit category. Never pass
-        a URL that may carry a query token, or any file content.
+        Bounded values from a closed set, such as a phase name or a limit
+        category. Callers supply some names, so a download's asset name is not
+        closed and must not be passed here. Never pass a URL that may carry a
+        query token, or any file content.
     """
     logger.debug(event, extra={"event_data": {"event": event, **fields}})
 
