@@ -104,8 +104,8 @@ boundaries each report their own span, so a slow setup is distinguishable from
 slow validation. Every closing event adds `elapsed_seconds`; a failure replaces
 the completion with a `failed` event that names only the exception class as
 `reason`. `kani.snapshot.install.repair` records a bounded repair trigger, and
-`kani.install.staged` records the staged tag and asset count. Those fields are
-the metric source: `outcome`, `cache`, and `reason` are closed category sets,
+`kani.install.staged` records the asset count. Those fields are the metric
+source: `outcome`, `cache`, and `reason` are closed category sets,
 `elapsed_seconds` is a duration, and `exit_code` is an integer, so no event
 introduces an unbounded metric label. No event carries a path, URL, argument
 list, digest, or payload. When removing a temporary file fails while another
