@@ -25,7 +25,10 @@ import time
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.identity import identity_layout, snapshot_layout
+from rust_prover_tools.kani_snapshot.identity import (
+    generation_layout,
+    identity_layout,
+)
 from rust_prover_tools.kani_snapshot.install_model import (
     Deadline,
     InstallHooks,
@@ -156,7 +159,16 @@ def _validated_under_lock(
     ):
         # The pointer is not known yet, and the reads below are
         # identity-level, so no generation name is invented for them.
-        layout = identity_layout(options.pin, cache_home=options.cache_home)
+        # Resolving the cache root touches the filesystem, so it runs where an
+        # expired budget can abandon it instead of pinning the shared lock.
+        layout = deadline.supervise(
+            "identity layout resolution",
+            functools.partial(
+                identity_layout,
+                options.pin,
+                cache_home=options.cache_home,
+            ),
+        )
         if deadline.supervise(
             "publication state read",
             functools.partial(publication_pending, layout),
@@ -174,11 +186,9 @@ def _validated_under_lock(
             "manifest read",
             functools.partial(active_manifest, options.pin, layout),
         )
-        generation = snapshot_layout(
-            options.pin,
-            cache_home=options.cache_home,
-            generation=pointer.generation,
-        )
+        # The identity directory is already resolved above, so naming the
+        # generation here is lexical and adds no unsupervised filesystem work.
+        generation = generation_layout(layout.identity_dir, pointer.generation)
         # The filesystem validation must not outlive the budget, so it runs
         # under the same supervision as the reads.
         deadline.check("active generation validation")

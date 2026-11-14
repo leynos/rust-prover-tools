@@ -895,6 +895,24 @@ name verified provenance rather than the verifier command.
   (`verus.extract.start`, `kani.setup.complete`) are unaffected, because the
   rule they must satisfy is about metric labels rather than about log fields.
 
+- [x] (2026-11-14) Supervised the layout resolution the check performs under
+  the identity lock. `identity_directory` resolves the cache root, so
+  `identity_layout` and `snapshot_layout` were filesystem work running while
+  the shared lock was held and outside `Deadline.supervise`. `check.py` now
+  resolves the identity layout through
+  `deadline.supervise("identity layout resolution", …)`, and a new pure
+  `generation_layout(identity_dir, name)` names the generation from that
+  resolved directory, so the pointer's generation costs no second resolution.
+  `install.py` takes the same shape: the pre-lock layout is supervised, and
+  `_reuse_active` receives the layout instead of resolving one inside the lock.
+  `test_the_query_supervises_the_layout_resolution` records the thread that
+  resolved the layout and asserts it is the deadline's worker, which fails when
+  the call is unwrapped.
+  `test_generation_layout_names_a_generation_without_resolving` makes
+  `Path.resolve` fail and asserts `generation_layout` still builds the paths,
+  and `test_generation_layout_rejects_the_same_unsafe_names` keeps the
+  one-component name rule.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.

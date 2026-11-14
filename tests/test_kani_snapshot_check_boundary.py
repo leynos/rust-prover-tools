@@ -10,12 +10,18 @@ its caller injected, and a refusal must surface as a snapshot error.
 from __future__ import annotations
 
 import shlex
+import threading
 import typing as typ
 
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.identity import runtime_for, snapshot_layout
+from rust_prover_tools.kani_snapshot import check as check_module
+from rust_prover_tools.kani_snapshot.identity import (
+    SnapshotLayout,
+    runtime_for,
+    snapshot_layout,
+)
 from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
 from rust_prover_tools.kani_snapshot.install_defaults import (
     probe_generation,
@@ -35,6 +41,8 @@ from tests.kani_snapshot_install_fixtures import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
+
+    from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 
 def _recording_wrapper(
@@ -80,6 +88,41 @@ def test_the_process_free_query_never_runs_a_configured_wrapper(
         "the query validated a different manifest than the active pin names"
     )
     assert not log.exists(), "the process-free query ran the compiler wrapper"
+
+
+@pytest.mark.timeout(30)
+def test_the_query_supervises_the_layout_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolving the cache path cannot outlive the check's deadline.
+
+    `Path.resolve` touches the filesystem, and the query performs it while the
+    shared identity lock is held. An unsupervised stall here would pin the lock
+    past the budget and keep an installer from acquiring it, so the resolution
+    must run in a worker the deadline can abandon.
+    """
+    case = make_case(tmp_path)
+    install_snapshot(install_options(case), install_hooks(case))
+    resolve = check_module.identity_layout
+    observed: list[str] = []
+
+    def recording_layout(
+        pin: SnapshotPin,
+        *,
+        cache_home: Path | None = None,
+    ) -> SnapshotLayout:
+        """Record the thread that resolved the identity layout."""
+        observed.append(threading.current_thread().name)
+        return resolve(pin, cache_home=cache_home)
+
+    monkeypatch.setattr(check_module, "identity_layout", recording_layout)
+
+    check_snapshot(install_options(case))
+
+    assert observed == ["snapshot identity layout resolution"], (
+        "the layout resolution did not run under the check's deadline"
+    )
 
 
 @pytest.mark.timeout(30)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import sys
 import typing as typ
 
@@ -17,7 +18,9 @@ from rust_prover_tools.kani_snapshot.identity import (
     SnapshotLayout,
     build_identity_report,
     execution_environment,
+    generation_layout,
     identity_directory,
+    identity_layout,
     is_safe_generation_name,
     new_generation_name,
     runtime_for,
@@ -137,6 +140,47 @@ def test_unsafe_generation_names_are_rejected(name: str) -> None:
     assert not is_safe_generation_name(name)
     with pytest.raises(ProverToolError, match="generation"):
         snapshot_layout(_pin(), cache_home=typ.cast("Path", None), generation=name)
+
+
+def test_generation_layout_names_a_generation_without_resolving(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Naming a generation must not touch the filesystem again.
+
+    `identity_directory` resolves the cache root, which is filesystem work. A
+    caller that already holds the resolved identity layout names its generation
+    from that layout, so the query inside the identity lock adds no second
+    resolution it would have to supervise.
+    """
+    identity = identity_layout(_pin(), cache_home=tmp_path)
+
+    def refuse_resolve(*_args: object, **_kwargs: object) -> typ.NoReturn:
+        """Fail if anything resolves a path during the generation layout."""
+        message = "the generation layout resolved the filesystem"
+        raise AssertionError(message)
+
+    monkeypatch.setattr(pathlib.Path, "resolve", refuse_resolve)
+    generation = generation_layout(identity.identity_dir, "g1")
+
+    assert generation.identity_dir == identity.identity_dir
+    assert generation.generation_dir == identity.identity_dir / "generations" / "g1"
+    assert generation.receipt_path == generation.generation_dir / "receipt.json"
+    assert generation.lock_path == identity.identity_dir / "install.lock"
+
+
+@pytest.mark.parametrize(
+    "name", ["", ".", "..", "../escape", "a/b", "a\\b", "a\x00b", "a b"]
+)
+def test_generation_layout_rejects_the_same_unsafe_names(
+    name: str,
+    tmp_path: Path,
+) -> None:
+    """The generation-name rule holds whether or not the root is resolved here."""
+    identity = identity_layout(_pin(), cache_home=tmp_path)
+
+    with pytest.raises(ProverToolError, match="generation"):
+        generation_layout(identity.identity_dir, name)
 
 
 def test_snapshot_layout_places_everything_inside_the_generation(

@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "SnapshotLayout",
     "SnapshotRuntime",
+    "generation_layout",
     "identity_directory",
     "identity_layout",
     "is_safe_generation_name",
@@ -232,6 +233,47 @@ def identity_layout(
     )
 
 
+def generation_layout(identity_dir: Path, generation: str) -> SnapshotLayout:
+    """Name one generation inside an already resolved identity directory.
+
+    `identity_directory` resolves the cache root, which is filesystem work. A
+    caller that already holds the resolved directory names its generation here
+    rather than resolving the root again, so work it does while a snapshot lock
+    is held stays off the filesystem. The directory, not a whole layout, is the
+    input: a generation-level layout would nest the new name inside the old
+    one.
+
+    Parameters
+    ----------
+    identity_dir : Path
+        Resolved per-identity cache directory.
+    generation : str
+        Existing or fresh generation name.
+
+    Returns
+    -------
+    SnapshotLayout
+        The identity directory with the named generation beneath it.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when `generation` is not one safe component.
+    """
+    _require_safe_generation_name(generation)
+    return SnapshotLayout(
+        identity_dir=identity_dir,
+        generation_dir=identity_dir / "generations" / generation,
+    )
+
+
+def _require_safe_generation_name(name: str) -> None:
+    """Reject a generation name that is not one plain path component."""
+    if not is_safe_generation_name(name):
+        msg = f"snapshot generation name is not one safe component: {name!r}"
+        raise ProverToolError(msg)
+
+
 def snapshot_layout(
     pin: SnapshotPin,
     *,
@@ -260,13 +302,12 @@ def snapshot_layout(
         Raised when a supplied generation name is not one safe component.
     """
     name = new_generation_name() if generation is None else generation
-    if not is_safe_generation_name(name):
-        msg = f"snapshot generation name is not one safe component: {name!r}"
-        raise ProverToolError(msg)
-    identity_dir = identity_directory(pin, cache_home=cache_home)
-    return SnapshotLayout(
-        identity_dir=identity_dir,
-        generation_dir=identity_dir / "generations" / name,
+    # The name is rejected before any resolution, so a caller that supplies a
+    # generation never pays for filesystem work that cannot be used.
+    _require_safe_generation_name(name)
+    return generation_layout(
+        identity_directory(pin, cache_home=cache_home),
+        name,
     )
 
 

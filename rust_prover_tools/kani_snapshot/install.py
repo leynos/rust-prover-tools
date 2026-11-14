@@ -24,6 +24,7 @@ from rust_prover_tools.kani_snapshot.check import (
 from rust_prover_tools.kani_snapshot.durability import flush_directory
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
+    generation_layout,
     runtime_for,
     snapshot_layout,
 )
@@ -129,7 +130,14 @@ def install_snapshot(
             raise ProverToolError(msg)
         deadline = Deadline(time.monotonic() + options.deadline_seconds)
         deadline.check("installation start")
-        layout = snapshot_layout(options.pin, cache_home=options.cache_home)
+        layout = deadline.supervise(
+            "identity layout resolution",
+            functools.partial(
+                snapshot_layout,
+                options.pin,
+                cache_home=options.cache_home,
+            ),
+        )
         context = _InstallContext(options=options, deadline=deadline, hooks=chosen)
         # `identity_lock` creates the identity directory under this budget, so
         # the installation needs no separate creation step before the lock.
@@ -138,7 +146,7 @@ def install_snapshot(
             timeout=options.lock_timeout_seconds,
             budget=deadline,
         ):
-            reusable = _reuse_active(context)
+            reusable = _reuse_active(context, layout)
             if reusable is not None:
                 span.finish("reused", cache="hit")
                 return reusable
@@ -150,20 +158,22 @@ def install_snapshot(
                     chosen,
                     budget=deadline,
                 )
-            generation = snapshot_layout(
-                options.pin,
-                cache_home=options.cache_home,
-                generation=new_generation_name(),
-            )
+            generation = generation_layout(layout.identity_dir, new_generation_name())
             identity = _install_generation(context, manifest, generation)
             span.finish("activated", cache="miss")
             return identity
 
 
-def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
-    """Return a valid active generation, or `None` when repair is needed."""
+def _reuse_active(
+    context: _InstallContext,
+    layout: SnapshotLayout,
+) -> SnapshotIdentity | None:
+    """Return a valid active generation, or `None` when repair is needed.
+
+    `layout` is resolved before the identity lock is taken, so the reads below
+    add no unsupervised filesystem work while the lock is held.
+    """
     options = context.options
-    layout = snapshot_layout(options.pin, cache_home=options.cache_home)
     try:
         # Both reads touch the shared cache, so a hung filesystem must not hold
         # the identity lock past the budget. Abandoning a read is safe because
@@ -190,11 +200,7 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             "manifest read",
             functools.partial(active_manifest, options.pin, layout),
         )
-        generation = snapshot_layout(
-            options.pin,
-            cache_home=options.cache_home,
-            generation=pointer.generation,
-        )
+        generation = generation_layout(layout.identity_dir, pointer.generation)
         context.deadline.check("active generation validation")
         validated = context.deadline.supervise(
             "active generation validation",

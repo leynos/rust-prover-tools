@@ -18,6 +18,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.snapshot_layout import (
     SnapshotLayout,
     SnapshotRuntime,
+    generation_layout,
     identity_directory,
     identity_layout,
     is_safe_generation_name,
@@ -41,6 +42,7 @@ __all__ = (
     "SnapshotRuntime",
     "build_identity_report",
     "execution_environment",
+    "generation_layout",
     "identity_directory",
     "identity_layout",
     "is_safe_generation_name",
