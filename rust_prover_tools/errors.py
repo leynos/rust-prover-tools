@@ -17,11 +17,23 @@ raise CommandFailedError(
 
 from __future__ import annotations
 
-__all__ = ("CommandFailedError", "ProverToolError")
+__all__ = (
+    "CommandFailedError",
+    "ProverToolError",
+    "TransientDownloadError",
+)
 
 
 class ProverToolError(RuntimeError):
     """Base error for expected prover tool failures."""
+
+
+class TransientDownloadError(ProverToolError):
+    """A transport failure that a bounded retry may resolve.
+
+    Integrity, policy and local filesystem failures deliberately use the base
+    class so a retry can never mask them as a flaky connection.
+    """
 
 
 class CommandFailedError(ProverToolError):

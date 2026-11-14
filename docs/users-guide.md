@@ -136,8 +136,126 @@ nested Kani invocation. Removing these child flags does not disable parent
 measurement. Coverage report scope and the local ratchet still need validation
 when selecting that mode.
 
-This legacy command is separate from the snapshot programme proposed in
-[PR #131](https://github.com/leynos/rust-prover-tools/pull/131).
+This legacy command is separate from the snapshot commands described in
+[Kani snapshot commands](#kani-snapshot-commands).
+
+### Kani snapshot commands
+
+The snapshot commands install, check and run one immutable, reviewed Kani
+build. They are independent of the legacy `kani check-version` and `kani exec`
+commands and never fall back to a host Kani installation.
+
+A version 1 pin is a TOML document that requires exactly `schema_version`,
+`repository`, `tag`, `upstream_commit`, `builder_commit`, `target` and
+`manifest_sha256`. The only supported target is `x86_64-unknown-linux-gnu`.
+Unknown keys, wrong types, duplicate keys, unsupported schema versions and
+malformed identities fail closed. See
+[D1: Explicit selection and immutable identity](kani-snapshot-distribution-design.md#d1-explicit-selection-and-immutable-identity)
+for the tag grammar and field constraints.
+
+`prover-tools kani snapshot install` materializes the identity named by
+`tools/kani/snapshot.toml`:
+
+```sh
+prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+```
+
+Installation requires the prebuilt GitHub CLI (`gh`) on the caller's `PATH`;
+the installer runs `gh attestation verify` and bundles no verifier of its own. A
+`PATH` entry under a directory another user can write can replace `gh`, so run
+the command with a `PATH` whose entries you trust.
+
+Installation requires `--asset-dir` until the release download transport is
+implemented. The directory must contain `manifest.json`,
+`manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the manifest names. The
+installer checks, in order, that the manifest bytes match the reviewed pin
+digest, that the pin binds to the manifest, that the checksums agree, that
+`gh attestation verify` accepts the bundle under the repository policy, and
+that every payload matches its recorded size and digest. It then compares the
+backend archive's members with `inventory.json` and runs the packaged launcher's
+`setup --use-local-bundle` with generation-private `KANI_HOME`, `RUSTUP_HOME`
+and `CARGO_HOME`. Only after the installed `rustc -vV` and
+`kani-compiler --version` match the manifest does the command record the active
+generation. The same check that `snapshot check` performs runs first: every
+runtime file the launcher needs must be present and executable, `pyroot` must
+be a real directory whose links resolve inside that directory and whose members
+exactly match the record written after setup, and the recorded toolchain's
+shared libraries must live inside the private rustup home with no unrecorded
+library beside them. The rustup home itself must also resolve inside the
+generation. When an existing generation is reused, the backend archive is
+rehashed rather than trusted by size, so an equal-size edit is still refused.
+The compiler probes load the verified toolchain's `lib` directory first, so an
+inherited `LD_LIBRARY_PATH` cannot shadow it.
+
+`prover-tools kani snapshot check` revalidates the active generation without
+running setup:
+
+```sh
+prover-tools kani snapshot check
+```
+
+The command first validates the installed bytes — the receipt, cached payloads,
+installed tree and toolchain files — without starting any process, then runs
+the generation's `rustc -vV` and `kani-compiler --version` through the same
+admission route a proof uses and compares both with the manifest. Both steps
+hold the same shared lock, so the generation whose bytes were validated is the
+one whose compiler is proved. The compiler step is a process: if you configure
+`RUSTC_WRAPPER`, that wrapper runs and may write to its own caches or build
+directory. The byte-validation step never invokes it.
+
+`prover-tools kani run --snapshot-pin PATH -- ARGS...` executes a proof through
+the active generation:
+
+```sh
+prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness proof
+```
+
+Every argument after `--` is forwarded unchanged, stdout and stderr are
+mirrored live to the corresponding streams, and the launcher's exit status
+becomes the command's exit status. A long proof therefore reports progress as
+it runs rather than only on completion. Because a proof log can be arbitrarily
+large, the command retains only the last 64 KiB of each stream for diagnostics
+instead of buffering the whole run in memory. `run` revalidates the generation
+first, so a changed payload or compiler stops the proof, and then executes
+exactly the generation it validated: a concurrent change to the active
+activation record cannot redirect the proof to a different build. It refuses
+`setup`, `--use-local-bundle`, `--use-local-toolchain` and `-Z lean` because
+they would replace the pinned backend.
+
+Install and check default the pin to `tools/kani/snapshot.toml` and the cache to
+`.kani-snapshots` below the repository root. Both accept `--pin`,
+`--repo-root` and `--cache-dir`; `run` accepts `--snapshot-pin`, `--repo-root`
+and `--cache-dir`. `run` also uses the repository root, which defaults to the
+invocation directory, as the proof working directory.
+
+Repeating an install while a validated generation is active reuses that
+generation without reading `--asset-dir` again. A failed installation leaves
+the previous generation and the active activation record unchanged; a new
+generation is activated only after its receipt is durable, its compiler has
+been observed, and every executable, recorded library, backend inventory member
+and Python-root member it needs has been flushed. A cache whose payload
+publication did not finish is refused by `check` and `run` until `install`
+repairs it; a publication overtaken by a later successful install is not
+unfinished, so a marker left behind by an abandoned attempt does not block the
+cache. Concurrent installs for one identity serialize on an advisory lock with
+a bounded wait (300 seconds) inside an overall 1800-second installation
+deadline; the wait is also bounded by the time the installation has left, so a
+slow earlier phase cannot push the call past its deadline. Staging, hashing,
+extraction, tree validation, setup and the compiler probes all run within that
+budget; the probes share the remaining time and refresh it before each command,
+and expiry terminates the whole process group. A stalled setup therefore cannot
+outlive the deadline or keep another installer waiting. A corrupt active
+generation is repaired by installing a new generation, and the old directory is
+preserved.
+
+Checking and running never repair a generation. If `check` or `run` reports a
+missing, changed or drifted snapshot, run `prover-tools kani snapshot install`
+again with the verified assets.
+
+Snapshot commands intentionally ignore the generic `INPUT_*` action bindings,
+so a workflow input cannot silently redirect a reviewed pin or cache. Proof
+execution is not a sandbox: the selected Kani build and the proof workspace
+must still be trusted.
 
 Cargo configuration discovery requires a non-empty `CARGO_HOME` or `HOME`. The
 command uses the invoking environment and fails rather than guessing a home
@@ -146,6 +264,16 @@ trusted; keep their files and Cargo configuration unchanged until this command
 and its nested Cargo children finish. Cargo still runs build scripts and
 procedural macros with the caller's permissions, so this compatibility route is
 not a sandbox for untrusted projects.
+
+Before execution, `snapshot run` validates the proof's Cargo configuration
+discovered from the proof working directory and its ancestors, plus the
+generation's private Cargo home. A malformed tool selection, an unresolved
+include, an ambiguous configuration pair, a conflicting wrapper, a protected
+routing override, or an unreadable configuration fails before execution.
+Correct or remove the offending `.cargo/config.toml` or manifest profile and
+run from the proof package. The
+[Explicit legacy Kani execution](#explicit-legacy-kani-execution) section gives
+the detailed rules.
 
 ### Verus commands
 

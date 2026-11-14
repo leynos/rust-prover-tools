@@ -1,0 +1,843 @@
+# Kani snapshot distribution design
+
+Status: Partly implemented. The consumer milestones EP-M2 (authenticated
+pin/manifest contracts) and EP-M3 (isolated installation, identity checking and
+execution) are implemented: snapshot install, snapshot check and `kani run`
+exist. EP-M1 (upstream feasibility), EP-M4 (publication automation) and EP-M5
+(monitoring and recovery) remain proposed and require explicit plan approval
+before implementation. Revision: 5, 2026-11-11. Scope:
+`leynos/rust-prover-tools` only.
+
+## Purpose and boundaries
+
+Provide centrally built, immutable Kani snapshots for
+`x86_64-unknown-linux-gnu`. Consumers download a matching prebuilt launcher and
+upstream-format backend bundle instead of compiling Kani or its solvers.
+Compiling a proof fixture remains normal verification. Setup may download the
+exact upstream Rust toolchain; the backend archive is not assumed to contain a
+complete Rust installation.
+
+This is a `rust-prover-tools` build of an upstream Kani snapshot, never an
+upstream release. Its reported Cargo package version remains unchanged. A
+passing compatibility fixture does not establish full-crate Axinite
+compatibility. Other platforms, containers, source-change watchers, automatic
+consumer upgrades, Axinite changes, native Python extensions, and committed
+upstream checkouts or binaries are excluded.
+
+The [execution plan](execplans/kani-monthly-snapshot-distribution.md) sequences
+implementation and verification. The [roadmap](roadmap.md) separates delivered
+capability from the independently authorized first publication.
+
+## D1: Explicit selection and immutable identity
+
+Existing `prover-tools kani install`, `prover-tools kani check-version`,
+`tools/kani/VERSION`, options, environment bindings, output, and release
+installation behaviour retain their contracts. Main now defaults to bounded
+prebuilt release installation, with source installation only under `--compile`.
+Preserve its existing release-qualified `kani exec` API as well. Its 0.67.0
+qualification does not demonstrate the snapshot compiler floor. Snapshot
+installation never enters either release installer fallback. These consumer
+commands are implemented and are existing APIs:
+
+```bash
+prover-tools kani snapshot install --pin tools/kani/snapshot.toml \
+  --asset-dir dist/kani-snapshot
+prover-tools kani snapshot check --pin tools/kani/snapshot.toml
+prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
+```
+
+Snapshot `install` and `check` default `--pin` to `tools/kani/snapshot.toml`,
+resolved below `--repo-root`. `run` requires `--snapshot-pin`; it never
+installs implicitly. All three accept `--repo-root` and `--cache-dir`; a
+relative cache path is relative to the repository root. The default cache is
+`.kani-snapshots` below that root. Execution uses `cwd=repo_root`, defaulting
+to the invocation directory; a pin located elsewhere does not change the proof
+root. `snapshot install` also accepts `--asset-dir` for a local directory
+containing the exact release files and their attestation, allowing the same
+consumer path before publication and for offline transfers. This changes
+transport only, never verification. There is no `--skip-verify`, source
+fallback, snapshot command override, or mutable selector. All verifier
+arguments following `--` are forwarded as an argument vector. Installation and
+identity errors return 1; CLI syntax errors retain Cyclopts behaviour; verifier
+status is preserved, with signal exits mapped to the conventional
+`128 + signal` when necessary.
+
+Snapshot commands reject legacy selectors supplied through flags or applicable
+`INPUT_VERSION`, `INPUT_VERSION_FILE`, `INPUT_KANI_VERSION_FILE`,
+`INPUT_EXPECTED_VERSION`, `INPUT_KANI_COMMAND`, or `KANI` environment
+variables. The mere presence of an unused `VERSION` file is not contradictory.
+New options have no environment bindings in schema version 1, avoiding
+inherited generic `INPUT_` values accidentally selecting a snapshot. Help tests
+must establish that rule even with the parent Cyclopts environment
+configuration.
+
+The version 1 TOML pin requires exactly `schema_version`, `repository`, `tag`,
+`upstream_commit`, `builder_commit`, `target`, and `manifest_sha256`.
+Repository is exactly `leynos/rust-prover-tools`; both commits are lowercase
+full 40-hex Git SHAs; the target is the single supported triple; the manifest
+digest is 64 lowercase hexadecimal characters. Unknown keys, wrong types
+(including booleans as integers), duplicates, unsupported schema versions,
+credentialled URLs, and malformed identities fail closed. The example below is
+schematic; angle-bracket fields must be replaced with reviewed, actual values
+before use.
+
+```toml
+schema_version = 1
+repository = "leynos/rust-prover-tools"
+tag = "kani-snapshot-2026-09-<12-hex-upstream-prefix>-r1"
+upstream_commit = "<full-upstream-commit>"
+builder_commit = "<full-rust-prover-tools-commit>"
+target = "x86_64-unknown-linux-gnu"
+manifest_sha256 = "<sha256-of-exact-manifest-bytes>"
+```
+
+The tag grammar is `kani-snapshot-YYYY-MM-<12-hex-upstream-prefix>-rN`, with a
+valid month and positive decimal revision without leading zeroes. Prefix and
+full upstream SHA must agree. Every changed build input, including builder
+revision or recipe, needs a new identity; a tag collision never permits
+replacement. The release tag points to the full builder commit, not to Kani's
+commit. All comparisons use complete identities, not the tag prefix or Kani's
+reported semantic version. A cache key includes repository, full upstream and
+builder SHAs, tag, target, and manifest digest using an unambiguous canonical
+encoding hashed with SHA-256.
+
+## D2: Manifest, checksums, and trust
+
+`manifest.json` is UTF-8 JSON with schema version 1. Hash its exact bytes,
+including the final newline; do not parse and reserialize before checking the
+pin. Generation uses deterministic key order and rejects duplicate object keys,
+non-finite numbers, unknown required structures, malformed UTF-8, and container
+nesting beyond a fixed ceiling. The explicit ceiling matters because the JSON
+decoder's own recursion limit moves with the interpreter build and with
+coverage instrumentation, which would otherwise make the same hostile document
+fail one way locally and another way in hosted CI. A trusted pin is reviewed
+and checked into the consumer repository. Downloads and release notes cannot
+update it. The initial pin must be produced from verified publication evidence
+and reviewed independently of the asset server.
+
+The manifest records the publication identity and the full upstream and builder
+commits; recursive source submodule path/commit pairs; source and builder
+lockfile digests; recipe/configuration digests; exact commands and adjustments;
+runner image identity; target, CPU baseline, dynamic loader, required shared
+libraries and tested glibc baseline; Rust toolchain identifier, components,
+`rustc -vV` identity and Kani compiler identity; launcher package version;
+backend and solver versions, revisions and executable digests; build
+prerequisite names, sources, versions and digests; workflow path, event, ref,
+run URL, run ID, attempt and timings; cache outcomes; and payload assets with
+role, basename, media type, byte length and SHA-256. Unknown identities block
+publication instead of being filled with guessed dates or version labels.
+
+Payload roles are backend bundle, launcher archive, redistribution notices, and
+a separately bounded `inventory.json` (64 MiB maximum). The original bundle
+layout is preserved. This inventory records paths, types, modes, link targets,
+sizes and file digests for the distributable trees, so cache validation can
+detect later corruption. The manifest hashes the inventory as a payload; the
+inventory does not hash its container or manifest. Setup-created files are
+recorded separately in a local receipt and checked against independently
+validated toolchain identities and allowed layout rules. A local receipt is not
+a replacement trust anchor.
+
+Digest dependencies are deliberately one-way. Produce payloads first, then the
+manifest containing their digests. Produce `SHA256SUMS` with rows for payloads
+and `manifest.json`; neither the manifest nor checksums hashes itself or the
+other checksum container. Produce `manifest.sigstore.jsonl`, an attestation of
+the manifest, afterwards. It is verified cryptographically, not included in the
+manifest's digest graph. The publisher verifies the complete set including the
+attestation and checksums before publication. Checksums are a convenience; a
+checksum downloaded beside an archive does not authenticate the archive.
+
+Require both the pinned manifest hash and a GitHub build attestation before
+extracting or executing payloads. Use an explicitly documented, prebuilt GitHub
+CLI prerequisite through the command adapter; do not implement Sigstore
+cryptography. Verification policy fixes repository, signer workflow
+`.github/workflows/kani-monthly.yml`, issuer
+`https://token.actions.githubusercontent.com`, source ref `refs/heads/main`,
+source and signer digest equal to the pinned builder SHA, and provenance
+predicate `https://slsa.dev/provenance/v1`; reject self-hosted signing runners.
+Use `gh attestation verify` with a local `--bundle`, explicit policy flags and
+JSON output. Parse only successfully verified results. Correlate certificate
+identities with the pin, and the manifest's run/attempt with the verified
+statement; do not treat arbitrary predicate fields as independently observed
+facts. The verifier's exit status only shows that some attestation satisfied
+the policy flags, so at least one verified record must also name the manifest's
+own run: its `runDetails.metadata.invocationId` has to equal
+`https://github.com/<repository>/actions/runs/<run_id>/attempts/<run_attempt>`
+for the identity the manifest records. An attestation for another run, or a
+rerun of the same run, authenticates nothing this installation may use. Each
+policy dimension is exercised as a refusal: a modelled bundle that fails the
+signer workflow, source ref, source digest or signer digest is rejected by the
+verifier, while a bundle matching the trusted flags is accepted, and
+installation stops before launcher extraction and setup, the points at which
+payload code would first execute. Trust roots come from the supported verifier
+distribution or separately provisioned trusted storage, never from the
+untrusted asset directory.[^1]
+
+Trust rests on consumer review, protected builder code, GitHub's identity and
+signing infrastructure, the verifier distribution, upstream dependency
+provenance, and the owner-controlled local cache. An attacker with the same
+local user privileges can alter code between checking and execution; defending
+against that is outside this model. Attestation establishes origin, not benign
+source or bit-for-bit reproducibility. No reproducibility claim is made until
+independent builds with identical inputs have been compared.
+
+## D3: Upstream-compatible build
+
+Resolve an upstream candidate once to a validated full SHA and use that SHA for
+every source read and checkout. For scheduled runs inspect at most the 20
+newest default-branch commits, selecting the newest with the required upstream
+Linux checks completed successfully. Record the exact check names, run URLs,
+head SHAs and conclusions; empty or ambiguous check sets fail closed. Manual
+input is a full SHA, with the same checks and compiler-floor policy. Never
+interpret arbitrary input as a shell fragment, ref option, or repository URL.
+
+At that SHA inspect `.cargo/config.toml`,
+`.github/actions/build-bundle/action.yml`, `.github/workflows/release.yml`,
+launcher Cargo manifests, setup implementation, Rust toolchain files, locks,
+submodules, smoke scripts, and component licences. Follow upstream bundle
+creation rather than archiving a development installation. Build the matching
+`kani` and `cargo-kani` launchers from that checkout using locked dependency
+resolution. Preserve upstream version metadata and toolchain pins. Build outside
+`/tmp`, with the shared Cargo cache; no private Cargo home workaround for lock
+contention. Record dirty-tree checks before and after building.
+
+Planning inspected upstream commit `4e31125fdb4f01fad95150415cbafe46e0587d66`;
+immutable source links and named successful upstream workflows are recorded in
+the execution plan. Its bundle mechanism is `cargo bundle -- VERSION`; launcher
+packaging is separate. Its `nightly-2026-09-23` toolchain resolved to Rust
+1.100.0-nightly in upstream logs, but the repository-owned compiler-floor proof
+remains unexecuted. Setup supports local bundles and local toolchains; its
+version-derived home confirms the need for per-identity `KANI_HOME`. Setup
+re-extracts with external `tar`: validate the complete archive before setup,
+require the expected single `kani-VERSION/` root, and validate destinations,
+links and collisions after `--strip-components=1`. Remove inherited
+`TAR_OPTIONS`; allow setup to consume only the same verified bytes in a
+private, bounded generation. The feasibility experiment must show that setup
+preserves D4's containment and resource limits.
+
+The first post-approval milestone is an explicit feasibility experiment. It
+must establish exact bundle commands, launcher build commands, local-bundle
+setup arguments, private `KANI_HOME` support, toolchain layout and symlink
+behaviour, CPU/runtime compatibility, Rust compiler floor, and notices. Its
+recorded commands become the tested recipe. Any source patch, lock update,
+nightly substitution, unsupported setup mechanism, licence obstacle, or
+compiler below 1.94 blocks progression for a documented deviation decision.
+Prefer trusted prebuilt prerequisites where upstream supports them; inventory
+solvers and include required notices, licence texts and source availability
+metadata for every redistributed component. Do not assume Kani's licence covers
+all bundled components.
+
+## D4: Bounded installation and reliable execution
+
+Keep `rust_prover_tools.kani` for the legacy release path. Add a feature package
+`rust_prover_tools.kani_snapshot` with `models.py`, `pins.py`, `manifest.py`,
+`download.py`, `archive.py`, `install.py`, `identity.py`, and `run.py`. Use
+frozen slotted dataclasses for validated pins, manifests, asset records,
+options, and identity reports; parsing helpers remain pure. Add tested builder
+and release helpers under `rust_prover_tools.kani_snapshot.build` and
+`publish.py`; keep YAML and any script entrypoints thin. The dependency
+direction is CLI to feature orchestration to pure models/helpers and command
+adapter. No feature imports CLI or Verus implementation. Reuse
+`read_required_file` only where its whitespace handling is appropriate; never
+use it for exact-byte manifest verification. The permissive legacy checksum
+lookup and first-semantic-version parser cannot enforce snapshot integrity.
+
+Consider reusable seams in main's `downloads`, `download_transport`,
+`download_stream`, `platforms` and `path_resolution` helpers. The existing
+transport accepts arbitrary HTTPS hosts, so add D4's narrower host policy
+through a tested boundary; release checksums do not replace attestation.
+`kani_archive.extract_frontend` handles two regular files only and cannot
+validate the backend graph. The version-keyed global installer cannot provide
+snapshot generations. Reuse `kani_release_config`/`kani_release_flags` pure
+helpers where applicable without importing fixed release compiler/LLVM values.
+
+All external commands use `rust_prover_tools.commands` and pinned Cuprum
+`0.2.0b2`. Preserve its best-effort echo and the CLI's closed-pipe exit-status
+guard. `ExecutionContext.env` currently overlays inherited values; do not
+mistake it for environment replacement. Read the bundled Cuprum migration
+guide. Extend that adapter for explicitly tested process deadlines, environment
+replacement and variable removal without global environment mutation,
+descendant cleanup on timeout/cancellation, and streaming output with bounded
+capture. Keep stdout and stderr separate. Use status inspection for proof
+execution and explicit CLI exit mapping rather than the generic error-to-1
+path. Exercise tiny real processes for these contracts before relying on
+cmd-mox. Cuprum support is a feasibility condition; do not bypass it or add
+dependencies silently. Standard-library HTTP/file/archive operations are
+permitted; no new runtime Python dependency is proposed. The package's actual
+Python floor is 3.14. Older generic guidance mentioning Python 3.13 and Plumbum
+yields to the package metadata and feature-specific Cuprum contract.
+
+For remote installs allow HTTPS only, `github.com` release URLs for the pinned
+repository/tag, and explicit documented GitHub asset redirect hosts. Validate
+every redirect before following it; never forward authorization across hosts.
+Reject credentials, query-based overrides, path tricks, unexpected ports,
+loopback, private addresses, and unapproved redirects. No public `--base-url`
+exists. The HTTP adapter is injected at the Python boundary for deterministic
+localhost tests; that test fixture does not broaden production host policy. Use
+15-second connect and 300-second per-asset total deadlines, at most three
+attempts for transient network failures with bounded backoff, five redirects,
+and a 30-minute overall installation deadline, including setup descendants.
+Integrity/schema errors are never retried as transient failures.
+
+Initial hard limits are 4 MiB manifest, 16 MiB attestation, 1 MiB checksums, 2
+GiB per compressed payload, 8 GiB total extracted data, 100,000 members, 4 KiB
+path length, and 16 link hops. Match advertised and actual byte counts; limits
+also apply during streaming and decompression. Reject duplicate archive paths,
+absolute paths, parent traversal, NULs, drive prefixes, sparse entries,
+devices, sockets, FIFOs, ownership changes and privileged mode bits. Keep
+ordinary executable modes and legitimate contained symbolic/hard links. Build
+and validate a complete member/link graph before materialization, reject cycles
+or dangling/escaping targets, create regular files before links, and never
+write through a previously created link. Apply rules to effective GNU/PAX
+headers after overrides, reject file/directory collisions, and require
+hard-link targets to resolve to contained regular files. Extraction uses a
+private directory with no attacker-writable ancestors. Python's extraction
+filter alone is not the complete containment policy. Reject unsupported hosts
+before any download.
+
+Rustup transport is a separate boundary. Preflight supported prebuilt GitHub
+CLI, Rustup and required linker/runtime packages before staging. Pin their
+trusted origins and versions. Override or remove `RUSTUP_DIST_SERVER`,
+`RUSTUP_UPDATE_ROOT`, deprecated `RUSTUP_DIST_ROOT`, and inherited Cargo/Rustup
+homes/configuration; permit only authenticated official Rust distribution
+endpoints. Bind required component archive URLs, lengths and digests, channel
+metadata digest, and extracted compiler/library inventory to the trusted
+manifest or its hashed inventory. Verify downloaded and extracted compiler
+bytes before running identity probes; version text alone is spoofable.
+Establish this ordering against actual Rustup in EP-M1 or block for a design
+deviation. Enable controlled prebuilt toolchain installation only during
+explicit install; set `RUSTUP_AUTO_INSTALL=0` for check/run and test that
+missing toolchains fail without network repair.[^2]
+
+Under the cache key, use an advisory `fcntl.flock` lock on a stable lock file,
+with a bounded wait and automatic kernel release on process death. Create an
+unreferenced unique generation directory at its permanent location. Perform
+extraction and setup there using generation-local `KANI_HOME` and isolated
+Rustup state as required by the upstream experiment. Do not rename a setup home
+containing absolute symlinks. Validate assets, toolchain, backend and receipt;
+flush files and parent directories before creating the small, ordered
+activation record that names the generation. Readers resolve and validate the
+highest record while holding the key lock. An interrupted stage is never
+active. Existing validated generations remain intact on failure. Immutable
+payload/toolchain trees are not mutated or automatically garbage-collected;
+repair creates a new generation at the same identity and switches only after
+validation. This avoids deleting paths used by a running proof. Detect corrupt
+receipts, missing files, wrong modes, changed symlinks and payload hashes on
+cache reuse, before running probes. Inventory actual upstream writes during
+feasibility. Give narrowly named bookkeeping/lock/scratch files separate
+generation-private mutable state; never exempt arbitrary subtrees from
+integrity checking. Two concurrent proofs must leave immutable trees unchanged
+and both normal user homes untouched.
+
+Resolve launchers to absolute paths, force generation-private homes, select the
+exact toolchain and backend, and remove conflicting inherited Kani/Rust
+selection variables. Include `RUSTC`, `RUSTC_WRAPPER`,
+`RUSTC_WORKSPACE_WRAPPER`, `RUSTUP_TOOLCHAIN`, and `RUSTFLAGS` in environment
+contract tests. Retain valid configured admission wrappers and `RUSTDOC`
+through compiler probes and proofs; never disable them to obtain isolation.
+Reject malformed or unproved routes. Preserve main's child-only Cargo backend
+profile overrides and exact coverage-flag filtering, including rejected
+package-scoped backends and unresolved includes. Wrappers absent on hosted
+runners remain optional; arbitrary wrappers are not evidence of compiler
+identity. Preserve ordinary verifier output, split stdout/stderr and exit
+status; do not invoke a shell. The snapshot wrapper must reject forwarded
+setup/update and any upstream option that would replace its backend or
+compiler. Record that finite selector list from upstream source and test it.
+Normal harness/proof options remain transparent. Snapshot execution is not a
+sandbox for untrusted proof crates or their Cargo configuration/build scripts.
+
+An identity report states selected tag, full SHAs, manifest digest, target,
+absolute launcher/backend/toolchain paths, upstream package version and actual
+compiler identity. Compare executable digests and effective compiler
+`rustc -vV`, not the host's default `rustc` or the first version in
+`cargo kani --version`. Record and validate setup-generated paths. Reports omit
+tokens, signed redirect URLs and inherited secret-bearing environment values.
+
+### Implemented consumer boundary (EP-M3)
+
+The installation pipeline is manifest digest, pin binding, checksums,
+attestation, payload copies and digests, archive structure, setup, launcher
+placement, probes, receipt, activation. A local `--asset-dir` is the only
+transport implemented so far; refusing to run without it is explicit rather
+than a silent fallback to a host installation. The remote download policy in
+this section remains the design for the later transport milestone.
+
+Structural agreement is checked before setup. The manifest pins the backend
+archive's bytes, and the separately hashed `inventory.json` is compared with
+the archive graph in both directions on path, kind, mode, size and link target.
+Setup then consumes the same verified bytes through
+`cargo-kani setup --use-local-bundle`, so the installer never re-implements
+extraction and never hands the launcher an unverified file.
+
+The launcher archive is extracted into a generation-private staging directory
+before setup, and its `bin` entries are copied beside the backend binaries only
+after setup succeeds. Existing backend binaries are never overwritten. Setup
+receives the generation's private homes through `execution_environment`, and
+the probe re-executes the installed `rustc -vV` and `kani-compiler --version`
+rather than trusting receipt text.
+
+Activation remains an ordered record write after validation. Repeating an
+install reuses a still-valid active generation before staging transport files,
+so changed local assets cannot disturb a healthy cache; changed assets are
+refused only when a new generation must be staged. `check` and `run` re-read
+the cached manifest, recheck receipt, rehash the backend, inventory and
+launcher payloads rather than trusting their recorded sizes, re-read each
+archive's structure, check the backend/inventory agreement, executable modes,
+the absolute toolchain link and both probes. `check` and `run` resolve the
+highest activation record and validate the generation while holding the same
+bounded identity lock as installation, because a repair publishes its verified
+payloads file by file under that lock; reading without it could validate a
+half-repaired cache and report a failure the running repair is about to
+resolve. A reader whose bounded wait expires is refused rather than waiting
+indefinitely. A corrupt generation is repaired by creating a new generation;
+the previous directory is never deleted. Install runs the same runtime-file
+contract as `check` before the probe executes anything, so a launcher archive
+that omits or strips the execute bit from a required binary cannot be activated.
+
+The toolchain identifier is treated as a single path component, not free text:
+the parser and construction boundary reject absolute paths, parent traversal
+and symbolic links that resolve outside the generation's private Rustup home.
+The private home itself must also resolve inside the generation, so a
+generation cannot be made to install its toolchain anywhere else. Verification
+covers the compiler, the component list and every recorded library, and rejects
+any shared object under `<toolchain>/lib` that the manifest does not record,
+because the pinned dynamic-loader path would otherwise expose it. The identity
+probe sets the same `LD_LIBRARY_PATH` as the proof, so a host Rustup toolchain
+cannot shadow the verified libraries while the probe reports them.
+
+Installed-tree validation exempts only the documented setup additions. `pyroot`
+is a setup-created directory whose contents the backend inventory cannot
+describe, so its descendants are exempt from inventory matching. That allowance
+is closed by a generation-local record: after setup, the installer writes
+`pyroot.json`, a canonical JSON document describing every member below the root
+by path, kind, mode, size, digest and link target. Reuse requires the record to
+exist and the tree to match it exactly, so setup nondeterminism and
+post-install drift are both refused rather than silently accepted. The record
+stores a link's text, not the content it reaches, so the directory must still
+be a real directory inside the generation and every link beneath it must
+resolve inside the Python root itself, not merely inside the generation. A link
+into a sibling generation home would otherwise put content on `PYTHONPATH` that
+the record never describes and whose later changes reuse would not observe.
+`bin/cargo-kani` and `bin/kani` remain single-file exemptions beside the
+recorded `bin` inventory.
+
+Per-identity installation is serialized by an advisory `flock` with a bounded
+wait inside a monotonic deadline. Setup executes with the remaining budget and
+the compiler probes share one budget: it is recomputed before each identity
+command and again immediately before a probe after cache revalidation, so slow
+checks or a slow first command cannot extend the deadline. A bounded command
+runs as its own process group and expiry terminates the whole group, so a
+stalled `rustup` download cannot outlive the deadline or hold the lock past it.
+The same budget supplies checkpoints to local work — payload copying, digest
+hashing, archive extraction and structure validation, archive header scanning
+including the bodies it skips, launcher placement in bounded chunks,
+installed-tree validation and toolchain verification — so each long phase stops
+when the deadline expires instead of only being checked at its boundary. A
+checkpoint is only reached between blocking calls, so local work that transfers
+bytes is additionally supervised: the operation runs in a private daemon thread
+while the installer waits no longer than the remaining budget, and abandons it
+on expiry. That is safe for reads, which mutate nothing; for writes whose
+output is a private staging directory or an unreferenced generation; for
+removing a file this run owns by name; and for shared writes whose published
+name is unique or totally ordered, such as an activation record at a sequence
+number a later activation has already passed, or a completion record named by
+the sequence it completes, which a late write adds beneath a newer record and
+which ranks no higher than the base of any publication that began after its
+activation link. It is not used to abandon shared publication silently:
+publication carries a durable marker, described below, that makes an unfinished
+replacement visible. Reads of the activation records and their names, the
+cached manifest on the reuse path, the staged transport manifest, the cached
+backend inventory, the publication marker listing, the asset directory probe,
+checksum verification and the activation-directory probe are supervised too, as
+are the publication state, active pointer and manifest reads `check` performs
+while it holds the lock, since a hung read would otherwise hold that lock past
+the deadline. So are the operations that precede the lock and the ones that run
+while it is held but were once left unsupervised: creating the identity
+directory, opening the lock file and the runtime-file checks that precede the
+probe. A supervised call can return a result its worker finished after the
+budget expired, so `check` re-reads the budget once the active generation has
+been validated and reports the deadline rather than a successful validation.
+
+`check` reads the publication state, pointer and manifest through
+identity-level paths, so it never invents a generation name before the pointer
+names the generation it validates.
+
+`check` is split into a process-free query and an explicit compiler
+verification. The query reads the publication state, pointer, manifest,
+receipt, cached payloads, installed tree and toolchain bytes; it starts no
+process, so it cannot invoke a wrapper the operator configured and writes
+nothing to the snapshot cache. The verification runs `rustc -vV` and
+`kani-compiler --version` through the same admission route the proof uses and
+returns the identity report, so a caller that only needs to know whether the
+installed bytes are intact does not run processes at all. `snapshot check` and
+`run` compose the two under one shared lock, so the generation whose bytes were
+validated is the generation whose compiler is proved. The probe sits outside
+the write-free guarantee: a configured compiler wrapper may write to its own
+caches or build directory while it runs. The probe receives the environment
+mapping and the admission resolver as parameters, and only the host composition
+point that the installer uses as its default probe reads `os.environ`, so a
+caller can state and test which environment a probe used.
+
+The lock wait itself is bounded by whichever is shorter, the configured timeout
+or the seconds the installation still has, so time already spent cannot be
+spent a second time. Removal of private, uniquely named state — a pending
+activation document, a partially copied launcher or generation file, a staging
+tree — is supervised as well, and a removal that outlives the budget is
+deferred and debug-logged rather than reported as a failure: no reader resolves
+those names, so an abandoned removal cannot disturb a later install. A staging
+tree is further protected by an advisory exclusive claim that its worker holds
+for as long as it may use the tree: the kernel releases the claim when the
+process exits, so a later sweep can distinguish a killed worker from one the
+deadline abandoned but did not stop, and removes a tree only when it can take
+the claim. Because a timeout abandons an operation instead of stopping it, the
+claim is counted against every supervised operation that may outlive its
+caller: a failure path removes the tree only once no such worker remains, and
+the last abandoned worker closes the descriptor itself when it stops, so the
+tree is left for a later sweep rather than deleted under a copy still running.
+A worker that has not yet counted itself when the claim finishes is refused
+instead of allowed to use the tree: the caller has already given up, so the
+window between starting a worker and counting it cannot let a late copy write
+into a tree that cleanup has taken. A claim that finishes after its deadline
+releases the descriptor itself, so a late claim neither leaks it nor keeps the
+tree claimed forever. A deferred sweep runs in a capped slice of the
+installation budget and is skipped when less than its own cap plus a fixed
+reserve remains, so reclaiming disk cannot starve the install that triggered
+it. The sweep takes a non-blocking per-identity claim inside its own worker and
+closes it when it stops, separate from the installation lock: an abandoned
+sweep keeps holding it, so a later sweep skips every tree instead of racing a
+removal still in progress, and a stalled sweep never holds the installation
+lock past the deadline. Staged payloads are published under a bound rather than
+abandoned silently. Each publication owns a marker in the identity directory,
+named for that publication, made durable before the first payload is replaced
+and removed only after every replacement and its directory flush are durable.
+Because no marker name is reused, a publication that resumes after being
+abandoned can remove only its own marker; a repair that starts meanwhile writes
+a new one first and clears the older ones only once its own marker is durable,
+so the incomplete state is never unmarked. A marker also records its base: the
+highest activation record its publication observed when it began, read from
+record names rather than their contents. The completion watermark is the
+highest of one small create-only record per completed installation, each named
+by the sequence it completed and written only by a lock-holding installation
+after its activation record is confirmed durable. A record therefore names an
+installation that finished rather than merely one that published a record, and
+a write that lands after a newer one joins the order beneath it instead of
+replacing it, so the watermark can rise but never regress. A reader refuses a
+cache until the watermark rises above a marker's base, and ignores a marker a
+later completion has passed. Every installation links its record above all
+existing records before it records completion, so a completion above a base
+always belongs to an installation that started after the publication did, while
+a completion write that lands late names a sequence the publication already
+observed and cannot retire its marker. The activation order cannot carry that
+meaning on its own: an unrelated late activation can outrank the record a
+publication observed without that publication having finished, so ordering
+markers against records alone could retire the marker of an unfinished repair.
+A marker that a publication writes late names a base below the completion of
+any installation that finished after it began, so it cannot make a completed
+cache look unfinished, while the marker of an interrupted repair stays pending
+until an installation that began after it completes. A marker written before
+markers recorded a base, one whose bytes cannot be read, one whose bytes are
+not exactly what the writer would produce for the base it appears to name, and
+one whose base carries more digits than an activation sequence, all name no
+base; each remains pending, because an unreadable or malformed marker is
+exactly the case in which the cache must not be assumed complete. A parsed base
+is therefore accepted only when the whole file is the canonical spelling, so a
+leading zero or any other non-canonical form names no base even though it
+converts to one. The marker read stops one byte past the longest canonical
+marker, so a marker that fills that read continues past what was read and its
+visible prefix is not trusted; a base longer than a sequence is unparsable
+rather than fatal. Neither case can exhaust the process or raise out of the
+readers that must keep the cache refused; an installation then repairs the
+cache because a pending marker sends it down the publication path, whose marker
+write clears the stale one. A completion record counts only when its name is
+canonical, its entry is a regular file rather than a directory or a symlink,
+and its contents name the same sequence; anything else names no finished
+installation and is ignored, because evidence the installer cannot account for
+must not retire a marker. Contents are read only as far as a canonical record,
+so corrupt evidence cannot exhaust the process deciding whether a marker is
+pending. An identity with no readable completion record reports a watermark of
+zero, which can only keep markers pending. Directory creation, each
+replacement, both directory flushes and the marker removal are supervised. A
+replacement that outlives the budget is reported as an unknown outcome, because
+the abandoned worker may still complete that atomic rename; every payload was
+verified before publication, so the cache is then either valid or detectably
+incomplete. A stale marker whose removal fails is an installation failure
+rather than a logged deferral: readers refuse any marked cache, so continuing
+would report a usable generation the cache cannot serve.
+
+Activation is a create-only write into an identity-level directory of ordered
+records, never a rename onto one mutable file. The highest-numbered record
+names the active generation. A record is written privately and fsynced, then
+hard-linked to the next free sequence number, and a link that finds the number
+taken retries with the next one. An abandoned activation can therefore only
+fail against a number a later activation already took, or add a record that
+ranks below it: it cannot replace or outrank the newer activation after the
+lock has moved on. A link that outlives the budget is reported as an unknown
+outcome for the same reason, and its private document is discarded so a worker
+that has not issued the link cannot publish at all. Records below the newest
+are pruned after the new record is durable, and a deferred prune is only a
+harmless leftover. Activation includes the directory flush: a flush that times
+out or fails raises an error naming the generation that is already visible.
+Reuse reissues the record it validated, which reissues that flush, so a retry
+after an unconfirmed activation cannot report reuse until a flush succeeds. A
+confirmed record then advances the identity's completion watermark, which is
+what lets a later reader ignore a marker an abandoned publication writes after
+the reuse; the reuse then prunes the markers that completion superseded.
+Because publication reads only the activation record names, never their
+contents, a corrupt record cannot block the repair that replaces it: the names
+supply the ordering, and a new installation publishes its own record above the
+damaged one. Before the record may move, the installer flushes every entry its
+runtime contract requires: the launcher, driver, compiler and `rustc`; the
+toolchain component record and every recorded library; every file and directory
+the backend inventory publishes, so a setup-extracted member such as
+`share/data.txt` is as durable as an executable; the directories naming them,
+including each required toolchain file's whole ancestor chain, deepest first,
+so the component record's `lib/rustlib` directory is flushed even when no
+recorded library sits beneath it; and every file and directory of the
+setup-created Python root. Files are flushed before the directories that hold
+them, so a crash cannot leave a durable activation naming a launcher, library,
+backend member or Python payload whose bytes were never written back. Launcher
+modes are applied before the fsync that makes those bytes durable.
+Staging-directory creation and its removal are supervised as well: an abandoned
+creation is private and uniquely named, and an abandoned removal touches only
+this run's own directory. The generation directory's own creation and the
+record listing that allocates the next sequence number are supervised too; both
+touch only private, idempotent or read-only state, so an abandoned creation or
+listing cannot disturb a later activation. A failed stage, extraction, setup or
+probe leaves every existing record untouched.
+
+`run` revalidates the generation, then runs the pinned launcher in the
+repository root and mirrors its stdout and stderr live. It executes the exact
+generation named by the validation result rather than resolving the activation
+records a second time, so a concurrent repair cannot switch the active
+generation between the check and the launch. It retains only the last 64 KiB of
+each stream through `commands.TailCapture` rather than buffering the whole run,
+because a proof log is diagnostic context whose size the caller does not
+control. The mirrored output is not replayed, so progress output is neither
+delayed nor rewritten.
+
+Two verification boundaries support this design. Generated archive graphs,
+checked against an independent expected-tree oracle, cover member ordering,
+contained link chains and the refusal cases; they complement the fixed hostile
+fixtures rather than replacing them. A Hypothesis rule-based state machine over
+two identities exercises install, transient failure, corruption and repair
+against the real pipeline, and seeded premature-pointer and post-setup-move
+tests show that validation detects both faults. A second, single-identity state
+machine drives the publication protocol directly, interleaving interrupted and
+late marker, activation and completion writes with the real repair and prune
+paths; it asserts that the completion watermark never regresses and that an
+unfinished publication stays pending until a later completion rises above the
+base its marker recorded. The download boundary is exercised end to end against
+a real loopback HTTPS server, so the TLS handshake, redirect policy, transient
+retry and digest check run without a replaced connection. Two-process fault
+tests kill an installer while it stages repair payloads and seed a setup
+failure while a peer waits, showing that neither interruption publishes a
+pointer and both recover. POSIX locking, rename durability and private cache
+ownership remain axioms tested at the process boundary, not formally proven.
+
+## D5: Workflow and immutable publication
+
+Propose `.github/workflows/kani-monthly.yml`, independent of Python releases.
+Schedule `23 4 3 * *` is 04:23 UTC on the third day of each month. Scheduled
+execution requires `vars.KANI_SNAPSHOTS_ENABLED == 'true'`; absent or other
+values disable it. Manual `workflow_dispatch` inputs are `upstream_commit`
+(required full SHA), `publication_id` (required tag grammar), and `publish`
+(boolean, default false). Non-publishing mode builds and validates without
+creating a release. It still creates a build attestation using OIDC; that side
+effect must be explicit in dispatch documentation. No PR trigger is added to
+this expensive workflow.
+
+All privileged work requires canonical repository identity, event equal to
+schedule or dispatch, and `github.ref == 'refs/heads/main'`. Resolve and record
+builder `github.sha`; verify every trusted checkout against it. Manual runs
+from other refs fail before building. Short-lived tokens and
+`persist-credentials: false` keep credentials out of source checkouts.
+
+Use distinct fresh jobs: resolution; unprivileged source build; trusted
+manifest assembly and attestation; clean installation/proof validation; and
+publication. Top-level permissions are empty. Resolution/build/validation
+receive only required read permissions. The attestation job alone receives
+`id-token: write` and `attestations: write`, plus required reads. Publication
+alone receives `contents: write`. Upstream source and asset-supplied scripts
+never execute in attestation or publication jobs. Those jobs run only checked
+out builder code at the recorded trusted SHA and pinned Actions. Treat build
+metadata as untrusted data: validate bounded schemas and correlate it with
+resolution outputs and independently computed asset hashes before signing.
+
+Attestation precedes clean validation to allow the public consumer verifier to
+exercise signature policy on the exact manifest before publication. It is a
+statement of build origin, not successful proof testing. A separate validation
+receipt binds manifest digest, complete asset set, run ID and attempt, fixture
+identities and observed harness results. Publication requires the successful
+validation job and matching receipt from that same run/attempt. Retrieve
+artefacts by exact same-run IDs, never by an arbitrary name in another run. Do
+not unpack payload archives in the privileged job or import Python modules from
+artefact directories.
+
+The local CV-005 readers were removed in favour of pinned shared
+`cv005-contracts`; run `make test-workflow-contracts` without resurrecting
+those modules. New snapshot contracts require strict parsing, duplicate-key
+refusal and malformed/empty-subject tests at their own boundary. Preserve
+main's CodeScene environment, coverage interpreter consistency and mutation
+caller selection; snapshot jobs neither receive those credentials nor publish
+coverage.
+
+Use full 40-hex Action/reusable-workflow pins; contract tests assert paths and
+pin shape rather than today's values. Proposed runner is the existing hosted
+Ubuntu x86-64 class, with an explicit image version selected during
+feasibility; no larger paid runner is implied. Proposed job deadlines are 10
+minutes for resolution, 180 for build, 15 for attestation, 45 for clean
+validation and 15 for publication. Exceeding runner/disk/budget limits requires
+review rather than automatic upgrades. Record wall time, cache hit/miss, disk
+high-water mark, asset sizes and failures in run summaries. Cache keys bind
+trust class, OS, target, upstream SHA, recursive submodules, toolchain, locks
+and recipe; privileged jobs do not restore writable source-build caches.
+Ordinary PR caches cannot feed signing or publication.
+
+Serialize the entire snapshot workflow, starting before resolution and revision
+allocation, with `cancel-in-progress: false` and a snapshot-specific
+concurrency group. Recheck identity availability before create. Use the default
+single pending slot and document that later runs can replace pending work; this
+is not a durable monthly queue. Monitor cancelled/missed runs and recover
+manually rather than promise exactly-once scheduling.[^3] Selection compares a
+full build-input fingerprint, not upstream HEAD alone. Fingerprint source and
+recursive submodules, builder/recipe, toolchain, dependency locks, prerequisite
+digests, target and relevant build configuration. Exclude observed run/attempt,
+timing, cache outcomes and asset sizes from input equality. These remain
+manifest observations, not reasons to rebuild an unchanged input set. For a
+month/prefix choose the next unused revision when inputs changed. If an
+existing published identity exactly matches inputs and all assets and
+provenance validate, return a recorded no-op; disagreement is a collision
+error. A manual identity is never silently renamed. Source resolution and
+release pagination are bounded; exhausting the bound is an actionable failure.
+
+Create a draft pre-release with `make_latest: false` and a tag at the recorded
+builder commit. Upload all payloads, manifest, checksums and attestation,
+re-download and verify exact bytes and the complete expected asset set, then
+publish. Reject an existing tag pointing elsewhere. Never clobber assets, move
+tags, replace published bytes or delete history. An interrupted draft may be
+resumed only with the same run/attempt's validated asset IDs and exact matching
+existing bytes; upload missing assets only. Changed inputs, changed attempt,
+unknown provenance, extra assets or conflicting bytes require a new identity
+and leave the incomplete draft for manual diagnosis. Bounded retries within one
+attempt can resume; a GitHub rerun increments the attempt and therefore
+requires a new revision unless reconciliation finds the exact already-published
+release from the previous attempt. A publication timeout is resolved by reading
+state and validating it, not blindly repeating writes.
+
+Repository-wide immutable releases are proposed for operational bootstrap, not
+enabled by implementation or this planning task. First adjust
+`.github/workflows/release.yml` to assemble all wheels, create a draft, upload
+and verify all assets, then publish. Keep its `v*.*.*` namespace, wheel
+contents and ordinary Python release behaviour, including generated release
+notes. Require a non-empty expected wheel inventory; missing/extra assets,
+interrupted drafts, published no-ops and collisions receive regression tests.
+Add narrowly scoped lifecycle tests; this is necessary because the current
+workflow creates a public release before uploading wheels. GitHub documents
+draft-first publication for immutable assets and tags.[^4]
+
+## D6: Evidence and operational handoff
+
+Before publication a fresh runner with no Kani build checkout or previous
+installation obtains only the builder's consumer wheel, produced assets,
+attestation and repository-owned proof fixtures. Install through public
+`snapshot install --asset-dir`, using a generated pin bound to the trusted
+assembly job's manifest digest; then exercise `snapshot check` and `kani run`.
+The fixture path is the working repository root for execution, not the builder
+checkout. Run upstream bundle smoke tests in an unprivileged context, adapting
+only fixture transport where the upstream script assumes a checkout.
+
+Require named positive harnesses, a deliberately false assertion whose harness
+ran and failed verification (not compilation), and a small compiler-floor
+fixture requiring Rust 1.94 or newer. Use slice `array_windows::<2>()`,
+documented as stable since 1.94, in a named successful Kani harness.[^5] Add a
+pure-Rust version of that same function for the Rust 1.93 negative control:
+failure must be the unavailable API, not Cargo's `rust-version`, Kani
+annotations or dependency configuration. This control and the actual Kani
+harness are executed only after approval. Include bounded collection
+growth/drop behaviour and Resource Acquisition Is Initialization (RAII), where
+ownership controls cleanup. Record compiler identity from the effective Kani
+compiler, harness names/counts and statuses. No discovered harnesses, a
+compilation error or unverified output is failure.
+
+Repeat installation with a warm cache; intentionally corrupt a digest and
+identity and show rejection before execution. Deterministic tiny distributions
+with identical semantic versions but distinct identities prove isolation
+without another full source build. Capture bounded descendant-process execution
+evidence during clean setup (for example `strace -f -e trace=execve`, through
+the command adapter). Reject `cargo install/build`, compiler code generation,
+solver builds and equivalent source compilation anywhere in the process tree;
+allow identity probes and prebuilt toolchain extraction. Adapter spies alone
+miss children spawned by setup. Capture proof compilation as a separate phase;
+setup toolchain downloads are separate evidence. Only proof execution may
+compile fixtures.
+
+Real attested EP-M5 validation requires approved builder code merged to trusted
+`main`, with scheduling still disabled. Keep EP-M5 open until that hosted
+non-publishing evidence exists; merging code alone does not satisfy it.
+
+After implementation, write `docs/kani-snapshot-operations.md` with exact
+settings, permission checks, default-disabled schedule, dispatch examples,
+identity allocation, provenance verification, cold public-download commands,
+draft recovery, rollback by older pin, and monitoring responsibilities.
+Operational bootstrap separately enables prerequisites, dispatches a validation
+run and first publication, downloads the public assets into another clean
+environment, verifies release immutability/provenance, and enables the schedule
+only after that succeeds. GitHub schedules can be delayed or dropped, run from
+the default branch, and may be disabled after inactivity in public
+repositories; monitor missed months and document manual recovery.[^6]
+
+## Review record
+
+The independent six-lens Logisphere panel reviewed revision 1 on 2026-09-27:
+Pandalump/Dinolump covered Python architecture; Wafflecat/Pandalump Kani
+packaging; Doggylump/Buzzy Bee release engineering and cost; Telefono
+supply-chain contracts; and Telefono/Dinolump test design. The initial verdict
+was revise/proceed with conditions. Revision 2 incorporates every requested
+amendment: separate Rustup trust and no implicit install; real process
+deadline, environment and child-execution evidence; hashed inventory payload;
+explicit proof working directory and mutable-state boundary; serialized
+allocation and stable input fingerprint; non-empty Python wheel
+inventory/recovery; and substantive compiler-floor and proof transcript
+controls.
+
+Final testing/consistency review accepted these amendments, with revision 3
+adding pinned upstream evidence, trusted-main sequencing and the shared build
+budget.
+
+Core bets remain conditional: supported upstream setup can isolate toolchains;
+Cuprum can enforce bounded process semantics; and the selected runner can build
+within measured limits. EP-M1 must demonstrate them. The strongest alternative
+is private Rustup homes plus a shared read-only cache of verified toolchain
+archives. Initially use private homes for simpler isolation, measure
+duplication, and defer shared archive optimization.
+
+The pre-mortem identified three incidents: an inherited Rust mirror spoofs the
+compiler (prevent with bound component digests and sanitized environment); two
+runs allocate one identity (serialize allocation and reject collisions); and
+publication times out after success (read and verify actual state before
+retrying). A fourth test concern, setup compiling a launcher invisibly, is
+addressed by descendant-process evidence rather than adapter mocks alone.
+Upstream source evidence and bounded feasibility questions are recorded in the
+execution plan. No prototype, build, workflow dispatch, repository setting
+change or publication is authorized by the proposed status of EP-M1, EP-M4 and
+EP-M5.
+
+[^1]: [GitHub CLI attestation verification](https://cli.github.com/manual/gh_attestation_verify).
+[^2]: [Rustup environment variables](https://rust-lang.github.io/rustup/environment-variables.html).
+[^3]: [GitHub workflow concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+[^4]: [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+[^5]: [Rust slice ArrayWindows](https://doc.rust-lang.org/std/slice/struct.ArrayWindows.html).
+[^6]: [GitHub workflow schedule events](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
+Revision 4 integration note (2026-11-08): the execution plan records main's new
+prebuilt release installer, `kani exec`, Cuprum 0.2 and shared validation
+boundaries. Future Python and test helpers require complete interrogate
+docstrings; use the vendored uv gate and current Makefile targets. The design
+work covered by EP-M1, EP-M4 and EP-M5 remains proposed pending explicit
+implementation approval.
+
+Cuprum 0.2 exposes `EnvMode.REPLACE`, `UNSET` and run-level timeouts. Extend
+the typed command adapter using those supported primitives, not custom
+environment emulation. Its documented termination targets the direct child;
+process-group ownership and descendant cleanup still require the EP-M1
+experiment and real child-process tests before adoption.

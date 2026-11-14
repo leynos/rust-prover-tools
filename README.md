@@ -79,6 +79,18 @@ prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
 The [users' guide](docs/users-guide.md#explicit-legacy-kani-execution)
 describes the compatibility and trust constraints for this command.
 
+To install and run an immutable, reviewed Kani snapshot instead of the legacy
+release, use the opt-in snapshot commands:
+
+```bash
+prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+prover-tools kani snapshot check
+prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
+```
+
+The [users' guide](docs/users-guide.md#kani-snapshot-commands) describes the
+reviewed pin, manifest and attestation checks these commands perform.
+
 Verus reads two pins: `tools/verus/VERSION`, and `tools/verus/SHA256SUMS`,
 which records the digest of the matching release archive beside its file name in
 `sha256sum` format. Verus publishes archives without checksums, so after

@@ -11,9 +11,29 @@ policy and connection handling can be read and tested independently.
 from __future__ import annotations
 
 import dataclasses as dc
+import typing as typ
 import urllib.parse
 
 from rust_prover_tools.errors import ProverToolError
+
+__all__ = ("UrlPolicy",)
+
+
+class UrlPolicy(typ.Protocol):
+    """Per-request URL policy checked by the transport.
+
+    The transport asks about the initial URL and every redirect target
+    separately, so a policy can require an exact release path for the first
+    request while allowing documentedly less specific redirect hosts.
+    """
+
+    def check_initial(self, url: str) -> None:
+        """Accept or reject the first URL of a download."""
+        ...
+
+    def check_redirect(self, url: str) -> None:
+        """Accept or reject a redirect target before it is opened."""
+        ...
 
 
 @dc.dataclass(frozen=True, slots=True)

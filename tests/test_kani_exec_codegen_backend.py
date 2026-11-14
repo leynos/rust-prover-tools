@@ -25,6 +25,8 @@ from rust_prover_tools.kani_release import KaniExecOptions, prepare_kani_command
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from cuprum.context import UnsetType
+
 _INSTALLATION = os.environ.get("PROVER_TOOLS_KANI_067_INSTALLATION")
 
 pytestmark = pytest.mark.skipif(
@@ -123,10 +125,15 @@ def _write_project(
     (root / ".cargo" / "config.toml").write_text(config, encoding="utf-8")
 
 
-def _cargo(root: Path, environment: cabc.Mapping[str, str]) -> _Build:
+def _cargo(root: Path, environment: cabc.Mapping[str, str | UnsetType]) -> _Build:
     """Build once and report the backend Cargo passed to rustc and its status."""
     installation = Path(_INSTALLATION or "")
-    merged = {**environment, "CARGO_HOME": str(root / "cargo-home")}
+    # A prepared child environment may carry Cuprum removal markers. They mean
+    # the variable is absent, so they are dropped rather than stringified.
+    merged = {
+        name: value for name, value in environment.items() if isinstance(value, str)
+    }
+    merged["CARGO_HOME"] = str(root / "cargo-home")
     completed = subprocess.run(
         (str(installation / "toolchain/bin/cargo"), "-v", "build"),
         cwd=root,
@@ -146,7 +153,9 @@ def _cargo(root: Path, environment: cabc.Mapping[str, str]) -> _Build:
     raise AssertionError(msg)
 
 
-def _assert_shadowed(root: Path, environment: cabc.Mapping[str, str]) -> None:
+def _assert_shadowed(
+    root: Path, environment: cabc.Mapping[str, str | UnsetType]
+) -> None:
     """Require a successful build that used the LLVM backend."""
     build = _cargo(root, environment)
     assert build.exit_code == 0, build.output

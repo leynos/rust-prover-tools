@@ -49,3 +49,33 @@ def test_z3_install_help_snapshot(
     app(["z3", "install", "--help"], exit_on_error=False)
     captured = capsys.readouterr()
     assert captured.out == snapshot, "Z3 install help does not match snapshot"
+
+
+def test_kani_snapshot_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Snapshot commands expose stable install, check and run options."""
+    app(["kani", "snapshot", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Kani snapshot help does not match snapshot"
+
+
+def test_kani_snapshot_install_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Local asset transport and cache flags remain stable."""
+    app(["kani", "snapshot", "install", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Snapshot install help does not match snapshot"
+
+
+def test_kani_run_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """The explicit snapshot run command keeps its separator contract."""
+    app(["kani", "run", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Kani run help does not match snapshot"

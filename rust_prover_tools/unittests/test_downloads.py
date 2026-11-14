@@ -16,7 +16,7 @@ from rust_prover_tools.downloads import (
     download_pinned,
     sha256_file,
 )
-from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 
 if typ.TYPE_CHECKING:
     import os
@@ -262,8 +262,8 @@ def test_download_pinned_emits_a_cache_hit_event(
         for record in caplog.records
         if hasattr(record, "event_data")
     ]
-    assert {"event": "download.cache_hit", "asset": "asset.bin"} in events, (
-        "a cache hit should report the asset name"
+    assert {"event": "download.cache_hit"} in events, (
+        "a cache hit must not carry an asset-name label"
     )
 
 
@@ -371,7 +371,6 @@ def test_stream_reports_a_read_timeout_at_the_deadline(
 
     assert events_from(caplog)[-1] == {
         "event": "download.failed",
-        "asset": "asset.bin",
         "reason": "deadline",
         "written": 0,
     }, "a read timeout at the deadline must report the deadline"
@@ -406,7 +405,6 @@ def test_stream_reports_an_early_read_timeout_as_a_stream_error(
 
     assert events_from(caplog)[-1] == {
         "event": "download.failed",
-        "asset": "asset.bin",
         "reason": "stream_error",
     }, "an early read timeout must not be reported as the deadline"
 
@@ -486,11 +484,9 @@ def test_download_follows_a_bounded_https_redirect(
         url: str,
         limits: DownloadLimits,
         deadline: float,
-        *,
-        asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
         """Return the next scripted response and its connection."""
-        del url, limits, deadline, asset_name
+        del url, limits, deadline
         return next(responses)
 
     monkeypatch.setattr(download_transport, "_open", fake_open)
@@ -523,11 +519,9 @@ def test_download_rejects_excess_redirects(
         url: str,
         limits: DownloadLimits,
         deadline: float,
-        *,
-        asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
         """Return the redirecting response and its connection."""
-        del url, limits, deadline, asset_name
+        del url, limits, deadline
         return response, connection
 
     monkeypatch.setattr(download_transport, "_open", fake_open)
@@ -567,7 +561,7 @@ def test_download_rejects_invalid_response(
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline, *, asset_name: (response, connection),
+        lambda url, limits, deadline: (response, connection),
     )
 
     with pytest.raises(ProverToolError, match=match):
@@ -701,7 +695,7 @@ def test_download_pinned_reports_a_digest_read_failure(
         download_pinned(asset, destination)
 
     assert [event for event in events_from(caplog) if "failed" in str(event)] == [
-        {"event": "download.failed", "asset": "asset.bin", "reason": "digest_read"}
+        {"event": "download.failed", "reason": "digest_read"}
     ], "a digest read failure must report exactly one bounded reason"
     assert not destination.exists(), "an unverified response must not be published"
     assert not destination.with_name("asset.bin.download").exists(), (
@@ -740,7 +734,7 @@ def test_download_pinned_reports_a_pending_cleanup_failure(
         download_pinned(asset, destination)
 
     assert [event for event in events_from(caplog) if "failed" in str(event)] == [
-        {"event": "download.failed", "asset": "asset.bin", "reason": "cleanup_error"}
+        {"event": "download.failed", "reason": "cleanup_error"}
     ], "a cleanup failure must report exactly one bounded reason"
     assert not any(
         event.get("event") == "download.verified" for event in events_from(caplog)
@@ -781,11 +775,10 @@ def test_download_pinned_keeps_the_primary_failure_when_cleanup_fails(
 
     events = events_from(caplog)
     assert [event for event in events if event.get("event") == "download.failed"] == [
-        {"event": "download.failed", "asset": "asset.bin", "reason": "digest_mismatch"}
+        {"event": "download.failed", "reason": "digest_mismatch"}
     ], "the primary failure must remain the only download failure event"
     assert {
         "event": "download.cleanup_failed",
-        "asset": "asset.bin",
         "reason": "cleanup_error",
     } in events, "a masked cleanup failure should still be observable"
 
@@ -840,7 +833,7 @@ def test_download_pinned_removes_pending_file_when_stream_is_stopped(
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline, *, asset_name: (response, connection),
+        lambda url, limits, deadline: (response, connection),
     )
     destination = tmp_path / "asset.bin"
 
@@ -928,12 +921,16 @@ def test_sha256_file_reports_an_unreadable_path(tmp_path: Path) -> None:
 
 
 def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
-    """A filesystem error while writing the body is reported."""
+    """A filesystem error while writing the body is a storage failure.
+
+    Opening or writing the destination cannot be repaired by asking the same
+    server again, so the error must not be classified as a transient download.
+    """
     destination = tmp_path / "asset.bin"
     destination.mkdir()
     response = FakeResponse(chunks=(b"payload",))
 
-    with pytest.raises(ProverToolError, match="failed to download"):
+    with pytest.raises(ProverToolError, match="failed to store"):
         download_stream._stream(
             response,
             destination,
@@ -995,7 +992,6 @@ def test_open_requests_the_validated_path_with_identity_encoding(
         "https://example.test:8443/asset.bin?token=abc",
         DownloadLimits(connect_timeout_seconds=5.0),
         download_transport.monotonic() + 60.0,
-        asset_name="asset.bin",
     )
 
     assert returned_response.status == 200, "the response status must be returned"
@@ -1060,12 +1056,11 @@ def test_open_reports_a_failed_request(
         FailingConnection,
     )
 
-    with pytest.raises(ProverToolError, match="failed to download"):
+    with pytest.raises(TransientDownloadError, match="failed to download"):
         download_transport._open(
             "https://example.test/asset.bin",
             DownloadLimits(),
             download_transport.monotonic() + 60.0,
-            asset_name="asset.bin",
         )
 
     assert len(connections) == 1, "the transport should open one connection"
@@ -1077,9 +1072,8 @@ def test_open_reports_a_failed_request(
     ]
     assert {
         "event": "download.failed",
-        "asset": "asset.bin",
         "reason": "transport_error",
-    } in events, "a transport failure should report the logical asset"
+    } in events, "a transport failure must not report an asset-name label"
 
 
 def test_open_rejects_an_expired_deadline() -> None:
@@ -1089,16 +1083,15 @@ def test_open_rejects_an_expired_deadline() -> None:
             "https://example.test/asset.bin",
             DownloadLimits(),
             download_transport.monotonic() - 1.0,
-            asset_name="asset.bin",
         )
 
 
-def test_download_complete_event_reports_bytes_elapsed_and_asset(
+def test_download_complete_event_reports_bytes_and_elapsed_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Completion reports the transferred size, duration, and logical asset."""
+    """Completion reports the transferred size and duration, not the asset."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
     payload = b"verified"
     response = FakeResponse(chunks=(payload,))
@@ -1106,7 +1099,7 @@ def test_download_complete_event_reports_bytes_elapsed_and_asset(
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline, *, asset_name: (response, connection),
+        lambda url, limits, deadline: (response, connection),
     )
 
     download_transport._download(
@@ -1127,18 +1120,18 @@ def test_download_complete_event_reports_bytes_elapsed_and_asset(
     complete = [event for event in events if event["event"] == "download.complete"]
     assert len(complete) == 1, "a successful download emits one completion event"
     event = complete[0]
-    assert event["asset"] == "asset.bin", "completion names the logical asset"
+    assert "asset" not in event, "completion must not carry an asset-name label"
     assert event["written"] == len(payload), "completion reports the body bytes"
     assert event["redirects"] == 0, "a direct download followed no redirects"
     elapsed = event["elapsed_seconds"]
     assert isinstance(elapsed, float), "completion reports a float elapsed time"
     assert elapsed >= 0.0, "completion reports a non-negative elapsed time"
-    assets = {
-        event["asset"]
+    labelled = [
+        event
         for event in events
-        if str(event["event"]).startswith("download.")
-    }
-    assert assets == {"asset.bin"}, "every transport event uses one asset value"
+        if str(event["event"]).startswith("download.") and "asset" in event
+    ]
+    assert labelled == [], "no download event may carry an asset-name label"
 
 
 def test_download_reports_a_missing_redirect_location(
@@ -1153,7 +1146,7 @@ def test_download_reports_a_missing_redirect_location(
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline, *, asset_name: (response, connection),
+        lambda url, limits, deadline: (response, connection),
     )
 
     with pytest.raises(ProverToolError, match="no Location"):
@@ -1174,28 +1167,35 @@ def test_download_reports_a_missing_redirect_location(
     ]
     assert {
         "event": "download.failed",
-        "asset": "asset.bin",
         "reason": "redirect_location",
         "status": 302,
     } in events, "a bad redirect should report its status and bounded reason"
 
 
+@pytest.mark.parametrize(
+    ("status", "status_class", "is_transient"),
+    [(503, "5xx", True), (404, "4xx", False)],
+)
 def test_download_reports_an_http_status_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    status: int,
+    status_class: str,
+    *,
+    is_transient: bool,
 ) -> None:
-    """A non-success response reports its status and status class."""
+    """A non-success response reports its status and whether it is transient."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
     connection = FakeConnection()
-    response = FakeResponse(status=503)
+    response = FakeResponse(status=status)
     monkeypatch.setattr(
         download_transport,
         "_open",
-        lambda url, limits, deadline, *, asset_name: (response, connection),
+        lambda url, limits, deadline: (response, connection),
     )
 
-    with pytest.raises(ProverToolError, match="HTTP status 503"):
+    with pytest.raises(ProverToolError, match=f"HTTP status {status}") as raised:
         download_transport._download(
             download_request(
                 "https://example.test/asset.bin",
@@ -1206,18 +1206,15 @@ def test_download_reports_an_http_status_class(
             DownloadLimits(),
         )
 
-    events = [
-        typ.cast("dict[str, object]", record.event_data)
-        for record in caplog.records
-        if hasattr(record, "event_data")
-    ]
+    assert isinstance(raised.value, TransientDownloadError) is is_transient, (
+        "only a retryable status may be classified as transient"
+    )
     assert {
         "event": "download.failed",
-        "asset": "asset.bin",
         "reason": "http_status",
-        "status": 503,
-        "status_class": "5xx",
-    } in events, "a failed response should report a bounded status class"
+        "status": status,
+        "status_class": status_class,
+    } in events_from(caplog), "a failed response should report a bounded status class"
 
 
 def test_download_reports_a_stream_error(
@@ -1237,7 +1234,7 @@ def test_download_reports_a_stream_error(
 
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
 
-    with pytest.raises(ProverToolError, match=r"failed to download asset\.bin"):
+    with pytest.raises(TransientDownloadError, match=r"failed to download asset\.bin"):
         download_stream._stream(
             FailingResponse(),
             tmp_path / "asset.bin",
@@ -1251,7 +1248,6 @@ def test_download_reports_a_stream_error(
     ]
     assert {
         "event": "download.failed",
-        "asset": "asset.bin",
         "reason": "stream_error",
     } in events, "a body transport error should report one bounded event"
 
