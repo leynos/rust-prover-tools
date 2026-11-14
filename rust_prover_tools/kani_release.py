@@ -17,25 +17,25 @@ import sys
 import time
 import typing as typ
 from functools import partial
-from pathlib import Path
 
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
+from rust_prover_tools.kani_exec_routing import admission_chain, runtime_search_path
 from rust_prover_tools.kani_release_config import (
     VerificationConfig,
+    backend_overrides,
     check_verification_config,
     checked_resolve,
     checked_stat,
-    codegen_backend_variable,
 )
 from rust_prover_tools.kani_release_flags import verification_flags
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 _RUSTC_IDENTITY = "rustc 1.93.0-nightly (53732d5e0 2025-11-20)"
 _TOOLCHAIN_IDENTITY = "nightly-2025-11-21-x86_64-unknown-linux-gnu"
-_RUSTUP_LIBRARY_SUFFIX_DEPTH = 3
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -177,26 +177,6 @@ def _validate_arguments(arguments: tuple[str, ...]) -> None:
         raise ProverToolError(msg)
 
 
-def _runtime_search_path(runtime: Path, inherited: str) -> str:
-    """Retain release-proxy hygiene while adding the matching runtime first."""
-
-    def compatible(entry: str) -> bool:
-        """Return whether the path lacks a toolchains/<name>/lib suffix."""
-        parts = Path(entry).parts
-        return not (
-            len(parts) >= _RUSTUP_LIBRARY_SUFFIX_DEPTH
-            and parts[-1] == "lib"
-            and parts[-_RUSTUP_LIBRARY_SUFFIX_DEPTH] == "toolchains"
-        )
-
-    entries = (
-        tuple(entry for entry in inherited.split(os.pathsep) if compatible(entry))
-        if inherited
-        else ()
-    )
-    return os.pathsep.join((str(runtime), *entries))
-
-
 def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) -> None:
     """Pin every accepted profile backend to LLVM inside the child only.
 
@@ -206,9 +186,8 @@ def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) 
     """
     started = time.monotonic()
     spellings = {selection.profile for selection in config.selections}
-    variables = {codegen_backend_variable(profile) for profile in spellings}
-    for variable in variables:
-        child[variable] = "llvm"
+    variables = backend_overrides(config)
+    child.update(variables)
     if not config.selections:
         # No profile selected a backend, so there is no decision to report. An
         # event per run would be noise and would make the stage log depend on
@@ -266,7 +245,7 @@ def prepare_kani_command(
     flags = verification_flags(environment)
     child = dict(environment)
     _apply_backend_overrides(child, config)
-    child["LD_LIBRARY_PATH"] = _runtime_search_path(
+    child["LD_LIBRARY_PATH"] = runtime_search_path(
         root / "toolchain/lib", child.get("LD_LIBRARY_PATH", "")
     )
     child["RUSTFLAGS"] = " ".join(flags)
@@ -345,11 +324,7 @@ def exec_kani(options: KaniExecOptions, environment: cabc.Mapping[str, str]) -> 
         "validation", partial(prepare_kani_command, options, environment)
     )
     root = checked_resolve(options.installation)
-    chain = tuple(
-        environment[variable]
-        for variable in ("RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER")
-        if variable in environment
-    )
+    chain = admission_chain(environment)
     for stage, relative in (
         ("rustc_identity", "toolchain/bin/rustc"),
         ("compiler_identity", "bin/kani-compiler"),

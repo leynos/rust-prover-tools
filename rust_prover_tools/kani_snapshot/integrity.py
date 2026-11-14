@@ -1,0 +1,176 @@
+"""Authentication of snapshot manifests, payloads and checksum lists.
+
+Nothing is extracted or executed until the manifest bytes match the reviewed
+pin and every payload matches its manifest record; `attestation` supplies the
+third check, a GitHub build attestation verified under an explicit policy.
+Checksums beside an archive are a convenience, never an authenticator, so they
+are verified against the manifest rather than trusted on their own.
+"""
+
+from __future__ import annotations
+
+import stat
+import typing as typ
+
+from rust_prover_tools.downloads import sha256_file
+from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.policy import is_safe_asset_name
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from pathlib import Path
+
+    from rust_prover_tools.kani_snapshot.manifest import ParsedManifest
+    from rust_prover_tools.kani_snapshot.models import (
+        AssetRecord,
+        SnapshotManifest,
+        SnapshotPin,
+    )
+
+__all__ = (
+    "verify_asset",
+    "verify_checksums",
+    "verify_manifest_digest",
+)
+
+#: A checksum row is exactly `<digest> <name>`.
+_CHECKSUM_FIELDS: typ.Final[int] = 2
+
+#: A SHA-256 digest is 64 lowercase hexadecimal characters.
+_SHA256_HEX_LENGTH: typ.Final[int] = 64
+
+
+def verify_manifest_digest(parsed: ParsedManifest, pin: SnapshotPin) -> None:
+    """Require exact manifest bytes to match the reviewed digest.
+
+    Parameters
+    ----------
+    parsed : ParsedManifest
+        Manifest with its exact-byte digest.
+    pin : SnapshotPin
+        Reviewed pin naming the approved digest.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the digest differs.
+    """
+    if parsed.sha256 != pin.manifest_sha256:
+        msg = (
+            "snapshot manifest digest does not match the reviewed pin: "
+            f"expected {pin.manifest_sha256}, got {parsed.sha256}"
+        )
+        raise ProverToolError(msg)
+
+
+def verify_asset(
+    path: Path,
+    asset: AssetRecord,
+    *,
+    checkpoint: cabc.Callable[[], None] | None = None,
+) -> None:
+    """Require a payload to match its recorded size and digest.
+
+    Parameters
+    ----------
+    path : Path
+        Downloaded or local payload.
+    asset : AssetRecord
+        Manifest record naming the expected bytes.
+    checkpoint : collections.abc.Callable[[], None] | None
+        Called while the digest is computed, so an installation deadline can
+        interrupt a large payload mid-hash.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the payload is missing, not a regular file, has the wrong
+        size, or has a different digest.
+    """
+    try:
+        status = path.stat()
+    except OSError as exc:
+        msg = f"failed to inspect snapshot asset '{asset.name}': {exc}"
+        raise ProverToolError(msg) from exc
+    if not stat.S_ISREG(status.st_mode):
+        msg = f"snapshot asset '{asset.name}' is not a regular file"
+        raise ProverToolError(msg)
+    if status.st_size != asset.size:
+        msg = (
+            f"snapshot asset '{asset.name}' has {status.st_size} bytes, "
+            f"expected {asset.size}"
+        )
+        raise ProverToolError(msg)
+    actual = sha256_file(path, checkpoint=checkpoint)
+    if actual != asset.sha256:
+        msg = (
+            f"snapshot asset '{asset.name}' digest does not match the manifest: "
+            f"expected {asset.sha256}, got {actual}"
+        )
+        raise ProverToolError(msg)
+
+
+def verify_checksums(
+    checksums_path: Path,
+    manifest: SnapshotManifest,
+    manifest_sha256: str,
+) -> None:
+    """Verify a `SHA256SUMS` file against the manifest and its digest.
+
+    Parameters
+    ----------
+    checksums_path : Path
+        Checksum file to read.
+    manifest : SnapshotManifest
+        Manifest whose payload digests the file must agree with.
+    manifest_sha256 : str
+        Digest of the manifest, which must also be listed.
+
+    Raises
+    ------
+    ProverToolError
+        Raised for unreadable, malformed, duplicate or disagreeing rows, or a
+        missing manifest or payload row.
+    """
+    try:
+        text = checksums_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        msg = f"failed to read snapshot checksums '{checksums_path}': {exc}"
+        raise ProverToolError(msg) from exc
+    expected = {asset.name: asset.sha256 for asset in manifest.assets}
+    expected["manifest.json"] = manifest_sha256
+    seen: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        row = _checksum_row(line, checksums_path)
+        digest, name = row
+        if name in seen:
+            msg = f"snapshot checksums list '{name}' more than once"
+            raise ProverToolError(msg)
+        seen[name] = digest
+    for name, digest in expected.items():
+        if name not in seen:
+            msg = f"snapshot checksums are missing '{name}'"
+            raise ProverToolError(msg)
+        if seen[name] != digest:
+            msg = f"snapshot checksum for '{name}' does not match the manifest"
+            raise ProverToolError(msg)
+
+
+def _checksum_row(line: str, path: Path) -> tuple[str, str]:
+    """Parse one checksum row, rejecting malformed or unsafe names."""
+    fields = line.split()
+    if len(fields) != _CHECKSUM_FIELDS:
+        msg = f"snapshot checksum row in '{path}' is not '<digest> <name>'"
+        raise ProverToolError(msg)
+    digest, name = fields
+    if len(digest) != _SHA256_HEX_LENGTH or any(
+        char not in "0123456789abcdef" for char in digest
+    ):
+        msg = f"snapshot checksum row for '{name}' has an invalid digest"
+        raise ProverToolError(msg)
+    if not is_safe_asset_name(name):
+        msg = f"snapshot checksum row has an unsafe asset name '{name}'"
+        raise ProverToolError(msg)
+    return digest, name

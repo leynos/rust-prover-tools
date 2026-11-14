@@ -30,10 +30,11 @@ registration. Command functions are thin adapters: they construct option
 dataclasses, delegate to feature modules, and translate expected errors to
 process exit codes. Commands with a wide parameter table live in a dedicated
 adapter module so the application module stays readable:
-`rust_prover_tools.kani_exec_cli` for legacy Kani execution and
-`rust_prover_tools.verus_run_cli` for `verus run`. An adapter module owns its
-Cyclopts and environment-variable binding, output printing, and exit-code
-mapping.
+`rust_prover_tools.kani_exec_cli` for legacy Kani execution,
+`rust_prover_tools.kani_snapshot_cli` for `kani snapshot install`,
+`kani snapshot check` and `kani run`, and `rust_prover_tools.verus_run_cli` for
+`verus run`. An adapter module owns its Cyclopts and environment-variable
+binding, output printing, and exit-code mapping.
 
 `rust_prover_tools.commands` is the only module that invokes external
 programmes. It builds Cuprum `CommandSpec` values and returns a small
@@ -80,30 +81,58 @@ downloader records `download.start`, `download.complete`, `download.cache_hit`,
 `download.verified`, and `download.failed` with a bounded reason category
 (`redirect_limit`, `redirect_target`, `redirect_location`, `http_status`,
 `invalid_content_length`, `content_length`, `size_limit`, `deadline`,
-`incomplete_body`, `stream_error`, `transport_error`, `digest_mismatch`,
-`digest_read`, `store_error`, or `cleanup_error`). Each installer also records
-`<tool>.install.start`, `<tool>.install.reuse`, `<tool>.install.complete`, and
-`<tool>.install.failed` with a bounded phase, together with the extraction,
-marker, setup, and verification boundaries (`z3.extract.complete`,
-`z3.marker.recorded`, `kani.extract.complete`, `kani.setup.complete`,
-`kani.verify.complete`, `verus.extract.start`, and `verus.extract.complete`).
-When removing a temporary file fails while another failure is in flight, the
-cleanup failure is recorded as `download.cleanup_failed` or
-`<tool>.cleanup_failed` and the primary failure is preserved; a cleanup failure
-on its own is reported as the download or installer failure instead. Kani names
-its cleanup reasons explicitly: `cleanup_error` for a pending extraction file
-that could not be removed, `rollback_error` for a backup that could not be
-restored or a published executable that could not be removed during rollback,
-and `backup_error` for a backup that could not be removed after both
-executables were published. A `rollback_error` is always secondary to the
-extraction failure it accompanies, so it is recorded and the extraction error
-is re-raised. A `backup_error` is standalone: it is recorded and then raised, so
-`kani.install.complete` is never reported. Completion events carry the
-transferred byte count and the elapsed seconds. Records carry an `event_data`
-mapping rather than free text. The library installs no handlers, so an
-application opts in by lowering the level of the relevant `rust_prover_tools`
-module logger. User-facing status lines and `ProverToolError` messages remain
-the primary interface.
+`incomplete_body`, `stream_error`, `transport_error`, `url_policy`,
+`digest_mismatch`, `digest_read`, `store_error`, or `cleanup_error`). No
+download event carries an asset name: callers supply it, so it is not a closed
+category and would grow one metric label per manifest. The snapshot download
+retry loop likewise records `download.retry` with only the failed attempt
+number and the delay before the next attempt, so a transient failure is visible
+without adding an unbounded reason or an asset-name label. Each installer also
+records `<tool>.install.start`, `<tool>.install.reuse`,
+`<tool>.install.complete`, and `<tool>.install.failed` with a bounded phase,
+together with the extraction, marker, setup, and verification boundaries
+(`z3.extract.complete`, `z3.marker.recorded`, `kani.extract.complete`,
+`kani.setup.complete`, `kani.verify.complete`, `verus.extract.start`, and
+`verus.extract.complete`). Snapshot commands report timed spans as correlated
+start and completion events. `kani.snapshot.install` closes with an `outcome` of
+`activated` or `reused` and a `cache` of `miss` or `hit`;
+`kani.snapshot.check` closes with `outcome="valid"`; and `kani.snapshot.run`
+closes with an `outcome` of `success` or `failure` and the launcher's
+`exit_code`. The internal `kani.snapshot.stage`, `kani.snapshot.setup`,
+`kani.snapshot.probe`, `kani.snapshot.publish`, and `kani.snapshot.launch`
+boundaries each report their own span, so a slow setup is distinguishable from
+slow validation. Every closing event adds `elapsed_seconds`; a failure replaces
+the completion with a `failed` event that names only the exception class as
+`reason`. `kani.snapshot.install.repair` records a bounded repair trigger, and
+`kani.install.staged` records the asset count. Those fields are the metric
+source: `outcome`, `cache`, and `reason` are closed category sets,
+`elapsed_seconds` is a duration, and `exit_code` is an integer, so no event
+introduces an unbounded metric label. No event carries a path, URL, argument
+list, digest, or payload. When removing a temporary file fails while another
+failure is in flight, the cleanup failure is recorded as
+`download.cleanup_failed` or `<tool>.cleanup_failed` and the primary failure is
+preserved; a cleanup failure on its own is reported as the download or
+installer failure instead. Kani names its cleanup reasons explicitly:
+`cleanup_error` for a pending extraction file that could not be removed,
+`rollback_error` for a backup that could not be restored or a published
+executable that could not be removed during rollback, and `backup_error` for a
+backup that could not be removed after both executables were published. A
+`rollback_error` is always secondary to the extraction failure it accompanies,
+so it is recorded and the extraction error is re-raised. A `backup_error` is
+standalone: it is recorded and then raised, so `kani.install.complete` is never
+reported. Completion events carry the transferred byte count and the elapsed
+seconds. Records carry an `event_data` mapping rather than free text. The
+library itself installs no handlers and exports no metrics client. The consumer
+of the event stream is therefore the embedding application: whoever configures
+logging for the process, such as the CLI's host or an operator-run harness,
+lowers the level of the relevant `rust_prover_tools` module logger and attaches
+the handler, which turns each `event_data` mapping into a log record or a
+metric increment. Because every field that reaches that consumer is a closed
+category (`outcome`, `cache`, `reason`, the retry `attempt`), a number
+(`elapsed_seconds`, `exit_code`, `delay_seconds`, byte counts) or a log-only
+identifier (`span_id`), the receiving side needs no per-release mapping.
+User-facing status lines and `ProverToolError` messages remain the primary
+interface.
 
 ### Verified download sequence
 
@@ -365,6 +394,18 @@ never carry proof paths, arguments, or verifier output, and the module installs
 no logger or handler, so the CLI's normal stream is unchanged unless the host
 application enables logging.
 
+Neither the generic downloader nor the snapshot retry event names the asset it
+transfers. `download_pinned` and `download_asset` accept caller-supplied
+assets, so an asset name is not a closed category and must not become a metric
+label; the name is carried in error messages instead. Every download event
+field is therefore a bounded category or a number. The snapshot tag is likewise
+not logged because it changes with every release. Operation spans carry a
+process-local `span_id` so concurrent spans of one operation can be paired; it
+is unique per span and therefore log-only, never a metric label. This package
+installs no metrics client or log-to-metric pipeline: it emits bounded
+structured fields that a host-owned collector may map, and collection remains
+the host's responsibility.
+
 Binary discovery is split from installation at the API boundary.
 `resolve_verus_bin` is the read-only probe that returns `None` when no
 executable is found; `ensure_run_binary` owns the install fallback and is named
@@ -414,14 +455,14 @@ not the default `make test` gate.
 ## Explicit legacy release execution
 
 The separate `kani exec` verb executes a selected complete release without
-installing it, while leaving the proposed snapshot-only `kani run` programme in
-[PR #131](https://github.com/leynos/rust-prover-tools/pull/131)
-unchanged. The initial compatibility boundary is Linux x86_64 Kani 0.67.0 and
-its exact release compiler metadata. Runtime lookup is child scoped; compiler
-identity queries and subsequent Cargo compilation retain every configured
-admission wrapper. Wrappers are optional when absent; the runtime does not
-create a substitute on hosted runners. Environment and Cargo configuration
-validation reject malformed selections and unproved backend or wrapper routes.
+installing it. It does not alias, wrap or replace the snapshot-only `kani run`
+command described under [Kani snapshot commands](#kani-snapshot-commands). The
+initial compatibility boundary is Linux x86_64 Kani 0.67.0 and its exact
+release compiler metadata. Runtime lookup is child scoped; compiler identity
+queries and subsequent Cargo compilation retain every configured admission
+wrapper. Wrappers are optional when absent; the runtime does not create a
+substitute on hosted runners. Environment and Cargo configuration validation
+reject malformed selections and unproved backend or wrapper routes.
 
 Profile backends are classified by position, not by name. Discovery returns a
 `VerificationConfig` holding an immutable `BackendSelection` for each string
@@ -466,3 +507,34 @@ normalization. The default cargo-llvm-cov wrapper mode therefore remains
 unqualified for nested Kani. Selecting ambient mode also changes coverage
 selection semantics, so consumers must validate their measured report scope and
 ratchet rather than assuming numeric equivalence.
+
+## Kani snapshot commands
+
+The [Kani snapshot distribution design](kani-snapshot-distribution-design.md)
+defines opt-in immutable binary snapshots, independent of the existing
+semantic-version release path. The consumer half is implemented as a separate
+command group so the legacy CLI keeps its persisted `VERSION` contract:
+
+- `kani snapshot install` materializes and activates one reviewed pin from a
+  verified local asset directory.
+- `kani snapshot check` revalidates the active generation without setup.
+- `kani run --snapshot-pin PATH -- ARGS...` executes a proof through the
+  active generation and forwards every argument unchanged.
+
+`kani run` is distinct from legacy `kani exec`: `exec` selects a complete
+release by semantic version for one execution, while `run` requires an
+installed snapshot identity and refuses any argument that would replace its
+backend. Neither command is an alias for the other, and neither falls back to
+the other on failure.
+
+Install and check resolve the pin to `tools/kani/snapshot.toml` and the cache to
+`.kani-snapshots` below the repository root. `run` requires an explicit
+`--snapshot-pin` so a proof cannot silently drift to another snapshot. Snapshot
+sub-applications disable Cyclopts' `INPUT_*` configuration, keeping a generic
+workflow input from redirecting a reviewed pin or cache.
+
+Installation currently requires `--asset-dir`. The release download transport
+and the publication workflow are later milestones; until they land, a pin can
+be consumed only from release files that were obtained and reviewed separately.
+The [execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
+implementation acceptance from a separately authorized first publication.

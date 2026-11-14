@@ -19,7 +19,7 @@ import logging
 import typing as typ
 from time import monotonic
 
-from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 from rust_prover_tools.observability import log_event
 
 if typ.TYPE_CHECKING:
@@ -97,15 +97,19 @@ class _DeadlineResponse:
 
 def _log_failure(
     logger: logging.Logger,
-    asset_name: str,
     reason: str,
     **fields: object,
 ) -> None:
-    """Record one bounded download failure event on `logger`."""
+    """Record one bounded download failure event on `logger`.
+
+    The asset name is deliberately not logged. Callers of the generic
+    downloader supply their own names, so the value is not a closed category
+    and must not become a metric label; the reason and the numeric fields
+    are bounded.
+    """
     log_event(
         logger,
         "download.failed",
-        asset=asset_name,
         reason=reason,
         **fields,
     )
@@ -126,17 +130,26 @@ def _stream(
     limits: _StreamLimits,
 ) -> int:
     """Write a response body, enforcing the byte ceiling and deadline."""
-    # The limits travel together so transport events can name the same logical
-    # asset as the downloader, and the returned count avoids re-reading the file.
+    # The limits travel together so failure messages name the logical asset,
+    # and the returned count avoids re-reading the file.
     name = limits.name
     expected = _content_length(response, name)
     _reject_declared_oversize(limits, expected)
     try:
         with destination.open("wb") as output:
-            written = _copy_body(response, output, limits)
-    except (OSError, http.client.HTTPException) as exc:
-        _log_failure(_LOGGER, name, "stream_error")
-        msg = f"failed to download {name}: {exc}"
+            try:
+                written = _copy_body(response, output, limits)
+            except (OSError, http.client.HTTPException) as exc:
+                # Only response reads reach here: `_copy_body` converts local
+                # write failures first, so retrying this one may help.
+                _log_failure(_LOGGER, "stream_error")
+                msg = f"failed to download {name}: {exc}"
+                raise TransientDownloadError(msg) from exc
+    except OSError as exc:
+        # Opening, flushing or closing the destination is a local storage
+        # failure; a retry of the same request cannot repair it.
+        _log_failure(_LOGGER, "store_error")
+        msg = f"failed to store {name} at {destination}: {exc}"
         raise ProverToolError(msg) from exc
     _require_complete_body(limits, written, expected)
     return written
@@ -150,11 +163,11 @@ def _content_length(response: HTTPResponseLike, asset_name: str) -> int | None:
     try:
         value = int(raw)
     except ValueError as exc:
-        _log_failure(_LOGGER, asset_name, "invalid_content_length")
+        _log_failure(_LOGGER, "invalid_content_length")
         msg = f"invalid Content-Length '{raw}' from {asset_name}"
         raise ProverToolError(msg) from exc
     if value < 0:
-        _log_failure(_LOGGER, asset_name, "invalid_content_length", declared=value)
+        _log_failure(_LOGGER, "invalid_content_length", declared=value)
         msg = f"invalid negative Content-Length '{raw}' from {asset_name}"
         raise ProverToolError(msg)
     return value
@@ -169,7 +182,6 @@ def _reject_declared_oversize(
         return
     _log_failure(
         _LOGGER,
-        limits.name,
         "content_length",
         declared=declared,
         max_bytes=limits.max_bytes,
@@ -205,7 +217,6 @@ def _copy_body(
         if written > limits.max_bytes:
             _log_failure(
                 _LOGGER,
-                limits.name,
                 "size_limit",
                 written=written,
                 max_bytes=limits.max_bytes,
@@ -215,7 +226,13 @@ def _copy_body(
                 f"streamed size exceeded the {limits.max_bytes}-byte limit"
             )
             raise ProverToolError(msg)
-        output.write(chunk)
+        try:
+            output.write(chunk)
+        except OSError as exc:
+            # A local disk error must not be retried as a flaky connection.
+            _log_failure(_LOGGER, "store_error", written=written)
+            msg = f"failed to store {limits.name}: {exc}"
+            raise ProverToolError(msg) from exc
 
 
 def _raise_deadline(
@@ -225,7 +242,7 @@ def _raise_deadline(
     cause: BaseException | None = None,
 ) -> typ.NoReturn:
     """Report the expired transfer deadline and raise the bounded failure."""
-    _log_failure(_LOGGER, limits.name, "deadline", written=written)
+    _log_failure(_LOGGER, "deadline", written=written)
     msg = f"download of {limits.name} exceeded the transfer deadline"
     raise ProverToolError(msg) from cause
 
@@ -240,7 +257,6 @@ def _require_complete_body(
         return
     _log_failure(
         _LOGGER,
-        limits.name,
         "incomplete_body",
         written=written,
         expected=expected,

@@ -28,11 +28,13 @@ from __future__ import annotations
 import dataclasses as dc
 import sys
 import typing as typ
-from pathlib import Path
+from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
 
 import cyclopts
 from cyclopts import App, Parameter
 
+from rust_prover_tools.cli_support import error_exit
+from rust_prover_tools.cli_support import repo_root as resolve_repo_root
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import guard_shutdown_flush, print_lines
 from rust_prover_tools.kani import (
@@ -43,12 +45,12 @@ from rust_prover_tools.kani import (
     install_kani,
 )
 from rust_prover_tools.kani_exec_cli import kani_exec
+from rust_prover_tools.kani_snapshot_cli import run_app, snapshot_app
 from rust_prover_tools.verus import (
     DEFAULT_TARGET,
     VERUS_BASE_URL,
     VerusInstallOptions,
     VerusPaths,
-    VerusProofFailedError,
     install_verus,
 )
 from rust_prover_tools.verus_run_cli import verus_run
@@ -73,22 +75,6 @@ z3_app: cyclopts.App = App(
     "z3",
     help="Install the pinned Z3 solver used by Verus",
 )
-
-
-def _repo_root(path: Path | None) -> Path:
-    """Return the requested repository root or the current working directory."""
-    return (path or Path.cwd()).resolve()
-
-
-def _error_exit(exc: ProverToolError) -> int:
-    """Print a user-facing error and return the appropriate exit status."""
-    # A closed pipe loses only this diagnostic; the proof result must survive.
-    print_lines((str(exc),), stream=sys.stderr)
-    match exc:
-        case VerusProofFailedError(exit_code=code):
-            return code
-        case _:
-            return 1
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -151,7 +137,7 @@ def _kani_install_options(flags: _KaniInstallFlags) -> KaniInstallOptions:
     """Translate parsed CLI flags into installer options."""
     return KaniInstallOptions(
         paths=KaniPaths(
-            repo_root=_repo_root(flags.repo_root),
+            repo_root=resolve_repo_root(flags.repo_root),
             version_file=flags.version_file,
         ),
         version=flags.version,
@@ -191,7 +177,7 @@ def install(
     try:
         lines = install_kani(_kani_install_options(options))
     except ProverToolError as exc:
-        return _error_exit(exc)
+        return error_exit(exc)
     print_lines(lines)
     return 0
 
@@ -233,20 +219,20 @@ def check_version(
 
     Notes
     -----
-    `ProverToolError` is handled with `_error_exit`.
+    `ProverToolError` is handled with `error_exit`.
     """
     try:
         message = check_kani_version(
             KaniCheckOptions(
                 paths=KaniPaths(
-                    repo_root=_repo_root(repo_root), version_file=version_file
+                    repo_root=resolve_repo_root(repo_root), version_file=version_file
                 ),
                 expected_version=expected_version,
                 kani_command=kani_command,
             ),
         )
     except ProverToolError as exc:
-        return _error_exit(exc)
+        return error_exit(exc)
     print_lines((message,))
     return 0
 
@@ -301,13 +287,13 @@ def install_verifier(
 
     Notes
     -----
-    `ProverToolError` is handled with `_error_exit`.
+    `ProverToolError` is handled with `error_exit`.
     """
     try:
         lines = install_verus(
             VerusInstallOptions(
                 paths=VerusPaths(
-                    repo_root=_repo_root(repo_root),
+                    repo_root=resolve_repo_root(repo_root),
                     version_file=version_file,
                     checksum_file=checksum_file,
                 ),
@@ -317,7 +303,7 @@ def install_verifier(
             ),
         )
     except ProverToolError as exc:
-        return _error_exit(exc)
+        return error_exit(exc)
     print_lines(lines)
     return 0
 
@@ -355,23 +341,25 @@ def install_solver(
 
     Notes
     -----
-    `ProverToolError` is handled with `_error_exit`.
+    `ProverToolError` is handled with `error_exit`.
     """
     try:
         lines = install_z3_solver(
             Z3InstallOptions(
-                repo_root=_repo_root(repo_root),
+                repo_root=resolve_repo_root(repo_root),
                 install_dir=install_dir,
                 cache_dir=cache_dir,
             ),
         )
     except ProverToolError as exc:
-        return _error_exit(exc)
+        return error_exit(exc)
     print_lines(lines)
     return 0
 
 
 kani_app.command(kani_exec, name="exec")
+kani_app.command(run_app, name="run")
+kani_app.command(snapshot_app, name="snapshot")
 verus_app.command(verus_run, name="run")
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")

@@ -20,6 +20,11 @@ import typing as typ
 from pathlib import Path
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_exec_routing import (
+    TOOL_ROUTES,
+    check_process_tool_selections,
+    has_selected_tool,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -29,12 +34,6 @@ _PROFILE_NAME = re.compile(r"[A-Za-z0-9_-]+")
 _UNPROVED_BACKEND = "Kani exec cannot prove isolation of Cargo backend configuration"
 _PACKAGE_BACKEND = (
     "Kani exec cannot prove isolation of a package-specific Cargo backend override"
-)
-
-_TOOL_ROUTES = (
-    ("rustc-wrapper", "RUSTC_WRAPPER"),
-    ("rustc-workspace-wrapper", "RUSTC_WORKSPACE_WRAPPER"),
-    ("rustdoc", "RUSTDOC"),
 )
 
 
@@ -61,31 +60,6 @@ def checked_resolve(path: Path) -> Path:
         raise ProverToolError(msg) from exc
 
 
-def _has_selected_tool(environment: cabc.Mapping[str, str], variable: str) -> bool:
-    """Require a representable non-empty selection before relying on precedence."""
-    value = environment.get(variable)
-    if not value or "\x00" in value:
-        return False
-    try:
-        value.encode("utf-8", errors="strict")
-    except UnicodeError:
-        return False
-    return True
-
-
-def _check_process_tool_selections(environment: cabc.Mapping[str, str]) -> None:
-    """Allow absent tools, preserving valid selections and refusing hidden routes."""
-    for key, variable in _TOOL_ROUTES:
-        if variable in environment and not _has_selected_tool(environment, variable):
-            msg = f"Kani exec refuses invalid process tool selection for {variable}"
-            raise ProverToolError(msg)
-        if "CARGO_BUILD_" + variable in environment and not _has_selected_tool(
-            environment, variable
-        ):
-            msg = f"Kani exec refuses unproved Cargo compiler routing via {key}"
-            raise ProverToolError(msg)
-
-
 def _check_routing_overrides(
     document: dict[str, object], environment: cabc.Mapping[str, str]
 ) -> None:
@@ -99,7 +73,7 @@ def _check_routing_overrides(
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
     }
-    protected.update("CARGO_BUILD_" + variable for _, variable in _TOOL_ROUTES)
+    protected.update("CARGO_BUILD_" + variable for _, variable in TOOL_ROUTES)
     variables = document.get("env")
     if isinstance(variables, dict) and protected.intersection(variables):
         msg = "Kani exec refuses Cargo env overrides of verification routing"
@@ -107,10 +81,10 @@ def _check_routing_overrides(
     build = document.get("build")
     if not isinstance(build, dict):
         return
-    for key, variable in _TOOL_ROUTES:
+    for key, variable in TOOL_ROUTES:
         # Bundled Cargo context::maybe_get_tool selects a UTF-8 process value
         # before the [build] fallback. Preserve that selection verbatim.
-        if key in build and not _has_selected_tool(environment, variable):
+        if key in build and not has_selected_tool(environment, variable):
             msg = f"Kani exec refuses unproved Cargo compiler routing via {key}"
             raise ProverToolError(msg)
 
@@ -146,6 +120,19 @@ class VerificationConfig:
     """
 
     selections: tuple[BackendSelection, ...] = ()
+
+
+def backend_overrides(config: VerificationConfig) -> dict[str, str]:
+    """Return child-only Cargo variables pinning accepted backends to LLVM.
+
+    Cargo reads `CARGO_PROFILE_<NAME>_CODEGEN_BACKEND` in preference to profile
+    tables in configuration files and manifests, so writing these variables
+    into the child selects the qualified backend without touching the parent.
+    """
+    return {
+        codegen_backend_variable(selection.profile): "llvm"
+        for selection in config.selections
+    }
 
 
 def codegen_backend_variable(profile: str) -> str:
@@ -334,7 +321,7 @@ def check_verification_config(
         A malformed tool selection, backend, unresolved include, ambiguous
         config pair, or unreadable configuration prevents verification isolation.
     """
-    _check_process_tool_selections(environment)
+    check_process_tool_selections(environment)
     home = environment.get("CARGO_HOME")
     if home:
         cargo_home = Path(home)

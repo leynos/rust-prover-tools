@@ -53,6 +53,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
+    from rust_prover_tools.download_url import UrlPolicy
+
 __all__ = (
     "DEFAULT_DOWNLOAD_LIMITS",
     "DownloadLimits",
@@ -90,6 +92,8 @@ def download_pinned(
     asset: PinnedAsset,
     destination: Path,
     limits: DownloadLimits = DEFAULT_DOWNLOAD_LIMITS,
+    *,
+    url_policy: UrlPolicy | None = None,
 ) -> Path:
     """Download a pinned asset and verify its SHA-256 digest.
 
@@ -105,6 +109,9 @@ def download_pinned(
         Final path for the verified asset.
     limits : DownloadLimits
         Network limits. Defaults to `DownloadLimits()`.
+    url_policy : UrlPolicy | None
+        Optional policy applied to the initial URL and every redirect before
+        either is opened.
 
     Returns
     -------
@@ -120,19 +127,19 @@ def download_pinned(
     _ensure_parent_directory(destination)
 
     if _has_verified_copy(asset, destination):
-        log_event(_LOGGER, "download.cache_hit", asset=asset.name)
+        log_event(_LOGGER, "download.cache_hit")
         return destination
 
     pending = destination.with_name(f"{destination.name}.download")
-    with _pending_download(pending, asset.name):
-        _download_verified(asset, pending, limits)
+    with _pending_download(pending):
+        _download_verified(asset, pending, limits, url_policy=url_policy)
         _publish_verified(asset, pending, destination)
-    log_event(_LOGGER, "download.verified", asset=asset.name)
+    log_event(_LOGGER, "download.verified")
     return destination
 
 
 @contextlib.contextmanager
-def _pending_download(path: Path, asset: str) -> cabc.Generator[None]:
+def _pending_download(path: Path) -> cabc.Generator[None]:
     """Remove a pending download, preserving an earlier failure."""
     # A cleanup failure after a successful block is raised because the caller
     # should know the temporary file remains. While the block is already
@@ -141,12 +148,12 @@ def _pending_download(path: Path, asset: str) -> cabc.Generator[None]:
     try:
         yield
     except BaseException:
-        _discard_pending(path, asset, has_prior_failure=True)
+        _discard_pending(path, has_prior_failure=True)
         raise
-    _discard_pending(path, asset, has_prior_failure=False)
+    _discard_pending(path, has_prior_failure=False)
 
 
-def _discard_pending(path: Path, asset: str, *, has_prior_failure: bool) -> None:
+def _discard_pending(path: Path, *, has_prior_failure: bool) -> None:
     """Remove a pending file and report a cleanup failure at the right level."""
     try:
         path.unlink(missing_ok=True)
@@ -155,11 +162,10 @@ def _discard_pending(path: Path, asset: str, *, has_prior_failure: bool) -> None
             log_event(
                 _LOGGER,
                 "download.cleanup_failed",
-                asset=asset,
                 reason="cleanup_error",
             )
             return
-        log_event(_LOGGER, "download.failed", asset=asset, reason="cleanup_error")
+        log_event(_LOGGER, "download.failed", reason="cleanup_error")
         msg = f"failed to remove pending download '{path}': {exc}"
         raise ProverToolError(msg) from exc
 
@@ -199,6 +205,8 @@ def _download_verified(
     asset: PinnedAsset,
     pending: Path,
     limits: DownloadLimits,
+    *,
+    url_policy: UrlPolicy | None = None,
 ) -> None:
     """Download into `pending` and reject a digest that does not match."""
     _download(
@@ -207,18 +215,17 @@ def _download_verified(
             destination=pending,
             max_bytes=asset.max_bytes,
             asset_name=asset.name,
+            url_policy=url_policy,
         ),
         limits,
     )
     try:
         actual = sha256_file(pending)
     except ProverToolError:
-        log_event(_LOGGER, "download.failed", asset=asset.name, reason="digest_read")
+        log_event(_LOGGER, "download.failed", reason="digest_read")
         raise
     if actual != asset.sha256:
-        log_event(
-            _LOGGER, "download.failed", asset=asset.name, reason="digest_mismatch"
-        )
+        log_event(_LOGGER, "download.failed", reason="digest_mismatch")
         msg = (
             f"SHA-256 mismatch for {asset.name}.\n"
             f"Expected: {asset.sha256}\n"
@@ -232,18 +239,25 @@ def _publish_verified(asset: PinnedAsset, pending: Path, destination: Path) -> N
     try:
         pending.replace(destination)
     except OSError as exc:
-        log_event(_LOGGER, "download.failed", asset=asset.name, reason="store_error")
+        log_event(_LOGGER, "download.failed", reason="store_error")
         msg = f"failed to store {asset.name} at '{destination}': {exc}"
         raise ProverToolError(msg) from exc
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(
+    path: Path,
+    *,
+    checkpoint: cabc.Callable[[], None] | None = None,
+) -> str:
     """Return the lowercase SHA-256 digest of a file.
 
     Parameters
     ----------
     path : Path
         File to hash.
+    checkpoint : collections.abc.Callable[[], None] | None
+        Called before each chunk so a caller's deadline can interrupt a large
+        file instead of being noticed only after hashing finishes.
 
     Returns
     -------
@@ -259,6 +273,8 @@ def sha256_file(path: Path) -> str:
     try:
         with path.open("rb") as source:
             while chunk := source.read(READ_CHUNK_SIZE):
+                if checkpoint is not None:
+                    checkpoint()
                 digest.update(chunk)
     except OSError as exc:
         msg = f"failed to read '{path}': {exc}"
