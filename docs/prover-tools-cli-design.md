@@ -82,8 +82,10 @@ downloader records `download.start`, `download.complete`, `download.cache_hit`,
 (`redirect_limit`, `redirect_target`, `redirect_location`, `http_status`,
 `invalid_content_length`, `content_length`, `size_limit`, `deadline`,
 `incomplete_body`, `stream_error`, `transport_error`, `url_policy`,
-`digest_mismatch`, `digest_read`, `store_error`, or `cleanup_error`). The
-snapshot download retry loop records `download.retry` with the failed attempt
+`digest_mismatch`, `digest_read`, `store_error`, or `cleanup_error`). No
+download event carries an asset name: callers supply it, so it is not a closed
+category and would grow one metric label per manifest. The snapshot download
+retry loop likewise records `download.retry` with only the failed attempt
 number and the delay before the next attempt, so a transient failure is visible
 without adding an unbounded reason or an asset-name label. Each installer also
 records `<tool>.install.start`, `<tool>.install.reuse`,
@@ -384,16 +386,17 @@ never carry proof paths, arguments, or verifier output, and the module installs
 no logger or handler, so the CLI's normal stream is unchanged unless the host
 application enables logging.
 
-The generic downloader's events name the asset they transfer, because those
-names are fixed per tool. The snapshot retry event does not: `download_asset`
-accepts a separately constructed policy and pinned asset, so a snapshot asset
-name is not a closed category and must not become a metric label. The snapshot
-tag is likewise not logged because it changes with every release. Operation
-spans carry a process-local `span_id` so concurrent spans of one operation can
-be paired; it is unique per span and therefore log-only, never a metric label.
-This package installs no metrics client or log-to-metric pipeline: it emits
-bounded structured fields that a host-owned collector may map, and collection
-remains the host's responsibility.
+Neither the generic downloader nor the snapshot retry event names the asset it
+transfers. `download_pinned` and `download_asset` accept caller-supplied
+assets, so an asset name is not a closed category and must not become a metric
+label; the name is carried in error messages instead. Every download event
+field is therefore a bounded category or a number. The snapshot tag is likewise
+not logged because it changes with every release. Operation spans carry a
+process-local `span_id` so concurrent spans of one operation can be paired; it
+is unique per span and therefore log-only, never a metric label. This package
+installs no metrics client or log-to-metric pipeline: it emits bounded
+structured fields that a host-owned collector may map, and collection remains
+the host's responsibility.
 
 Binary discovery is split from installation at the API boundary.
 `resolve_verus_bin` is the read-only probe that returns `None` when no

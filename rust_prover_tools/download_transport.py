@@ -83,12 +83,13 @@ DEFAULT_DOWNLOAD_LIMITS: typ.Final[DownloadLimits] = DownloadLimits()
 
 @dc.dataclass(frozen=True, slots=True)
 class _DownloadRequest:
-    """One bounded download and the asset identity its events report.
+    """One bounded download and the asset name its failure messages report.
 
     `asset_name` defaults to the destination file name for direct callers;
-    `download_pinned` supplies the pinned asset name so transport events join
-    with the downloader's own events. `url_policy` receives the initial URL and
-    every redirect target before either is opened.
+    `download_pinned` supplies the pinned asset name. The name is used in
+    messages only: it is caller-supplied, so it is not a bounded event field.
+    `url_policy` receives the initial URL and every redirect target before
+    either is opened.
     """
 
     url: str
@@ -99,7 +100,7 @@ class _DownloadRequest:
 
     @property
     def name(self) -> str:
-        """Logical asset name reported by every event."""
+        """Logical asset name used in failure messages."""
         return self.asset_name or self.destination.name
 
 
@@ -109,32 +110,27 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
     started = monotonic()
     deadline = started + limits.transfer_timeout_seconds
     current = _validate_url(request.url)
-    _check_policy(request.url_policy, request.url, asset_name=name, redirect=False)
-    log_event(_LOGGER, "download.start", asset=name, max_bytes=request.max_bytes)
+    _check_policy(request.url_policy, request.url, redirect=False)
+    log_event(_LOGGER, "download.start", max_bytes=request.max_bytes)
     for hop in range(limits.max_redirects + 1):
-        response, connection = _open(current, limits, deadline, asset_name=name)
+        response, connection = _open(current, limits, deadline)
         try:
-            location = _redirect_location(response, current, asset_name=name)
+            location = _redirect_location(response, current)
             if location is not None:
                 if hop >= limits.max_redirects:
-                    _log_failure(_LOGGER, name, "redirect_limit")
+                    _log_failure(_LOGGER, "redirect_limit")
                     msg = f"too many redirects while downloading {request.url}"
                     raise ProverToolError(msg)
                 target = urllib.parse.urljoin(current, location)
                 try:
                     target = _validate_url(target)
                 except ProverToolError:
-                    _log_failure(_LOGGER, name, "redirect_target")
+                    _log_failure(_LOGGER, "redirect_target")
                     raise
-                _check_policy(
-                    request.url_policy,
-                    target,
-                    asset_name=name,
-                    redirect=True,
-                )
+                _check_policy(request.url_policy, target, redirect=True)
                 current = target
                 continue
-            _require_success(response, current, asset_name=name)
+            _require_success(response, current)
             written = _stream(
                 response,
                 request.destination,
@@ -143,7 +139,6 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
             log_event(
                 _LOGGER,
                 "download.complete",
-                asset=name,
                 written=written,
                 redirects=hop,
                 elapsed_seconds=monotonic() - started,
@@ -151,7 +146,7 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
             return
         finally:
             connection.close()
-    _log_failure(_LOGGER, name, "redirect_limit")
+    _log_failure(_LOGGER, "redirect_limit")
     msg = f"too many redirects while downloading {request.url}"
     raise ProverToolError(msg)
 
@@ -160,7 +155,6 @@ def _check_policy(
     policy: UrlPolicy | None,
     url: str,
     *,
-    asset_name: str,
     redirect: bool,
 ) -> None:
     """Apply the caller's URL policy and report a refusal as one event."""
@@ -172,7 +166,7 @@ def _check_policy(
         else:
             policy.check_initial(url)
     except ProverToolError:
-        _log_failure(_LOGGER, asset_name, "url_policy")
+        _log_failure(_LOGGER, "url_policy")
         raise
 
 
@@ -180,14 +174,12 @@ def _open(
     url: str,
     limits: DownloadLimits,
     deadline: float,
-    *,
-    asset_name: str,
 ) -> tuple[HTTPResponseLike, http.client.HTTPSConnection]:
     """Request `url` and return the response with its connection."""
     parsed = _parse_https_url(url)
     remaining = deadline - monotonic()
     if remaining <= 0:
-        _log_failure(_LOGGER, asset_name, "deadline")
+        _log_failure(_LOGGER, "deadline")
         msg = f"download of {url} exceeded the transfer deadline"
         raise ProverToolError(msg)
     timeout = min(limits.connect_timeout_seconds, remaining)
@@ -215,7 +207,7 @@ def _open(
         response = connection.getresponse()
     except (OSError, http.client.HTTPException) as exc:
         connection.close()
-        _log_failure(_LOGGER, asset_name, "transport_error")
+        _log_failure(_LOGGER, "transport_error")
         msg = f"failed to download {url}: {exc}"
         raise TransientDownloadError(msg) from exc
     return (
@@ -232,8 +224,6 @@ def _open(
 def _redirect_location(
     response: HTTPResponseLike,
     url: str,
-    *,
-    asset_name: str,
 ) -> str | None:
     """Return a redirect target, `None` for success, or raise for a bad hop."""
     if response.status not in REDIRECT_STATUSES:
@@ -242,7 +232,6 @@ def _redirect_location(
     if not location:
         _log_failure(
             _LOGGER,
-            asset_name,
             "redirect_location",
             status=response.status,
         )
@@ -254,15 +243,12 @@ def _redirect_location(
 def _require_success(
     response: HTTPResponseLike,
     url: str,
-    *,
-    asset_name: str,
 ) -> None:
     """Raise unless the response is a complete HTTP 200."""
     if response.status == HTTP_OK:
         return
     _log_failure(
         _LOGGER,
-        asset_name,
         "http_status",
         status=response.status,
         status_class=f"{response.status // 100}xx",

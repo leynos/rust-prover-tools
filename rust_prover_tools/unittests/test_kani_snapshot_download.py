@@ -147,11 +147,9 @@ def test_transport_checks_every_redirect_before_opening_it(
         url: str,
         limits: DownloadLimits,
         deadline: float,
-        *,
-        asset_name: str,
     ) -> tuple[FakeResponse, FakeConnection]:
         """Record the opened URL and return the redirect."""
-        del limits, deadline, asset_name
+        del limits, deadline
         opened.append(url)
         return FakeResponse(), connection
 
@@ -445,11 +443,9 @@ def test_download_asset_retries_a_transient_http_status(
         url: str,
         limits: download_transport.DownloadLimits,
         deadline: float,
-        *,
-        asset_name: str,
     ) -> tuple[_Response, _Connection]:
         """Return the transient status first, then the payload."""
-        del url, limits, deadline, asset_name
+        del url, limits, deadline
         calls.append(1)
         if len(calls) == 1:
             return _Response(status), _Connection()
@@ -569,11 +565,9 @@ def test_download_asset_does_not_retry_an_unwritable_pending_path(
         url: str,
         limits: download_transport.DownloadLimits,
         deadline: float,
-        *,
-        asset_name: str,
     ) -> tuple[_Response, _Connection]:
         """Record the attempt and return a successful response."""
-        del url, limits, deadline, asset_name
+        del url, limits, deadline
         calls.append(1)
         return _Response(200, b"payload"), _Connection()
 

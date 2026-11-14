@@ -135,11 +135,9 @@ def test_download_never_exceeds_the_redirect_budget(
         url: str,
         limits: DownloadLimits,
         deadline: float,
-        *,
-        asset_name: str,
     ) -> tuple[RedirectResponse, ClosingConnection]:
         """Record the requested URL and answer with a redirect."""
-        del limits, deadline, asset_name
+        del limits, deadline
         opened.append(url)
         return RedirectResponse(), ClosingConnection()
 

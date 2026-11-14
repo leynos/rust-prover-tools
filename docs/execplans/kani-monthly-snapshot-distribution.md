@@ -805,6 +805,19 @@ name verified provenance rather than the verifier command.
   integrity and observability tests. Every changed bare assertion now carries a
   failure message, and the focused modules pass (119 tests).
 
+- [x] (2026-11-14) Remediated the hosted review of `a12dd34`, whose pre-merge
+  table failed Unit Architecture, Domain Architecture and Observability.
+  Observability was a real defect: `download.start`, `download.complete`,
+  `download.cache_hit`, `download.verified`, `download.failed`,
+  `download.cleanup_failed` and `download.retry` carried an asset name, but
+  `download_pinned` and `download_asset` accept caller-supplied assets, so the
+  field would grow one metric label per manifest entry. Every download event
+  now carries only bounded categories (`reason`) and numbers, the name stays in
+  error messages, and a test asserts that no `download.*` event carries an
+  `asset` label. The design document's event and observability paragraphs state
+  that boundary. Unit Architecture and Domain Architecture remain open in this
+  entry and are continued by the following one.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
