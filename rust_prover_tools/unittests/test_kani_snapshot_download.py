@@ -178,17 +178,25 @@ class _Response:
         body: bytes = b"",
         *,
         read_error: OSError | None = None,
+        declared_length: int | None = None,
     ) -> None:
         """Store the status, the body to return once, and any read failure."""
         self.status = status
         self._body = body
         self._read_error = read_error
         self._read = False
+        self._declared_length = (
+            len(body) if declared_length is None else declared_length
+        )
 
     def getheader(self, name: str, default: str | None = None) -> str | None:
-        """Return the declared body length."""
+        """Return the declared body length.
+
+        A `declared_length` above the body models a response truncated in
+        transit, which the transport must see as a transient failure.
+        """
         if name == "Content-Length":
-            return str(len(self._body))
+            return str(self._declared_length)
         return default
 
     def read(self, amt: int | None = None) -> bytes:
@@ -344,6 +352,45 @@ def test_download_asset_retries_a_body_read_failure(
 
     assert result == tmp_path / "asset", "the download must return its destination"
     assert connections.opened == 2, "a failed body read must be retried"
+    assert sleeps == [0.5], "the retry waits the configured backoff"
+    assert result.read_bytes() == payload, "the retry must store the payload"
+
+
+def test_download_asset_retries_a_truncated_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A body shorter than its `Content-Length` is retried, not reported.
+
+    Python's `HTTPResponse.read` can return the end of the stream without
+    raising `IncompleteRead`, so a truncated response reaches the transport as
+    a short body rather than a read error. It is a transport fault like any
+    other, and the bounded retry must get a chance to complete the download.
+    """
+    payload = b"payload"
+    connections = _ScriptedConnections(
+        _ServingConnection(_Response(200, payload[:3], declared_length=len(payload))),
+        _ServingConnection(_Response(200, payload)),
+    )
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        connections,
+    )
+
+    result = download_asset(
+        _hashed_asset(payload),
+        tmp_path / "asset",
+        _policy(),
+        settings=DownloadSettings(
+            retry=DownloadRetryPolicy(attempts=2, backoff_seconds=0.5),
+            sleep=sleeps.append,
+        ),
+    )
+
+    assert result == tmp_path / "asset", "the download must return its destination"
+    assert connections.opened == 2, "a truncated body must be retried"
     assert sleeps == [0.5], "the retry waits the configured backoff"
     assert result.read_bytes() == payload, "the retry must store the payload"
 

@@ -69,12 +69,16 @@ in `rust_prover_tools.download_url`. Connection and redirect policy lives in
 bounded number of re-validated redirects. Body limits live in
 `rust_prover_tools.download_stream`, which rejects an oversized
 `Content-Length` before reading, counts streamed bytes, and enforces one
-monotonic transfer deadline. A pending file is removed on any failure and
-renamed to the final path only after the digest matches. The transport connects
-directly over HTTPS and deliberately does not read proxy environment variables
-such as `HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a
-proxy-only environment has no supported route through this library; a caller
-that needs a proxy cannot be served by the current API.
+monotonic transfer deadline. A body shorter than its declared `Content-Length`
+is raised as a transient transport failure rather than a plain error: a
+truncated stream can end without a read error, and a retry may deliver the
+whole body. Digest, policy and local storage failures stay outside the retry
+path. A pending file is removed on any failure and renamed to the final path
+only after the digest matches. The transport connects directly over HTTPS and
+deliberately does not read proxy environment variables such as `HTTPS_PROXY`.
+`download_pinned` exposes no transport hook, so a proxy-only environment has no
+supported route through this library; a caller that needs a proxy cannot be
+served by the current API.
 
 `rust_prover_tools.observability` defines the opt-in event helper. The
 downloader records `download.start`, `download.complete`, `download.cache_hit`,

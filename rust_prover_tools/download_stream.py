@@ -252,7 +252,14 @@ def _require_complete_body(
     written: int,
     expected: int | None,
 ) -> None:
-    """Reject a body shorter than its declared `Content-Length`."""
+    """Reject a body shorter than its declared `Content-Length`.
+
+    `HTTPResponse.read` can report the end of a truncated stream without
+    raising `IncompleteRead`, so this check is often the only place a cut
+    connection surfaces. The failure is transient for the same reason a read
+    error is: a retry may receive the whole body, and the digest and storage
+    checks that follow still decide whether what arrived is acceptable.
+    """
     if expected is None or written == expected:
         return
     _log_failure(
@@ -265,4 +272,4 @@ def _require_complete_body(
         f"incomplete download of {limits.name}: "
         f"received {written} bytes, expected {expected}"
     )
-    raise ProverToolError(msg)
+    raise TransientDownloadError(msg)

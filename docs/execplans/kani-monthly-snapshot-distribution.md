@@ -865,6 +865,19 @@ name verified provenance rather than the verifier command.
   it fail. Setup keeps its overlay, because it is meant to inherit the host and
   remove only the extraction option it must not pass on.
 
+- [x] (2026-11-14) Made a truncated response retryable.
+  `_require_complete_body` raised the base `ProverToolError`, so a body shorter
+  than its declared `Content-Length` never reached the bounded retry loop in
+  `download_asset`. `HTTPResponse.read` can return the end of a truncated
+  stream without raising `IncompleteRead`, which makes that check the only
+  place a cut transfer surfaces, and a retry may still deliver the whole body.
+  It now raises `TransientDownloadError`; digest, policy and local storage
+  failures keep the base class, so a retry still cannot mask them.
+  `test_download_asset_retries_a_truncated_body` scripts a three-byte body
+  declaring seven bytes followed by the complete response and asserts two
+  connections, one backoff and the full payload on disk; the `_Response` double
+  gained a `declared_length` so the truncation is expressible.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
