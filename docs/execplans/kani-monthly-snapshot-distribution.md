@@ -878,14 +878,20 @@ name verified provenance rather than the verifier command.
   connections, one backoff and the full payload on disk; the `_Response` double
   gained a `declared_length` so the truncation is expressible.
 
-- [x] (2026-11-14) Corrected the event-field guidance to match the closed-set
-  rule. `log_event`'s docstring offered an asset name as an example of a
-  bounded value, and `docs/developers-guide.md` listed asset names among the
-  permitted fields, although callers supply the names and they are therefore
-  not a closed set. Both now name closed categories such as a phase name and
-  say explicitly why an asset name is excluded. Every emitted field follows
-  that rule already; this is a documentation correction, and the design record
-  in `docs/prover-tools-cli-design.md` already stated it.
+- [x] (2026-11-14) Corrected the event-field guidance.
+
+  `log_event`'s docstring offered an asset name as an example of a bounded
+  value, and `docs/developers-guide.md` listed asset names among the permitted
+  fields without saying what they may not become. Both now separate the two
+  rules: a field may be a count, a duration, a short category from a closed
+  set, or a log-only identifier such as a pinned asset name, and only closed
+  categories and numbers may serve as metric labels. `span_id` and a
+  caller-supplied asset name are named as log-only, which is what the module
+  docstring and `docs/prover-tools-cli-design.md` already said. No emitter
+  changed: download events still omit the asset name, and the installer events
+  that do carry one (`verus.extract.start`, `kani.setup.complete`) are
+  unaffected, because the rule they must satisfy is about metric labels rather
+  than about log fields.
 
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.

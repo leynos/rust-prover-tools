@@ -141,12 +141,14 @@ Installer and download boundaries report through
 helper emits one DEBUG record whose payload is an `event_data` mapping. Event
 names are stable identifiers such as `download.start` or
 `kani.install.complete`, and their fields stay bounded to counts, durations,
-and closed-set category strings such as phase names. A download's asset name is
-not closed, because callers supply it, so it is never a field. Never include
-URLs, filesystem paths, credentials, digests, or payloads. The library installs
-no handlers, so an application opts in by lowering the level of the relevant
-`rust_prover_tools` module logger. `docs/prover-tools-cli-design.md` owns the
-system-design record for the event vocabulary.
+closed-set category strings such as phase names, and log-only identifiers such
+as a pinned asset name. Only closed categories and numbers may serve as metric
+labels, so a unique value such as `span_id` or a caller-supplied asset name
+must never become one. Never include URLs, filesystem paths, credentials,
+digests, or payloads. The library installs no handlers, so an application opts
+in by lowering the level of the relevant `rust_prover_tools` module logger.
+`docs/prover-tools-cli-design.md` owns the system-design record for the event
+vocabulary.
 
 A process or storage boundary that should be timed uses
 `operation_span(logger, event, **fields)` from the same module. It emits
