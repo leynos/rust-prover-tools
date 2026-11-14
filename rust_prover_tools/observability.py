@@ -6,12 +6,14 @@ example ``logging.getLogger("rust_prover_tools").setLevel(logging.DEBUG)``.
 Each event carries a bounded ``event_data`` mapping on the log record so a
 collector can read fields without parsing the message text.
 
-Events are also the metric source: outcome, latency and cache fields carry a
-closed set of short category strings or a number, never a path, URL, argument
-list, digest or payload. A collector can therefore aggregate them directly
-without unbounded label growth. The one exception is ``span_id``: it is unique
-per operation, so it is a log-only correlation key and must never become a
-metric label.
+Events are also the metric source: outcome and cache fields carry a short
+category string from a closed set, and latency fields carry a number. Neither
+is a path, URL, argument list, digest or payload, so a collector can aggregate
+them without unbounded label growth, provided it treats a number as an
+observation rather than a label: a label built from each ``elapsed_seconds``
+value would create one series per operation. ``span_id`` is unique per
+operation, and an asset name is supplied by the caller; both are log-only
+correlation keys and must never become a metric label.
 """
 
 from __future__ import annotations
@@ -46,11 +48,12 @@ def log_event(logger: logging.Logger, event: str, **fields: object) -> None:
         Stable dotted event name, such as ``download.failed``.
     **fields : object
         Bounded log fields: counts, durations, short category strings from a
-        closed set, or a log-only identifier such as a pinned asset name. Only
-        closed categories and numbers are safe as metric labels, so a unique
-        value such as ``span_id`` or a caller-supplied asset name must never
-        become one. Never pass a URL that may carry a query token, a filesystem
-        path, a digest, or any file content.
+        closed set, or a log-only identifier such as a pinned asset name.
+        Durations and counts are metric observations, not labels. A numeric
+        label is safe only when its values form a small, bounded set, and a
+        unique value such as ``span_id`` or a caller-supplied asset name must
+        never become one. Never pass a URL that may carry a query token, a
+        filesystem path, a digest, or any file content.
     """
     logger.debug(event, extra={"event_data": {"event": event, **fields}})
 

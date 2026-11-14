@@ -884,14 +884,16 @@ name verified provenance rather than the verifier command.
   value, and `docs/developers-guide.md` listed asset names among the permitted
   fields without saying what they may not become. Both now separate the two
   rules: a field may be a count, a duration, a short category from a closed
-  set, or a log-only identifier such as a pinned asset name, and only closed
-  categories and numbers may serve as metric labels. `span_id` and a
+  set, or a log-only identifier such as a pinned asset name. `span_id` and a
   caller-supplied asset name are named as log-only, which is what the module
-  docstring and `docs/prover-tools-cli-design.md` already said. No emitter
-  changed: download events still omit the asset name, and the installer events
-  that do carry one (`verus.extract.start`, `kani.setup.complete`) are
-  unaffected, because the rule they must satisfy is about metric labels rather
-  than about log fields.
+  docstring and `docs/prover-tools-cli-design.md` already said. A follow-up
+  correction separated numbers from labels: a duration or a count is a metric
+  observation, and a numeric label is safe only when its values form a small,
+  bounded set, because a label built from each `elapsed_seconds` value would
+  create one series per operation. No emitter changed: download events still
+  omit the asset name, and the installer events that do carry one
+  (`verus.extract.start`, `kani.setup.complete`) are unaffected, because the
+  rule they must satisfy is about metric labels rather than about log fields.
 
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.

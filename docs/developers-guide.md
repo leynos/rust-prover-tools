@@ -142,11 +142,12 @@ helper emits one DEBUG record whose payload is an `event_data` mapping. Event
 names are stable identifiers such as `download.start` or
 `kani.install.complete`, and their fields stay bounded to counts, durations,
 closed-set category strings such as phase names, and log-only identifiers such
-as a pinned asset name. Only closed categories and numbers may serve as metric
-labels, so a unique value such as `span_id` or a caller-supplied asset name
-must never become one. Never include URLs, filesystem paths, credentials,
-digests, or payloads. The library installs no handlers, so an application opts
-in by lowering the level of the relevant `rust_prover_tools` module logger.
+as a pinned asset name. Durations and counts are metric observations rather
+than labels; a numeric label is safe only when its values form a small, bounded
+set, and a unique value such as `span_id` or a caller-supplied asset name must
+never become one. Never include URLs, filesystem paths, credentials, digests,
+or payloads. The library installs no handlers, so an application opts in by
+lowering the level of the relevant `rust_prover_tools` module logger.
 `docs/prover-tools-cli-design.md` owns the system-design record for the event
 vocabulary.
 
