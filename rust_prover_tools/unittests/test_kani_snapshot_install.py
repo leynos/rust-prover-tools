@@ -1529,6 +1529,29 @@ def test_activation_flush_timeout_is_reported_as_durability(
     assert pointer.generation == generation, "the pointer names another generation"
 
 
+def test_the_lock_supervises_the_identity_layout_resolution(
+    tmp_path: Path,
+) -> None:
+    """The cache path is resolved where an expired budget can abandon it.
+
+    `identity_directory` resolves the cache root, so both a check and an
+    install do filesystem work before the lock is attempted. An unsupervised
+    stall there would overrun the budget without ever reaching the lock that
+    was supposed to bound it.
+    """
+    case = make_case(tmp_path)
+
+    with (
+        pytest.raises(ProverToolError, match="identity layout resolution"),
+        install_state.identity_lock(
+            install_options(case),
+            timeout=1.0,
+            budget=_ExpiringSupervision("identity layout resolution"),
+        ),
+    ):
+        pytest.fail("the lock was taken after its budget expired")
+
+
 def test_payload_publication_reports_an_unknown_outcome_when_it_stalls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

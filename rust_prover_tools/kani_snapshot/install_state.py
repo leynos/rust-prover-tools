@@ -74,6 +74,27 @@ _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 _LOCK_POLL_SECONDS: typ.Final[float] = 0.05
 
 
+def _resolve_identity_directory(
+    options: InstallOptions,
+    budget: InstallBudget | None,
+) -> Path:
+    """Resolve the identity directory, supervised when a budget is supplied.
+
+    `identity_directory` resolves the cache root, which is filesystem work. The
+    lock bounds directory creation, lock-file creation and the wait, so a
+    resolution that stalled outside the budget could overrun the deadline
+    before any of them began.
+    """
+    resolve = functools.partial(
+        identity_directory,
+        options.pin,
+        cache_home=options.cache_home,
+    )
+    if budget is None:
+        return resolve()
+    return budget.supervise("identity layout resolution", resolve)
+
+
 @contextlib.contextmanager
 def identity_lock(
     options: InstallOptions,
@@ -99,7 +120,7 @@ def identity_lock(
     any exclusive installation or repair holding it, so a check never reads a
     half-repaired cache.
     """
-    identity_dir = identity_directory(options.pin, cache_home=options.cache_home)
+    identity_dir = _resolve_identity_directory(options, budget)
     path = identity_dir / "install.lock"
     if read_only:
         descriptor = _open_existing_lock_file(path, budget)

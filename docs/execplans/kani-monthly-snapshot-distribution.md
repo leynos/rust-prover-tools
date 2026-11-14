@@ -905,6 +905,11 @@ name verified provenance rather than the verifier command.
   resolved directory, so the pointer's generation costs no second resolution.
   `install.py` takes the same shape: the pre-lock layout is supervised, and
   `_reuse_active` receives the layout instead of resolving one inside the lock.
+  `identity_lock` itself resolves through `_resolve_identity_directory`, which
+  supervises the same phase whenever a budget is supplied, so the resolution
+  that precedes the lock is bounded too;
+  `test_the_lock_supervises_the_identity_layout_resolution` drives it with a
+  budget that expires at that phase and asserts the lock is never taken.
   `test_the_query_supervises_the_layout_resolution` records the thread that
   resolved the layout and asserts it is the deadline's worker, which fails when
   the call is unwrapped.
