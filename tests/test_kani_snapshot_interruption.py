@@ -19,7 +19,10 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import install_copy, install_transport
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
-from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
+from rust_prover_tools.kani_snapshot.install import (
+    check_active_snapshot,
+    install_snapshot,
+)
 from tests.kani_snapshot_install_fixtures import (
     SnapshotCase,
     active_generation,
@@ -200,7 +203,7 @@ def test_killed_installer_after_a_partial_write_leaves_recovery_intact(
     # No restoration happens here: the intact source release is the only
     # repair input, exactly as a real operator would leave it.
     install_snapshot(install_options(case), install_hooks(case))
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
     previous = snapshot_layout(
         case.pin,
         cache_home=case.cache_home,
@@ -260,13 +263,13 @@ def test_interrupted_repair_leaves_the_previous_generation_usable(
 
     # A healthy probe validates the old generation with no recovery in between:
     # the interrupted repair did not touch the evidence it would have replaced.
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
     assert active_generation(case) == generation, (
         "validating the previous generation changed the active pointer"
     )
 
     install_snapshot(install_options(case), install_hooks(case))
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
     previous = snapshot_layout(
         case.pin,
         cache_home=case.cache_home,
@@ -336,4 +339,4 @@ def test_seeded_setup_fault_leaves_one_valid_generation(tmp_path: Path) -> None:
     assert active_generation(case) == generation, (
         "the peer's generation is not the active one"
     )
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))

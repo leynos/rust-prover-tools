@@ -18,7 +18,10 @@ from rust_prover_tools.cli_support import error_exit
 from rust_prover_tools.cli_support import repo_root as resolve_repo_root
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import print_lines
-from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
+from rust_prover_tools.kani_snapshot.install import (
+    check_active_snapshot,
+    install_snapshot,
+)
 from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 from rust_prover_tools.kani_snapshot.pins import load_pin
 from rust_prover_tools.kani_snapshot.run import RunOptions, run_snapshot
@@ -143,7 +146,7 @@ def check(
     try:
         paths = _paths(pin=pin, repo_root=repo_root, cache_dir=cache_dir)
         snapshot_pin = load_pin(paths.pin)
-        identity = check_snapshot(
+        identity = check_active_snapshot(
             InstallOptions(pin=snapshot_pin, cache_home=paths.cache)
         )
     except ProverToolError as exc:

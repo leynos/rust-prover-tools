@@ -7,6 +7,7 @@ a receipt cannot merely describe paths that no longer hold the pinned binaries.
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import os
 import time
 import typing as typ
@@ -28,7 +29,15 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_snapshot.identity import SnapshotRuntime
 
-__all__ = ("probe_generation", "run_local_bundle_setup")
+__all__ = (
+    "AdmissionResolver",
+    "probe_generation",
+    "probe_host_generation",
+    "run_local_bundle_setup",
+)
+
+#: Resolves the compiler admission wrappers from an injected environment.
+type AdmissionResolver = cabc.Callable[[cabc.Mapping[str, str]], tuple[str, ...]]
 
 #: Setup must not let an inherited `TAR_OPTIONS` change extraction.
 _INHERITED_EXTRACTION_VARIABLES: typ.Final[tuple[str, ...]] = ("TAR_OPTIONS",)
@@ -81,8 +90,18 @@ def run_local_bundle_setup(
 def probe_generation(
     runtime: SnapshotRuntime,
     timeout_seconds: float | None = None,
+    *,
+    environment: cabc.Mapping[str, str],
+    resolve_admission: AdmissionResolver = admission_chain,
 ) -> SetupEvidence:
     """Observe the installed compiler identities and toolchain link.
+
+    This function runs two processes, so it is the effectful half of a
+    snapshot check; `rust_prover_tools.kani_snapshot.install_state.
+    validate_generation` remains the process-free query. The environment and
+    the admission resolver are injected rather than read from `os.environ`, so
+    a caller can prove which environment the probe used. Use
+    `probe_host_generation` to run against the host's own environment.
 
     Parameters
     ----------
@@ -92,6 +111,12 @@ def probe_generation(
         Remaining installation budget shared by both identity commands, so
         the second only receives what the first left behind. `None` leaves
         the probes unbounded.
+    environment : collections.abc.Mapping[str, str]
+        Inherited environment the probe derives the child environment and the
+        admission route from. `os.environ` is the production value.
+    resolve_admission : AdmissionResolver
+        Resolves the admission wrappers from `environment`. The default keeps
+        the reviewed routing rule: the probe exercises the configured wrapper.
 
     Returns
     -------
@@ -102,8 +127,8 @@ def probe_generation(
     ------
     ProverToolError
         Raised when the link is missing, relative or outside the private
-        toolchains, or when an executable cannot report its identity within
-        the remaining budget.
+        toolchains, when the admission route is malformed, or when an
+        executable cannot report its identity within the remaining budget.
     """
     link = runtime.kani_dir / "toolchain"
     try:
@@ -118,19 +143,19 @@ def probe_generation(
     if not target.is_relative_to(expected):
         msg = f"snapshot toolchain link escapes the private toolchains: {target}"
         raise ProverToolError(msg)
-    env = execution_environment(runtime, os.environ)
+    env = execution_environment(runtime, environment)
     # The probe must load the same libraries the proof will load. An inherited
     # `LD_LIBRARY_PATH` could otherwise shadow the verified toolchain, so the
     # pinned directory goes first and other Rustup toolchain libraries are
     # dropped, exactly as `proof_environment` does for the proof itself.
     env["LD_LIBRARY_PATH"] = runtime_search_path(
         toolchain_root(runtime) / "lib",
-        os.environ.get("LD_LIBRARY_PATH", ""),
+        environment.get("LD_LIBRARY_PATH", ""),
     )
     # The probe must exercise the same compiler route the proof will use, so a
     # configured admission wrapper runs outermost and an unusable selection
     # fails here instead of being silently bypassed.
-    chain = admission_chain(dict(os.environ))
+    chain = resolve_admission(environment)
     started = time.monotonic()
 
     def remaining_budget() -> float | None:
@@ -164,3 +189,17 @@ def probe_generation(
         ),
         toolchain_link_target=target,
     )
+
+
+def probe_host_generation(
+    runtime: SnapshotRuntime,
+    timeout_seconds: float | None = None,
+) -> SetupEvidence:
+    """Probe `runtime` against the host's own environment.
+
+    This is the process-boundary composition point and the default
+    `InstallHooks.probe`. Keeping the `os.environ` read here, rather than
+    inside `probe_generation`, lets tests prove which environment a probe
+    used without patching the process environment.
+    """
+    return probe_generation(runtime, timeout_seconds, environment=os.environ)

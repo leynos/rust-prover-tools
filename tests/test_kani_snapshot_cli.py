@@ -133,7 +133,7 @@ def test_relative_paths_resolve_below_the_repository_root(
         msg = "snapshot is not installed"
         raise ProverToolError(msg)
 
-    monkeypatch.setattr(kani_snapshot_cli, "check_snapshot", recording_check)
+    monkeypatch.setattr(kani_snapshot_cli, "check_active_snapshot", recording_check)
 
     status = app(
         [

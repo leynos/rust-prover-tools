@@ -13,7 +13,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
-    check_snapshot,
+    check_active_snapshot,
     install_snapshot,
 )
 from rust_prover_tools.kani_snapshot.install_state import write_active
@@ -133,7 +133,7 @@ def test_run_executes_the_generation_it_validated(
 ) -> None:
     """A pointer switch after validation cannot redirect the proof.
 
-    `check_snapshot` validates one generation and reports it. Re-reading the
+    `check_active_snapshot` validates one generation and reports it. Re-reading
     active pointer afterwards would let a concurrent repair swap in a
     different, unvalidated generation between the check and the launch.
     """
@@ -142,7 +142,7 @@ def test_run_executes_the_generation_it_validated(
         pin=options.pin,
         cache_home=options.cache_home,
     )
-    identity = check_snapshot(check_options, hooks)
+    identity = check_active_snapshot(check_options, hooks)
     layout = snapshot_layout(options.pin, cache_home=options.cache_home)
     other_name = "switched-generation"
     other = layout.identity_dir / "generations" / other_name

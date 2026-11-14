@@ -461,6 +461,22 @@ been validated and reports the deadline rather than a successful validation.
 identity-level paths, so it never invents a generation name before the pointer
 names the generation it validates.
 
+`check` is split into a process-free query and an explicit compiler
+verification. The query reads the publication state, pointer, manifest,
+receipt, cached payloads, installed tree and toolchain bytes; it starts no
+process, so it cannot invoke a wrapper the operator configured and writes
+nothing to the snapshot cache. The verification runs `rustc -vV` and
+`kani-compiler --version` through the same admission route the proof uses and
+returns the identity report, so a caller that only needs to know whether the
+installed bytes are intact does not run processes at all. `snapshot check` and
+`run` compose the two under one shared lock, so the generation whose bytes were
+validated is the generation whose compiler is proved. The probe sits outside
+the write-free guarantee: a configured compiler wrapper may write to its own
+caches or build directory while it runs. The probe receives the environment
+mapping and the admission resolver as parameters, and only the host composition
+point that the installer uses as its default probe reads `os.environ`, so a
+caller can state and test which environment a probe used.
+
 The lock wait itself is bounded by whichever is shorter, the configured timeout
 or the seconds the installation still has, so time already spent cannot be
 spent a second time. Removal of private, uniquely named state — a pending

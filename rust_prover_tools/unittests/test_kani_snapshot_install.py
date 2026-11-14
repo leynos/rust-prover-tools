@@ -29,6 +29,7 @@ from rust_prover_tools.kani_snapshot import (
     install_generation,
     install_state,
     install_transport,
+    install_validation,
     publication,
 )
 from rust_prover_tools.kani_snapshot import (
@@ -51,13 +52,15 @@ from rust_prover_tools.kani_snapshot.attestation import (
 from rust_prover_tools.kani_snapshot.identity import runtime_for, snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
-    check_snapshot,
+    check_active_snapshot,
     install_snapshot,
 )
 from rust_prover_tools.kani_snapshot.install_model import Deadline
-from rust_prover_tools.kani_snapshot.install_state import (
-    load_active,
+from rust_prover_tools.kani_snapshot.install_state import load_active
+from rust_prover_tools.kani_snapshot.install_validation import (
+    ValidatedGeneration,
     validate_generation,
+    verify_effective_compiler,
 )
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION, FileRecord
 from rust_prover_tools.kani_snapshot.receipt import ObservedToolchain, SetupEvidence
@@ -264,10 +267,11 @@ def test_same_reported_version_installs_into_disjoint_generations(
     assert active_generation(second) == second_identity.generation.name
     # Both installations stay independently valid in the shared cache root.
     assert (
-        check_snapshot(install_options(first), install_hooks(first)) == first_identity
+        check_active_snapshot(install_options(first), install_hooks(first))
+        == first_identity
     )
     assert (
-        check_snapshot(install_options(second), install_hooks(second))
+        check_active_snapshot(install_options(second), install_hooks(second))
         == second_identity
     )
 
@@ -559,11 +563,54 @@ def test_install_repairs_a_corrupt_active_generation(tmp_path: Path) -> None:
     assert len(calls) == 2, "repair did not run setup in a new generation"
 
 
+def _recording_validation(
+    seen: dict[str, object],
+    real_validate: cabc.Callable[..., ValidatedGeneration],
+) -> cabc.Callable[..., ValidatedGeneration]:
+    """Return a validation spy that records its checkpoint and delegates."""
+
+    def spy(
+        options: InstallOptions,
+        manifest: SnapshotManifest,
+        generation: SnapshotLayout,
+        *,
+        checkpoint: cabc.Callable[[], None] | None = None,
+    ) -> ValidatedGeneration:
+        """Record the validation seam and delegate to the real validator."""
+        seen["checkpoint"] = checkpoint
+        return real_validate(
+            options,
+            manifest,
+            generation,
+            checkpoint=checkpoint,
+        )
+
+    return spy
+
+
+def _recording_verification(
+    seen: dict[str, object],
+    real_verify: cabc.Callable[..., SnapshotIdentity],
+) -> cabc.Callable[..., SnapshotIdentity]:
+    """Return a verification spy that records its budget and delegates."""
+
+    def spy(
+        validated: ValidatedGeneration,
+        probe: ProbeRunner,
+        remaining_budget: cabc.Callable[[], float] | None = None,
+    ) -> SnapshotIdentity:
+        """Record the verification seams and delegate to the real prober."""
+        seen["remaining"] = remaining_budget
+        return real_verify(validated, probe, remaining_budget)
+
+    return spy
+
+
 def test_check_reports_the_active_generation(tmp_path: Path) -> None:
     """Checking returns the same validated identity installation did."""
     case = make_case(tmp_path)
     identity = install_snapshot(install_options(case), install_hooks(case))
-    checked = check_snapshot(install_options(case), install_hooks(case))
+    checked = check_active_snapshot(install_options(case), install_hooks(case))
     assert checked == identity, "check reported a different identity"
 
 
@@ -578,6 +625,7 @@ def test_check_supervises_active_generation_validation(
     budgets: list[_RecordingBudget] = []
     seen: dict[str, object] = {}
     real_validate = check_module.validate_generation
+    real_verify = check_module.verify_effective_compiler
 
     class _RecordingBudget:
         """A real budget that records every supervised phase."""
@@ -614,33 +662,24 @@ def test_check_supervises_active_generation_validation(
         budgets.append(budget)
         return budget
 
-    def spy_validate(
-        options: InstallOptions,
-        manifest: SnapshotManifest,
-        generation: SnapshotLayout,
-        probe: ProbeRunner,
-        remaining_budget: cabc.Callable[[], float] | None = None,
-        *,
-        checkpoint: cabc.Callable[[], None] | None = None,
-    ) -> SnapshotIdentity:
-        """Record the validation seams and delegate to the real validator."""
-        seen["remaining"] = remaining_budget
-        seen["checkpoint"] = checkpoint
-        return real_validate(
-            options,
-            manifest,
-            generation,
-            probe,
-            remaining_budget,
-            checkpoint=checkpoint,
-        )
-
     monkeypatch.setattr(check_module, "Deadline", recording_deadline)
-    monkeypatch.setattr(check_module, "validate_generation", spy_validate)
+    monkeypatch.setattr(
+        check_module,
+        "validate_generation",
+        _recording_validation(seen, real_validate),
+    )
+    monkeypatch.setattr(
+        check_module,
+        "verify_effective_compiler",
+        _recording_verification(seen, real_verify),
+    )
 
-    assert check_snapshot(install_options(case), install_hooks(case)) == identity
+    assert check_active_snapshot(install_options(case), install_hooks(case)) == identity
     assert "active generation validation" in budgets[0].phases, (
         "check ran validation without supervising it"
+    )
+    assert "effective compiler verification" in budgets[0].phases, (
+        "check ran the compiler probe without supervising it"
     )
     remaining = typ.cast("cabc.Callable[[], float]", seen["remaining"])
     assert remaining() > 0, "check passed no probe budget"
@@ -662,7 +701,7 @@ def test_check_does_not_create_a_missing_cache(tmp_path: Path) -> None:
     options = dc.replace(install_options(case), cache_home=cache)
 
     with pytest.raises(ProverToolError, match=r"not installed"):
-        check_snapshot(options, install_hooks(case))
+        check_active_snapshot(options, install_hooks(case))
 
     assert not cache.exists(), "check created the cache it was only reading"
 
@@ -678,7 +717,7 @@ def test_check_leaves_an_installed_cache_unchanged(tmp_path: Path) -> None:
     cache = case.cache_home
     before = _cache_state(cache)
 
-    assert check_snapshot(install_options(case), install_hooks(case)) == identity
+    assert check_active_snapshot(install_options(case), install_hooks(case)) == identity
 
     assert _cache_state(cache) == before, "check mutated the snapshot cache"
 
@@ -687,7 +726,7 @@ def test_check_rejects_a_missing_active_pointer(tmp_path: Path) -> None:
     """Checking before installation is a clear error."""
     case = make_case(tmp_path)
     with pytest.raises(ProverToolError, match=r"not installed"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_install_stops_before_setup_when_the_deadline_expired(
@@ -756,7 +795,7 @@ def test_install_shares_the_remaining_budget_between_setup_and_probe(
     )
 
 
-def test_validate_generation_measures_the_probe_budget_after_cache_checks(
+def test_verify_measures_the_probe_budget_after_cache_checks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -769,7 +808,7 @@ def test_validate_generation_measures_the_probe_budget_after_cache_checks(
         generation=active_generation(case),
     )
     order: list[str] = []
-    real_validate = install_state.validate_cached_payloads
+    real_validate = install_validation.validate_cached_payloads
 
     def record_payloads(
         layout: SnapshotLayout,
@@ -781,7 +820,7 @@ def test_validate_generation_measures_the_probe_budget_after_cache_checks(
         order.append("payloads")
         real_validate(layout, manifest, checkpoint=checkpoint)
 
-    monkeypatch.setattr(install_state, "validate_cached_payloads", record_payloads)
+    monkeypatch.setattr(install_validation, "validate_cached_payloads", record_payloads)
     base = install_hooks(case)
 
     def record_probe(
@@ -797,13 +836,12 @@ def test_validate_generation_measures_the_probe_budget_after_cache_checks(
         order.append("budget")
         return 5.0
 
-    validate_generation(
+    validated = validate_generation(
         install_options(case),
         case.manifest,
         layout,
-        record_probe,
-        remaining,
     )
+    verify_effective_compiler(validated, record_probe, remaining)
     assert order == ["payloads", "budget", "probe"], (
         "the probe budget was measured before the cache checks finished"
     )
@@ -870,7 +908,7 @@ def test_check_rejects_tampered_installed_backend_bytes(tmp_path: Path) -> None:
     installed.write_bytes(b"DATA")
 
     with pytest.raises(ProverToolError, match=r"wrong digest"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_rejects_tampered_installed_launcher_bytes(tmp_path: Path) -> None:
@@ -880,7 +918,7 @@ def test_check_rejects_tampered_installed_launcher_bytes(tmp_path: Path) -> None
     identity.launcher.write_bytes(b"#!/bin/sh\necho tampered\n")
 
     with pytest.raises(ProverToolError, match=r"launcher"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_install_rejects_setup_that_loses_a_backend_member(
@@ -950,13 +988,13 @@ def test_check_rejects_tampered_installed_toolchain_bytes(tmp_path: Path) -> Non
     identity.rustc.write_bytes(RUSTC_BYTES.replace(b"printf", b"exec  "))
 
     with pytest.raises(ProverToolError, match=r"compiler.*does not match"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
     # A library the compiler loads is held to the same record.
     identity.rustc.write_bytes(RUSTC_BYTES)
     (toolchain / LIBRARY_PATH).write_bytes(b"tampered library\n")
     with pytest.raises(ProverToolError, match=r"library.*does not match"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def _launcher_files() -> dict[str, tuple[bytes, int]]:
@@ -1024,7 +1062,7 @@ def test_check_rejects_a_python_root_link_escaping_the_generation(
     )
 
     with pytest.raises(ProverToolError, match=r"Python root link escapes"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_install_rejects_a_python_root_link_to_a_sibling_home(
@@ -1089,7 +1127,7 @@ def test_check_rejects_a_changed_python_root_link_target(tmp_path: Path) -> None
     link.symlink_to("versions/b", target_is_directory=True)
 
     with pytest.raises(ProverToolError, match=r"do not match the record"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_rejects_a_python_root_that_is_a_symbolic_link(
@@ -1105,7 +1143,7 @@ def test_check_rejects_a_python_root_that_is_a_symbolic_link(
     pyroot.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ProverToolError, match=r"must not be a symbolic link"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_rejects_an_unrecorded_python_root_member(tmp_path: Path) -> None:
@@ -1118,7 +1156,7 @@ def test_check_rejects_an_unrecorded_python_root_member(tmp_path: Path) -> None:
     injected.write_bytes(b"import os\n")
 
     with pytest.raises(ProverToolError, match=r"does not describe"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_rejects_a_modified_python_root_member(tmp_path: Path) -> None:
@@ -1129,7 +1167,7 @@ def test_check_rejects_a_modified_python_root_member(tmp_path: Path) -> None:
     recorded.write_bytes(b'"""Tampered Kani Python payload."""\n')
 
     with pytest.raises(ProverToolError, match=r"do not match the record"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_rejects_a_generation_without_a_python_root_record(
@@ -1142,7 +1180,7 @@ def test_check_rejects_a_generation_without_a_python_root_record(
     record.unlink()
 
     with pytest.raises(ProverToolError, match=r"no recorded setup content"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_rejects_a_same_size_backend_replacement(tmp_path: Path) -> None:
@@ -1156,7 +1194,7 @@ def test_check_rejects_a_same_size_backend_replacement(tmp_path: Path) -> None:
     backend.write_bytes(bytes(data))
 
     with pytest.raises(ProverToolError, match=r"backend\.tar\.gz.*digest"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_install_rejects_a_rustup_home_that_escapes_the_generation(
@@ -1199,7 +1237,7 @@ def test_check_rejects_a_relocated_rustup_home(tmp_path: Path) -> None:
     layout.rustup_home.symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(ProverToolError, match=r"rustup home escapes its generation"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_launcher_copy_reports_progress_inside_a_large_file(
@@ -1544,7 +1582,7 @@ def test_payload_publication_reports_an_unknown_outcome_when_it_stalls(
     assert not layout.publication_markers(), (
         "a completed repair left the publication marker behind"
     )
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_check_refuses_a_cache_whose_publication_did_not_finish(
@@ -1557,13 +1595,13 @@ def test_check_refuses_a_cache_whose_publication_did_not_finish(
     layout.publication_marker("test-1").write_text("publishing\n", encoding="ascii")
 
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
     install_snapshot(install_options(case), install_hooks(case))
     assert not layout.publication_markers(), (
         "the repair did not clear the publication marker"
     )
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_reuse_cannot_succeed_while_the_activation_flush_fails(
@@ -1739,7 +1777,7 @@ def test_an_abandoned_activation_cannot_displace_a_later_one(
         f"an abandoned activation displaced {second.generation.name} "
         f"with {pointer.generation}"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 def _completion(layout: SnapshotLayout) -> int:
@@ -1834,13 +1872,13 @@ def test_an_abandoned_completion_cannot_clear_a_repair_marker(
 
     assert marker_b.exists(), "an abandoned completion removed a later repair's marker"
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "the completed repair left a publication marker behind"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 def test_a_late_completion_write_cannot_retire_a_repair_marker(
@@ -1921,13 +1959,13 @@ def test_a_late_completion_write_cannot_retire_a_repair_marker(
 
     assert layout.publication_markers(), "the interrupted repair left no marker"
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "the completed repair left a publication marker behind"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 @dc.dataclass
@@ -2048,7 +2086,7 @@ def test_a_late_completion_write_cannot_regress_the_watermark(
     writes.marker.release.set()
     assert writes.marker.finished.wait(10), "the repair's marker write never resumed"
     assert layout.publication_markers(), "the resumed repair wrote no marker"
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
     # A's completion lands last. If it lowers the watermark, B's marker
     # becomes pending and the cache C left intact is refused.
@@ -2057,7 +2095,7 @@ def test_a_late_completion_write_cannot_regress_the_watermark(
     assert completion.completion_watermark(layout) == later, (
         "a late completion regressed the watermark"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 def test_launcher_mode_is_durable_before_its_bytes(
@@ -2694,7 +2732,7 @@ def test_installation_fails_when_a_stale_publication_marker_cannot_be_removed(
         "a failed repair changed the active generation"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
 
 def _record_flushes(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Path]]:
@@ -3391,7 +3429,7 @@ def test_check_deadline_bounds_a_stalled_publication_state_read(
             ProverToolError,
             match=r"deadline expired during publication state read",
         ):
-            check_snapshot(options)
+            check_active_snapshot(options)
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -3432,7 +3470,7 @@ def test_check_deadline_bounds_a_stalled_active_pointer_read(
             ProverToolError,
             match=r"deadline expired during active pointer read",
         ):
-            check_snapshot(options)
+            check_active_snapshot(options)
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -3477,7 +3515,7 @@ def test_check_deadline_bounds_a_stalled_manifest_read(
             ProverToolError,
             match=r"deadline expired during manifest read",
         ):
-            check_snapshot(options)
+            check_active_snapshot(options)
         elapsed = time.monotonic() - started
     finally:
         release.set()
@@ -3505,7 +3543,7 @@ def test_a_check_that_validates_after_expiry_reports_the_deadline(
         ProverToolError,
         match=r"deadline expired during active generation validation",
     ):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 def test_a_check_does_not_generate_a_generation_name(
@@ -3527,7 +3565,7 @@ def test_a_check_does_not_generate_a_generation_name(
         raise AssertionError(msg)
 
     monkeypatch.setattr(layout_module, "new_generation_name", refuse)
-    identity = check_snapshot(install_options(case), install_hooks(case))
+    identity = check_active_snapshot(install_options(case), install_hooks(case))
 
     assert identity.tag == case.pin.tag, "the check did not report the pinned tag"
 
@@ -3567,7 +3605,7 @@ def test_a_marker_is_pending_until_a_completion_supersedes_its_base(
     assert not install_state.publication_pending(layout), (
         "a marker below the last completion was treated as pending"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
     superseding = activation.highest_sequence(layout)
     marker.write_bytes(publication.render_marker(superseding))
@@ -3579,7 +3617,7 @@ def test_a_marker_is_pending_until_a_completion_supersedes_its_base(
         "a marker without a readable base was not treated as pending"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
 
 def test_malformed_completion_evidence_cannot_retire_a_marker(
@@ -3627,7 +3665,7 @@ def test_malformed_completion_evidence_cannot_retire_a_marker(
         "malformed completion evidence retired an unfinished marker"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
 
 def test_an_oversized_completion_record_is_read_with_a_bound(
@@ -3701,7 +3739,7 @@ def test_an_oversized_completion_record_is_read_with_a_bound(
         "oversized completion evidence retired an unfinished marker"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
 
 def test_an_oversized_marker_base_cannot_block_repair(tmp_path: Path) -> None:
@@ -3726,13 +3764,13 @@ def test_an_oversized_marker_base_cannot_block_repair(tmp_path: Path) -> None:
         "an oversized marker base retired the marker"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "the repair left the corrupted marker in place"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 def test_a_truncated_marker_cannot_retire_itself(tmp_path: Path) -> None:
@@ -3760,13 +3798,13 @@ def test_a_truncated_marker_cannot_retire_itself(tmp_path: Path) -> None:
         "a truncated marker retired itself"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "the repair left the truncated marker in place"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 def test_a_non_canonical_marker_cannot_retire_itself(tmp_path: Path) -> None:
@@ -3796,13 +3834,13 @@ def test_a_non_canonical_marker_cannot_retire_itself(tmp_path: Path) -> None:
         "a non-canonical marker retired itself"
     )
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "the repair left the non-canonical marker in place"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 class _ReuseValidationFailure:
@@ -3821,11 +3859,9 @@ class _ReuseValidationFailure:
         options: InstallOptions,
         manifest: SnapshotManifest,
         layout: SnapshotLayout,
-        probe: ProbeRunner,
-        remaining_budget: cabc.Callable[[], float] | None = None,
         *,
         checkpoint: cabc.Callable[[], None] | None = None,
-    ) -> SnapshotIdentity:
+    ) -> ValidatedGeneration:
         """Fail once, then validate exactly as the real implementation does."""
         self.calls += 1
         if self.calls == 1:
@@ -3835,8 +3871,6 @@ class _ReuseValidationFailure:
             options,
             manifest,
             layout,
-            probe,
-            remaining_budget,
             checkpoint=checkpoint,
         )
 
@@ -3914,7 +3948,7 @@ def test_a_late_marker_cannot_make_a_reused_cache_unfinished(
     assert reused.generation.name == first.generation.name, (
         "the later install did not reuse the validated generation"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
     try:
         stall.release.set()
@@ -3926,13 +3960,13 @@ def test_a_late_marker_cannot_make_a_reused_cache_unfinished(
     assert len(markers) == 1, (
         f"the abandoned write published {len(markers)} markers instead of one"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
     install_snapshot(install_options(case), hooks)
     assert not layout.publication_markers(), (
         "a later reuse left the superseded marker behind"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 def test_a_late_activation_record_cannot_hide_an_interrupted_repair(
@@ -3990,7 +4024,7 @@ def test_a_late_activation_record_cannot_hide_an_interrupted_repair(
 
     assert layout.publication_markers(), "the abandoned repair published no marker"
     with pytest.raises(ProverToolError, match=r"publication did not finish"):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
 
 def test_repair_recovers_beyond_a_corrupt_activation_record(
@@ -4010,7 +4044,7 @@ def test_repair_recovers_beyond_a_corrupt_activation_record(
     newest.write_bytes(b'{"schema_version": 1, "generation": ')
 
     with pytest.raises(ProverToolError):
-        check_snapshot(install_options(case), hooks)
+        check_active_snapshot(install_options(case), hooks)
 
     repaired = install_snapshot(install_options(case), hooks)
     assert repaired.generation.name != first.generation.name, (
@@ -4022,7 +4056,7 @@ def test_repair_recovers_beyond_a_corrupt_activation_record(
         f"the repair left {pointer.generation} active instead of "
         f"{repaired.generation.name}"
     )
-    check_snapshot(install_options(case), hooks)
+    check_active_snapshot(install_options(case), hooks)
 
 
 class _LockHolder(threading.Thread):
@@ -4135,7 +4169,7 @@ def test_check_reports_a_valid_span(
     install_snapshot(options, hooks)
 
     with caplog.at_level(logging.DEBUG, logger="rust_prover_tools"):
-        check_snapshot(options, hooks)
+        check_active_snapshot(options, hooks)
 
     checks = _span_events(caplog, "kani.snapshot.check.")
     assert [event["event"] for event in checks] == [
@@ -4156,7 +4190,7 @@ def test_check_reports_a_bounded_failure_event(
         caplog.at_level(logging.DEBUG, logger="rust_prover_tools"),
         pytest.raises(ProverToolError, match="not installed"),
     ):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
     checks = _span_events(caplog, "kani.snapshot.check.")
     assert [event["event"] for event in checks] == [

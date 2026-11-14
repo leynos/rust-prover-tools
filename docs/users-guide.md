@@ -194,6 +194,15 @@ running setup:
 prover-tools kani snapshot check
 ```
 
+The command first validates the installed bytes — the receipt, cached payloads,
+installed tree and toolchain files — without starting any process, then runs
+the generation's `rustc -vV` and `kani-compiler --version` through the same
+admission route a proof uses and compares both with the manifest. Both steps
+hold the same shared lock, so the generation whose bytes were validated is the
+one whose compiler is proved. The compiler step is a process: if you configure
+`RUSTC_WRAPPER`, that wrapper runs and may write to its own caches or build
+directory. The byte-validation step never invokes it.
+
 `prover-tools kani run --snapshot-pin PATH -- ARGS...` executes a proof through
 the active generation:
 

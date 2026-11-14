@@ -20,7 +20,10 @@ import pytest
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
-from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
+from rust_prover_tools.kani_snapshot.install import (
+    check_active_snapshot,
+    install_snapshot,
+)
 from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 from rust_prover_tools.kani_snapshot.install_state import load_active
 from tests.kani_snapshot_actors import (
@@ -129,7 +132,7 @@ def test_overlapping_installs_publish_one_generation(tmp_path: Path) -> None:
         f"installs published different generations: {reports}"
     )
     assert active_generation(case) == reports[0], "reported generation is not active"
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
 
 
 @pytest.mark.timeout(120)
@@ -155,7 +158,7 @@ def test_killed_staging_owner_releases_the_lock(tmp_path: Path) -> None:
             lock_timeout_seconds=10,
         )
         install_snapshot(options, install_hooks(case))
-        check_snapshot(options, install_hooks(case))
+        check_active_snapshot(options, install_hooks(case))
     finally:
         owner.join(10)
 
@@ -213,7 +216,7 @@ def test_contention_inside_the_pipeline_withholds_publication(
     assert active_generation(case) == generation, (
         "the retry published a second generation instead of reusing"
     )
-    check_snapshot(options, install_hooks(case))
+    check_active_snapshot(options, install_hooks(case))
 
 
 @pytest.mark.timeout(120)
@@ -247,7 +250,7 @@ def test_install_times_out_while_another_owner_holds_the_lock(tmp_path: Path) ->
     assert owner.exitcode == 0, "owner crashed"
 
     install_snapshot(install_options(case), install_hooks(case))
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))
 
 
 @pytest.mark.timeout(120)
@@ -281,7 +284,7 @@ def test_check_is_refused_while_a_repair_rewrites_the_cache(
         assert in_publish.wait(20), "the repair never reached publication"
         reader = dc.replace(install_options(case), lock_timeout_seconds=0.2)
         with pytest.raises(ProverToolError, match="timed out"):
-            check_snapshot(reader, install_hooks(case))
+            check_active_snapshot(reader, install_hooks(case))
         resume.set()
         report = typ.cast("str", outcomes.get(timeout=60))
     finally:
@@ -290,4 +293,4 @@ def test_check_is_refused_while_a_repair_rewrites_the_cache(
 
     assert repairer.exitcode == 0, "the repair process crashed"
     assert report == "repaired", f"the repair failed: {report}"
-    check_snapshot(install_options(case), install_hooks(case))
+    check_active_snapshot(install_options(case), install_hooks(case))

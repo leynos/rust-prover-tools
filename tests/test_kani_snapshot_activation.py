@@ -26,7 +26,10 @@ from hypothesis.stateful import (
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import runtime_for, snapshot_layout
-from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
+from rust_prover_tools.kani_snapshot.install import (
+    check_active_snapshot,
+    install_snapshot,
+)
 from rust_prover_tools.kani_snapshot.install_state import load_active, write_active
 from rust_prover_tools.kani_snapshot.install_transport import asset_by_role
 from tests.kani_snapshot_install_fixtures import (
@@ -123,7 +126,7 @@ class _InstallStateMachine(RuleBasedStateMachine):
             assert old.generation_dir.is_dir(), "repair deleted the old generation"
         expectation.generation = generation
         expectation.is_valid = True
-        check_snapshot(self.options(identity), self.hooks(identity))
+        check_active_snapshot(self.options(identity), self.hooks(identity))
 
     @rule(identity=st.sampled_from(_IDENTITIES))
     def refuse_attestation(self, identity: str) -> None:
@@ -191,17 +194,17 @@ class _InstallStateMachine(RuleBasedStateMachine):
         launcher.write_bytes(launcher.read_bytes() + b"corrupt")
         expectation.is_valid = False
         with pytest.raises(ProverToolError):
-            check_snapshot(self.options(identity), self.hooks(identity))
+            check_active_snapshot(self.options(identity), self.hooks(identity))
 
     @rule(identity=st.sampled_from(_IDENTITIES))
     def validate(self, identity: str) -> None:
         """Check validation against the model's own expectation."""
         expectation = self.expectations[identity]
         if expectation.is_valid:
-            check_snapshot(self.options(identity), self.hooks(identity))
+            check_active_snapshot(self.options(identity), self.hooks(identity))
             return
         with pytest.raises(ProverToolError):
-            check_snapshot(self.options(identity), self.hooks(identity))
+            check_active_snapshot(self.options(identity), self.hooks(identity))
 
 
 _MACHINE_SETTINGS = settings(
@@ -276,7 +279,7 @@ def test_premature_pointer_write_is_detected(tmp_path: Path) -> None:
     write_active(layout, "0" * 12)
 
     with pytest.raises(ProverToolError):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))
 
 
 @pytest.mark.timeout(30)
@@ -293,4 +296,4 @@ def test_moving_the_active_generation_is_detected(tmp_path: Path) -> None:
     layout.generation_dir.rename(layout.generation_dir.with_name("moved"))
 
     with pytest.raises(ProverToolError):
-        check_snapshot(install_options(case), install_hooks(case))
+        check_active_snapshot(install_options(case), install_hooks(case))

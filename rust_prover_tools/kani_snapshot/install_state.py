@@ -22,20 +22,16 @@ from rust_prover_tools.kani_snapshot.activation import (
     write_active,
 )
 from rust_prover_tools.kani_snapshot.durability import fsync_directory
-from rust_prover_tools.kani_snapshot.identity import (
-    SnapshotIdentity,
-    build_identity_report,
-    identity_directory,
-    runtime_for,
-)
-from rust_prover_tools.kani_snapshot.install_cache import (
-    validate_cached_payloads,
-    validate_installed_tree,
-)
+from rust_prover_tools.kani_snapshot.identity import identity_directory
 from rust_prover_tools.kani_snapshot.install_model import (
     MANIFEST_ASSET_NAME,
     InstallOptions,
-    ProbeRunner,
+)
+from rust_prover_tools.kani_snapshot.install_validation import (
+    ValidatedGeneration,
+    require_runtime_files,
+    validate_generation,
+    verify_effective_compiler,
 )
 from rust_prover_tools.kani_snapshot.manifest import (
     parse_manifest,
@@ -45,11 +41,6 @@ from rust_prover_tools.kani_snapshot.publication import (
     prune_superseded_markers,
     publication_pending,
 )
-from rust_prover_tools.kani_snapshot.receipt import (
-    load_receipt,
-    validate_receipt,
-)
-from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -60,14 +51,11 @@ if typ.TYPE_CHECKING:
         SnapshotManifest,
         SnapshotPin,
     )
-    from rust_prover_tools.kani_snapshot.receipt_model import SetupEvidence
-    from rust_prover_tools.kani_snapshot.snapshot_layout import (
-        SnapshotLayout,
-        SnapshotRuntime,
-    )
+    from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotLayout
 
 __all__ = (
     "ActivePointer",
+    "ValidatedGeneration",
     "active_manifest",
     "ensure_private_directory",
     "fsync_directory",
@@ -77,13 +65,13 @@ __all__ = (
     "publication_pending",
     "require_runtime_files",
     "validate_generation",
+    "verify_effective_compiler",
     "write_active",
 )
 
 _PRIVATE_DIRECTORY_MODE: typ.Final[int] = 0o700
 _PRIVATE_FILE_MODE: typ.Final[int] = 0o600
 _LOCK_POLL_SECONDS: typ.Final[float] = 0.05
-_EXECUTABLE_BITS: typ.Final[int] = 0o111
 
 
 @contextlib.contextmanager
@@ -275,120 +263,3 @@ def active_manifest(pin: SnapshotPin, layout: SnapshotLayout) -> SnapshotManifes
         raise ProverToolError(msg)
     validate_binding(pin, parsed.manifest)
     return parsed.manifest
-
-
-# pylint: disable-next=too-many-arguments,too-many-positional-arguments
-def validate_generation(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - one parameter per validated input
-    options: InstallOptions,
-    manifest: SnapshotManifest,
-    layout: SnapshotLayout,
-    probe: ProbeRunner,
-    remaining_budget: cabc.Callable[[], float] | None = None,
-    *,
-    checkpoint: cabc.Callable[[], None] | None = None,
-) -> SnapshotIdentity:
-    """Return the identity of a generation that still satisfies the manifest.
-
-    Parameters
-    ----------
-    options : InstallOptions
-        Reviewed pin and cache root.
-    manifest : SnapshotManifest
-        Manifest the generation was installed from.
-    layout : SnapshotLayout
-        Generation to validate.
-    probe : ProbeRunner
-        Compiler identity probe.
-    remaining_budget : collections.abc.Callable[[], float] | None
-        Called immediately before the probe to obtain the seconds left in
-        the installation budget, so slow receipt and cache checks cannot
-        spend the probe's share. `None` leaves the probe unbounded.
-    checkpoint : collections.abc.Callable[[], None] | None
-        Called while cached payloads and the installed tree are verified, so an
-        expired budget interrupts a long validation.
-
-    Raises
-    ------
-    ProverToolError
-        Raised when the receipt, cached payloads, toolchain link or effective
-        compiler no longer match the reviewed snapshot, or when the probe
-        exceeds the remaining budget.
-    """
-    receipt = load_receipt(layout.receipt_path)
-    validate_receipt(receipt, options.pin, manifest, layout)
-    runtime = runtime_for(layout, manifest)
-    require_runtime_files(runtime)
-    _check_toolchain_link(runtime, receipt.toolchain_link_target)
-    validate_cached_payloads(layout, manifest, checkpoint=checkpoint)
-    validate_installed_tree(layout, manifest, runtime, checkpoint=checkpoint)
-    verify_toolchain(runtime, manifest, checkpoint=checkpoint)
-    budget = None if remaining_budget is None else remaining_budget()
-    evidence = probe(runtime, budget)
-    _check_evidence(evidence, manifest, runtime)
-    if evidence.observed != receipt.observed:
-        msg = "snapshot receipt observation does not match the installed compiler"
-        raise ProverToolError(msg)
-    return build_identity_report(options.pin, manifest, runtime)
-
-
-def require_runtime_files(runtime: SnapshotRuntime) -> None:
-    """Require every executable the runtime will invoke to be present.
-
-    Installation and revalidation both call this before a generation may
-    become active, so a launcher archive that ships `cargo-kani` for setup but
-    omits `kani` cannot be published as usable.
-    """
-    paths = (
-        ("launcher", runtime.launcher),
-        ("driver", runtime.driver),
-        ("compiler", runtime.compiler),
-        ("rustc", runtime.rustc),
-    )
-    for name, path in paths:
-        try:
-            status = path.stat()
-        except OSError as exc:
-            msg = f"snapshot {name} is missing: {exc}"
-            raise ProverToolError(msg) from exc
-        if not path.is_file() or not status.st_mode & _EXECUTABLE_BITS:
-            msg = f"snapshot {name} is not an executable regular file: {path}"
-            raise ProverToolError(msg)
-
-
-def _check_toolchain_link(runtime: SnapshotRuntime, expected: Path) -> None:
-    """Compare the live toolchain symlink with the receipt."""
-    link = runtime.kani_dir / "toolchain"
-    try:
-        target = link.readlink()
-    except OSError as exc:
-        msg = f"snapshot toolchain link is missing: {exc}"
-        raise ProverToolError(msg) from exc
-    if not target.is_absolute() or target != expected:
-        msg = f"snapshot toolchain link does not match the receipt: {target}"
-        raise ProverToolError(msg)
-
-
-def _check_evidence(
-    evidence: SetupEvidence,
-    manifest: SnapshotManifest,
-    runtime: SnapshotRuntime,
-) -> None:
-    """Require observed identities to equal the reviewed manifest."""
-    expected_link = runtime.layout.rustup_home / "toolchains" / runtime.toolchain
-    checks = (
-        (
-            "rustc",
-            evidence.observed.rustc_vv,
-            manifest.toolchain.rustc_vv,
-        ),
-        (
-            "kani-compiler",
-            evidence.observed.kani_compiler,
-            manifest.toolchain.kani_compiler,
-        ),
-        ("toolchain link", evidence.toolchain_link_target, expected_link),
-    )
-    for name, actual, wanted in checks:
-        if actual != wanted:
-            msg = f"snapshot {name} identity does not match the manifest"
-            raise ProverToolError(msg)

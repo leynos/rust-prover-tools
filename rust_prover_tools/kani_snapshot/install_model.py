@@ -16,7 +16,7 @@ import typing as typ
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.attestation import verify_attestation
 from rust_prover_tools.kani_snapshot.install_defaults import (
-    probe_generation,
+    probe_host_generation,
     run_local_bundle_setup,
 )
 from rust_prover_tools.kani_snapshot.progress import run_within
@@ -223,11 +223,13 @@ class InstallHooks:
         the remaining installation budget, or `None` when unbounded.
     probe : ProbeRunner
         Observes the compiler identities and toolchain link after setup. The
-        second argument is the remaining budget, or `None` when unbounded.
+        second argument is the remaining budget, or `None` when unbounded. The
+        default runs `probe_host_generation`, the composition point that reads
+        the host environment; tests inject a probe instead.
     verify_attestation : AttestationVerifier
         Verifies the manifest attestation before any extraction.
     """
 
     setup: SetupRunner = run_local_bundle_setup
-    probe: ProbeRunner = probe_generation
+    probe: ProbeRunner = probe_host_generation
     verify_attestation: AttestationVerifier = verify_attestation

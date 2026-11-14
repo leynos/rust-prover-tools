@@ -17,7 +17,10 @@ import typing as typ
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.activation import write_active
 from rust_prover_tools.kani_snapshot.archive_extract import extract_archive
-from rust_prover_tools.kani_snapshot.check import check_snapshot
+from rust_prover_tools.kani_snapshot.check import (
+    check_active_snapshot,
+    check_snapshot,
+)
 from rust_prover_tools.kani_snapshot.durability import flush_directory
 from rust_prover_tools.kani_snapshot.identity import (
     build_identity_report,
@@ -43,13 +46,16 @@ from rust_prover_tools.kani_snapshot.install_state import (
     load_active,
     prune_superseded_markers,
     publication_pending,
-    require_runtime_files,
-    validate_generation,
 )
 from rust_prover_tools.kani_snapshot.install_transport import (
     asset_by_role,
     bundle_policy,
     stage_assets,
+)
+from rust_prover_tools.kani_snapshot.install_validation import (
+    require_runtime_files,
+    validate_generation,
+    verify_effective_compiler,
 )
 from rust_prover_tools.kani_snapshot.python_root import record_python_root
 from rust_prover_tools.kani_snapshot.receipt import build_receipt, render_receipt
@@ -68,6 +74,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "InstallHooks",
     "InstallOptions",
+    "check_active_snapshot",
     "check_snapshot",
     "install_snapshot",
 )
@@ -189,16 +196,25 @@ def _reuse_active(context: _InstallContext) -> SnapshotIdentity | None:
             generation=pointer.generation,
         )
         context.deadline.check("active generation validation")
-        identity = context.deadline.supervise(
+        validated = context.deadline.supervise(
             "active generation validation",
             functools.partial(
                 validate_generation,
                 options,
                 manifest,
                 generation,
+                checkpoint=context.deadline.checkpoint("active generation validation"),
+            ),
+        )
+        # The compiler probe runs only after the installed bytes match, and it
+        # receives what the filesystem checks left of the installation budget.
+        identity = context.deadline.supervise(
+            "effective compiler verification",
+            functools.partial(
+                verify_effective_compiler,
+                validated,
                 context.hooks.probe,
                 context.deadline.remaining,
-                checkpoint=context.deadline.checkpoint("active generation validation"),
             ),
         )
     except ProverToolError as exc:

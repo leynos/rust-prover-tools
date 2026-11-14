@@ -32,7 +32,10 @@ from hypothesis.stateful import (
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
-from rust_prover_tools.kani_snapshot.install import check_snapshot, install_snapshot
+from rust_prover_tools.kani_snapshot.install import (
+    check_active_snapshot,
+    install_snapshot,
+)
 from rust_prover_tools.kani_snapshot.install_state import identity_lock, load_active
 from tests.kani_snapshot_install_fixtures import (
     active_generation,
@@ -128,7 +131,7 @@ class _TwoActorStateMachine(RuleBasedStateMachine):
             return
         install_snapshot(options, install_hooks(self.case))
         self.generation = active_generation(self.case)
-        check_snapshot(self.options(), install_hooks(self.case))
+        check_active_snapshot(self.options(), install_hooks(self.case))
 
 
 def _machine_factory(root: Path) -> type[RuleBasedStateMachine]:

@@ -17,6 +17,7 @@ from tests.kani_snapshot_bundles import KANI_COMPILER, RUSTC_VV, TOOLCHAIN, VERS
 from tests.kani_snapshot_fixtures import make_pin
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
 
@@ -57,12 +58,11 @@ def test_probe_runs_through_the_configured_admission_wrapper(
 ) -> None:
     """Every probed compiler starts with the configured wrapper."""
     wrapper = "/usr/bin/build-limits-rustc"
-    monkeypatch.setenv("RUSTC_WRAPPER", wrapper)
     seen = _record_commands(monkeypatch)
 
     runtime = _runtime(tmp_path)
 
-    evidence = probe_generation(runtime)
+    evidence = probe_generation(runtime, environment={"RUSTC_WRAPPER": wrapper})
 
     assert evidence.observed.rustc_vv == RUSTC_VV
     assert [spec.argv[0] for spec in seen] == [wrapper, wrapper]
@@ -82,17 +82,14 @@ def test_probe_loads_the_verified_toolchain_libraries(
     toolchain, so the pinned directory goes first and other Rustup toolchain
     libraries are dropped.
     """
-    monkeypatch.setenv(
-        "LD_LIBRARY_PATH",
-        os.pathsep.join((
-            str(tmp_path / "inherited" / "toolchains" / "nightly-x" / "lib"),
-            "/opt/extra-libs",
-        )),
-    )
+    inherited = os.pathsep.join((
+        str(tmp_path / "inherited" / "toolchains" / "nightly-x" / "lib"),
+        "/opt/extra-libs",
+    ))
     seen = _record_commands(monkeypatch)
     runtime = _runtime(tmp_path)
 
-    probe_generation(runtime)
+    probe_generation(runtime, environment={"LD_LIBRARY_PATH": inherited})
 
     expected = os.pathsep.join((
         str(runtime.layout.rustup_home / "toolchains" / TOOLCHAIN / "lib"),
@@ -111,9 +108,63 @@ def test_probe_refuses_a_malformed_admission_wrapper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An unusable route fails before either executable is invoked."""
-    monkeypatch.setenv("RUSTC_WRAPPER", "")
     seen = _record_commands(monkeypatch)
 
     with pytest.raises(ProverToolError, match=r"process tool selection"):
-        probe_generation(_runtime(tmp_path))
+        probe_generation(_runtime(tmp_path), environment={"RUSTC_WRAPPER": ""})
     assert seen == [], "a malformed admission route still ran a probe"
+
+
+def test_probe_ignores_the_host_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probe derives its route from the mapping it was given.
+
+    A decoy wrapper in the process environment models the failure this guards
+    against: a probe that read `os.environ` would route through a wrapper its
+    caller never approved, and would inherit a library path that shadows the
+    verified toolchain.
+    """
+    monkeypatch.setenv("RUSTC_WRAPPER", "/usr/bin/host-only-wrapper")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/host-only-libs")
+    seen = _record_commands(monkeypatch)
+    runtime = _runtime(tmp_path)
+
+    probe_generation(runtime, environment={})
+
+    assert [spec.argv[0] for spec in seen] == [
+        str(runtime.rustc),
+        str(runtime.compiler),
+    ], "the probe used the host's admission route instead of the injected one"
+    expected = str(runtime.layout.rustup_home / "toolchains" / TOOLCHAIN / "lib")
+    for spec in seen:
+        assert spec.env is not None, "the probe discarded its environment"
+        assert spec.env["LD_LIBRARY_PATH"] == expected, (
+            "the probe inherited the host's library path instead of the injected one"
+        )
+
+
+def test_probe_resolves_admission_from_the_injected_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replaced resolver receives the mapping the caller injected."""
+    seen = _record_commands(monkeypatch)
+    resolved: list[dict[str, str]] = []
+
+    def resolve(environment: cabc.Mapping[str, str]) -> tuple[str, ...]:
+        """Record the mapping and admit the probe directly."""
+        resolved.append(dict(environment))
+        return ()
+
+    probe_generation(
+        _runtime(tmp_path),
+        environment={"MARKER": "injected"},
+        resolve_admission=resolve,
+    )
+
+    assert resolved == [{"MARKER": "injected"}], (
+        "the probe resolved admission from an environment its caller did not supply"
+    )
+    assert seen, "the probe ran no command"

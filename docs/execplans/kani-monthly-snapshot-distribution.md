@@ -818,6 +818,40 @@ name verified provenance rather than the verifier command.
   that boundary. Unit Architecture and Domain Architecture remain open in this
   entry and are continued by the following one.
 
+- [x] (2026-11-14) Split the snapshot check into a process-free query and an
+  explicit compiler verification, as the Unit Architecture row of the same
+  review requires. `install_validation.validate_generation` now returns a
+  `ValidatedGeneration` and touches files only, and
+  `install_validation.verify_effective_compiler` runs the probe and returns the
+  identity report. Both live in a module split out of `install_state.py`, which
+  keeps the locking and pointer helpers and re-exports the public names.
+  `check.check_snapshot` holds the shared identity lock and runs only the query;
+  `check.check_active_snapshot` composes both under one lock and one deadline,
+  and the installer, launcher and CLI use the composed form.
+  `install_defaults.probe_generation` takes the environment mapping and the
+  admission resolver as parameters; `probe_host_generation` is the only
+  composition point that reads `os.environ` and is the default
+  `InstallHooks.probe`. Tests cover the three prescribed seams: a generation
+  installed with fixtures, then queried with `RUSTC_WRAPPER` naming an
+  executable that logs its invocations and writes a failure exit, leaves no log
+  at all; verification run through a real recording wrapper on the admission
+  chain produces exactly one `-vV` and one `--version` invocation and reports
+  the receipt's identity; a wrapper that exits non-zero raises
+  `ProverToolError`; and a decoy `RUSTC_WRAPPER` and `LD_LIBRARY_PATH` in
+  `os.environ` are ignored when the probe is given an empty injected mapping.
+  The `check` module docstring, the users' guide and the design document now
+  describe the split and confine the wrapper-side-effect warning to the probe.
+  Domain Architecture remains open and is addressed in the decision log.
+
+- [x] (2026-11-14) Closed the Observability row's sink requirement. The design
+  document now names the consumer of the structured events: the embedding
+  application or operator logging configuration that lowers the
+  `rust_prover_tools` logger level and attaches the handler, because the
+  library installs no handler and exports no metrics client. It lists the field
+  kinds that reach that consumer — closed categories, numbers and the log-only
+  `span_id` — and the existing tests assert that `download.complete` and
+  `download.retry` carry exactly those bounded fields.
+
 - [ ] EP-M4: guarded workflow and immutable publication state machine.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
@@ -1453,6 +1487,26 @@ budget could expire during the downloads-directory flush under parallel test
 execution, so the stall the test is about was never reached. The budget is now
 five seconds, which still bounds the stalled creation but outlasts the
 preparation phases, and the elapsed ceiling rose with it.
+
+2026-11-14, declined the Domain Architecture port: the hosted review asked for
+`ActivationStore` and `PublicationStore` protocols exposing no `Path` or
+`SnapshotLayout`, the sequence, watermark, marker-base and pruning rules behind
+them as pure functions, a filesystem adapter implementing the port, and
+`ReleaseUrlPolicy` host and repository values injected from configuration. The
+ordering and watermark rules already live in pure functions in `activation.py`,
+`completion.py` and `publication.py`, and the filesystem guarantees the review
+asks the adapter to document — create-only hard link, fsync ordering — are what
+those modules implement and state today. A path-free port cannot keep the
+deadline guarantee: every filesystem call on these paths is interleaved with
+`InstallBudget`/`Deadline` supervision, so an adapter that hid the paths would
+also hide the operation boundaries the budget supervises, and either the budget
+leaks back into the domain or a stalled filesystem holds a caller past the
+deadline. The configuration point is declined outright: `REPOSITORY` is the
+trust anchor that `ReleaseUrlPolicy` and the manifest validation enforce, and
+injecting it would let configuration select a different attestation repository.
+That weakens a reviewed safety boundary rather than improving the design, so
+the recommendation is recorded here and answered with this evidence instead of
+applied.
 
 2026-09-27, proposed D5/D6: attest build origin before clean validation, then
 publish only with successful same-run proof evidence. Test public offline

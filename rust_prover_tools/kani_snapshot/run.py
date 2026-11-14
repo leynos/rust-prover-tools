@@ -28,7 +28,10 @@ from rust_prover_tools.kani_snapshot.identity import (
     snapshot_layout,
     validate_forwarded_args,
 )
-from rust_prover_tools.kani_snapshot.install import InstallOptions, check_snapshot
+from rust_prover_tools.kani_snapshot.install import (
+    InstallOptions,
+    check_active_snapshot,
+)
 from rust_prover_tools.kani_snapshot.verification_env import proof_environment
 from rust_prover_tools.observability import operation_span
 
@@ -99,7 +102,7 @@ def run_snapshot(
         # switch the active generation between the check and the launch, so
         # execution uses the checked identity rather than a second,
         # unvalidated resolution.
-        identity = check_snapshot(
+        identity = check_active_snapshot(
             InstallOptions(pin=options.pin, cache_home=options.cache_home),
             hooks,
         )
