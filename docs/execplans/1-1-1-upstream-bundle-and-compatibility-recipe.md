@@ -94,15 +94,23 @@ budgets. Final counts against base `77b46af`, measured with
 `git diff --numstat` and excluding both ExecPlan files:
 
 - Files: 29 non-ExecPlan files changed against a budget of 20.
-- Code: 4,432 net lines across `rust_prover_tools/` and `tests/` against a
+- Code: 4,444 net lines across `rust_prover_tools/` and `tests/` against a
   budget of 2,500.
-- Documentation: 114 net lines against a budget of 400, so within budget.
+- Documentation: 123 net lines against a budget of 400, so within budget.
 - Configuration, interface and dependencies: no change, as intended.
 
 The excess is evidence rather than production logic: the pinned upstream files,
 the two captured transcripts, the tag ref, and the tests that bind each pinned
 value to them. The requirement for that evidence arrived with the assignment,
 so an estimate made before it existed was too low. See D11.
+
+Escalation record (2026-11-15): the overrun and these counts were reported to
+the plan's owner and maintainer when they were measured, and the work was not
+trimmed to fit. The owner's three options are to accept the exceeded limits, to
+raise them in a plan revision that keeps these original figures, or to reject
+the delivery. This plan defines no separate approval artefact, so a reviewer
+looking for written acceptance should read this record and the owner's
+assignment, not a waiver attached elsewhere.
 
 ## Risks
 
