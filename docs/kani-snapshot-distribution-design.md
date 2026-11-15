@@ -184,12 +184,18 @@ independent builds with identical inputs have been compared.
 ## D3: Upstream-compatible build
 
 Resolve an upstream candidate once to a validated full SHA and use that SHA for
-every source read and checkout. For scheduled runs inspect at most the 20
-newest default-branch commits, selecting the newest with the required upstream
-Linux checks completed successfully. Record the exact check names, run URLs,
-head SHAs and conclusions; empty or ambiguous check sets fail closed. Manual
-input is a full SHA, with the same checks and compiler-floor policy. Never
-interpret arbitrary input as a shell fragment, ref option, or repository URL.
+every source read and checkout. When D3 was approved, the candidate set was
+described as the 20 newest default-branch commits. EP-M1 narrows that: a
+snapshot is built from a released tag, so a commit qualifies only if a release
+object names it, and an unreleased default-branch head is not a candidate even
+when its checks are green. Scheduled runs therefore inspect the newest releases
+(up to 20) rather than raw commits, selecting the newest whose required
+upstream Linux checks completed successfully. This is the rule EP-M4 follows;
+the default-branch wording above is superseded where the two disagree. Record
+the exact check names, run URLs, head SHAs and conclusions; empty or ambiguous
+check sets fail closed. Manual input is a full SHA, with the same checks and
+compiler-floor policy. Never interpret arbitrary input as a shell fragment, ref
+option, or repository URL.
 
 At that SHA inspect `.cargo/config.toml`,
 `.github/actions/build-bundle/action.yml`, `.github/workflows/release.yml`,

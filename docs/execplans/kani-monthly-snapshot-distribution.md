@@ -2091,7 +2091,7 @@ unchanged locks/toolchain pins and recorded recursive submodules. Add
 `test_kani_snapshot_producer.py` for command sequencing, immutable resolution,
 malicious manual inputs, unchanged HEAD with changed recipe, missing/failed
 upstream checks, runtime/licence completeness and resource-limit rejection. Run
-`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_build`; compare
+`python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_producer`; compare
 before/after source status and input hashes in the opt-in EP-M1/EP-M5
 experiment. The negative control resolves a different SHA at a later phase or
 drops a submodule record; the recipe must reject it. A mock cannot establish
@@ -2445,29 +2445,29 @@ successful for the pinned commit: `BuildBundle-Linux-x86_64`,
 `TestBundle (ubuntu-22.04)`, `TestBundle (ubuntu-24.04)`,
 `TestLocalToolchain (ubuntu-22.04)` and `TestLocalToolchain (ubuntu-24.04)` in
 run 35043356377, and `regression (ubuntu-22.04)` and
-`regression (ubuntu-24.04)` in run 35077197253.[^11] macOS and aarch64 checks
+`regression (ubuntu-24.04)` in run 35077197253.[^1] macOS and aarch64 checks
 are excluded because this distribution supports only `x86_64-unknown-linux-gnu`.
 `build.resolution` encodes that policy: the newest run of every named check
 must be completed and successful, and missing, ambiguous, repeated or
 draft/prerelease candidates are refused.
 
 At this revision, `.cargo/config.toml` maps `cargo bundle` to
-`cargo run -p build-kani -- bundle`.[^4] The bundle action runs
+`cargo run -p build-kani -- bundle`.[^2] The bundle action runs
 `cargo bundle -- VERSION`, producing
 `kani-VERSION-x86_64-unknown-linux-gnu.tar.gz`; its separate
 `cargo package -p kani-verifier` output is launcher source, not a prebuilt
-launcher.[^5] Build both proxy executables from this same revision centrally;
+launcher.[^3] Build both proxy executables from this same revision centrally;
 never delegate the workflow's `cargo install` step to consumers.
 
 `tools/build-kani/src/main.rs` creates the upstream `kani-VERSION/` tree with
 `bin/kani-driver`, `kani-compiler`, `kani-cov`, CBMC/GOTO tools and Kissat,
 Kani libraries and a prebuilt sysroot, `rust-toolchain-version`,
-`rustc-version`, and `license-notes.txt`.[^6] CBMC and Kissat resolve from the
+`rustc-version`, and `license-notes.txt`.[^4] CBMC and Kissat resolve from the
 builder's `PATH`; inventory actual executable digests and identities, not only
 source labels. Preserve that layout and inventory runtime/shared-library needs.
 
 `src/setup.rs` supports `cargo kani setup --use-local-bundle PATH` and
-`--use-local-toolchain DIR`.[^7] It canonicalizes the bundle and extracts it
+`--use-local-toolchain DIR`.[^5] It canonicalizes the bundle and extracts it
 using external `tar --strip-components=1`. Validate the complete archive before
 invoking setup: require the single expected `kani-VERSION/` root, validate
 destinations, links and collisions after `--strip-components=1`, and remove
@@ -2483,12 +2483,12 @@ Python must additionally verify the complete effective compiler identity.
 same-version collision risk and need for a private home per complete snapshot
 identity. `src/bin/kani.rs` and `src/bin/cargo_kani.rs` are proxy executables;
 `src/lib.rs` selects the installed `bin/kani-driver`, prepends bundled paths
-and sets `RUSTUP_TOOLCHAIN`.[^8] Permanent generation paths must preserve
+and sets `RUSTUP_TOOLCHAIN`.[^6] Permanent generation paths must preserve
 setup-created links. The release workflow obtains a separate prebuilt Rust
 nightly installation for local-toolchain smoke setup: the backend bundle does
-not contain the complete Rust installation.[^9]
+not contain the complete Rust installation.[^7]
 
-The toolchain pin is `nightly-2026-08-21`.[^13] Locally, that channel reports
+The toolchain pin is `nightly-2026-08-21`.[^8] Locally, that channel reports
 `rustc 1.100.0-nightly (8925ea358 2026-08-20)`. The bundle builder writes the
 channel into `rust-toolchain-version` and that exact version line into
 `rustc-version`; EP-M1 captured both from the built bundle. The compiler floor
@@ -2509,10 +2509,10 @@ package requires at most `GLIBC_2.34`. Recorded shared-library needs are
 
 The setup action installs Rustup, distro prerequisites and shallow pinned
 submodules. `.gitmodules` lists Firecracker, `tests/perf/s2n-quic` and Charon;
-record recursive gitlink revisions, not their configured branch labels.[^10]
-The Linux prerequisite scripts install build tools (including Bison, CMake,
-Flex, GCC/G++, Make and Git), Z3, zlib, static cvc5 1.3.0, CBMC and Kissat;
-versions come from `kani-dependencies` and the setup scripts.[^12] Distinguish
+record recursive gitlink revisions, not their configured branch labels.[^9] The
+Linux prerequisite scripts install build tools (including Bison, CMake, Flex,
+GCC/G++, Make and Git), Z3, zlib, static cvc5 1.3.0, CBMC and Kissat; versions
+come from `kani-dependencies` and the setup scripts.[^10] Distinguish
 producer-only prerequisites from measured consumer runtime requirements;
 consumers must never build these dependencies. Recheck all resolved binaries.
 Redistribution evidence starts with root Apache/MIT licences and
@@ -2527,26 +2527,25 @@ not complete upstream: Kissat ships in the bundle but is absent from
 Safe setup re-extraction and clean-host validation remain EP-M5 work, and build
 cost beyond this prototype run is still unrecorded.
 
-[^4]: [Pinned Cargo aliases](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.cargo/config.toml).
-[^5]: [Pinned bundle action](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/actions/build-bundle/action.yml).
-[^6]: [Pinned bundle builder](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/tools/build-kani/src/main.rs).
-[^7]: [Pinned installer setup](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/src/setup.rs).
-[^8]: [Pinned launcher implementation](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/src/lib.rs).
-[^9]: [Pinned release workflow](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/workflows/release.yml).
-[^11]: Successful runs at the pinned SHA:
+[^1]: Successful runs at the pinned SHA:
        [bundle, bundle-test and local-toolchain jobs](https://github.com/model-checking/kani/actions/runs/35043356377)
        and [regression jobs](https://github.com/model-checking/kani/actions/runs/35077197253).
-[^12]: [Pinned Linux prerequisites](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/scripts/setup/ubuntu/install_deps.sh).
-[^13]: [Pinned toolchain inspected with Firecrawl](https://raw.githubusercontent.com/model-checking/kani/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/rust-toolchain.toml).
-[^10]: [Pinned setup action](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/actions/setup/action.yml).
+[^2]: [Pinned Cargo aliases](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.cargo/config.toml).
+[^3]: [Pinned bundle action](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/actions/build-bundle/action.yml).
+[^4]: [Pinned bundle builder](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/tools/build-kani/src/main.rs).
+[^5]: [Pinned installer setup](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/src/setup.rs).
+[^6]: [Pinned launcher implementation](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/src/lib.rs).
+[^7]: [Pinned release workflow](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/workflows/release.yml).
+[^8]: [Pinned toolchain inspected with Firecrawl](https://raw.githubusercontent.com/model-checking/kani/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/rust-toolchain.toml).
+[^9]: [Pinned setup action](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/actions/setup/action.yml).
+[^10]: [Pinned Linux prerequisites](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/scripts/setup/ubuntu/install_deps.sh).
+[^11]: [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
+[^12]: [GitHub CLI attestation verification](https://cli.github.com/manual/gh_attestation_verify).
+[^13]: [GitHub schedule behaviour](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
 Primary GitHub references consulted during planning cover immutable
-releases,[^1] attestation verification,[^2] and schedule behaviour.[^3] They
+releases,[^11] attestation verification,[^12] and schedule behaviour.[^13] They
 establish service interfaces; actual repository settings remain unverified.
-
-[^1]: [GitHub immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases).
-[^2]: [GitHub CLI attestation verification](https://cli.github.com/manual/gh_attestation_verify).
-[^3]: [GitHub schedule behaviour](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
 ## Interfaces, dependencies and skills
 

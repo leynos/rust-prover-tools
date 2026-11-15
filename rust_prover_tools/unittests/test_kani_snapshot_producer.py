@@ -237,6 +237,28 @@ def test_validation_rejects_a_runtime_floor_newer_than_the_builder() -> None:
         validate_recipe(recipe)
 
 
+def test_validation_rejects_a_runtime_floor_older_than_the_builder() -> None:
+    """A bundle cannot certify a glibc older than the image that linked it.
+
+    The image is the only baseline that was actually exercised, so claiming an
+    older one promises compatibility nothing tested.
+    """
+    recipe = dc.replace(
+        pinned_recipe(),
+        runtime=dc.replace(pinned_recipe().runtime, glibc_baseline="2.31"),
+    )
+    with pytest.raises(ProverToolError, match="older than the builder glibc"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_a_boolean_compiler_floor_component() -> None:
+    """`True == 1`, so a boolean component would serialize as `true`."""
+    decoded_true = typ.cast("int", json.loads("true"))
+    recipe = dc.replace(pinned_recipe(), compiler_floor=(decoded_true, 94))
+    with pytest.raises(ProverToolError, match="major/minor pair"):
+        validate_recipe(recipe)
+
+
 def test_validation_rejects_a_malformed_builder_image() -> None:
     """The builder is a plain image label, never a command or a URL."""
     recipe = dc.replace(
@@ -723,6 +745,116 @@ def test_selection_fails_closed_on_an_unordered_duplicate() -> None:
                 *_OTHER_REQUIRED,
             )
         ])
+
+
+def test_selection_fails_closed_on_a_three_way_tie() -> None:
+    """A conflicting run cannot hide behind two successes it is tied with."""
+    failed = CheckRun(
+        name=REQUIRED_UPSTREAM_CHECKS[0],
+        status="completed",
+        conclusion="failure",
+        run_id=1,
+        started_at="2026-09-16T00:00:00Z",
+    )
+    success = dc.replace(
+        _ALL_REQUIRED[0],
+        started_at=failed.started_at,
+        run_id=failed.run_id,
+    )
+    with pytest.raises(ProverToolError, match="ambiguous"):
+        select_newest_candidate([
+            _candidate(
+                _NEWEST,
+                "2026-10-01T00:00:00Z",
+                failed,
+                success,
+                success,
+                *_OTHER_REQUIRED,
+            )
+        ])
+
+
+def test_selection_disqualifies_a_candidate_whose_required_rerun_is_queued() -> None:
+    """A queued rerun is newer evidence than the success it will replace."""
+    pending = CheckRun(
+        name=REQUIRED_UPSTREAM_CHECKS[0],
+        status="queued",
+        conclusion=None,
+        run_id=99,
+        started_at=None,
+    )
+    assert (
+        select_newest_candidate([
+            _candidate(_NEWEST, "2026-10-01T00:00:00Z", pending, *_OTHER_REQUIRED),
+            _candidate(_OLDER, "2026-09-01T00:00:00Z", *_ALL_REQUIRED),
+        ])
+        == _OLDER
+    )
+
+
+def test_selection_orders_two_unstarted_runs_without_comparing_none() -> None:
+    """Two queued runs of one check are told apart by their run identifiers.
+
+    Neither run has a start time, so ordering them must fall back to the
+    identifier rather than compare `None` with a timestamp.
+    """
+    first = CheckRun(
+        name=REQUIRED_UPSTREAM_CHECKS[0],
+        status="queued",
+        conclusion=None,
+        run_id=7,
+        started_at=None,
+    )
+    second = dc.replace(first, run_id=8)
+    assert (
+        select_newest_candidate([
+            _candidate(_NEWEST, "2026-10-01T00:00:00Z", second, *_OTHER_REQUIRED),
+            _candidate(_OLDER, "2026-09-01T00:00:00Z", *_ALL_REQUIRED),
+        ])
+        == _OLDER
+    )
+
+
+def test_selection_fails_closed_when_unstarted_runs_disagree() -> None:
+    """Runs without a start time still share an identity when identifiers match."""
+    failed = CheckRun(
+        name=REQUIRED_UPSTREAM_CHECKS[0],
+        status="completed",
+        conclusion="failure",
+        run_id=7,
+        started_at=None,
+    )
+    pending = dc.replace(failed, status="queued", conclusion=None)
+    with pytest.raises(ProverToolError, match="ambiguous"):
+        select_newest_candidate([
+            _candidate(
+                _NEWEST,
+                "2026-10-01T00:00:00Z",
+                failed,
+                pending,
+                *_OTHER_REQUIRED,
+            )
+        ])
+
+
+def test_candidate_parses_a_queued_check_without_a_start_time() -> None:
+    """GitHub reports `started_at: null` until a queued check begins.
+
+    Only the required checks decide qualification, so a queued optional check
+    must not stop a release from producing a candidate at all.
+    """
+    release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
+    checks = typ.cast("list[object]", _fixture_json("upstream-check-runs.json"))
+    queued = dict(typ.cast("dict[str, object]", checks[0]))
+    queued.update({
+        "name": "Some optional check",
+        "status": "queued",
+        "conclusion": None,
+        "started_at": None,
+    })
+    candidate = candidate_from_api(release, tag_ref, [queued, *checks])
+    assert select_newest_candidate([candidate]) == PINNED_UPSTREAM_COMMIT
 
 
 def test_selection_fails_closed_without_a_qualified_candidate() -> None:

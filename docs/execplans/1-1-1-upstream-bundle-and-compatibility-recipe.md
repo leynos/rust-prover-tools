@@ -90,13 +90,13 @@ these numbers are a first estimate anchored on the size of the existing
 `rust_prover_tools/kani_snapshot` package and its tests.
 
 Recorded deviation (2026-11-15): the delivered change exceeds two of those
-budgets. Final counts against base `77b46af`, measured with
-`git diff --numstat` and excluding both ExecPlan files:
+budgets. Counts against base `77b46af`, measured with `git diff --numstat`,
+excluding both ExecPlan files, and re-measured after the formal-review repairs:
 
 - Files: 29 non-ExecPlan files changed against a budget of 20.
-- Code: 4,444 net lines across `rust_prover_tools/` and `tests/` against a
+- Code: 4,622 net lines across `rust_prover_tools/` and `tests/` against a
   budget of 2,500.
-- Documentation: 123 net lines against a budget of 400, so within budget.
+- Documentation: 129 net lines against a budget of 400, so within budget.
 - Configuration, interface and dependencies: no change, as intended.
 
 The excess is evidence rather than production logic: the pinned upstream files,
@@ -174,6 +174,15 @@ assignment, not a waiver attached elsewhere.
       requires an exact match for the pinned commit, and adds three tests
       (partial list, moved commit, parser gate). Corrects the recorded file
       count to the independently confirmed figure.
+- [x] (2026-11-15) Close the formal CodeRabbit review of head `577cbcb` by
+      repairing the findings it accepted: a tie between check runs is refused
+      only when the tied runs disagree, and an unstarted rerun counts as the
+      newest observation so a queued rerun blocks qualification; the negative
+      control must report `array_windows` in its own `E0658` diagnostic; a
+      boolean compiler-floor component is refused like a boolean
+      `schema_version`; and the runtime baseline must equal the builder glibc,
+      not merely be no newer than it. Renumbers the roadmap's footnotes by
+      first appearance and corrects its focused-test filter.
 
 ## Surprises & discoveries
 
@@ -272,6 +281,16 @@ assignment, not a waiver attached elsewhere.
   it cannot reach for a fixture or a checkout; the evidence has to be data. The
   pinned recipe builds its records from the same tuple, so the rule and the
   recipe share one source and cannot drift. Date/Author: 2026-11-15, agent.
+- D13. Decision: refuse a runtime baseline that differs from the builder glibc
+  in either direction, and treat an unstarted check run as the newest
+  observation of its name. Rationale: the formal review of head `577cbcb`
+  observed that `baseline < builder` also publishes an unexercised claim — the
+  build ran against `2.35`, so a published `2.31` floor is a promise nothing
+  measured — and that the previous tie-break silently kept a completed success
+  while its rerun was still queued, so a fresh run's result could never
+  displace it. Runs that share the newest identity but report different results
+  are still refused rather than resolved by order, because that disagreement
+  means the evidence itself is ambiguous. Date/Author: 2026-11-15, agent.
 
 ## Outcomes & retrospective
 
@@ -373,8 +392,12 @@ The producer's observable output is a JSON document with eleven groups:
 `prerequisites`, `runtime`, `schema_version`, `submodules`, `target` and
 `upstream`. Rendering is a pure function of the pinned values; parsing is its
 strict inverse; validation accepts exactly the documents whose values are
-internally consistent and consistent with the upstream evidence fixtures.
-Malformed input, unknown or duplicate keys and every invariant violation raise
+internally consistent, and, **for the pinned commit only**, consistent with the
+upstream evidence. Evidence for any other commit is the caller's obligation:
+`_require_pinned_gitlinks` skips the pinned-tree comparison when the upstream
+commit differs, because the domain holds no evidence for that tree, so a future
+producer must establish it before treating such a recipe as verified. Malformed
+input, unknown or duplicate keys and every invariant violation raise
 `ProverToolError`.
 
 ### Invariants and lemmas

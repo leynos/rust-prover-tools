@@ -2,8 +2,8 @@
 
 `validate_recipe` is the only constructor gate. It fails closed on every value
 that could make the build unreproducible, including a compiler floor the
-pinned toolchain cannot reach and a runtime floor newer than the builder image
-can link against.
+pinned toolchain cannot reach and a runtime baseline the builder image did not
+exercise.
 """
 
 from __future__ import annotations
@@ -111,7 +111,7 @@ def _validate_floor(recipe: Recipe) -> None:
     """Check that the promised compiler floor is reachable and credible."""
     floor = recipe.compiler_floor
     if len(floor) != _FLOOR_COMPONENTS or any(
-        not isinstance(part, int) for part in floor
+        not _is_plain_int(part) for part in floor
     ):
         _fail("snapshot recipe compiler floor must be a major/minor pair")
     if tuple(floor) < COMPILER_FLOOR:
@@ -134,11 +134,19 @@ def _validate_builder(recipe: Recipe) -> None:
         _fail("snapshot recipe builder image must be a plain image name")
     if _GLIBC_VERSION.fullmatch(builder.glibc) is None:
         _fail("snapshot recipe builder glibc must be a major/minor pair")
-    if _glibc_tuple(recipe.runtime.glibc_baseline) > _glibc_tuple(builder.glibc):
+    baseline = _glibc_tuple(recipe.runtime.glibc_baseline)
+    linking_image = _glibc_tuple(builder.glibc)
+    if baseline > linking_image:
         _fail(
             f"snapshot recipe runtime glibc_baseline "
             f"{recipe.runtime.glibc_baseline} is newer than the builder glibc "
             f"{builder.glibc}"
+        )
+    if baseline < linking_image:
+        _fail(
+            f"snapshot recipe runtime glibc_baseline "
+            f"{recipe.runtime.glibc_baseline} is older than the builder glibc "
+            f"{builder.glibc}, the only baseline the build actually exercised"
         )
 
 
@@ -312,13 +320,21 @@ def _validate_licences(licences: tuple[LicenceRecord, ...]) -> None:
             )
 
 
+def _is_plain_int(value: object) -> bool:
+    """Return whether a value is an integer rather than a boolean.
+
+    `True == 1` in Python, so `isinstance(value, int)` alone accepts a boolean
+    that the strict parser then refuses, and a recipe validated here would not
+    survive the round trip.
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _validate_schema(recipe: Recipe) -> None:
     """Check the recipe names a schema this implementation understands."""
     # `True == 1` in Python, so a bare inequality would accept the boolean and
     # accept a recipe the strict parser then refuses, breaking the round trip.
-    if isinstance(recipe.schema_version, bool) or not isinstance(
-        recipe.schema_version, int
-    ):
+    if not _is_plain_int(recipe.schema_version):
         _fail("snapshot recipe schema_version must be an integer")
     if recipe.schema_version != RECIPE_SCHEMA_VERSION:
         _fail(
@@ -339,9 +355,9 @@ def validate_recipe(recipe: Recipe) -> None:
     ------
     ProverToolError
         Raised for an unsupported schema version, a malformed identity, a
-        builder older than the claimed runtime floor, a missing or duplicated
-        prerequisite or licence, an unreachable compiler floor, an unsafe
-        asset template or an unexpected verifier.
+        runtime baseline that differs from the builder glibc, a missing or
+        duplicated prerequisite or licence, an unreachable compiler floor, an
+        unsafe asset template or an unexpected verifier.
     """
     _validate_schema(recipe)
     _validate_upstream(recipe.upstream)

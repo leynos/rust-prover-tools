@@ -4,8 +4,10 @@ Two routes select a commit: a manual dispatch input and the newest upstream
 release whose required Linux checks passed. Both fail closed. A manual input is
 an identity, never a ref or a command line. A CI candidate qualifies only when
 every required check has a completed, successful run; a newer run of the same
-check supersedes an older one, and two runs that cannot be ordered are refused
-rather than guessed.
+check supersedes an older one, and runs that share an identity but disagree are
+refused rather than guessed. A run that has not started yet has no start time,
+so it is treated as the newest observation of its check: a queued rerun blocks
+qualification until it reports something.
 """
 
 from __future__ import annotations
@@ -59,15 +61,16 @@ class CheckRun:
         Conclusion once completed; `None` while the run is pending.
     run_id : int
         Workflow run identifier, used only to order two runs of one check.
-    started_at : str
-        ISO-8601 UTC start time, used to pick the newest run of one check.
+    started_at : str | None
+        ISO-8601 UTC start time, used to pick the newest run of one check;
+        `None` while the run is queued, which GitHub reports as `null`.
     """
 
     name: str
     status: str
     conclusion: str | None
     run_id: int = 0
-    started_at: str = ""
+    started_at: str | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -115,26 +118,43 @@ def resolve_manual_commit(value: str) -> str:
     return require_full_sha(value, "workflow_dispatch upstream_commit")
 
 
+def _identity(run: CheckRun) -> tuple[str, int]:
+    """Return the value that says which observation a run is.
+
+    An unstarted run has no time; it still carries a run identifier, so two
+    queued runs stay distinguishable.
+    """
+    return (run.started_at or "", run.run_id)
+
+
+def _order(run: CheckRun) -> tuple[bool, str, int]:
+    """Return a sort key in which an unstarted run counts as the newest.
+
+    A queued rerun is newer evidence than the success it will replace, so it
+    must supersede it rather than be ignored. Ordering it last also keeps the
+    key free of `None`, which cannot be compared with a timestamp.
+    """
+    return (run.started_at is None, run.started_at or "", run.run_id)
+
+
 def _newest(checks: cabc.Sequence[CheckRun]) -> CheckRun:
-    """Return the newest run, refusing an unordered pair."""
-    ordered = sorted(checks, key=lambda run: (run.started_at, run.run_id))
-    newest = ordered[-1]
-    if len(ordered) > 1:
-        previous = ordered[-2]
-        same_order = (previous.started_at, previous.run_id) == (
-            newest.started_at,
-            newest.run_id,
+    """Return the newest run, refusing any tie that reports different results.
+
+    Every run sharing the newest identity is compared, not just the final pair
+    of a sort: with three tied observations, two matching successes must not
+    hide a conflicting failure.
+    """
+    newest = max(checks, key=_order)
+    identity = _identity(newest)
+    results = {
+        (run.status, run.conclusion) for run in checks if _identity(run) == identity
+    }
+    if len(results) > 1:
+        msg = (
+            f"upstream check {newest.name!r} is ambiguous: runs share an "
+            "identity but report different results"
         )
-        different_result = (previous.status, previous.conclusion) != (
-            newest.status,
-            newest.conclusion,
-        )
-        if same_order and different_result:
-            msg = (
-                f"upstream check {newest.name!r} is ambiguous: two runs share "
-                "an identity but report different results"
-            )
-            raise ProverToolError(msg)
+        raise ProverToolError(msg)
     return newest
 
 
@@ -224,12 +244,16 @@ def _check_run(document: object) -> CheckRun:
     if conclusion is not None and not isinstance(conclusion, str):
         msg = "upstream check run conclusion must be a string or null"
         raise ProverToolError(msg)
+    started_at = _field(record, "started_at", "check run")
+    if started_at is not None and not isinstance(started_at, str):
+        msg = "upstream check run started_at must be a string or null"
+        raise ProverToolError(msg)
     return CheckRun(
         name=_text(record, "name", "check run"),
         status=status,
         conclusion=conclusion,
         run_id=run_id,
-        started_at=_text(record, "started_at", "check run"),
+        started_at=started_at,
     )
 
 

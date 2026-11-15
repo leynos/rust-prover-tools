@@ -139,6 +139,20 @@ def test_negative_transcript_for_another_reason_is_refused() -> None:
         require_unstable_feature_rejected("error: expected one of `!` or `::`")
 
 
+def test_negative_transcript_binds_the_feature_to_the_diagnostic() -> None:
+    """An unrelated E0658 plus a stray mention proves nothing about the feature."""
+    transcript = "\n".join([
+        "error[E0658]: `let` expressions in this position are unstable",
+        " --> negative_1_93.rs:4:9",
+        "",
+        "error: aborting due to 1 previous error",
+        "",
+        "the control also mentions array_windows in passing",
+    ])
+    with pytest.raises(ProverToolError, match="array_windows"):
+        require_unstable_feature_rejected(transcript)
+
+
 def test_positive_fixture_depends_on_the_floor_feature() -> None:
     """The harness source uses the API whose stabilisation defines the floor."""
     source = _fixture("positive.rs")

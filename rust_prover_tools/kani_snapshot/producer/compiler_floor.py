@@ -150,6 +150,18 @@ def require_floor_harness_verified(
         raise ProverToolError(msg)
 
 
+def _diagnostic_messages(transcript: str, error_code: str) -> list[str]:
+    """Return the compiler's diagnostic messages for one error code.
+
+    The feature name has to appear *in* the diagnostic that rejects it. A
+    transcript that reports an unrelated unstable feature and mentions the
+    floor feature somewhere else would otherwise pass, and the negative
+    control would no longer show that this feature needs a newer compiler.
+    """
+    pattern = re.compile(rf"^error\[{re.escape(error_code)}\]:.*$", re.MULTILINE)
+    return pattern.findall(transcript)
+
+
 def require_unstable_feature_rejected(
     transcript: str,
     error_code: str = FLOOR_ERROR_CODE,
@@ -170,9 +182,13 @@ def require_unstable_feature_rejected(
         the floor feature, which would mean the negative control passed for
         some unrelated reason.
     """
-    if f"error[{error_code}]" not in transcript:
+    messages = _diagnostic_messages(transcript, error_code)
+    if not messages:
         msg = f"compiler-floor negative control lacks diagnostic {error_code}"
         raise ProverToolError(msg)
-    if FLOOR_FEATURE not in transcript:
-        msg = f"compiler-floor negative control does not mention {FLOOR_FEATURE}"
+    if not any(FLOOR_FEATURE in message for message in messages):
+        msg = (
+            f"compiler-floor negative control does not report {FLOOR_FEATURE!r} "
+            f"as unstable in a {error_code} diagnostic"
+        )
         raise ProverToolError(msg)
