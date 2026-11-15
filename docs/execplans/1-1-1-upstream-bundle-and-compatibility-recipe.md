@@ -199,6 +199,15 @@ assignment, not a waiver attached elsewhere.
       closed the claim and the test read that as a product defect. The
       assertion now runs while the copy is still blocked. Twenty focused runs
       pass.
+- [x] (2026-11-15) Re-check the head after the fix: hosted `lint-test` and
+      `Gecko Security Review` both pass on `58ddf74`, and
+      `mergeStateStatus` is `CLEAN`. CodeRabbit paused automatic reviews after
+      the run of pushes and reports that it last reviewed `577cbcb`, so its
+      pre-merge rows and its `CHANGES_REQUESTED` decision still describe that
+      commit. The single review queued for this PR through `comenq`
+      (`4f0725c9`) is the outstanding item; its ETA is measured in hours
+      because the queue is shared, so the branch waits on it rather than
+      asking a second time.
 
 ## Surprises & discoveries
 
