@@ -1,0 +1,108 @@
+# serializer version: 1
+# name: test_canonical_json_matches_the_reviewed_snapshot
+  '''
+  {
+    "attestation": {
+      "command_prefix": [
+        "gh",
+        "attestation",
+        "verify"
+      ],
+      "verifier": "gh"
+    },
+    "builder": {
+      "glibc": "2.35",
+      "image": "ubuntu-22.04"
+    },
+    "compiler_floor": [
+      1,
+      94
+    ],
+    "launcher": {
+      "archive_template": "kani-{version}-launcher-{target}.tar.gz",
+      "binaries": [
+        "kani",
+        "cargo-kani"
+      ],
+      "package": "kani-verifier"
+    },
+    "licences": [
+      {
+        "component": "cbmc",
+        "evidence": "licence-notes",
+        "licence": "BSD-4-Clause",
+        "source": "https://github.com/diffblue/cbmc/blob/develop/LICENSE"
+      },
+      {
+        "component": "kani",
+        "evidence": "licence-notes",
+        "licence": "Apache-2.0 OR MIT",
+        "source": "https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/LICENSE-MIT"
+      },
+      {
+        "component": "kissat",
+        "evidence": "component-licence",
+        "licence": "MIT",
+        "source": "https://github.com/arminbiere/kissat/blob/rel-4.0.1/LICENSE"
+      },
+      {
+        "component": "rustc",
+        "evidence": "licence-notes",
+        "licence": "Apache-2.0 OR MIT (plus some BSD)",
+        "source": "https://github.com/rust-lang/rust/blob/master/COPYRIGHT"
+      }
+    ],
+    "prerequisites": [
+      {
+        "name": "cbmc",
+        "sha256": "de9fa1cc4cf51c493e708a1c7608b192ad4956717b684d9c4501e22fd22d88a0",
+        "source": "https://github.com/diffblue/cbmc/releases/download/cbmc-6.11.0/ubuntu-22.04-cbmc-6.11.0-Linux.deb",
+        "version": "6.11.0"
+      },
+      {
+        "name": "kissat",
+        "sha256": "4b41edf12ffa5f8e8b1986e5ad3e0bedb4d34b0ed3ecc7c13362bc7ba0aba66b",
+        "source": "https://github.com/arminbiere/kissat/archive/refs/tags/rel-4.0.1.tar.gz",
+        "version": "4.0.1"
+      }
+    ],
+    "runtime": {
+      "cpu_baseline": "x86-64",
+      "dynamic_loader": "/lib64/ld-linux-x86-64.so.2",
+      "glibc_baseline": "2.35",
+      "shared_libraries": [
+        "libc.so.6",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libstdc++.so.6"
+      ]
+    },
+    "schema_version": 1,
+    "submodules": [
+      {
+        "commit": "b250680abd40ff1aaa07081d0497dc2755ed112e",
+        "path": "charon"
+      },
+      {
+        "commit": "cd36c699f3cb3d531289aadee26c45c1306edcfc",
+        "path": "firecracker"
+      },
+      {
+        "commit": "a33d369b98a50fd9290fd6586832c969035bdec0",
+        "path": "tests/perf/s2n-quic"
+      }
+    ],
+    "target": "x86_64-unknown-linux-gnu",
+    "upstream": {
+      "commit": "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
+      "crate_version": "0.68.0",
+      "published_at": "2026-09-16T03:43:14Z",
+      "repository": "model-checking/kani",
+      "rustc_version": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+      "tag": "kani-0.68.0",
+      "toolchain_channel": "nightly-2026-08-21"
+    }
+  }
+  
+  '''
+# ---

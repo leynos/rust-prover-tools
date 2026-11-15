@@ -1,0 +1,5 @@
+{
+  "charon": "b250680abd40ff1aaa07081d0497dc2755ed112e",
+  "firecracker": "cd36c699f3cb3d531289aadee26c45c1306edcfc",
+  "tests/perf/s2n-quic": "a33d369b98a50fd9290fd6586832c969035bdec0"
+}
