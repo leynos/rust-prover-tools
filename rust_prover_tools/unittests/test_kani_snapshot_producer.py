@@ -22,6 +22,7 @@ from rust_prover_tools.kani_snapshot.attestation import (
     attestation_command,
     policy_for_pin,
 )
+from rust_prover_tools.kani_snapshot.models import SubmoduleRecord
 from rust_prover_tools.kani_snapshot.producer.commands import (
     bundle_asset_name,
     bundle_command,
@@ -43,6 +44,8 @@ from rust_prover_tools.kani_snapshot.producer.recipe import (
     recipe_to_json,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe_model import (
+    COMPONENT_LICENCE,
+    NOTICE_INVENTORY,
     LauncherRecipe,
     LicenceRecord,
     Recipe,
@@ -376,6 +379,192 @@ def test_validation_rejects_an_unknown_attestation_verifier() -> None:
         validate_recipe(recipe)
 
 
+def test_validation_rejects_a_relative_dynamic_loader() -> None:
+    """An interpreter path is either absolute or absent."""
+    recipe = dc.replace(
+        pinned_recipe(),
+        runtime=dc.replace(
+            pinned_recipe().runtime, dynamic_loader="lib/ld-linux-x86-64.so.2"
+        ),
+    )
+    with pytest.raises(ProverToolError, match="absolute path"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_unsorted_shared_libraries() -> None:
+    """The recorded library set is stored in the order a reviewer compares."""
+    runtime = pinned_recipe().runtime
+    recipe = dc.replace(
+        pinned_recipe(),
+        runtime=dc.replace(
+            runtime, shared_libraries=tuple(reversed(runtime.shared_libraries))
+        ),
+    )
+    with pytest.raises(ProverToolError, match="sorted and unique"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_a_duplicated_shared_library() -> None:
+    """A repeated library is not additional evidence."""
+    runtime = pinned_recipe().runtime
+    recipe = dc.replace(
+        pinned_recipe(),
+        runtime=dc.replace(
+            runtime,
+            shared_libraries=(*runtime.shared_libraries, runtime.shared_libraries[0]),
+        ),
+    )
+    with pytest.raises(ProverToolError, match="sorted and unique"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_a_shared_library_that_is_not_a_name() -> None:
+    """A shell fragment is not a library name and never reaches a linker."""
+    recipe = dc.replace(
+        pinned_recipe(),
+        runtime=dc.replace(
+            pinned_recipe().runtime, shared_libraries=("libc.so.6 && id",)
+        ),
+    )
+    with pytest.raises(ProverToolError, match="plain library name"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_a_malformed_runtime_baseline() -> None:
+    """The runtime baseline is a major/minor pair like the builder's."""
+    recipe = dc.replace(
+        pinned_recipe(),
+        runtime=dc.replace(pinned_recipe().runtime, glibc_baseline="2"),
+    )
+    with pytest.raises(ProverToolError, match="major/minor pair"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_a_submodule_that_escapes_the_tree() -> None:
+    """The containment rule guards a tree whose gitlinks are not pinned."""
+    recipe = _mutated(pinned_recipe(), commit=_OTHER_COMMIT)
+    escaped = SubmoduleRecord(path="../escape", commit="a" * 40)
+    with pytest.raises(ProverToolError, match="stay below"):
+        validate_recipe(dc.replace(recipe, submodules=(escaped, *recipe.submodules)))
+
+
+def test_validation_rejects_unsorted_submodules() -> None:
+    """Recorded gitlinks follow the order a reviewer can compare."""
+    recipe = pinned_recipe()
+    with pytest.raises(ProverToolError, match="sorted by path"):
+        validate_recipe(
+            dc.replace(recipe, submodules=tuple(reversed(recipe.submodules)))
+        )
+
+
+def test_validation_rejects_a_short_submodule_commit_on_another_recipe() -> None:
+    """A tree without pinned evidence is still checked, value by value."""
+    recipe = _mutated(pinned_recipe(), commit=_OTHER_COMMIT)
+    short = dc.replace(recipe.submodules[0], commit="abc")
+    with pytest.raises(ProverToolError, match="40-hex"):
+        validate_recipe(dc.replace(recipe, submodules=(short, *recipe.submodules[1:])))
+
+
+def test_validation_rejects_an_attestation_prefix_for_another_command() -> None:
+    """The frozen prefix is the verify command, not an arbitrary `gh` call."""
+    recipe = pinned_recipe()
+    prefix = recipe.attestation.command_prefix
+    with pytest.raises(ProverToolError, match="gh attestation verify"):
+        validate_recipe(
+            dc.replace(
+                recipe,
+                attestation=dc.replace(
+                    recipe.attestation,
+                    command_prefix=("gh", "release", *prefix[2:]),
+                ),
+            )
+        )
+
+
+def test_validation_rejects_a_blank_attestation_argument() -> None:
+    """An empty argument would change the command the freeze protects."""
+    recipe = pinned_recipe()
+    prefix = recipe.attestation.command_prefix
+    with pytest.raises(ProverToolError, match="blanks"):
+        validate_recipe(
+            dc.replace(
+                recipe,
+                attestation=dc.replace(
+                    recipe.attestation, command_prefix=(*prefix, "")
+                ),
+            )
+        )
+
+
+def test_validation_rejects_a_repeated_prerequisite() -> None:
+    """Two records for one tool would let last-one-wins hide a conflict."""
+    recipe = pinned_recipe()
+    with pytest.raises(ProverToolError, match="repeat"):
+        validate_recipe(
+            dc.replace(
+                recipe, prerequisites=(*recipe.prerequisites, recipe.prerequisites[0])
+            )
+        )
+
+
+def test_validation_rejects_a_malformed_prerequisite_digest() -> None:
+    """The digest is a lowercase SHA-256, not a version or a package name."""
+    recipe = pinned_recipe()
+    broken = dc.replace(recipe.prerequisites[0], sha256="ABC123")
+    with pytest.raises(ProverToolError, match="64-hex digest"):
+        validate_recipe(
+            dc.replace(recipe, prerequisites=(broken, *recipe.prerequisites[1:]))
+        )
+
+
+def test_validation_rejects_a_prerequisite_without_provenance() -> None:
+    """Every prerequisite names where it came from."""
+    recipe = pinned_recipe()
+    broken = dc.replace(recipe.prerequisites[0], source="   ")
+    with pytest.raises(ProverToolError, match="prerequisite source"):
+        validate_recipe(
+            dc.replace(recipe, prerequisites=(broken, *recipe.prerequisites[1:]))
+        )
+
+
+def test_validation_rejects_a_repeated_licence_component() -> None:
+    """A component recorded twice would make its evidence ambiguous."""
+    recipe = pinned_recipe()
+    with pytest.raises(ProverToolError, match="repeat"):
+        validate_recipe(
+            dc.replace(recipe, licences=(*recipe.licences, recipe.licences[0]))
+        )
+
+
+def test_validation_rejects_an_unknown_licence_evidence() -> None:
+    """Evidence is the notice inventory or the component's own licence."""
+    recipe = pinned_recipe()
+    broken = dc.replace(recipe.licences[0], evidence="upstream says so")
+    with pytest.raises(ProverToolError, match="evidence must be"):
+        validate_recipe(dc.replace(recipe, licences=(broken, *recipe.licences[1:])))
+
+
+def test_validation_rejects_a_malformed_publication_time() -> None:
+    """The publication time is part of the release identity."""
+    recipe = _mutated(pinned_recipe(), published_at="2026-08-21")
+    with pytest.raises(ProverToolError, match="ISO-8601"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_an_empty_upstream_repository() -> None:
+    """The repository a release came from is never blank."""
+    recipe = _mutated(pinned_recipe(), repository=" ")
+    with pytest.raises(ProverToolError, match="repository"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_an_empty_rustc_version() -> None:
+    """The compiler version is what the floor claim is measured against."""
+    recipe = _mutated(pinned_recipe(), rustc_version=" ")
+    with pytest.raises(ProverToolError, match="rustc_version"):
+        validate_recipe(recipe)
+
+
 def test_attestation_command_prefix_matches_the_recipe() -> None:
     """The frozen recipe prefix is the vector the verifier actually runs."""
     recipe = pinned_recipe()
@@ -472,6 +661,22 @@ def test_parse_rejects_an_unknown_key() -> None:
         parse_recipe(_encode(document))
 
 
+def test_parse_rejects_an_unknown_key_in_a_nested_group() -> None:
+    """The nested groups are strict too, not only the top-level document."""
+    document = _document()
+    document["builder"]["surprise"] = 1
+    with pytest.raises(ProverToolError, match="unknown keys"):
+        parse_recipe(_encode(document))
+
+
+def test_parse_rejects_a_wrong_type_in_a_nested_array() -> None:
+    """A number in a string list is refused, not coerced to text."""
+    document = _document()
+    document["runtime"]["shared_libraries"] = [1]
+    with pytest.raises(ProverToolError, match="shared_libraries"):
+        parse_recipe(_encode(document))
+
+
 def test_parse_rejects_a_missing_key() -> None:
     """A missing required group fails closed."""
     document = _document()
@@ -551,10 +756,15 @@ def test_build_commands_are_argument_vectors() -> None:
         "--use-local-toolchain",
         "toolchain",
     )
-    assert toolchain_install_command("nightly-2026-08-21")[:3] == (
+    assert toolchain_install_command("nightly-2026-08-21") == (
         "rustup",
         "toolchain",
         "install",
+        "nightly-2026-08-21",
+        "--profile",
+        "minimal",
+        "--component",
+        "llvm-tools,rustc-dev,rust-src,rustfmt",
     )
 
 
@@ -592,6 +802,53 @@ def test_missing_licence_evidence_flags_a_notice_lie() -> None:
         evidence="licence-notes",
     )
     assert missing_licence_evidence(notes, (claimed,)) == ("z3",)
+
+
+def test_metadata_rejects_a_repeated_gitmodules_path() -> None:
+    """Two sections for one path would record the same tree twice."""
+    data = (
+        b'[submodule "charon"]\n\tpath = charon\n\turl = https://example.invalid\n'
+        b'[submodule "again"]\n\tpath = charon\n\turl = https://example.invalid\n'
+    )
+    with pytest.raises(ProverToolError, match="repeated"):
+        parse_submodule_paths(data)
+
+
+def test_metadata_rejects_a_repeated_dependency_name() -> None:
+    """The last assignment would silently win over the first."""
+    data = b'CBMC_VERSION="6.11.0"\nCBMC_VERSION="6.12.0"\n'
+    with pytest.raises(ProverToolError, match="repeats"):
+        parse_dependency_versions(data)
+
+
+def test_metadata_rejects_invalid_utf8() -> None:
+    """Evidence bytes are decoded strictly, so damage is visible."""
+    with pytest.raises(ProverToolError, match="UTF-8"):
+        parse_toolchain_channel(b"\xff\xfe")
+
+
+def test_missing_licence_evidence_requires_a_source() -> None:
+    """A component licence without a source is not evidence."""
+    record = LicenceRecord(
+        component="rustc",
+        licence="Apache-2.0 WITH LLVM-exception",
+        source="  ",
+        evidence=COMPONENT_LICENCE,
+    )
+    notes = _fixture("license-notes.txt")
+    assert missing_licence_evidence(notes, (record,)) == ("rustc",)
+
+
+def test_missing_licence_evidence_ignores_component_case() -> None:
+    """Upstream's notice spellings are compared case-insensitively."""
+    record = LicenceRecord(
+        component="KANI",
+        licence="Apache-2.0 OR MIT",
+        source="https://example.invalid/kani",
+        evidence=NOTICE_INVENTORY,
+    )
+    notes = _fixture("license-notes.txt")
+    assert missing_licence_evidence(notes, (record,)) == ()
 
 
 @pytest.mark.parametrize(
@@ -632,6 +889,8 @@ _OTHER_REQUIRED = tuple(
 )
 _NEWEST = "1" * 40
 _OLDER = "2" * 40
+#: A commit that is not the pinned release, so pinned-tree evidence is absent.
+_OTHER_COMMIT = "3" * 40
 
 
 def test_selection_takes_the_newest_candidate_with_every_check() -> None:
@@ -915,6 +1174,31 @@ def test_candidate_parser_refuses_a_draft_release() -> None:
     checks = typ.cast("list[object]", _fixture_json("upstream-check-runs.json"))
     with pytest.raises(ProverToolError, match="draft"):
         candidate_from_api(draft, tag_ref, checks)
+
+
+def test_candidate_parser_refuses_a_prerelease() -> None:
+    """A prerelease tag is not a published identity either."""
+    release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
+    prerelease = {**release, "prerelease": True}
+    checks = typ.cast("list[object]", _fixture_json("upstream-check-runs.json"))
+    with pytest.raises(ProverToolError, match="prerelease"):
+        candidate_from_api(prerelease, tag_ref, checks)
+
+
+def test_candidate_parser_refuses_a_check_run_without_an_integer_id() -> None:
+    """The run identifier orders observations, so it must be an integer."""
+    release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
+    run = {
+        "id": "1",
+        "name": "lint-test",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": None,
+    }
+    with pytest.raises(ProverToolError, match="id must be an integer"):
+        candidate_from_api(release, tag_ref, [run])
 
 
 def test_candidate_parser_refuses_a_malformed_check_run() -> None:

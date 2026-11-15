@@ -772,10 +772,12 @@ version control at any depth, and the code indexer skips it too.
 
 - `recipe_model` holds the frozen records (`Recipe`, `UpstreamIdentity`,
   `BuilderRecord`, `LauncherRecipe`, `AttestationRecipe`, `LicenceRecord`).
-- `recipe_rules.validate_recipe` is the only constructor gate; it checks every
+- `recipe_rules.validate_recipe` is the gate both validated entry points use:
+  `pinned_recipe` and `recipe_parse.parse_recipe`. The frozen records are plain
+  dataclasses, so constructing one directly bypasses the gate. It checks every
   invariant, including that the compiler floor is reachable and no newer than
-  the pinned compiler, and that the runtime floor is no newer than the builder
-  image can link.
+  the pinned compiler, and that the runtime baseline equals the builder glibc —
+  the only baseline the build actually exercised.
 - `recipe_evidence` records the pinned commit and its gitlinks as plain data.
   Validation is the only gate a document passes, so it cannot read a fixture or
   a checkout; a recipe naming the pinned commit must instead record exactly
@@ -791,6 +793,17 @@ version control at any depth, and the code indexer skips it too.
 - `commands` derives argument vectors and asset names from validated inputs.
 - `compiler_floor` owns the supported floor and the transcript checks that
   demonstrate it.
+
+The package boundary is defined by effects, not by the shape of the data it
+reads. `resolution` converts GitHub API payloads, `upstream_metadata` converts
+upstream files and `commands` derives argument vectors; all three are pure
+functions with no outbound port, so moving them behind an "adapter" would not
+change a single dependency direction. Keeping them here keeps each fail-closed
+check next to the records it protects and keeps the whole package testable
+without a service. The `attestation` verifier and its frozen `command_prefix`
+are recipe facts for the same reason: the consumer checks the command it is
+about to run against them, so an adapter could not own that spelling without
+weakening the check.
 
 Conventions that keep the recipe trustworthy:
 

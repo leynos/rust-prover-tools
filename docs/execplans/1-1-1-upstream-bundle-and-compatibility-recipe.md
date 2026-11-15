@@ -183,6 +183,16 @@ assignment, not a waiver attached elsewhere.
       `schema_version`; and the runtime baseline must equal the builder glibc,
       not merely be no newer than it. Renumbers the roadmap's footnotes by
       first appearance and corrects its focused-test filter.
+- [x] (2026-11-15) Reconcile the formal review's failed pre-merge checks. The
+      Testing (Overall) row's branch-level tests are added: runtime loader and
+      library rules, submodule containment, ordering and digests on an
+      unpinned commit, attestation prefix and blank arguments, prerequisite
+      and licence duplicates and digests, upstream formats, nested parser
+      groups, prerelease and non-integer check-run identifiers, metadata
+      repeats and invalid UTF-8, licence-evidence source and casing, and the
+      whole toolchain vector. The Domain Architecture warning is dispositioned
+      rather than refactored (D14), and the constructor claim it identified is
+      corrected in the module docstring and the guide.
 
 ## Surprises & discoveries
 
@@ -291,6 +301,17 @@ assignment, not a waiver attached elsewhere.
   displace it. Runs that share the newest identity but report different results
   are still refused rather than resolved by order, because that disagreement
   means the evidence itself is ambiguous. Date/Author: 2026-11-15, agent.
+- D14. Decision: keep the pure API and file parsers and the argv builders in
+  the producer package, and define that package's boundary by effects rather
+  than by data shape. Rationale: CodeRabbit's Domain Architecture row proposed
+  moving `candidate_from_api`, the attestation prefix, `commands`,
+  `upstream_metadata` and the JSON codec into adapters. Every one of them is a
+  pure function: none performs I/O, so moving them changes no dependency
+  direction and buys no testability, while the fail-closed checks would move
+  away from the frozen records they protect. The attestation `command_prefix`
+  is a recipe fact precisely so that an adapter cannot choose the command the
+  freeze exists to pin. The only effectful code is the consumer that executes
+  the vectors. Date/Author: 2026-11-15, agent.
 
 ## Outcomes & retrospective
 

@@ -1,6 +1,9 @@
 """Invariants a pinned snapshot build recipe must satisfy.
 
-`validate_recipe` is the only constructor gate. It fails closed on every value
+`pinned_recipe` and `parse_recipe` are the only validated entry points, and
+both call `validate_recipe`, the sole gate they use. The frozen records are
+plain dataclasses, so constructing one directly bypasses this module; the gate
+guards the entry points, not the constructors. It fails closed on every value
 that could make the build unreproducible, including a compiler floor the
 pinned toolchain cannot reach and a runtime baseline the builder image did not
 exercise.
