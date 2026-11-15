@@ -9,12 +9,11 @@ own.
 
 - **Merged:** the EP-M2 and EP-M3 implementations, in #131 (14 November): pin
   and manifest contracts, and isolated snapshot installation, identity checking
-  and execution. Installation works only from a locally staged `--asset-dir`;
-  nothing can be downloaded yet.
+  and execution. The installer takes separately staged, verified assets from a
+  local `--asset-dir`; release download isn't connected yet.
 - **Not started:** EP-M1 (upstream recipe and the Rust 1.94 compiler floor),
   EP-M4 (build and publication), EP-M5 (smoke build and handoff), and the first
-  live publication. No snapshot has been published, so no consumer can use one
-  yet.
+  live publication. This project has not published a snapshot.
 
 ## 1. Immutable Kani snapshot distribution
 
@@ -34,8 +33,9 @@ preserving the legacy release path. See the
 - [ ] 1.1.3. Deliver isolated binary installation and execution. Requires 1.1.2.
   Complete EP-M3 with deterministic CLI, HTTP, archive, concurrency, cache,
   identity, and same-semantic-version regression evidence. Implementation
-  merged in #131; the same-semantic-version regression evidence is still to be
-  written, and the entry is held open behind 1.1.1 and 1.1.2.
+  merged in #131, including the same-reported-version regression test
+  (`test_same_reported_version_installs_into_disjoint_generations`); held open
+  behind 1.1.1 and 1.1.2.
 - [ ] 1.1.4. Deliver guarded build and publication orchestration. Requires
   1.1.3. Complete EP-M4 with tested Python helpers, monthly/manual workflow,
   publication recovery tests, and the necessary Python release lifecycle fix.
