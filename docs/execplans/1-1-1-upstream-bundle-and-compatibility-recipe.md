@@ -134,7 +134,8 @@ these numbers are a first estimate anchored on the size of the existing
 - [x] (2026-11-15) Record the design decisions and internal conventions in the
       design document, the parent execution plan, the developer guide and the
       roadmap.
-- [ ] Run the full commit gates and deliver the branch.
+- [x] (2026-11-15) Run the full commit gates and deliver the branch in draft
+      pull request #254.
 
 ## Surprises & discoveries
 
@@ -324,7 +325,7 @@ Malformed input, unknown or duplicate keys and every invariant violation raise
   `GLIBC_2.34`; measured with `readelf`, not proved.
 - `AXIOM-gh`: `gh attestation verify` accepts exactly the documented argument
   prefix; only the frozen prefix and verifier identity are modelled.
-- `AXIOM-rustc`: Rust 1.93.1's stabilisation boundary for `array_windows` is
+- `AXIOM-rustc`: Rust 1.93.1's stabilization boundary for `array_windows` is
   what the negative transcript records.
 
 ### Methods per obligation
