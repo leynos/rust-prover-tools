@@ -1,0 +1,10 @@
+{
+  "node_id": "REF_kwDODQ0dQbA",
+  "object": {
+    "sha": "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
+    "type": "commit",
+    "url": "https://api.github.com/repos/model-checking/kani/git/commits/0d2328a93f0e0ff66132d6bfa1a7d884877cf862"
+  },
+  "ref": "refs/tags/kani-0.68.0",
+  "url": "https://api.github.com/repos/model-checking/kani/git/refs/tags/kani-0.68.0"
+}

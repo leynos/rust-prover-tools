@@ -111,10 +111,12 @@ def test_pinned_recipe_matches_the_upstream_evidence() -> None:
     """Every pinned identity agrees with the checked-in upstream files."""
     recipe = pinned_recipe()
     release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
+    tag_object = typ.cast("dict[str, object]", tag_ref["object"])
     assert recipe.upstream.commit == PINNED_UPSTREAM_COMMIT
     assert recipe.upstream.tag == PINNED_UPSTREAM_TAG
-    assert recipe.upstream.commit == release["commit"]
-    assert recipe.upstream.tag == release["tag"]
+    assert recipe.upstream.tag == release["tag_name"]
+    assert recipe.upstream.commit == tag_object["sha"]
     assert recipe.upstream.published_at == release["published_at"]
     assert recipe.upstream.repository == "model-checking/kani"
     assert (
@@ -145,12 +147,17 @@ def test_pinned_recipe_records_the_upstream_dependency_versions() -> None:
 
 
 def test_pinned_recipe_records_every_source_submodule() -> None:
-    """Recorded gitlinks match the upstream tree and its `.gitmodules`."""
+    """Recorded gitlinks match the upstream tree and its `.gitmodules`.
+
+    The comparison keeps the record sequence rather than collapsing it into a
+    mapping, so a duplicated path cannot hide behind last-one-wins.
+    """
     recipe = pinned_recipe()
     declared = parse_submodule_paths(_fixture("gitmodules"))
-    recorded = {record.path: record.commit for record in recipe.submodules}
-    assert tuple(sorted(recorded)) == tuple(sorted(declared))
-    assert recorded == _fixture_json("upstream-gitlinks.json")
+    recorded = [(record.path, record.commit) for record in recipe.submodules]
+    assert [path for path, _ in recorded] == sorted(declared)
+    gitlinks = typ.cast("dict[str, str]", _fixture_json("upstream-gitlinks.json"))
+    assert recorded == sorted(gitlinks.items())
 
 
 def test_pinned_recipe_has_complete_licence_evidence() -> None:
@@ -260,6 +267,48 @@ def test_validation_requires_the_matching_launcher_binaries() -> None:
     )
     with pytest.raises(ProverToolError, match="cargo-kani"):
         validate_recipe(recipe)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "kani-{version}-{target}-{unknown}.tar.gz",
+        "kani-{version}-{target}-{0}.tar.gz",
+        "kani-{version!r}-{target}.tar.gz",
+        "kani-{version:>10}-{target}.tar.gz",
+    ],
+)
+def test_validation_rejects_an_unsafe_launcher_template(template: str) -> None:
+    """An unknown or decorated field fails as a recipe error, not a KeyError."""
+    recipe = dc.replace(
+        pinned_recipe(),
+        launcher=dc.replace(pinned_recipe().launcher, archive_template=template),
+    )
+    with pytest.raises(ProverToolError, match="archive_template"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_a_boolean_schema_version() -> None:
+    """`True == 1`, so a bare comparison would accept a boolean schema."""
+    # The value arrives the way it really would: a JSON `true` decodes to `True`.
+    decoded_true = typ.cast("int", json.loads("true"))
+    recipe = dc.replace(pinned_recipe(), schema_version=decoded_true)
+    with pytest.raises(ProverToolError, match="integer"):
+        validate_recipe(recipe)
+
+
+def test_validation_rejects_an_empty_submodule_list() -> None:
+    """A pinned release always records the gitlinks its tree contains."""
+    with pytest.raises(ProverToolError, match="submodules"):
+        validate_recipe(dc.replace(pinned_recipe(), submodules=()))
+
+
+def test_validation_rejects_duplicate_submodule_paths() -> None:
+    """Two records for one path would let last-one-wins hide a conflict."""
+    recipe = pinned_recipe()
+    repeated = (recipe.submodules[0], recipe.submodules[0])
+    with pytest.raises(ProverToolError, match="repeat"):
+        validate_recipe(dc.replace(recipe, submodules=repeated))
 
 
 def test_validation_requires_licence_evidence_for_kissat() -> None:
@@ -682,10 +731,17 @@ def test_required_checks_are_the_linux_x86_64_jobs() -> None:
 
 
 def test_pinned_release_is_selected_from_upstream_evidence() -> None:
-    """The recorded release qualifies from the real check-run evidence."""
+    """The recorded release qualifies from the real check-run evidence.
+
+    The release fixture is the API response as returned. Its
+    `target_commitish` is the branch `main`, so the commit is taken from the
+    separately fetched tag ref rather than from the release object.
+    """
     release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
     checks = typ.cast("list[object]", _fixture_json("upstream-check-runs.json"))
-    candidate = candidate_from_api(release, checks)
+    assert release["target_commitish"] == "main"
+    candidate = candidate_from_api(release, tag_ref, checks)
     newer = _candidate(_NEWEST, "2026-10-01T00:00:00Z")
     assert select_newest_candidate([newer, candidate]) == PINNED_UPSTREAM_COMMIT
     recipe = pinned_recipe()
@@ -697,17 +753,40 @@ def test_pinned_release_is_selected_from_upstream_evidence() -> None:
 def test_candidate_parser_refuses_a_draft_release() -> None:
     """A draft release is not a published identity."""
     release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
     draft = {**release, "draft": True}
     checks = typ.cast("list[object]", _fixture_json("upstream-check-runs.json"))
     with pytest.raises(ProverToolError, match="draft"):
-        candidate_from_api(draft, checks)
+        candidate_from_api(draft, tag_ref, checks)
 
 
 def test_candidate_parser_refuses_a_malformed_check_run() -> None:
     """A check run without a status is external data the parser refuses."""
     release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
     with pytest.raises(ProverToolError, match="status"):
-        candidate_from_api(release, [{"id": 1, "name": "x", "conclusion": None}])
+        candidate_from_api(
+            release, tag_ref, [{"id": 1, "name": "x", "conclusion": None}]
+        )
+
+
+def test_candidate_parser_refuses_a_tag_ref_for_another_tag() -> None:
+    """A tag ref that names a different tag cannot identify this release."""
+    release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
+    elsewhere = {**tag_ref, "ref": "refs/tags/kani-0.67.0"}
+    with pytest.raises(ProverToolError, match="does not name"):
+        candidate_from_api(release, elsewhere, [])
+
+
+def test_candidate_parser_refuses_an_annotated_tag() -> None:
+    """A tag object is not a commit, so it must be dereferenced first."""
+    release = typ.cast("dict[str, object]", _fixture_json("upstream-release.json"))
+    tag_ref = typ.cast("dict[str, object]", _fixture_json("upstream-tag-ref.json"))
+    target = typ.cast("dict[str, object]", tag_ref["object"])
+    annotated = {**tag_ref, "object": {**target, "type": "tag"}}
+    with pytest.raises(ProverToolError, match="dereference"):
+        candidate_from_api(release, annotated, [])
 
 
 def test_pinned_toolchain_reaches_the_compiler_floor() -> None:

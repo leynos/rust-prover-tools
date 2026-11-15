@@ -801,10 +801,14 @@ Conventions that keep the recipe trustworthy:
   `main`'s head. When re-pinning, refresh `tests/fixtures/kani_recipe` with the
   upstream files from that same commit; the unit tests compare the recipe
   against them.
-- The non-version fixtures are evidence, not inputs. `upstream-release.json`
-  and `upstream-check-runs.json` are the release and check-run responses for
-  the pinned commit, deduplicated; `upstream-gitlinks.json` records the
-  recursive submodule commits.
+- The non-version fixtures are evidence, not inputs. `upstream-release.json`,
+  `upstream-tag-ref.json` and `upstream-check-runs.json` are the release, tag
+  ref and check-run responses for the pinned commit, deduplicated. Their shape
+  is the API's, not a normalized copy: a release's `target_commitish` is a
+  branch name (`main` for Kani), so the released commit is read from
+  `refs/tags/<tag_name>`, and an annotated tag must be dereferenced to its
+  commit before it is recorded. `upstream-gitlinks.json` records the recursive
+  submodule commits.
 - The compiler floor is demonstrated by two transcripts under
   `tests/fixtures/kani_snapshot/compiler_floor`. `positive.txt` is a real Kani
   verification of the named harness, and `negative_1_93.txt` is the control

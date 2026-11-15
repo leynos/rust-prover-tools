@@ -89,6 +89,21 @@ No comparable completed ExecPlan in this repository had its budgets raised, so
 these numbers are a first estimate anchored on the size of the existing
 `rust_prover_tools/kani_snapshot` package and its tests.
 
+Recorded deviation (2026-11-15): the delivered change exceeds two of those
+budgets. Final counts against base `77b46af`, measured with
+`git diff --numstat` and excluding both ExecPlan files:
+
+- Files: 29 non-ExecPlan files changed against a budget of 20.
+- Code: 4,370 net lines across `rust_prover_tools/` and `tests/` against a
+  budget of 2,500.
+- Documentation: 114 net lines against a budget of 400, so within budget.
+- Configuration, interface and dependencies: no change, as intended.
+
+The excess is evidence rather than production logic: the pinned upstream files,
+the two captured transcripts, the tag ref, and the tests that bind each pinned
+value to them. The requirement for that evidence arrived with the assignment,
+so an estimate made before it existed was too low. See D11.
+
 ## Risks
 
 - Risk: a bundle built on the developer host links a newer glibc than the
@@ -136,6 +151,14 @@ these numbers are a first estimate anchored on the size of the existing
       roadmap.
 - [x] (2026-11-15) Run the full commit gates and deliver the branch in draft
       pull request #254.
+- [x] (2026-11-15) Request the ExecPlan completeness assessment
+      (`EPM1-254-20261115T1800Z`) at head `7dee339` and repair its five in-scope
+      findings: read the released commit from the tag ref rather than the
+      release's `target_commitish`, refuse unknown and decorated launcher
+      template fields, reject a boolean `schema_version`, require a non-empty
+      duplicate-free submodule list, and bind each transcript verdict to its own
+      harness line. Each repair carries a test that fails against the reviewed
+      head.
 
 ## Surprises & discoveries
 
@@ -159,6 +182,11 @@ these numbers are a first estimate anchored on the size of the existing
   bundle relocatable, so a consumer must preserve it.
 - Observation: `rust-toolchain-version` has no trailing newline. Impact:
   parsers must not assume one; the recipe stores the stripped value.
+- Observation: a GitHub release object does not carry the commit it names.
+  Evidence: `target_commitish` is `main` for `kani-0.68.0`, and only
+  `refs/tags/kani-0.68.0` resolves to `0d2328a9…`. Impact: the parser takes a
+  separately fetched tag ref, and refuses an annotated tag it would otherwise
+  record as the commit.
 - Observation: the initial positive transcript was 2,109 lines of CBMC checks.
   Evidence: `kani positive.rs` output. Impact: recapture with
   `--output-format terse`, which yields 29 lines and still names the harness
@@ -201,6 +229,26 @@ these numbers are a first estimate anchored on the size of the existing
   upstream's `license-notes.txt`. Rationale: the upstream file is evidence and
   must stay verbatim; the producer composes the redistributed notices from it
   and adds the missing component. Date/Author: 2026-11-15, agent.
+- D9. Decision: parse the GitHub API's own shapes and take the released commit
+  from `refs/tags/<tag_name>`, refusing an annotated tag. Rationale: the review
+  of head `7dee339` showed the fixtures had been normalized by hand, so the
+  documented input boundary — a release object whose `target_commitish` is the
+  branch `main` — was never exercised. The tag ref is the only object that
+  resolves a tag to the commit it names. Date/Author: 2026-11-15, agent.
+- D10. Decision: fail closed on three value shapes the review found: launcher
+  template fields that are not exactly `{version}` and `{target}`, a boolean
+  `schema_version`, and an empty or duplicate-bearing submodule list.
+  Rationale: each escaped the promised `ProverToolError` contract, and the
+  parser already refused the boolean, so validation and parsing disagreed about
+  which recipes are well formed. Date/Author: 2026-11-15, agent.
+- D11. Decision: record, rather than avoid, the size-tolerance deviation. The
+  delivered diff changes more non-ExecPlan files and more net code, test and
+  fixture lines than `Tolerances` allows. Rationale: the evidence the user
+  required — pinned upstream files, two captured transcripts, a tag ref and the
+  tests that bind them — is what exceeded the budget, and the work was
+  delivered in full rather than trimmed to fit an estimate made before the
+  evidence existed. The deviation and its final counts are recorded under
+  `Tolerances`. Date/Author: 2026-11-15, agent.
 
 ## Outcomes & retrospective
 
@@ -219,6 +267,14 @@ re-extraction during setup. Build cost beyond this prototype run is unrecorded.
 
 Lesson: before creating a new package directory, check `git check-ignore`. A
 silently ignored source tree looks exactly like a clean working tree.
+
+Retrospective on review: the completeness assessment found five real defects
+that the passing suite did not, and every one was a place where a boundary
+accepted a shape it had not checked — the release identity, the launcher
+template, the schema version, the submodule list, and the harness verdict. The
+lesson is that fixtures copied from a real API response carry the API's actual
+shape; had the release fixture kept the invented `target_commitish` of a commit
+SHA, the tag-ref boundary would never have been written.
 
 ## Context and orientation
 

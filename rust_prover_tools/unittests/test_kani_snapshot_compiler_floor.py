@@ -91,6 +91,43 @@ def test_positive_transcript_without_the_harness_is_refused() -> None:
         require_floor_harness_verified(summary)
 
 
+def test_positive_transcript_binds_the_verdict_to_the_named_harness() -> None:
+    """A success reported for a different harness cannot discharge this one."""
+    neighbouring = "\n".join([
+        f"Checking harness {FLOOR_HARNESS}...",
+        "",
+        "VERIFICATION RESULT:",
+        " ** 1 of 1 failed",
+        "",
+        "VERIFICATION:- FAILED",
+        "",
+        "Checking harness some_other_harness...",
+        "",
+        "VERIFICATION RESULT:",
+        " ** 0 of 1 failed",
+        "",
+        "VERIFICATION:- SUCCESSFUL",
+    ])
+    with pytest.raises(ProverToolError, match="does not verify harness"):
+        require_floor_harness_verified(neighbouring)
+
+
+def test_positive_transcript_accepts_a_later_successful_harness() -> None:
+    """The same mixed transcript passes when the named harness succeeds."""
+    mixed = "\n".join([
+        "Checking harness some_other_harness...",
+        "",
+        "VERIFICATION:- FAILED",
+        "",
+        f"Checking harness {FLOOR_HARNESS}...",
+        "",
+        " ** 0 of 409 failed (6 unreachable)",
+        "",
+        "VERIFICATION:- SUCCESSFUL",
+    ])
+    require_floor_harness_verified(mixed)
+
+
 def test_negative_transcript_rejects_the_unstable_feature() -> None:
     """The 1.93 control failed because `array_windows` is unstable there."""
     require_unstable_feature_rejected(_fixture("negative_1_93.txt"))

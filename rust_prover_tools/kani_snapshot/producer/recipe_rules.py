@@ -9,6 +9,7 @@ can link against.
 from __future__ import annotations
 
 import re
+import string
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
@@ -58,6 +59,8 @@ _PUBLISHED_AT: typ.Final[re.Pattern[str]] = re.compile(
 _GLIBC_VERSION: typ.Final[re.Pattern[str]] = re.compile(r"\d+\.\d+")
 _IMAGE_NAME: typ.Final[re.Pattern[str]] = re.compile(r"[a-z0-9][a-z0-9._-]*")
 _CARGO_PACKAGE: typ.Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]+")
+#: The only fields a launcher archive template may substitute.
+_LAUNCHER_TEMPLATE_FIELDS: typ.Final[frozenset[str]] = frozenset({"version", "target"})
 _LIBRARY_NAME: typ.Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_.+-]+")
 
 #: A compiler floor names a major and a minor release.
@@ -157,9 +160,14 @@ def _validate_prerequisites(prerequisites: tuple[PrerequisiteRecord, ...]) -> No
 
 def _validate_submodules(submodules: tuple[SubmoduleRecord, ...]) -> None:
     """Check that recorded gitlinks are complete and cannot escape the tree."""
+    if not submodules:
+        _fail("snapshot recipe must record the upstream release's submodules")
     paths = [record.path for record in submodules]
     if paths != sorted(paths):
         _fail("snapshot recipe submodules must be sorted by path")
+    duplicated = sorted({path for path in paths if paths.count(path) > 1})
+    if duplicated:
+        _fail(f"snapshot recipe submodules repeat: {', '.join(duplicated)}")
     for record in submodules:
         if not is_contained_relative_path(record.path):
             _fail(
@@ -192,6 +200,32 @@ def _validate_runtime(runtime: RuntimeIdentity) -> None:
             )
 
 
+def _launcher_template_fields(template: str) -> frozenset[str]:
+    """Return the field names a launcher archive template substitutes.
+
+    Only plain `{version}` and `{target}` fields are acceptable. A conversion,
+    a format spec or a positional field is refused here rather than left to
+    `str.format`, which would raise `KeyError` or `IndexError` instead of the
+    `ProverToolError` this module promises.
+    """
+    try:
+        parsed = tuple(string.Formatter().parse(template))
+    except ValueError as exc:
+        _fail(f"snapshot recipe launcher archive_template is malformed: {exc}")
+    fields: list[str] = []
+    for _, field_name, format_spec, conversion in parsed:
+        if field_name is None:
+            continue
+        is_plain = field_name.isidentifier() and not format_spec and not conversion
+        if not is_plain:
+            _fail(
+                "snapshot recipe launcher archive_template must use only plain "
+                "{version} and {target} fields"
+            )
+        fields.append(field_name)
+    return frozenset(fields)
+
+
 def _validate_launcher(launcher: LauncherRecipe) -> None:
     """Check that the launcher recipe names both entry points and a safe asset."""
     if _CARGO_PACKAGE.fullmatch(launcher.package) is None:
@@ -202,9 +236,9 @@ def _validate_launcher(launcher: LauncherRecipe) -> None:
             f"{', '.join(LAUNCHER_BINARIES)}"
         )
     template = launcher.archive_template
-    if "{version}" not in template or "{target}" not in template:
+    if _launcher_template_fields(template) != _LAUNCHER_TEMPLATE_FIELDS:
         _fail(
-            "snapshot recipe launcher archive_template must contain "
+            "snapshot recipe launcher archive_template must contain exactly "
             "{version} and {target}"
         )
     expanded = template.format(version="0.0.0", target="x86_64-unknown-linux-gnu")
@@ -250,6 +284,12 @@ def _validate_licences(licences: tuple[LicenceRecord, ...]) -> None:
 
 def _validate_schema(recipe: Recipe) -> None:
     """Check the recipe names a schema this implementation understands."""
+    # `True == 1` in Python, so a bare inequality would accept the boolean and
+    # accept a recipe the strict parser then refuses, breaking the round trip.
+    if isinstance(recipe.schema_version, bool) or not isinstance(
+        recipe.schema_version, int
+    ):
+        _fail("snapshot recipe schema_version must be an integer")
     if recipe.schema_version != RECIPE_SCHEMA_VERSION:
         _fail(
             f"snapshot recipe schema_version must be {RECIPE_SCHEMA_VERSION}, "

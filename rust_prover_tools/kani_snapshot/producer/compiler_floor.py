@@ -44,6 +44,10 @@ _VERIFICATION: typ.Final[re.Pattern[str]] = re.compile(
     r"^\s*VERIFICATION:- SUCCESSFUL",
     re.MULTILINE,
 )
+_HARNESS_START: typ.Final[re.Pattern[str]] = re.compile(
+    r"^Checking harness (?P<name>\S+?)\.\.\.$",
+    re.MULTILINE,
+)
 
 
 def parse_rustc_version(value: str) -> tuple[int, int]:
@@ -98,6 +102,23 @@ def require_compiler_floor(
         raise ProverToolError(msg)
 
 
+def _harness_sections(transcript: str) -> dict[str, list[str]]:
+    """Split a Kani transcript into the text that follows each harness check.
+
+    Kani prints `Checking harness <name>...` and then that harness's own
+    verification result, so a verdict belongs to the nearest preceding harness
+    line. Searching the whole transcript would let one harness's success
+    discharge another harness's failed check.
+    """
+    starts = list(_HARNESS_START.finditer(transcript))
+    sections: dict[str, list[str]] = {}
+    for index, start in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(transcript)
+        body = transcript[start.end() : end]
+        sections.setdefault(start.group("name"), []).append(body)
+    return sections
+
+
 def require_floor_harness_verified(
     transcript: str,
     harness: str = FLOOR_HARNESS,
@@ -114,14 +135,17 @@ def require_floor_harness_verified(
     Raises
     ------
     ProverToolError
-        Raised when the transcript does not name the harness or does not
-        report a successful verification. A summary-only transcript cannot
-        show which harness ran, so the harness line is required as well.
+        Raised when the transcript does not check the harness, or when any run
+        of it does not report a successful verification. A summary-only
+        transcript cannot show which harness ran, so the harness line is
+        required, and a success reported for a different harness is not
+        accepted as this harness's verdict.
     """
-    if f"Checking harness {harness}" not in transcript:
+    blocks = _harness_sections(transcript).get(harness)
+    if not blocks:
         msg = f"compiler-floor transcript does not check harness {harness!r}"
         raise ProverToolError(msg)
-    if _VERIFICATION.search(transcript) is None:
+    if any(_VERIFICATION.search(block) is None for block in blocks):
         msg = f"compiler-floor transcript does not verify harness {harness!r}"
         raise ProverToolError(msg)
 

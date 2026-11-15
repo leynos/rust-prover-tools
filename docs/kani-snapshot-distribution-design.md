@@ -207,13 +207,16 @@ EP-M1 pinned the released `kani-0.68.0` tag at
 `1.100.0-nightly (8925ea358 2026-08-20)`. The earlier planning inspection used
 `4e31125fdb4f01fad95150415cbafe46e0587d66`, which is post-release `main`; a
 snapshot must be built from the source the release came from, so that commit is
-not a candidate. At the tag, `cargo bundle -- 0.68.0` builds the release
-binaries and Kani libraries, copies CBMC and Kissat from `PATH`, records
-`rust-toolchain-version` and `rustc-version`, and archives one `kani-0.68.0/`
-tree. The matching `kani` and `cargo-kani` launchers come from
-`cargo package -p kani-verifier` followed by
-`cargo install --locked --path kani-verifier-0.68.0 --root DIR`. Setup accepts
-`--use-local-bundle` and `--use-local-toolchain`, extracts with external
+not a candidate. A release object is not by itself an identity: GitHub's
+`target_commitish` repeats whatever the release form held, which for Kani is
+the branch `main`, so the producer resolves `refs/tags/<tag_name>` and records
+that commit, refusing an annotated tag that has not been dereferenced to it. At
+the tag, `cargo bundle -- 0.68.0` builds the release binaries and Kani
+libraries, copies CBMC and Kissat from `PATH`, records `rust-toolchain-version`
+and `rustc-version`, and archives one `kani-0.68.0/` tree. The matching `kani`
+and `cargo-kani` launchers come from `cargo package -p kani-verifier` followed
+by `cargo install --locked --path kani-verifier-0.68.0 --root DIR`. Setup
+accepts `--use-local-bundle` and `--use-local-toolchain`, extracts with external
 `tar --strip-components=1` into `$KANI_HOME/kani-<VERSION>`, and checks the
 supplied toolchain's `rustc --version` against the bundle's recorded string
 before linking it as `toolchain`. Its version-derived home confirms the need

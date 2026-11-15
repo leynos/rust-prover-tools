@@ -233,16 +233,54 @@ def _check_run(document: object) -> CheckRun:
     )
 
 
+def _released_commit(tag_ref: cabc.Mapping[str, object], tag: str) -> str:
+    """Return the commit a release tag ref resolves to.
+
+    A release object's `target_commitish` is *not* the released commit: GitHub
+    copies whatever the release form held, which for Kani is the branch name
+    `main`. The commit is therefore taken from the tag ref instead, and an
+    annotated tag is refused rather than silently recorded as its own tag
+    object, because only the dereferenced commit can be built.
+    """
+    expected = f"refs/tags/{tag}"
+    reference = _text(tag_ref, "ref", "tag ref")
+    if reference != expected:
+        msg = f"upstream tag ref {reference!r} does not name {expected!r}"
+        raise ProverToolError(msg)
+    target = _field(tag_ref, "object", "tag ref")
+    if not isinstance(target, dict):
+        msg = "upstream tag ref object must be an object"
+        raise ProverToolError(msg)
+    record = typ.cast("cabc.Mapping[str, object]", target)
+    kind = _text(record, "type", "tag ref object")
+    if kind != "commit":
+        msg = (
+            f"upstream tag ref {expected!r} points at a {kind!r}, not a commit; "
+            "dereference an annotated tag before resolving it"
+        )
+        raise ProverToolError(msg)
+    return require_full_sha(
+        _field(record, "sha", "tag ref object"), "upstream release commit"
+    )
+
+
 def candidate_from_api(
     release: cabc.Mapping[str, object],
+    tag_ref: cabc.Mapping[str, object],
     check_runs: cabc.Sequence[object],
 ) -> CandidateCommit:
-    """Build a candidate from a release object and its check runs.
+    """Build a candidate from a release, its tag ref and its check runs.
+
+    The arguments are GitHub API objects as returned, not a normalised form:
+    the release supplies `tag_name` and `published_at`, and the separately
+    fetched tag ref supplies the commit the tag names.
 
     Parameters
     ----------
     release : collections.abc.Mapping of str to object
         GitHub release object; draft and prerelease releases are refused.
+    tag_ref : collections.abc.Mapping of str to object
+        GitHub `git/ref` object for `refs/tags/<tag_name>`.
     check_runs : collections.abc.Sequence of object
         Check-run objects returned for the release's commit.
 
@@ -254,18 +292,18 @@ def candidate_from_api(
     Raises
     ------
     ProverToolError
-        Raised when the release is a draft or prerelease, names no full commit,
-        or a check run is malformed.
+        Raised when the release is a draft or prerelease, the tag ref does not
+        name the release's tag or does not resolve to a commit, or a check run
+        is malformed.
     """
     for flag in ("draft", "prerelease"):
         if _field(release, flag, "release") is not False:
             msg = f"upstream release must not be a {flag}"
             raise ProverToolError(msg)
+    tag = _text(release, "tag_name", "release")
     return CandidateCommit(
-        commit=require_full_sha(
-            _field(release, "commit", "release"), "upstream release commit"
-        ),
-        tag=_text(release, "tag", "release"),
+        commit=_released_commit(tag_ref, tag),
+        tag=tag,
         published_at=_text(release, "published_at", "release"),
         checks=tuple(_check_run(run) for run in check_runs),
     )
