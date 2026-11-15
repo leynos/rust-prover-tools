@@ -132,7 +132,20 @@ EP-O1 assigns responsibility and records live evidence.
   revision. The user's 2026-11-09 instruction "Begin implementation" and "Mark
   the plan … as approved" ratifies revision 4, D1–D6 and milestones EP-M1–EP-M5
   within the stated tolerances. EP-O1 stays separately authorized.
-- [ ] EP-M1: upstream feasibility and compatibility recipe.
+- [x] (2026-11-15) EP-M1: upstream feasibility and compatibility recipe.
+  Pinned the released `kani-0.68.0` tag at
+  `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, replaced every planning-time
+  `4e31125…` reference, and added the producer domain package
+  `rust_prover_tools/kani_snapshot/producer` (records, invariants, canonical
+  JSON and strict parser, upstream-file parsers, resolution policy, argument
+  vectors and the compiler-floor transcript checks). Evidence: the pinned
+  upstream files and release/check-run responses under
+  `tests/fixtures/kani_recipe`, plus the two compiler-floor transcripts under
+  `tests/fixtures/kani_snapshot/compiler_floor`. A Syrupy snapshot records the
+  canonical recipe document. The prototype run built the bundle, packaged and
+  installed the launchers, ran local setup against the pinned toolchain and
+  verified the floor harness (`0 of 409` checks failed). Unit tests: 75 in the
+  two new modules. Nothing is published.
 - [x] (2026-11-09) EP-M2: authenticated pin/manifest contracts. Added
   `rust_prover_tools/kani_snapshot/{models,cache_key,pins,manifest,manifest_groups,render,validation,tags,strict_json,policy,integrity,attestation}.py`
   and the tests `test_kani_snapshot_{pins,manifest,integrity}.py` plus
@@ -154,7 +167,7 @@ EP-O1 assigns responsibility and records live evidence.
   skipped, and the snapshot CLI tests need `FORCE_COLOR` unset.
 - [x] EP-M3: isolated installation, identity checking and execution.
   - [x] (2026-11-09) Established the upstream setup boundary from pinned source
-    `model-checking/kani@4e31125fdb4f01fad95150415cbafe46e0587d66`:
+    `model-checking/kani@0d2328a93f0e0ff66132d6bfa1a7d884877cf862`:
     `cargo kani setup --use-local-bundle <file>` extracts a `kani-<VERSION>/`
     bundle with external `tar --strip-components=1` into
     `$KANI_HOME/kani-<VERSION>`, runs `rustup toolchain install <identifier>`
@@ -1618,13 +1631,13 @@ manifest's own run and attempt, and V2 wrong-signer, wrong-source and wrong-ref
 refusal evidence at the verifier and installation boundaries, modelled as a
 bundle identity that a matching command accepts and a wrong one is refused
 before launcher extraction and setup. All are repaired with tests recorded in
-Progress. EP-M1, EP-M4, EP-M5 and EP-O1, and all publication, have not started.
-The consumer `install` command is deliberately limited to a verified local
-`--asset-dir` until the EP-M4 release transport is connected. Independent
-reviews covered all five requested specialities, with amendments recorded in
-the design and checked by a final testing/consistency review. Planning
-validation passed `make fmt`, `make markdownlint` (including spelling and three
-spelling-helper tests), `make nixie`, and both working/staged
+Progress. EP-M1 completed on 2026-11-15; EP-M4, EP-M5 and EP-O1, and all
+publication, have not started. The consumer `install` command is deliberately
+limited to a verified local `--asset-dir` until the EP-M4 release transport is
+connected. Independent reviews covered all five requested specialities, with
+amendments recorded in the design and checked by a final testing/consistency
+review. Planning validation passed `make fmt`, `make markdownlint` (including
+spelling and three spelling-helper tests), `make nixie`, and both working/staged
 `git diff --check`. Earlier dependency-network and document spelling/line-wrap
 failures were resolved without weakening gates. Only four Markdown files
 changed during initial planning. The later requested rebase validation ran the
@@ -2075,7 +2088,7 @@ the libraries the toolchain check approved.
 
 Invariant: source, launchers and backend derive from one full SHA with
 unchanged locks/toolchain pins and recorded recursive submodules. Add
-`test_kani_snapshot_build.py` for command sequencing, immutable resolution,
+`test_kani_snapshot_producer.py` for command sequencing, immutable resolution,
 malicious manual inputs, unchanged HEAD with changed recipe, missing/failed
 upstream checks, runtime/licence completeness and resource-limit rejection. Run
 `python scripts/uv_gate.py run -- pytest -q -k kani_snapshot_build`; compare
@@ -2423,11 +2436,20 @@ rollback is a reviewed older pin, never a moved tag or mutable alias.
 
 ## Upstream evidence and unresolved experiments
 
-Primary-source inspection resolved `model-checking/kani` once to
-`4e31125fdb4f01fad95150415cbafe46e0587d66`. Named Release Bundle, Kani CI and
-Kani Extra workflows succeeded for that exact commit on 2026-09-25.[^11] This
-is not a claim that every commit status is green: the combined status also had
-pending contexts. Record the selected required checks again during EP-M1.
+EP-M1 resolved `model-checking/kani` to the released `kani-0.68.0` tag at
+`0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, published 2026-09-16T03:43:14Z.
+Planning had inspected `4e31125` (post-release `main`, toolchain
+`nightly-2026-09-23`); it was rejected because a snapshot must be built from
+the source the release came from. The required Linux checks are completed and
+successful for the pinned commit: `BuildBundle-Linux-x86_64`,
+`TestBundle (ubuntu-22.04)`, `TestBundle (ubuntu-24.04)`,
+`TestLocalToolchain (ubuntu-22.04)` and `TestLocalToolchain (ubuntu-24.04)` in
+run 35043356377, and `regression (ubuntu-22.04)` and
+`regression (ubuntu-24.04)` in run 35077197253.[^11] macOS and aarch64 checks
+are excluded because this distribution supports only `x86_64-unknown-linux-gnu`.
+`build.resolution` encodes that policy: the newest run of every named check
+must be completed and successful, and missing, ambiguous, repeated or
+draft/prerelease candidates are refused.
 
 At this revision, `.cargo/config.toml` maps `cargo bundle` to
 `cargo run -p build-kani -- bundle`.[^4] The bundle action runs
@@ -2466,14 +2488,24 @@ setup-created links. The release workflow obtains a separate prebuilt Rust
 nightly installation for local-toolchain smoke setup: the backend bundle does
 not contain the complete Rust installation.[^9]
 
-The toolchain pin is `nightly-2026-09-23`.[^13] The successful Release Bundle
-run reports `1.100.0-nightly (6bb1652a0 2026-09-22)`, exceeding the requested
-1.94 floor. This is upstream log evidence, not a local build or proof result.
-EP-M1 must capture generated `rustc-version` and effective `rustc -vV`, then
-execute the compiler-floor harness; nightly age alone is insufficient.
-Upstream's Ubuntu 22.04 bundle-test job also succeeded; that is evidence for
-its tested environment, not a measured minimum runtime baseline for this
-distribution.
+The toolchain pin is `nightly-2026-08-21`.[^13] Locally, that channel reports
+`rustc 1.100.0-nightly (8925ea358 2026-08-20)`. The bundle builder writes the
+channel into `rust-toolchain-version` and that exact version line into
+`rustc-version`; EP-M1 captured both from the built bundle. The compiler floor
+is demonstrated by execution, not by nightly age: Rust 1.93.1 rejects
+`array_windows` with `E0658`, Rust 1.94.0 and the pinned nightly accept it, and
+the pinned toolchain verifies the named Kani harness. Transcripts are checked
+in under `tests/fixtures/kani_snapshot/compiler_floor`.
+
+Upstream's `TestBundle (ubuntu-22.04)` and `TestLocalToolchain (ubuntu-22.04)`
+jobs succeeded at the pinned commit, which is evidence that the upstream bundle
+runs on glibc 2.35. EP-M1 measured locally built payloads separately: the
+compiler requires at most `GLIBC_2.34`, while the locally built `kani-driver`
+requires `GLIBC_2.39` because this host runs glibc 2.39. That is why the recipe
+pins the `ubuntu-22.04` builder image and treats a local runtime measurement as
+prototype evidence rather than a distribution claim. CBMC's `ubuntu-22.04`
+package requires at most `GLIBC_2.34`. Recorded shared-library needs are
+`libc.so.6`, `libgcc_s.so.1`, `libm.so.6` and `libstdc++.so.6`.
 
 The setup action installs Rustup, distro prerequisites and shallow pinned
 submodules. `.gitmodules` lists Firecracker, `tests/perf/s2n-quic` and Charon;
@@ -2485,23 +2517,28 @@ producer-only prerequisites from measured consumer runtime requirements;
 consumers must never build these dependencies. Recheck all resolved binaries.
 Redistribution evidence starts with root Apache/MIT licences and
 `tools/build-kani/license-notes.txt`; audit each bundled component separately.
-No upstream source build, installation or compatibility proof was performed
-during planning. Runtime floors, safe setup re-extraction, full notice
-completeness and measured build cost remain explicit EP-M1 experiments.
+EP-M1 performed the upstream build, local setup and compatibility proof on
+2026-11-15. `cargo bundle -- 0.68.0` produced a 142 MB
+`x86_64-unknown-linux-gnu` bundle with one `kani-0.68.0/` root, local setup
+installed it against the pinned toolchain, and the floor harness verified. The
+runtime floors above are measured rather than inferred. The notice inventory is
+not complete upstream: Kissat ships in the bundle but is absent from
+`license-notes.txt`, so the producer's notices bundle adds its MIT licence.
+Safe setup re-extraction and clean-host validation remain EP-M5 work, and build
+cost beyond this prototype run is still unrecorded.
 
-[^4]: [Pinned Cargo aliases](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/.cargo/config.toml).
-[^5]: [Pinned bundle action](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/.github/actions/build-bundle/action.yml).
-[^6]: [Pinned bundle builder](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/tools/build-kani/src/main.rs).
-[^7]: [Pinned installer setup](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/src/setup.rs).
-[^8]: [Pinned launcher implementation](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/src/lib.rs).
-[^9]: [Pinned release workflow](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/.github/workflows/release.yml).
-[^11]: Successful runs at the recorded SHA:
-       [Release Bundle](https://github.com/model-checking/kani/actions/runs/36175991081),
-    [Kani CI](https://github.com/model-checking/kani/actions/runs/36175991035),
-    and [Kani Extra](https://github.com/model-checking/kani/actions/runs/36169676475).
-[^12]: [Pinned Linux prerequisites](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/scripts/setup/ubuntu/install_deps.sh).
-[^13]: [Pinned toolchain inspected with Firecrawl](https://raw.githubusercontent.com/model-checking/kani/4e31125fdb4f01fad95150415cbafe46e0587d66/rust-toolchain.toml).
-[^10]: [Pinned setup action](https://github.com/model-checking/kani/blob/4e31125fdb4f01fad95150415cbafe46e0587d66/.github/actions/setup/action.yml).
+[^4]: [Pinned Cargo aliases](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.cargo/config.toml).
+[^5]: [Pinned bundle action](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/actions/build-bundle/action.yml).
+[^6]: [Pinned bundle builder](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/tools/build-kani/src/main.rs).
+[^7]: [Pinned installer setup](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/src/setup.rs).
+[^8]: [Pinned launcher implementation](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/src/lib.rs).
+[^9]: [Pinned release workflow](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/workflows/release.yml).
+[^11]: Successful runs at the pinned SHA:
+       [bundle, bundle-test and local-toolchain jobs](https://github.com/model-checking/kani/actions/runs/35043356377)
+       and [regression jobs](https://github.com/model-checking/kani/actions/runs/35077197253).
+[^12]: [Pinned Linux prerequisites](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/scripts/setup/ubuntu/install_deps.sh).
+[^13]: [Pinned toolchain inspected with Firecrawl](https://raw.githubusercontent.com/model-checking/kani/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/rust-toolchain.toml).
+[^10]: [Pinned setup action](https://github.com/model-checking/kani/blob/0d2328a93f0e0ff66132d6bfa1a7d884877cf862/.github/actions/setup/action.yml).
 
 Primary GitHub references consulted during planning cover immutable
 releases,[^1] attestation verification,[^2] and schedule behaviour.[^3] They
