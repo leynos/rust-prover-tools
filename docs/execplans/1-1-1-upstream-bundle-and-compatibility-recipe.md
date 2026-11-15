@@ -193,6 +193,12 @@ assignment, not a waiver attached elsewhere.
       whole toolchain vector. The Domain Architecture warning is dispositioned
       rather than refactored (D14), and the constructor claim it identified is
       corrected in the module docstring and the guide.
+- [x] (2026-11-15) Clear the hosted-only failure on head `a447733`:
+      `test_a_timed_out_staging_worker_keeps_its_claim` asserted the staging
+      claim after releasing the stalled copy, so a worker that finished first
+      closed the claim and the test read that as a product defect. The
+      assertion now runs while the copy is still blocked. Twenty focused runs
+      pass.
 
 ## Surprises & discoveries
 
@@ -225,6 +231,15 @@ assignment, not a waiver attached elsewhere.
   Evidence: `kani positive.rs` output. Impact: recapture with
   `--output-format terse`, which yields 29 lines and still names the harness
   and the verdict.
+- Observation: `test_a_timed_out_staging_worker_keeps_its_claim` is
+  order-dependent on its own events, not on the product. Evidence: it passed
+  locally and on head `aa76d5a`, then failed on hosted CI for head `a447733`
+  with "a timed-out worker released its staging claim". Impact: the test
+  released the stalled copy in `finally` and only then asked whether the claim
+  was held, so a worker that finished quickly closed its own claim first. The
+  assertion now runs while the copy is still blocked, matching its sibling
+  `test_an_abandoned_staging_copy_releases_its_claim_when_it_stops`, and twenty
+  consecutive focused runs pass.
 
 ## Decision log
 
