@@ -21,6 +21,10 @@ from rust_prover_tools.kani_snapshot.models import (
     RuntimeIdentity,
     SubmoduleRecord,
 )
+from rust_prover_tools.kani_snapshot.producer.recipe_evidence import (
+    PINNED_SUBMODULES,
+    PINNED_UPSTREAM_COMMIT,
+)
 from rust_prover_tools.kani_snapshot.producer.recipe_model import (
     COMPONENT_LICENCE,
     NOTICE_INVENTORY,
@@ -42,10 +46,8 @@ __all__ = (
     "recipe_to_json",
 )
 
-#: The upstream commit the released `kani-0.68.0` tag points at.
-PINNED_UPSTREAM_COMMIT: typ.Final[str] = "0d2328a93f0e0ff66132d6bfa1a7d884877cf862"
-
-#: The upstream release tag naming that commit.
+#: The upstream release tag naming `PINNED_UPSTREAM_COMMIT`, which validation
+#: reads from `recipe_evidence` so the rule and this recipe share one source.
 PINNED_UPSTREAM_TAG: typ.Final[str] = "kani-0.68.0"
 
 _PINNED: typ.Final[Recipe] = Recipe(
@@ -79,19 +81,8 @@ _PINNED: typ.Final[Recipe] = Recipe(
             sha256="4b41edf12ffa5f8e8b1986e5ad3e0bedb4d34b0ed3ecc7c13362bc7ba0aba66b",
         ),
     ),
-    submodules=(
-        SubmoduleRecord(
-            path="charon",
-            commit="b250680abd40ff1aaa07081d0497dc2755ed112e",
-        ),
-        SubmoduleRecord(
-            path="firecracker",
-            commit="cd36c699f3cb3d531289aadee26c45c1306edcfc",
-        ),
-        SubmoduleRecord(
-            path="tests/perf/s2n-quic",
-            commit="a33d369b98a50fd9290fd6586832c969035bdec0",
-        ),
+    submodules=tuple(
+        SubmoduleRecord(path=path, commit=commit) for path, commit in PINNED_SUBMODULES
     ),
     runtime=RuntimeIdentity(
         glibc_baseline="2.35",

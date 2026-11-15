@@ -776,6 +776,11 @@ version control at any depth, and the code indexer skips it too.
   invariant, including that the compiler floor is reachable and no newer than
   the pinned compiler, and that the runtime floor is no newer than the builder
   image can link.
+- `recipe_evidence` records the pinned commit and its gitlinks as plain data.
+  Validation is the only gate a document passes, so it cannot read a fixture or
+  a checkout; a recipe naming the pinned commit must instead record exactly
+  these gitlinks. `pinned_recipe` builds its records from the same tuple, so
+  the rule and the recipe share one source.
 - `recipe` fixes the EP-M1 pin, renders canonical JSON and digests it;
   `recipe_parse.parse_recipe` reads that JSON back strictly.
 - `upstream_metadata` parses the pinned upstream files the recipe must agree

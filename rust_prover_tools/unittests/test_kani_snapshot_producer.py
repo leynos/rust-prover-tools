@@ -311,6 +311,31 @@ def test_validation_rejects_duplicate_submodule_paths() -> None:
         validate_recipe(dc.replace(recipe, submodules=repeated))
 
 
+def test_validation_rejects_a_partial_pinned_submodule_list() -> None:
+    """A sorted, non-empty subset is still not the pinned release's tree."""
+    recipe = pinned_recipe()
+    with pytest.raises(ProverToolError, match="gitlinks"):
+        validate_recipe(dc.replace(recipe, submodules=recipe.submodules[:-1]))
+
+
+def test_validation_rejects_a_pinned_submodule_with_another_commit() -> None:
+    """Naming a pinned path is not enough if the commit moved."""
+    recipe = pinned_recipe()
+    moved = dc.replace(recipe.submodules[0], commit="0" * 39 + "1")
+    with pytest.raises(ProverToolError, match="gitlinks"):
+        validate_recipe(dc.replace(recipe, submodules=(moved, *recipe.submodules[1:])))
+
+
+def test_parse_rejects_a_partial_pinned_submodule_list() -> None:
+    """The parser's gate refuses a document that drops a pinned gitlink."""
+    document = _document()
+    document["submodules"] = [
+        record for record in document["submodules"] if record["path"] != "charon"
+    ]
+    with pytest.raises(ProverToolError, match="gitlinks"):
+        parse_recipe(_encode(document))
+
+
 def test_validation_requires_licence_evidence_for_kissat() -> None:
     """A redistributed component may not fall out of the notices."""
     recipe = pinned_recipe()

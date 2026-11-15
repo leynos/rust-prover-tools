@@ -18,6 +18,10 @@ from rust_prover_tools.kani_snapshot.producer.compiler_floor import (
     COMPILER_FLOOR,
     parse_rustc_version,
 )
+from rust_prover_tools.kani_snapshot.producer.recipe_evidence import (
+    PINNED_SUBMODULES,
+    PINNED_UPSTREAM_COMMIT,
+)
 from rust_prover_tools.kani_snapshot.producer.recipe_model import (
     ATTESTATION_VERIFIER,
     COMPONENT_LICENCE,
@@ -37,7 +41,6 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.models import (
         PrerequisiteRecord,
         RuntimeIdentity,
-        SubmoduleRecord,
     )
 from rust_prover_tools.kani_snapshot.validation import (
     FULL_SHA_PATTERN,
@@ -158,8 +161,34 @@ def _validate_prerequisites(prerequisites: tuple[PrerequisiteRecord, ...]) -> No
             )
 
 
-def _validate_submodules(submodules: tuple[SubmoduleRecord, ...]) -> None:
-    """Check that recorded gitlinks are complete and cannot escape the tree."""
+def _require_pinned_gitlinks(recipe: Recipe) -> None:
+    """Require the pinned commit's recipe to record the pinned tree exactly.
+
+    Only the pinned commit has recorded evidence, so only its documents are
+    checked this way. A recipe for any other commit is still checked for
+    ordering, duplication and containment, but its tree has to be evidenced by
+    the caller that chose it.
+    """
+    if recipe.upstream.commit != PINNED_UPSTREAM_COMMIT:
+        return
+    recorded = tuple((record.path, record.commit) for record in recipe.submodules)
+    if recorded != PINNED_SUBMODULES:
+        expected = ", ".join(path for path, _ in PINNED_SUBMODULES)
+        _fail(
+            "snapshot recipe submodules must record the pinned release's "
+            f"gitlinks exactly: {expected}"
+        )
+
+
+def _validate_submodules(recipe: Recipe) -> None:
+    """Check that recorded gitlinks are complete and cannot escape the tree.
+
+    A non-empty, sorted list is still not the pinned release's tree, so a recipe
+    naming the pinned commit must record exactly the gitlinks `recipe_evidence`
+    recorded for it. Without that comparison a document could silently drop a
+    submodule and build a tree nobody inspected.
+    """
+    submodules = recipe.submodules
     if not submodules:
         _fail("snapshot recipe must record the upstream release's submodules")
     paths = [record.path for record in submodules]
@@ -168,6 +197,7 @@ def _validate_submodules(submodules: tuple[SubmoduleRecord, ...]) -> None:
     duplicated = sorted({path for path in paths if paths.count(path) > 1})
     if duplicated:
         _fail(f"snapshot recipe submodules repeat: {', '.join(duplicated)}")
+    _require_pinned_gitlinks(recipe)
     for record in submodules:
         if not is_contained_relative_path(record.path):
             _fail(
@@ -318,7 +348,7 @@ def validate_recipe(recipe: Recipe) -> None:
     validate_target(recipe.target)
     _validate_floor(recipe)
     _validate_prerequisites(recipe.prerequisites)
-    _validate_submodules(recipe.submodules)
+    _validate_submodules(recipe)
     _validate_runtime(recipe.runtime)
     _validate_builder(recipe)
     _validate_launcher(recipe.launcher)

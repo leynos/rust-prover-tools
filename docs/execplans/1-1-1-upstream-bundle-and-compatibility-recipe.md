@@ -94,7 +94,7 @@ budgets. Final counts against base `77b46af`, measured with
 `git diff --numstat` and excluding both ExecPlan files:
 
 - Files: 29 non-ExecPlan files changed against a budget of 20.
-- Code: 4,370 net lines across `rust_prover_tools/` and `tests/` against a
+- Code: 4,432 net lines across `rust_prover_tools/` and `tests/` against a
   budget of 2,500.
 - Documentation: 114 net lines against a budget of 400, so within budget.
 - Configuration, interface and dependencies: no change, as intended.
@@ -159,6 +159,13 @@ so an estimate made before it existed was too low. See D11.
       duplicate-free submodule list, and bind each transcript verdict to its own
       harness line. Each repair carries a test that fails against the reviewed
       head.
+- [x] (2026-11-15) Close the second assessment round at head `2da5616`: the
+      submodule rule accepted a sorted, non-empty subset of the pinned release's
+      gitlinks, so a document could drop a submodule and still pass validation
+      and the parser. Records the pinned gitlinks as data in `recipe_evidence`,
+      requires an exact match for the pinned commit, and adds three tests
+      (partial list, moved commit, parser gate). Corrects the recorded file
+      count to the independently confirmed figure.
 
 ## Surprises & discoveries
 
@@ -249,6 +256,14 @@ so an estimate made before it existed was too low. See D11.
   delivered in full rather than trimmed to fit an estimate made before the
   evidence existed. The deviation and its final counts are recorded under
   `Tolerances`. Date/Author: 2026-11-15, agent.
+- D12. Decision: keep the pinned release's gitlinks as plain data in
+  `recipe_evidence`, and make `validate_recipe` require an exact match for the
+  pinned commit. Rationale: the earlier rule only rejected empty and duplicated
+  lists, so a sorted subset of the pinned tree's gitlinks passed validation and
+  the parser's gate with it. Validation is the only gate a document passes, so
+  it cannot reach for a fixture or a checkout; the evidence has to be data. The
+  pinned recipe builds its records from the same tuple, so the rule and the
+  recipe share one source and cannot drift. Date/Author: 2026-11-15, agent.
 
 ## Outcomes & retrospective
 

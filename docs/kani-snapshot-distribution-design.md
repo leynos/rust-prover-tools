@@ -230,13 +230,17 @@ The experiment established the supported recipe recorded in
 `rust_prover_tools.kani_snapshot.producer.recipe`: upstream identity, target,
 compiler floor, builder image, prerequisites and digests, recursive submodule
 gitlinks, runtime identity, launcher recipe, attestation command and licence
-records. The compiler floor is demonstrated rather than inferred. Rust 1.93.1
-rejects `array_windows` with `E0658`; Rust 1.94.0 and the pinned
-`1.100.0-nightly` accept it; and the pinned toolchain verifies a Kani harness
-that uses it. Both transcripts are checked in and validated by unit tests. Any
-source patch, lock update, nightly substitution, unsupported setup mechanism,
-licence obstacle or compiler below 1.94 still blocks progression for a
-documented deviation decision.
+records. The submodule evidence is checked, not merely recorded: validation is
+the only gate a recipe document passes, so the pinned commit's gitlinks live as
+data in `recipe_evidence` and a document naming that commit must record exactly
+them, path for path and commit for commit, rather than any sorted subset. The
+compiler floor is demonstrated rather than inferred. Rust 1.93.1 rejects
+`array_windows` with `E0658`; Rust 1.94.0 and the pinned `1.100.0-nightly`
+accept it; and the pinned toolchain verifies a Kani harness that uses it. Both
+transcripts are checked in and validated by unit tests. Any source patch, lock
+update, nightly substitution, unsupported setup mechanism, licence obstacle or
+compiler below 1.94 still blocks progression for a documented deviation
+decision.
 
 The full path was exercised end to end on the prototype bundle. It contains a
 single `kani-0.68.0/` root with `bin/` (`kani-driver`, `kani-compiler`,
