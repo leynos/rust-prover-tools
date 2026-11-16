@@ -2287,15 +2287,19 @@ def test_a_timed_out_staging_worker_keeps_its_claim(
     try:
         with pytest.raises(ProverToolError, match=r"deadline expired"):
             install_snapshot(options, install_hooks(case))
+        # Assert the claim while the copy is still blocked. Once the copy is
+        # released the abandoned worker finishes and closes its own claim, so
+        # checking afterwards would race the very release this test is about
+        # and report a lost claim that never happened.
+        trees = list(layout.identity_dir.glob(".staging-*"))
+        assert len(trees) == 1, f"unexpected staging leftovers: {trees}"
+        assert cleanup._has_live_worker(trees[0]), (
+            "a timed-out worker released its staging claim"
+        )
     finally:
         release.set()
 
     assert stalled.is_set(), "the staged copy was never attempted"
-    trees = list(layout.identity_dir.glob(".staging-*"))
-    assert len(trees) == 1, f"unexpected staging leftovers: {trees}"
-    assert cleanup._has_live_worker(trees[0]), (
-        "a timed-out worker released its staging claim"
-    )
 
 
 def test_an_abandoned_staging_copy_releases_its_claim_when_it_stops(

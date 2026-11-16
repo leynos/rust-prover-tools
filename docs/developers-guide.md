@@ -760,3 +760,95 @@ shared gates. Controlled child tests establish invocation and failure
 contracts, not full verifier compatibility. Linux x86_64 Kani 0.67.0 is the
 bounded initial qualification target; an upstream release that drops wrappers
 is unsupported.
+
+## Kani snapshot producer recipe
+
+`rust_prover_tools.kani_snapshot.producer` is the producer-side domain package.
+It decides what may be built and how, and executes nothing: no subprocess,
+network call, environment read or filesystem write belongs in it. Adapters
+elsewhere receive its argument vectors and run them. The package is not named
+`build`: the repository-wide `build/` ignore rule drops such a directory from
+version control at any depth, and the code indexer skips it too.
+
+- `recipe_model` holds the frozen records (`Recipe`, `UpstreamIdentity`,
+  `BuilderRecord`, `LauncherRecipe`, `AttestationRecipe`, `LicenceRecord`).
+- `recipe_rules.validate_recipe` is the gate both validated entry points use:
+  `pinned_recipe` and `recipe_parse.parse_recipe`. The frozen records are plain
+  dataclasses, so constructing one directly bypasses the gate. It checks every
+  invariant, including that the compiler floor is reachable and no newer than
+  the pinned compiler, and that the runtime baseline equals the builder glibc —
+  the only baseline a build in that image links against. The recipe's `2.35` is
+  the intended baseline rather than an observed one: the measured prototype ran
+  on Rocky Linux 10 and linked against glibc `2.39`, and the production build in
+  `ubuntu-22.04` is EP-M4's deliverable.
+- `recipe_evidence` records the pinned commit and its gitlinks as plain data.
+  Validation is the only gate a document passes, so it cannot read a fixture or
+  a checkout; a recipe naming the pinned commit must instead record exactly
+  these gitlinks. `pinned_recipe` builds its records from the same tuple, so
+  the rule and the recipe share one source.
+- `recipe` fixes the EP-M1 pin, renders canonical JSON and digests it;
+  `recipe_parse.parse_recipe` reads that JSON back strictly.
+- `upstream_metadata` parses the pinned upstream files the recipe must agree
+  with: `rust-toolchain.toml`, `Cargo.toml`, `kani-dependencies`, `.gitmodules`
+  and `license-notes.txt`.
+- `resolution` selects an upstream commit from release and check-run responses,
+  or validates a manually dispatched full SHA.
+- `commands` derives argument vectors and asset names from validated inputs.
+- `compiler_floor` owns the supported floor and the transcript checks that
+  demonstrate it.
+
+The package boundary is defined by effects, not by the shape of the data it
+reads. `resolution` converts GitHub API payloads, `upstream_metadata` converts
+upstream files and `commands` derives argument vectors; all three are pure
+functions with no outbound port, so moving them behind an "adapter" would not
+change a single dependency direction. Keeping them here keeps each fail-closed
+check next to the records it protects and keeps the whole package testable
+without a service. The `attestation` verifier and its frozen `command_prefix`
+are recipe facts for the same reason: the producer validates the prefix a
+recipe records, `attestation_command` builds the consumer's argument vector
+from its own fixed `gh attestation verify` spelling, and
+`test_attestation_command_prefix_matches_the_recipe` fails if the two drift
+apart. Nothing compares the prefix at run time, so moving the recipe side into
+an adapter would leave that agreement unenforced.
+
+Conventions that keep the recipe trustworthy:
+
+- Argument vectors are tuples, never shell strings. Every value that reaches
+  one is validated first: plain semver, full lowercase SHAs, contained relative
+  paths and safe basenames.
+- `recipe_to_json` is byte-stable (sorted keys, two-space indent, ASCII, final
+  newline). `recipe_digest` hashes those bytes, and later milestones record the
+  digest in the manifest, so any pinned-value change changes the identity. A
+  Syrupy snapshot of the canonical document records what changed; refresh it
+  with `pytest --snapshot-update` only when the pin change is intended.
+- The pinned upstream identity is the commit the release tag points at, never
+  `main`'s head. When re-pinning, refresh `tests/fixtures/kani_recipe` with the
+  upstream files from that same commit; the unit tests compare the recipe
+  against them.
+- The non-version fixtures are evidence, not inputs. `upstream-release.json`,
+  `upstream-tag-ref.json` and `upstream-check-runs.json` are the release, tag
+  ref and check-run responses for the pinned commit, deduplicated. Their shape
+  is the API's, not a normalized copy: a release's `target_commitish` is a
+  branch name (`main` for Kani), so the released commit is read from
+  `refs/tags/<tag_name>`, and an annotated tag must be dereferenced to its
+  commit before it is recorded. `upstream-gitlinks.json` records the recursive
+  submodule commits.
+- The compiler floor is demonstrated by two transcripts under
+  `tests/fixtures/kani_snapshot/compiler_floor`. `positive.txt` is a real Kani
+  verification of the named harness, and `negative_1_93.txt` is the control
+  compiler (Rust 1.93.1) rejecting `array_windows` with `E0658`. Recapture both
+  if the floor changes; never hand-edit them. Recapture from the fixture
+  directory with:
+
+  ```bash
+  # Positive: the installed snapshot verifies the harness. Terse output keeps
+  # the transcript to the header, the harness line and the verdict.
+  kani positive.rs --output-format terse > positive.txt 2>&1
+  # Negative: the control compiler refuses the same source.
+  rustc +1.93.1 negative_1_93.rs 2> negative_1_93.txt
+  ```
+
+- The builder image is part of the recipe. Dynamically linked Rust binaries
+  cannot claim a glibc floor older than the image that linked them, and
+  `kani-driver` links the host C library, so a prototype built on another
+  distribution measures that distribution's floor, not the published one.

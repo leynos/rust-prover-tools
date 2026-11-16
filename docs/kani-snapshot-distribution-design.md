@@ -3,9 +3,10 @@
 Status: Partly implemented. The consumer milestones EP-M2 (authenticated
 pin/manifest contracts) and EP-M3 (isolated installation, identity checking and
 execution) are implemented: snapshot install, snapshot check and `kani run`
-exist. EP-M1 (upstream feasibility), EP-M4 (publication automation) and EP-M5
-(monitoring and recovery) remain proposed and require explicit plan approval
-before implementation. Revision: 5, 2026-11-11. Scope:
+exist. EP-M1 (upstream feasibility) is implemented as a tested producer recipe
+with pinned evidence; nothing is published. EP-M4 (publication automation) and
+EP-M5 (monitoring and recovery) remain proposed and require explicit plan
+approval before implementation. Revision: 7, 2026-11-15. Scope:
 `leynos/rust-prover-tools` only.
 
 ## Purpose and boundaries
@@ -183,12 +184,18 @@ independent builds with identical inputs have been compared.
 ## D3: Upstream-compatible build
 
 Resolve an upstream candidate once to a validated full SHA and use that SHA for
-every source read and checkout. For scheduled runs inspect at most the 20
-newest default-branch commits, selecting the newest with the required upstream
-Linux checks completed successfully. Record the exact check names, run URLs,
-head SHAs and conclusions; empty or ambiguous check sets fail closed. Manual
-input is a full SHA, with the same checks and compiler-floor policy. Never
-interpret arbitrary input as a shell fragment, ref option, or repository URL.
+every source read and checkout. When D3 was approved, the candidate set was
+described as the 20 newest default-branch commits. EP-M1 narrows that: a
+snapshot is built from a released tag, so a commit qualifies only if a release
+object names it, and an unreleased default-branch head is not a candidate even
+when its checks are green. Scheduled runs therefore inspect the newest releases
+(up to 20) rather than raw commits, selecting the newest whose required
+upstream Linux checks completed successfully. This is the rule EP-M4 follows;
+the default-branch wording above is superseded where the two disagree. Record
+the exact check names, run URLs, head SHAs and conclusions; empty or ambiguous
+check sets fail closed. Manual input is a full SHA, with the same checks and
+compiler-floor policy. Never interpret arbitrary input as a shell fragment, ref
+option, or repository URL.
 
 At that SHA inspect `.cargo/config.toml`,
 `.github/actions/build-bundle/action.yml`, `.github/workflows/release.yml`,
@@ -200,31 +207,73 @@ resolution. Preserve upstream version metadata and toolchain pins. Build outside
 `/tmp`, with the shared Cargo cache; no private Cargo home workaround for lock
 contention. Record dirty-tree checks before and after building.
 
-Planning inspected upstream commit `4e31125fdb4f01fad95150415cbafe46e0587d66`;
-immutable source links and named successful upstream workflows are recorded in
-the execution plan. Its bundle mechanism is `cargo bundle -- VERSION`; launcher
-packaging is separate. Its `nightly-2026-09-23` toolchain resolved to Rust
-1.100.0-nightly in upstream logs, but the repository-owned compiler-floor proof
-remains unexecuted. Setup supports local bundles and local toolchains; its
-version-derived home confirms the need for per-identity `KANI_HOME`. Setup
-re-extracts with external `tar`: validate the complete archive before setup,
-require the expected single `kani-VERSION/` root, and validate destinations,
-links and collisions after `--strip-components=1`. Remove inherited
-`TAR_OPTIONS`; allow setup to consume only the same verified bytes in a
-private, bounded generation. The feasibility experiment must show that setup
-preserves D4's containment and resource limits.
+EP-M1 pinned the released `kani-0.68.0` tag at
+`0d2328a93f0e0ff66132d6bfa1a7d884877cf862` (published 2026-09-16), whose
+`rust-toolchain.toml` names `nightly-2026-08-21` and whose `rustc` reports
+`1.100.0-nightly (8925ea358 2026-08-20)`. The earlier planning inspection used
+`4e31125fdb4f01fad95150415cbafe46e0587d66`, which is post-release `main`; a
+snapshot must be built from the source the release came from, so that commit is
+not a candidate. A release object is not by itself an identity: GitHub's
+`target_commitish` repeats whatever the release form held, which for Kani is
+the branch `main`, so the producer resolves `refs/tags/<tag_name>` and records
+that commit, refusing an annotated tag that has not been dereferenced to it. At
+the tag, `cargo bundle -- 0.68.0` builds the release binaries and Kani
+libraries, copies CBMC and Kissat from `PATH`, records `rust-toolchain-version`
+and `rustc-version`, and archives one `kani-0.68.0/` tree. The matching `kani`
+and `cargo-kani` launchers come from `cargo package -p kani-verifier` followed
+by `cargo install --locked --path kani-verifier-0.68.0 --root DIR`. Setup
+accepts `--use-local-bundle` and `--use-local-toolchain`, extracts with external
+`tar --strip-components=1` into `$KANI_HOME/kani-<VERSION>`, and checks the
+supplied toolchain's `rustc --version` against the bundle's recorded string
+before linking it as `toolchain`. Its version-derived home confirms the need
+for a private `KANI_HOME` per complete identity. Consumers still validate the
+complete archive before setup: require the single expected `kani-VERSION/`
+root, validate destinations, links and collisions after `--strip-components=1`,
+remove inherited `TAR_OPTIONS`, and allow setup to consume only the same
+verified bytes in a private, bounded generation.
 
-The first post-approval milestone is an explicit feasibility experiment. It
-must establish exact bundle commands, launcher build commands, local-bundle
-setup arguments, private `KANI_HOME` support, toolchain layout and symlink
-behaviour, CPU/runtime compatibility, Rust compiler floor, and notices. Its
-recorded commands become the tested recipe. Any source patch, lock update,
-nightly substitution, unsupported setup mechanism, licence obstacle, or
-compiler below 1.94 blocks progression for a documented deviation decision.
-Prefer trusted prebuilt prerequisites where upstream supports them; inventory
-solvers and include required notices, licence texts and source availability
-metadata for every redistributed component. Do not assume Kani's licence covers
-all bundled components.
+The experiment established the supported recipe recorded in
+`rust_prover_tools.kani_snapshot.producer.recipe`: upstream identity, target,
+compiler floor, builder image, prerequisites and digests, recursive submodule
+gitlinks, runtime identity, launcher recipe, attestation command and licence
+records. The submodule evidence is checked, not merely recorded: validation is
+the only gate a recipe document passes, so the pinned commit's gitlinks live as
+data in `recipe_evidence` and a document naming that commit must record exactly
+them, path for path and commit for commit, rather than any sorted subset. The
+compiler floor is demonstrated rather than inferred. Rust 1.93.1 rejects
+`array_windows` with `E0658`; Rust 1.94.0 and the pinned `1.100.0-nightly`
+accept it; and the pinned toolchain verifies a Kani harness that uses it. Both
+transcripts are checked in and validated by unit tests. Any source patch, lock
+update, nightly substitution, unsupported setup mechanism, licence obstacle or
+compiler below 1.94 still blocks progression for a documented deviation
+decision.
+
+The full path was exercised end to end on the prototype bundle. It contains a
+single `kani-0.68.0/` root with `bin/` (`kani-driver`, `kani-compiler`,
+`kani-cov`, `cbmc`, `goto-cc`, `goto-instrument`, `goto-analyzer`, `kissat`),
+`lib/`, `playback/`, `no_core/`, the library sources, `rust-toolchain-version`,
+`rustc-version` and `license-notes.txt`; the measured `DT_NEEDED` set is
+`libc.so.6`, `libgcc_s.so.1`, `libm.so.6` and `libstdc++.so.6`.
+`cargo package -p kani-verifier` plus `cargo install --locked --path` produced
+`bin/kani` and `bin/cargo-kani` (mode 0755), which the producer archives as
+`kani-<version>-launcher-<target>.tar.gz`. Local setup with that bundle and the
+pinned toolchain exited successfully, created
+`$KANI_HOME/kani-0.68.0/toolchain` as a symlink to the toolchain, and reported
+`Kani Rust Verifier 0.68.0 (standalone)` with `CBMC 6.11.0`; the floor harness
+then verified with `0` of `409` checks failed. The producer's notices bundle is
+upstream's `license-notes.txt` plus Kissat's MIT licence, because the upstream
+inventory omits Kissat.
+
+The builder image is part of the recipe. Upstream builds and tests the Linux
+x86_64 bundle on `ubuntu-22.04`, whose glibc 2.35 the published payload may
+claim. A prototype built on Rocky Linux 10 (glibc 2.39) linked `kani-driver`
+against `GLIBC_2.39` while `kani-compiler` needed only `GLIBC_2.34`, so a
+measurement on an arbitrary host is not a distribution claim; the published
+bundle must be rebuilt on the pinned image. CBMC 6.11.0 comes from the
+`ubuntu-22.04` package, whose newest symbol requirement is `GLIBC_2.34`.
+Upstream's `license-notes.txt` lists Kani, rustc and CBMC but not Kissat,
+although the bundle ships Kissat, so the producer adds Kissat's MIT notice. Do
+not assume Kani's licence covers all bundled components.
 
 ## D4: Bounded installation and reliable execution
 
@@ -233,7 +282,7 @@ Keep `rust_prover_tools.kani` for the legacy release path. Add a feature package
 `download.py`, `archive.py`, `install.py`, `identity.py`, and `run.py`. Use
 frozen slotted dataclasses for validated pins, manifests, asset records,
 options, and identity reports; parsing helpers remain pure. Add tested builder
-and release helpers under `rust_prover_tools.kani_snapshot.build` and
+and release helpers under `rust_prover_tools.kani_snapshot.producer` and
 `publish.py`; keep YAML and any script entrypoints thin. The dependency
 direction is CLI to feature orchestration to pure models/helpers and command
 adapter. No feature imports CLI or Verus implementation. Reuse
