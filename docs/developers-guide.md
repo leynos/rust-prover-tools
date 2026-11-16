@@ -777,7 +777,10 @@ version control at any depth, and the code indexer skips it too.
   dataclasses, so constructing one directly bypasses the gate. It checks every
   invariant, including that the compiler floor is reachable and no newer than
   the pinned compiler, and that the runtime baseline equals the builder glibc —
-  the only baseline the build actually exercised.
+  the only baseline a build in that image links against. The recipe's `2.35` is
+  the intended baseline rather than an observed one: the measured prototype ran
+  on Rocky Linux 10 and linked against glibc `2.39`, and the production build in
+  `ubuntu-22.04` is EP-M4's deliverable.
 - `recipe_evidence` records the pinned commit and its gitlinks as plain data.
   Validation is the only gate a document passes, so it cannot read a fixture or
   a checkout; a recipe naming the pinned commit must instead record exactly
@@ -801,9 +804,12 @@ functions with no outbound port, so moving them behind an "adapter" would not
 change a single dependency direction. Keeping them here keeps each fail-closed
 check next to the records it protects and keeps the whole package testable
 without a service. The `attestation` verifier and its frozen `command_prefix`
-are recipe facts for the same reason: the consumer checks the command it is
-about to run against them, so an adapter could not own that spelling without
-weakening the check.
+are recipe facts for the same reason: the producer validates the prefix a
+recipe records, `attestation_command` builds the consumer's argument vector
+from its own fixed `gh attestation verify` spelling, and
+`test_attestation_command_prefix_matches_the_recipe` fails if the two drift
+apart. Nothing compares the prefix at run time, so moving the recipe side into
+an adapter would leave that agreement unenforced.
 
 Conventions that keep the recipe trustworthy:
 

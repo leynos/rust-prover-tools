@@ -5,8 +5,8 @@ both call `validate_recipe`, the sole gate they use. The frozen records are
 plain dataclasses, so constructing one directly bypasses this module; the gate
 guards the entry points, not the constructors. It fails closed on every value
 that could make the build unreproducible, including a compiler floor the
-pinned toolchain cannot reach and a runtime baseline the builder image did not
-exercise.
+pinned toolchain cannot reach and a runtime baseline the builder image's glibc
+cannot support.
 """
 
 from __future__ import annotations
@@ -149,7 +149,8 @@ def _validate_builder(recipe: Recipe) -> None:
         _fail(
             f"snapshot recipe runtime glibc_baseline "
             f"{recipe.runtime.glibc_baseline} is older than the builder glibc "
-            f"{builder.glibc}, the only baseline the build actually exercised"
+            f"{builder.glibc}, the only baseline a build in that image links "
+            "against"
         )
 
 

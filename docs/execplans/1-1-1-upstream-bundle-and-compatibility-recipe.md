@@ -208,6 +208,23 @@ assignment, not a waiver attached elsewhere.
       (`4f0725c9`) is the outstanding item; its ETA is measured in hours
       because the queue is shared, so the branch waits on it rather than
       asking a second time.
+- [x] (2026-11-16) Answer the review the queue delivered against `58ddf74`
+      (submitted 03:35Z, `CHANGES_REQUESTED`). Two inline findings were
+      correct and are fixed: the guide claimed the pinned `2.35` baseline had
+      been exercised and that a consumer checks the recipe's attestation
+      prefix, and neither is true. The guide now names `2.35` as the intended
+      baseline, records that the measured prototype linked against `2.39` on
+      Rocky Linux 10, defers the `ubuntu-22.04` build to EP-M4, and describes
+      the real attestation arrangement: the producer validates the recorded
+      prefix, `attestation_command` builds the consumer vector from its own
+      fixed spelling, and a test keeps the two in agreement. The same
+      overstatement is removed from the validator message, the module
+      docstring and a test docstring. Of the two failed pre-merge rows, the
+      Testing row is answered by a test for a prerequisite recorded without a
+      version, mutation-checked by deleting the guard; the Domain Architecture
+      row's fifth item is answered by a test pinning the documented choice that
+      the gate guards the entry points rather than the constructors, and its
+      first four items keep the D14 disposition.
 
 ## Surprises & discoveries
 
@@ -336,6 +353,19 @@ assignment, not a waiver attached elsewhere.
   is a recipe fact precisely so that an adapter cannot choose the command the
   freeze exists to pin. The only effectful code is the consumer that executes
   the vectors. Date/Author: 2026-11-15, agent.
+- D15. Decision: describe the pinned runtime baseline as intended rather than
+  observed, and describe the attestation agreement test as the mechanism, not a
+  run-time check. Rationale: the review of head `58ddf74` pointed out that no
+  build has run in `ubuntu-22.04`, so nothing has measured glibc `2.35` there —
+  the measured prototype linked against `2.39` on Rocky Linux 10, and the
+  production build belongs to EP-M4. The validator still refuses a baseline
+  that differs from the builder image's glibc, because that image provides the
+  one baseline a build there links against; what it enforces is agreement with
+  the image, not evidence from a run. Likewise, no consumer compares its argv
+  against the recipe's `command_prefix` at run time: `attestation_command` uses
+  its own literal and a test fails if the two drift. Writing that down keeps a
+  reader from believing a check exists that does not. Date/Author: 2026-11-16,
+  agent.
 
 ## Outcomes & retrospective
 

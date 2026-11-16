@@ -241,10 +241,10 @@ def test_validation_rejects_a_runtime_floor_newer_than_the_builder() -> None:
 
 
 def test_validation_rejects_a_runtime_floor_older_than_the_builder() -> None:
-    """A bundle cannot certify a glibc older than the image that linked it.
+    """A bundle cannot certify a glibc older than the image that links it.
 
-    The image is the only baseline that was actually exercised, so claiming an
-    older one promises compatibility nothing tested.
+    The pinned image provides one glibc, and a build there links against it, so
+    claiming an older baseline promises compatibility that build cannot have.
     """
     recipe = dc.replace(
         pinned_recipe(),
@@ -525,6 +525,30 @@ def test_validation_rejects_a_prerequisite_without_provenance() -> None:
         validate_recipe(
             dc.replace(recipe, prerequisites=(broken, *recipe.prerequisites[1:]))
         )
+
+
+def test_validation_rejects_a_prerequisite_without_a_version() -> None:
+    """A prerequisite that names no version cannot be fetched reproducibly."""
+    recipe = pinned_recipe()
+    broken = dc.replace(recipe.prerequisites[0], version=" ")
+    with pytest.raises(ProverToolError, match="prerequisite version"):
+        validate_recipe(
+            dc.replace(recipe, prerequisites=(broken, *recipe.prerequisites[1:]))
+        )
+
+
+def test_a_directly_constructed_record_is_unchecked_until_validated() -> None:
+    """The gate guards the entry points, not the record constructors.
+
+    `validate_recipe` is what enforces the invariants, and `pinned_recipe` and
+    `parse_recipe` both call it. A record built by hand is accepted by its
+    constructor and refused only when its caller validates it, which is the
+    contract `recipe_rules` documents.
+    """
+    unchecked = dc.replace(pinned_recipe(), schema_version=99)
+    assert isinstance(unchecked, Recipe)
+    with pytest.raises(ProverToolError, match="schema_version must be"):
+        validate_recipe(unchecked)
 
 
 def test_validation_rejects_a_repeated_licence_component() -> None:
