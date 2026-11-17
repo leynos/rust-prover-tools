@@ -60,7 +60,8 @@ PYLINT = $(UV_GATE) tool --managed-python --python $(PYLINT_PYTHON) --from 'pyli
 
 
 .PHONY: prepare help all clean build build-release lint lint-python interrogate fmt check-fmt \
-        markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS) test-workflow-contracts
+        markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS) test-workflow-contracts \
+        workflow-check kani-snapshot-smoke
 
 prepare: ## Install the locked development environment, offline first
 	$(UV_GATE) prepare --group dev
@@ -70,7 +71,41 @@ prepare: ## Install the locked development environment, offline first
 test-workflow-contracts: ## Check the CV-005 CodeScene workflow contracts
 	$(CV005_CONTRACTS) check --repository .
 
-all: build check-fmt lint typecheck test spelling test-workflow-contracts
+# The workflow files are executable policy, so they get both a syntax/semantic
+# linter and the contract tests that pin guards, permissions, artefacts and
+# budgets. `ACTIONLINT` is overridable for a host that installs it elsewhere.
+ACTIONLINT ?= actionlint
+WORKFLOW_CONTRACT_TESTS ?= \
+	tests/test_kani_workflow_contract.py \
+	tests/test_python_release_contract.py \
+	tests/test_workflow_contract.py
+
+workflow-check: build ## Lint workflows and check their contracts
+	$(call ensure_tool,$(ACTIONLINT))
+	$(UV_GATE) run -- pytest -q $(WORKFLOW_CONTRACT_TESTS)
+	$(ACTIONLINT) .github/workflows/*.yml
+
+# Opt-in: dispatches a real, non-publishing snapshot run. It builds on a hosted
+# runner and creates an attestation, so it is never part of `all`.
+KANI_SNAPSHOT_UPSTREAM_COMMIT ?=
+KANI_SNAPSHOT_PUBLICATION_ID ?=
+
+kani-snapshot-smoke: ## Dispatch a non-publishing snapshot run (opt-in)
+	$(call ensure_tool,gh)
+	@test -n "$(KANI_SNAPSHOT_UPSTREAM_COMMIT)" || { \
+	  printf 'Error: set KANI_SNAPSHOT_UPSTREAM_COMMIT to a full upstream commit\n' >&2; \
+	  exit 1; \
+	}
+	@test -n "$(KANI_SNAPSHOT_PUBLICATION_ID)" || { \
+	  printf 'Error: set KANI_SNAPSHOT_PUBLICATION_ID to an unused snapshot tag\n' >&2; \
+	  exit 1; \
+	}
+	gh workflow run kani-monthly.yml --ref main \
+	  -f upstream_commit=$(KANI_SNAPSHOT_UPSTREAM_COMMIT) \
+	  -f publication_id=$(KANI_SNAPSHOT_PUBLICATION_ID) \
+	  -f publish=false
+
+all: build check-fmt lint typecheck test spelling test-workflow-contracts workflow-check
 
 define ensure_uv
 	@command -v $(UV) >/dev/null 2>&1 || { \
