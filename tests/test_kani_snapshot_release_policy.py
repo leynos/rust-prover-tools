@@ -1,0 +1,191 @@
+"""The release policy alone decides what a publication state means.
+
+These witnesses hold the lemma the policy exists for: `PUBLISH` is never chosen
+while an expected asset is absent, the wrong size, or unhashed; `NOOP` is never
+chosen for a published release whose bytes differ; and no decision ever deletes,
+replaces or moves a published asset. Each case names the one property that makes
+the state safe to act on, so a regression points at the rule that broke.
+"""
+
+from __future__ import annotations
+
+import dataclasses as dc
+
+from rust_prover_tools.kani_snapshot.release_policy import (
+    ObservedAsset,
+    ObservedRelease,
+    ReleaseAction,
+    decide,
+)
+from tests import kani_publish_fixtures as fixtures
+
+
+def _absent() -> ObservedRelease:
+    """Return the absent state."""
+    return ObservedRelease(exists=False, is_draft=False)
+
+
+def test_an_absent_release_creates_a_draft() -> None:
+    """No release is the only state that creates one."""
+    decision = decide(fixtures.expected(), _absent(), fixtures.validation())
+    assert decision.action is ReleaseAction.CREATE_DRAFT
+
+
+def test_cross_run_validation_cannot_authorise_publication() -> None:
+    """A receipt from another attempt is refused before any state is read."""
+    decision = decide(
+        fixtures.expected(),
+        _absent(),
+        dc.replace(fixtures.validation(), run_attempt=2),
+    )
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "another workflow run" in decision.reason
+
+
+def test_failed_validation_cannot_authorise_publication() -> None:
+    """A failed clean validation is not evidence, whatever else matches."""
+    decision = decide(
+        fixtures.expected(),
+        _absent(),
+        dc.replace(fixtures.validation(), verification_passed=False),
+    )
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "did not pass" in decision.reason
+
+
+def test_a_receipt_for_another_manifest_is_refused() -> None:
+    """The receipt must name the exact manifest bytes being published."""
+    decision = decide(
+        fixtures.expected(),
+        _absent(),
+        dc.replace(fixtures.validation(), manifest_sha256="d" * 64),
+    )
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "another manifest digest" in decision.reason
+
+
+def test_an_incomplete_receipt_is_refused() -> None:
+    """A receipt that omits an asset does not cover the release."""
+    decision = decide(
+        fixtures.expected(),
+        _absent(),
+        dc.replace(fixtures.validation(), assets=("backend.tar.gz",)),
+    )
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "incomplete asset set" in decision.reason
+
+
+def test_a_draft_missing_assets_uploads_exactly_those_assets() -> None:
+    """A naive publisher could mistake a draft's existence for readiness."""
+    name = "backend.tar.gz"
+    present = (
+        fixtures.observed_asset(name, sha256=fixtures.digest(fixtures.PAYLOADS[name])),
+    )
+    decision = decide(
+        fixtures.expected(), fixtures.draft(present), fixtures.validation()
+    )
+    assert decision.action is ReleaseAction.UPLOAD_ASSETS
+    assert {asset.name for asset in decision.uploads} == set(fixtures.PAYLOADS) - {name}
+
+
+def test_a_draft_with_unhashed_assets_is_verified_before_publishing() -> None:
+    """An asset's presence is a claim until its bytes are re-downloaded."""
+    unhashed = tuple(
+        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
+    )
+    decision = decide(
+        fixtures.expected(), fixtures.draft(unhashed), fixtures.validation()
+    )
+    assert decision.action is ReleaseAction.VERIFY_ASSETS
+    assert decision.verifications == tuple(sorted(fixtures.PAYLOADS))
+
+
+def test_a_complete_verified_draft_is_published() -> None:
+    """Only a complete, hashed draft may become public."""
+    decision = decide(
+        fixtures.expected(),
+        fixtures.draft(fixtures.verified_assets()),
+        fixtures.validation(),
+    )
+    assert decision.action is ReleaseAction.PUBLISH
+
+
+def test_a_draft_with_a_foreign_asset_conflicts() -> None:
+    """An unexplained asset is never deleted to make publication possible."""
+    extra = (*fixtures.verified_assets(), ObservedAsset("surprise.bin", 1, "e" * 64))
+    decision = decide(fixtures.expected(), fixtures.draft(extra), fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "outside the expected set" in decision.reason
+
+
+def test_a_draft_with_the_wrong_size_conflicts() -> None:
+    """A same-named asset of another size is a conflict, not an upload."""
+    name = "backend.tar.gz"
+    wrong = fixtures.assets_with_size(name, len(fixtures.PAYLOADS[name]) + 1)
+    decision = decide(fixtures.expected(), fixtures.draft(wrong), fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "differ from the expected bytes" in decision.reason
+
+
+def test_a_draft_with_other_bytes_conflicts() -> None:
+    """A same-size asset with other bytes is still a conflict."""
+    wrong = fixtures.assets_with_digest("backend.tar.gz", fixtures.digest(b"other"))
+    decision = decide(fixtures.expected(), fixtures.draft(wrong), fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "differ from the expected bytes" in decision.reason
+
+
+def test_a_draft_for_another_tag_conflicts() -> None:
+    """A draft under the expected tag that reports another one is ambiguous."""
+    observed = dc.replace(
+        fixtures.draft(fixtures.verified_assets()), tag="kani-snapshot-x"
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "another tag" in decision.reason
+
+
+def test_a_draft_targeting_another_commit_conflicts() -> None:
+    """The immutable tag must name the recorded builder commit."""
+    observed = dc.replace(
+        fixtures.draft(fixtures.verified_assets()), target_commitish="f" * 40
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "builder commit" in decision.reason
+
+
+def test_a_published_release_matching_exactly_is_a_no_op() -> None:
+    """Recovery from a lost response ends in observation, not a second write."""
+    observed = dc.replace(fixtures.draft(fixtures.verified_assets()), is_draft=False)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.NOOP
+
+
+def test_a_published_release_with_other_bytes_conflicts() -> None:
+    """Published bytes are never replaced, however they differ."""
+    wrong = fixtures.assets_with_digest("backend.tar.gz", fixtures.digest(b"other"))
+    observed = dc.replace(fixtures.draft(wrong), is_draft=False)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "differs from the expected bytes" in decision.reason
+
+
+def test_a_published_release_with_a_different_asset_set_conflicts() -> None:
+    """An asset set that changed after publication is never repaired in place."""
+    observed = dc.replace(
+        fixtures.draft(fixtures.verified_assets()[:-1]), is_draft=False
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "different asset set" in decision.reason
+
+
+def test_a_published_release_with_unhashed_assets_is_reverified() -> None:
+    """A published release's digests are observed, not trusted from the API."""
+    unhashed = tuple(
+        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
+    )
+    observed = dc.replace(fixtures.draft(unhashed), is_draft=False)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.VERIFY_ASSETS
