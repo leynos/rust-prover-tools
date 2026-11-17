@@ -1,0 +1,24 @@
+# serializer version: 1
+# name: test_the_rendered_receipt_is_stable
+  '''
+  {
+    "assets": [
+      "kani-0.68.0-x86_64-unknown-linux-gnu.tar.gz",
+      "kani-0.68.0-launcher-x86_64-unknown-linux-gnu.tar.gz",
+      "kani-0.68.0-notices-x86_64-unknown-linux-gnu.tar.gz",
+      "inventory.json"
+    ],
+    "checks": [
+      "manifest-digest",
+      "payload-digest"
+    ],
+    "manifest_sha256": "b8fd6da65a0e1ea28f6284b6959a4d4ecba103d1a2900755eecb4eb2c0919ea4",
+    "run_attempt": 1,
+    "run_id": 12345,
+    "schema_version": 1,
+    "tag": "kani-snapshot-2026-09-0d2328a93f0e-r1",
+    "verification_passed": true
+  }
+  
+  '''
+# ---
