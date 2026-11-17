@@ -46,6 +46,7 @@ from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     publication_identity_to_json,
     publication_month,
 )
+from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
 from rust_prover_tools.kani_snapshot.producer.release_assets import (
     CHECKSUMS_NAME,
     release_assets,
@@ -145,9 +146,9 @@ def _candidates(data: bytes) -> list[CandidateCommit]:
 
 
 def _require_manual_inputs(namespace: argparse.Namespace) -> None:
-    """Require the two explicit identities a manual resolution needs."""
-    if not namespace.commit or not namespace.upstream_tag:
-        msg = "manual resolution requires --commit and --upstream-tag"
+    """Require the one explicit identity a manual resolution needs."""
+    if not namespace.commit:
+        msg = "manual resolution requires --commit"
         raise ProverToolError(msg)
 
 
@@ -155,12 +156,19 @@ def _manual_resolution(
     namespace: argparse.Namespace,
     workflow: WorkflowIdentity,
 ) -> Resolution:
-    """Build a resolution from an explicit full commit and upstream tag."""
+    """Build a resolution from an explicit full commit.
+
+    The upstream tag comes from the pinned recipe unless the caller names one.
+    A dispatch input can only name the commit it intends to build; letting it
+    choose the tag would allow one release's identity to be paired with another
+    release's source, and the plan refuses that pairing later anyway.
+    """
+    tag = namespace.upstream_tag or pinned_recipe().upstream.tag
     return Resolution(
         schema_version=1,
         route=ResolutionRoute.MANUAL,
         upstream_commit=resolve_manual_commit(namespace.commit),
-        upstream_tag=require_truthy_text(namespace.upstream_tag, "upstream tag"),
+        upstream_tag=require_truthy_text(tag, "upstream tag"),
         workflow=workflow,
     )
 

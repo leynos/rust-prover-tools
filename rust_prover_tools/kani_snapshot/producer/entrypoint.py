@@ -54,7 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--route", choices=[route.value for route in ResolutionRoute], required=True
     )
     resolve_parser.add_argument("--commit", default=None)
-    resolve_parser.add_argument("--upstream-tag", default=None)
+    resolve_parser.add_argument(
+        "--upstream-tag",
+        default=None,
+        help="upstream release tag; defaults to the pinned recipe's tag",
+    )
     resolve_parser.add_argument("--candidates", default=None)
     resolve_parser.add_argument("--output", required=True)
     resolve_parser.set_defaults(handler=resolve)

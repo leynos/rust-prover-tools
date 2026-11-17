@@ -70,15 +70,17 @@ def _run_flags(
 
 
 def _resolve(tmp_path: pathlib.Path, *flags: str) -> int:
-    """Resolve the pinned upstream commit by explicit manual input."""
+    """Resolve the pinned upstream commit by explicit manual input.
+
+    The upstream tag is deliberately omitted: a dispatch names the commit it
+    means to build, and the recipe owns which release that commit is.
+    """
     return main([
         "resolve",
         "--route",
         "manual",
         "--commit",
         fixtures.UPSTREAM_COMMIT,
-        "--upstream-tag",
-        PINNED.upstream.tag,
         "--output",
         str(tmp_path / "resolution.json"),
         *_run_flags(),
@@ -276,10 +278,10 @@ def test_a_scheduled_resolution_selects_the_newest_qualified_release(
     assert resolution.upstream_tag == PINNED.upstream.tag
 
 
-def test_a_manual_resolution_requires_a_commit_and_tag(
+def test_a_manual_resolution_requires_a_commit(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Half a manual identity is not a resolution."""
+    """A dispatch that names no commit has nothing to build."""
     code = main([
         "resolve",
         "--route",
@@ -289,7 +291,22 @@ def test_a_manual_resolution_requires_a_commit_and_tag(
         *_run_flags(),
     ])
     assert code == 1
-    assert "--commit and --upstream-tag" in capsys.readouterr().err
+    assert "--commit" in capsys.readouterr().err
+
+
+def test_a_manual_resolution_adopts_the_pinned_upstream_tag(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The recipe owns the release a commit belongs to, not the dispatch.
+
+    A dispatch input can only name the commit; accepting a tag from it would
+    let a caller pair one release's tag with another release's source.
+    """
+    assert _resolve(tmp_path) == 0
+
+    resolution = parse_resolution((tmp_path / "resolution.json").read_bytes())
+    assert resolution.upstream_commit == fixtures.UPSTREAM_COMMIT
+    assert resolution.upstream_tag == PINNED.upstream.tag
 
 
 def test_a_scheduled_resolution_requires_candidates(
