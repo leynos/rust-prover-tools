@@ -27,7 +27,11 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     parse_build_plan,
     parse_resolution,
 )
+from rust_prover_tools.kani_snapshot.producer.publication_identity import (
+    parse_publication_identity,
+)
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
+from rust_prover_tools.kani_snapshot.producer.release_assets import EVIDENCE_NAMES
 from rust_prover_tools.kani_snapshot.producer.resolution import (
     REQUIRED_UPSTREAM_CHECKS,
 )
@@ -82,16 +86,33 @@ def _resolve(tmp_path: pathlib.Path, *flags: str) -> int:
     ])
 
 
-def _build(tmp_path: pathlib.Path, *flags: str) -> int:
-    """Derive a plan from the manual resolution."""
+def _identity(tmp_path: pathlib.Path, *flags: str) -> int:
+    """Adopt the dispatched publication identity."""
     return main([
-        "build",
+        "identity",
         "--resolution",
         str(tmp_path / "resolution.json"),
         "--builder-commit",
         fixtures.BUILDER_COMMIT,
-        "--tag",
+        "--publication-id",
         fixtures.TAG,
+        "--output",
+        str(tmp_path / "identity.json"),
+        *_run_flags(),
+        *flags,
+    ])
+
+
+def _build(tmp_path: pathlib.Path, *flags: str) -> int:
+    """Derive a plan from the manual resolution and its identity."""
+    return main([
+        "build",
+        "--resolution",
+        str(tmp_path / "resolution.json"),
+        "--identity",
+        str(tmp_path / "identity.json"),
+        "--builder-commit",
+        fixtures.BUILDER_COMMIT,
         "--output",
         str(tmp_path / "plan.json"),
         *_run_flags(),
@@ -107,19 +128,34 @@ def _write_assembly_input(tmp_path: pathlib.Path) -> pathlib.Path:
     return path
 
 
+def _release(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Stage the payloads in the one directory the release will serve."""
+    release = tmp_path / "release"
+    fixtures.write_payloads(release)
+    return release
+
+
 def _assemble(tmp_path: pathlib.Path, *flags: str) -> int:
-    """Assemble the pinned payloads under the run's own identity."""
+    """Assemble the pinned payloads into the release directory."""
+    release = tmp_path / "release"
     return main([
         "assemble",
         "--input",
         str(_write_assembly_input(tmp_path)),
         "--payloads",
-        str(tmp_path / "payloads"),
+        str(release),
         "--output",
-        str(tmp_path / "assembled"),
+        str(release),
         *_run_flags(),
         *flags,
     ])
+
+
+def _attest(tmp_path: pathlib.Path) -> None:
+    """Stand in for the attestation job's bundle."""
+    (tmp_path / "release" / "manifest.sigstore.jsonl").write_bytes(
+        b'{"mediaType": "application/vnd.dev.sigstore.bundle+json"}\n'
+    )
 
 
 def _validate(tmp_path: pathlib.Path, *flags: str) -> int:
@@ -127,9 +163,9 @@ def _validate(tmp_path: pathlib.Path, *flags: str) -> int:
     return main([
         "validate",
         "--manifest",
-        str(tmp_path / "assembled" / "manifest.json"),
+        str(tmp_path / "release" / "manifest.json"),
         "--payloads",
-        str(tmp_path / "payloads"),
+        str(tmp_path / "release"),
         "--output",
         str(tmp_path / "receipt.json"),
         *_run_flags(),
@@ -138,11 +174,13 @@ def _validate(tmp_path: pathlib.Path, *flags: str) -> int:
 
 
 def _prepare(tmp_path: pathlib.Path) -> None:
-    """Run resolve, build, assemble and validate for one trusted run."""
-    fixtures.write_payloads(tmp_path / "payloads")
+    """Run resolve, identity, build, assemble, attest and validate."""
+    _release(tmp_path)
     assert _resolve(tmp_path) == 0
+    assert _identity(tmp_path) == 0
     assert _build(tmp_path) == 0
     assert _assemble(tmp_path) == 0
+    _attest(tmp_path)
     assert _validate(tmp_path) == 0
 
 
@@ -152,10 +190,13 @@ def test_the_entrypoint_runs_the_whole_producer_sequence(
     """Each job's output parses and binds to the run that produced it."""
     _prepare(tmp_path)
     resolution = parse_resolution((tmp_path / "resolution.json").read_bytes())
+    identity = parse_publication_identity((tmp_path / "identity.json").read_bytes())
     plan = parse_build_plan((tmp_path / "plan.json").read_bytes())
-    parsed = parse_manifest((tmp_path / "assembled" / "manifest.json").read_bytes())
+    parsed = parse_manifest((tmp_path / "release" / "manifest.json").read_bytes())
     receipt = parse_receipt((tmp_path / "receipt.json").read_bytes())
     assert resolution.route.value == "manual"
+    assert identity.tag == fixtures.TAG
+    assert identity.upstream_commit == resolution.upstream_commit
     assert plan.upstream_commit == resolution.upstream_commit
     assert plan.tag == fixtures.TAG
     assert parsed.manifest.tag == plan.tag
@@ -170,12 +211,12 @@ def test_the_entrypoint_writes_checksums_beside_the_manifest(
 ) -> None:
     """`SHA256SUMS` covers the payloads and the manifest bytes it names."""
     _prepare(tmp_path)
-    manifest = (tmp_path / "assembled" / "manifest.json").read_bytes()
+    manifest = (tmp_path / "release" / "manifest.json").read_bytes()
     rows = {
         name: digest
         for digest, name in (
             line.split("  ", 1)
-            for line in (tmp_path / "assembled" / "SHA256SUMS")
+            for line in (tmp_path / "release" / "SHA256SUMS")
             .read_text(encoding="ascii")
             .splitlines()
         )
@@ -272,6 +313,7 @@ def test_build_refuses_a_resolution_from_another_run(
 ) -> None:
     """A stale resolution must not authorise this run's build."""
     assert _resolve(tmp_path) == 0
+    assert _identity(tmp_path) == 0
     code = _build(tmp_path, *_run_flags(run_id=999))
     assert code == 1
     assert "another workflow run" in capsys.readouterr().err
@@ -281,10 +323,12 @@ def test_validate_refuses_a_manifest_from_another_attempt(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A rerun revalidates rather than inheriting the previous verdict."""
-    fixtures.write_payloads(tmp_path / "payloads")
+    _release(tmp_path)
     assert _resolve(tmp_path) == 0
+    assert _identity(tmp_path) == 0
     assert _build(tmp_path) == 0
     assert _assemble(tmp_path) == 0
+    _attest(tmp_path)
     code = _validate(tmp_path, *_run_flags(run_attempt=2))
     assert code == 1
     assert "another workflow run" in capsys.readouterr().err
@@ -294,11 +338,13 @@ def test_validate_refuses_a_tampered_payload(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Validation hashes the files it is given, not the manifest's claims."""
-    fixtures.write_payloads(tmp_path / "payloads")
+    _release(tmp_path)
     assert _resolve(tmp_path) == 0
+    assert _identity(tmp_path) == 0
     assert _build(tmp_path) == 0
     assert _assemble(tmp_path) == 0
-    (tmp_path / "payloads" / fixtures.names()["backend"]).write_bytes(b"tampered")
+    _attest(tmp_path)
+    (tmp_path / "release" / fixtures.names()["backend"]).write_bytes(b"tampered")
     code = _validate(tmp_path)
     assert code == 1
     assert "does not match the manifest" in capsys.readouterr().err
@@ -322,11 +368,11 @@ def test_publish_refuses_a_receipt_from_another_run_before_any_call(
     code = main([
         "publish",
         "--manifest",
-        str(tmp_path / "assembled" / "manifest.json"),
+        str(tmp_path / "release" / "manifest.json"),
         "--receipt",
         str(tmp_path / "receipt.json"),
         "--payloads",
-        str(tmp_path / "payloads"),
+        str(tmp_path / "release"),
         *_run_flags(run_id=999),
     ])
     assert code == 1
@@ -394,7 +440,7 @@ class FakeGitHub:
             )
             return ("{}", "", 0)
         if args[1:3] == ["--method", "PATCH"]:
-            assert set(self.assets) == set(fixtures.names().values())
+            assert set(self.assets) == _release_names()
             self.is_draft = False
             self.published = True
             return ("{}", "", 0)
@@ -416,6 +462,11 @@ class FakeGitHub:
         raise AssertionError(msg)
 
 
+def _release_names() -> set[str]:
+    """Return every asset name the release must serve."""
+    return set(fixtures.names().values()) | set(EVIDENCE_NAMES)
+
+
 def test_publish_drives_the_release_through_the_real_adapter(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,
@@ -428,11 +479,11 @@ def test_publish_drives_the_release_through_the_real_adapter(
     code = main([
         "publish",
         "--manifest",
-        str(tmp_path / "assembled" / "manifest.json"),
+        str(tmp_path / "release" / "manifest.json"),
         "--receipt",
         str(tmp_path / "receipt.json"),
         "--payloads",
-        str(tmp_path / "payloads"),
+        str(tmp_path / "release"),
         *_run_flags(),
     ])
     assert code == 0
@@ -440,8 +491,7 @@ def test_publish_drives_the_release_through_the_real_adapter(
     assert not github.is_draft
     assert github.target == fixtures.BUILDER_COMMIT
     expected = {
-        name: (tmp_path / "payloads" / name).read_bytes()
-        for name in fixtures.names().values()
+        path.name: path.read_bytes() for path in (tmp_path / "release").iterdir()
     }
     assert github.assets == expected
     assert fixtures.TAG in capsys.readouterr().out

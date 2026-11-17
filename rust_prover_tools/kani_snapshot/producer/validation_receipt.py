@@ -17,11 +17,14 @@ import dataclasses as dc
 import json
 import typing as typ
 
-from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.policy import (
     is_safe_asset_name,
     reject_unknown_keys,
+)
+from rust_prover_tools.kani_snapshot.producer.release_assets import (
+    release_asset_names,
+    verify_payloads,
 )
 from rust_prover_tools.kani_snapshot.release_policy import ValidationBinding
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
@@ -36,13 +39,8 @@ from rust_prover_tools.kani_snapshot.validation import (
 )
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from rust_prover_tools.kani_snapshot.manifest import ParsedManifest
-    from rust_prover_tools.kani_snapshot.models import (
-        SnapshotManifest,
-        WorkflowIdentity,
-    )
+    from rust_prover_tools.kani_snapshot.models import WorkflowIdentity
 
 __all__ = (
     "RECEIPT_SCHEMA_VERSION",
@@ -139,11 +137,6 @@ class ValidationReceipt:
         )
 
 
-def _names(manifest: SnapshotManifest) -> tuple[str, ...]:
-    """Return the manifest's asset names in manifest order."""
-    return tuple(asset.name for asset in manifest.assets)
-
-
 def build_receipt(
     workflow: WorkflowIdentity,
     parsed: ParsedManifest,
@@ -175,7 +168,7 @@ def build_receipt(
         run_attempt=workflow.run_attempt,
         tag=parsed.manifest.tag,
         manifest_sha256=parsed.sha256,
-        assets=_names(parsed.manifest),
+        assets=release_asset_names(parsed.manifest),
         verification_passed=verification_passed,
         checks=checks,
     )
@@ -230,46 +223,9 @@ def verify_receipt(receipt: ValidationReceipt, parsed: ParsedManifest) -> None:
     if receipt.manifest_sha256 != parsed.sha256:
         msg = "validation receipt names another manifest digest"
         raise ProverToolError(msg)
-    if set(receipt.assets) != set(_names(parsed.manifest)):
+    if set(receipt.assets) != set(release_asset_names(parsed.manifest)):
         msg = "validation receipt records an incomplete asset set"
         raise ProverToolError(msg)
-
-
-def verify_payloads(
-    parsed: ParsedManifest,
-    payloads: Path,
-) -> None:
-    """Require every payload file to match the manifest's measured bytes.
-
-    Parameters
-    ----------
-    parsed : ParsedManifest
-        Parsed manifest naming the assets.
-    payloads : Path
-        Directory holding the payload files.
-
-    Raises
-    ------
-    ProverToolError
-        Raised when a payload is missing, is not a regular file, or has a size
-        or digest other than the one the manifest records.
-    """
-    for asset in parsed.manifest.assets:
-        path = payloads / asset.name
-        if not path.is_file():
-            msg = f"validated payload {asset.name!r} is not a regular file"
-            raise ProverToolError(msg)
-        try:
-            size = path.stat().st_size
-        except OSError as exc:
-            msg = f"failed to stat payload '{path}': {exc}"
-            raise ProverToolError(msg) from exc
-        if size != asset.size:
-            msg = f"payload {asset.name!r} size does not match the manifest"
-            raise ProverToolError(msg)
-        if sha256_file(path) != asset.sha256:
-            msg = f"payload {asset.name!r} digest does not match the manifest"
-            raise ProverToolError(msg)
 
 
 def receipt_to_json(receipt: ValidationReceipt) -> bytes:

@@ -10,6 +10,9 @@ unknown or missing field fails closed rather than being guessed at.
 from __future__ import annotations
 
 import json
+import os
+import pathlib
+import tempfile
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
@@ -65,6 +68,7 @@ __all__ = (
     "plan_to_json",
     "resolution_to_json",
     "same_run",
+    "write_document",
 )
 
 _RESOLUTION_KEYS: typ.Final[frozenset[str]] = frozenset({
@@ -159,6 +163,37 @@ def _encode(document: dict[str, object]) -> bytes:
     """Render a document as canonical UTF-8 JSON with a final newline."""
     text = json.dumps(document, sort_keys=True, indent=2, ensure_ascii=True)
     return (text + "\n").encode("ascii")
+
+
+def write_document(path: pathlib.Path, data: bytes) -> None:
+    """Write bytes atomically so a reader never sees a partial document.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Destination file. Its parent directories are created.
+    data : bytes
+        Exact document bytes.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the temporary file or the replacement cannot be written.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    os.close(handle)
+    temporary = pathlib.Path(name)
+    try:
+        with temporary.open("wb") as target:
+            target.write(data)
+            target.flush()
+            os.fsync(target.fileno())
+        temporary.replace(path)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        msg = f"failed to write '{path}': {exc}"
+        raise ProverToolError(msg) from exc
 
 
 def resolution_to_json(resolution: Resolution) -> bytes:

@@ -16,7 +16,9 @@ import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.validation import require_full_sha
+from rust_prover_tools.kani_snapshot.validation import (
+    require_full_sha,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

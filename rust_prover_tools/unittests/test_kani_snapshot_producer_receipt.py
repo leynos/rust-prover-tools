@@ -19,6 +19,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.producer.release_assets import release_asset_names
 from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     RECEIPT_SCHEMA_VERSION,
     ValidationReceipt,
@@ -64,7 +65,7 @@ def test_a_receipt_names_the_validated_manifest_and_run(
     assert receipt.run_attempt == fixtures.workflow().run_attempt
     assert receipt.tag == parsed.manifest.tag
     assert receipt.manifest_sha256 == parsed.sha256
-    assert receipt.assets == tuple(asset.name for asset in parsed.manifest.assets)
+    assert receipt.assets == release_asset_names(parsed.manifest)
     assert receipt.checks == _CHECKS
     assert receipt.verification_passed
 

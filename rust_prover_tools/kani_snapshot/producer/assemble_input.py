@@ -58,6 +58,7 @@ __all__ = (
     "AssemblyRequest",
     "assembly_input_to_json",
     "parse_assembly_input",
+    "resources_document",
 )
 
 _INPUT_KEYS: typ.Final[frozenset[str]] = frozenset({
@@ -191,7 +192,7 @@ def _require_wall_seconds(value: object) -> float:
     return seconds
 
 
-def _resources_document(value: object) -> tuple[float, int]:
+def resources_document(value: object) -> tuple[float, int]:
     """Parse the two measured resource fields assembly consumes."""
     document = require_mapping(value, "assembly resources")
     reject_unknown_keys(document, _RESOURCE_KEYS, "assembly resources")
@@ -232,7 +233,7 @@ def parse_assembly_input(data: bytes) -> AssemblyInput:
     if missing:
         msg = f"assembly input is missing keys: {', '.join(missing)}"
         raise ProverToolError(msg)
-    wall_seconds, disk_high_water_bytes = _resources_document(document["resources"])
+    wall_seconds, disk_high_water_bytes = resources_document(document["resources"])
     return AssemblyInput(
         schema_version=require_int(
             document["schema_version"], "assembly schema_version"

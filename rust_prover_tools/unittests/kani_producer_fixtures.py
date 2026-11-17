@@ -30,11 +30,15 @@ from rust_prover_tools.kani_snapshot.producer.assemble import (
     assemble,
     payload_names,
 )
+from rust_prover_tools.kani_snapshot.producer.build_evidence import BuildEvidence
 from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     WORKFLOW_PATH,
     WORKFLOW_REF,
+    BuildPlan,
+    BuildRequest,
     Resolution,
     ResolutionRoute,
+    plan_build,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import (
     pinned_recipe,
@@ -130,6 +134,46 @@ def toolchain() -> ToolchainIdentity:
                 sha256="0" * 64,
             ),
         ),
+    )
+
+
+def build_plan(
+    *,
+    identity: WorkflowIdentity | None = None,
+    builder_commit: str = BUILDER_COMMIT,
+    tag: str = TAG,
+) -> BuildPlan:
+    """Return the pinned plan this run would build from."""
+    measured = workflow() if identity is None else identity
+    return plan_build(
+        BuildRequest(
+            resolution=resolution(identity=measured),
+            workflow=measured,
+            builder_commit=builder_commit,
+            tag=tag,
+        )
+    )
+
+
+def evidence(
+    *,
+    wall_seconds: float = 1800.0,
+    disk_high_water_bytes: int = 8_000_000_000,
+) -> BuildEvidence:
+    """Return measured build evidence for the pinned recipe."""
+    return BuildEvidence(
+        schema_version=1,
+        toolchain=toolchain(),
+        backend=BackendIdentity(
+            version=CRATE_VERSION,
+            revision=UPSTREAM_COMMIT,
+            solvers=(SolverRecord("cbmc", "6.11.0", "5" * 64),),
+        ),
+        launcher_package_version=CRATE_VERSION,
+        lock_digests=(("Cargo.lock", "8" * 64),),
+        cache=CacheObservation("miss", f"kani-{PINNED.upstream.toolchain_channel}"),
+        wall_seconds=wall_seconds,
+        disk_high_water_bytes=disk_high_water_bytes,
     )
 
 
