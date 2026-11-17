@@ -43,9 +43,11 @@ preserving the legacy release path. See the
   merged in #131, including the same-reported-version regression test
   (`test_same_reported_version_installs_into_disjoint_generations`); 1.1.1 and
   1.1.2 were completed on 15 November.
-- [ ] 1.1.4. Deliver guarded build and publication orchestration. Requires
+- [x] 1.1.4. Deliver guarded build and publication orchestration. Requires
   1.1.3. Complete EP-M4 with tested Python helpers, monthly/manual workflow,
   publication recovery tests, and the necessary Python release lifecycle fix.
+  Implementation and tests are in #258. The schedule stays disabled until EP-M5
+  records real smoke evidence and EP-O1 grants operational bootstrap.
 - [ ] 1.1.5. Validate clean proofs and document operational handoff. Requires
   1.1.4. Complete EP-M5 with a non-publishing smoke build, public consumer-path
   installation, named positive/negative harnesses, compiler-floor evidence,

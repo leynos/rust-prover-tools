@@ -5,7 +5,9 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: COMPLETE (implementation and gates; hosted evidence remains EP-M5)
+
+Draft pull request: <https://github.com/leynos/rust-prover-tools/pull/258>
 
 Branch: `1-1-4-guarded-build-and-publication-orchestration`
 
@@ -115,7 +117,14 @@ Terms used here:
 - 17 November 2026: Python release workflow rewritten draft-first, with the
   composite action and workflow Actions pinned and 14 contract tests
   (`4dab020`).
-- 17 November 2026: design, users' and developers' guides updated.
+- 17 November 2026: design, users' and developers' guides updated (`e8db01e`).
+- 17 November 2026: full commit gates run sequentially. Formatting,
+  typechecking, lint (interrogate 100%, pylint 10.00/10), 1760 tests (5
+  pre-existing environment-gated skips), CV-005 workflow contracts,
+  `workflow-check` (69 contract tests plus actionlint), Markdown lint and
+  Mermaid validation all passed. The spelling gate caught one en-GB-oxendict
+  spelling, `authorises`, which is fixed to `authorizes`.
+- 17 November 2026: draft pull request #258 opened; roadmap 1.1.4 marked done.
 
 ## Surprises & discoveries
 
@@ -168,8 +177,30 @@ Terms used here:
 
 ## Outcomes & retrospective
 
-To be completed when the gates and review have passed. The pending items are:
-the full gate run, the draft pull request, and marking roadmap 1.1.4 done.
+The EP-M4 plateau is met: a default-disabled scheduled capability, a manual
+validation mode and a publication adapter that pass deterministic gates, with
+repository settings unchanged. Conformance covers U4 permissions, authenticated
+inputs, lifecycle and the Python namespace. Recovery is a code revert or a
+corrected new publication identity, never asset replacement.
+
+What went well:
+
+- Moving every projection of external data into a tested module kept the
+  workflow's shell small enough to review, and it made the strict contract
+  reader possible: the tests can assert intent rather than YAML trivia.
+- Writing the contract tests before the workflow caught two real defects: a
+  workflow path resolved relative to a changed working directory, and a manual
+  dispatch that could not supply the upstream tag.
+
+What to carry forward:
+
+- A check named in a receipt must be a check that ran. The `attestation` check
+  is deliberately a presence check, and both the design document and the
+  developers' guide say so; do not let a later change quietly relabel it.
+- actionlint cannot read composite actions, so any new composite action needs
+  its own contract test.
+- EP-M5 must exercise the real signature policy on a clean runner before the
+  schedule is enabled.
 
 ## Context and orientation
 
@@ -266,7 +297,8 @@ steps.
 5. Workflow, strict contract reader, contract tests, Makefile and CI target.
    Done.
 6. Python release lifecycle fix and its contract tests. Done.
-7. Documentation, roadmap entry and review. In progress.
+7. Documentation, roadmap entry and review. Done; review continues on the
+   draft pull request.
 
 ## Concrete steps
 
@@ -316,4 +348,5 @@ shared Cargo or uv cache.
 ## Revision note
 
 Initial version, written after implementation and before the full gate run and
-pull request.
+pull request. Revised after the gates passed and pull request #258 opened: the
+status, progress entries and outcomes now record the run rather than the plan.
