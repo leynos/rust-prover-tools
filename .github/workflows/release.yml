@@ -1,5 +1,13 @@
 name: Release Wheels
 
+# Publishes the pure-Python wheel for a `v*.*.*` tag.
+#
+# The release is created as a draft, every wheel is uploaded and verified
+# against the downloaded bytes, and only then is the draft published. A
+# published release's assets are immutable, so creating it first — as this
+# workflow used to — would leave no way to attach a wheel that failed to
+# upload. An interrupted draft is resumed; a published release is refused.
+
 on:
   push:
     tags:
@@ -7,21 +15,23 @@ on:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancelling here could strand a draft with neither a full asset set nor a
+  # reason why, so a later push waits instead of replacing the running job.
+  cancel-in-progress: false
 
-permissions:
-  contents: write
-
+permissions: {}
 
 jobs:
-
   pure-wheel:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/pure-python-wheel
         with:
           python-version: '3.13'
@@ -33,20 +43,95 @@ jobs:
     needs:
       - pure-wheel
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-      - uses: softprops/action-gh-release@v3.0.4
+          persist-credentials: false
+      - name: Download the wheels
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
-          generate_release_notes: true
-      - uses: actions/download-artifact@v8
-        with:
+          name: wheels-pure
           path: dist
-      - name: Upload wheels to release
+      - name: Require a non-empty wheel inventory
         run: |
-          set -eu
-          find dist/wheels-* -type f -name "*.whl" -print0 | \
-            xargs -0 -r gh release upload "${{ github.ref_name }}"
+          set -euo pipefail
+          mapfile -d '' wheels < <(find dist -type f -name '*.whl' -print0)
+          if [[ ${#wheels[@]} -eq 0 ]]; then
+            echo "no wheel was produced; refusing to create a release" >&2
+            exit 1
+          fi
+          printf '%s\n' "${wheels[@]}" | sort > wheel-inventory.txt
+          cat wheel-inventory.txt
+      - name: Create the draft or resume it
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft' \
+              > draft-state.txt 2>/dev/null; then
+            if [[ "$(cat draft-state.txt)" != "true" ]]; then
+              echo "release $GITHUB_REF_NAME is already published" >&2
+              echo "published assets are immutable; cut a new version instead" >&2
+              exit 1
+            fi
+            echo "resuming the existing draft for $GITHUB_REF_NAME"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --generate-notes \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME"
+          fi
+      - name: Upload the missing wheels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" --json assets \
+            --jq '.assets[].name' | sort > uploaded.txt
+          while IFS= read -r wheel; do
+            name="$(basename "$wheel")"
+            if grep -qxF "$name" uploaded.txt; then
+              echo "already uploaded: $name"
+            else
+              echo "uploading: $name"
+              gh release upload "$GITHUB_REF_NAME" "$wheel"
+            fi
+          done < wheel-inventory.txt
+      - name: Verify the complete asset set
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf verified
+          mkdir -p verified
+          gh release download "$GITHUB_REF_NAME" --dir verified --pattern '*.whl'
+
+          sort wheel-inventory.txt > expected.txt
+          find verified -type f -name '*.whl' -printf '%f\n' | sort > downloaded.txt
+          if ! diff -u expected.txt downloaded.txt; then
+            echo "the release does not serve the expected wheel set" >&2
+            exit 1
+          fi
+
+          gh release view "$GITHUB_REF_NAME" --json assets \
+            --jq '.assets[].name' | sort > remote.txt
+          if ! diff -u expected.txt remote.txt; then
+            echo "the release carries assets outside the expected inventory" >&2
+            exit 1
+          fi
+
+          while IFS= read -r wheel; do
+            cmp "$wheel" "verified/$(basename "$wheel")"
+          done < wheel-inventory.txt
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "$GITHUB_REF_NAME" --draft=false
