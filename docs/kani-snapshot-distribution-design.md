@@ -783,6 +783,74 @@ Add narrowly scoped lifecycle tests; this is necessary because the current
 workflow creates a public release before uploading wheels. GitHub documents
 draft-first publication for immutable assets and tags.[^4]
 
+### Implemented producer boundary (EP-M4)
+
+The workflow is thin because every decision it could get wrong moved into a
+tested module. `.github/workflows/kani-monthly.yml` runs five fresh jobs —
+`resolve`, `build`, `assemble`, `validate` and `publish` — behind a `guard` job
+that refuses anything but the canonical repository, `refs/heads/main` and a
+schedule or dispatch. Top-level permissions are empty; only `assemble` receives
+`id-token: write` and `attestations: write`, and only `publish` receives
+`contents: write`. Artefacts are named with `github.run_id` and
+`github.run_attempt`, so a later job downloads this run's attempt or nothing.
+The concurrency group is `kani-snapshot-${{ github.ref }}` with
+`cancel-in-progress: false`, so revision allocation cannot race a run it is
+replacing.
+
+A scheduled run is disabled unless `vars.KANI_SNAPSHOTS_ENABLED` is exactly
+`true`; the guard reports that and finishes successfully without building. A
+dispatch names `upstream_commit`, `publication_id` and `publish`, and always
+creates an attestation, so a non-publishing dispatch still has an OIDC side
+effect.
+
+Each job hands the next one a document, and the developer entrypoint
+`python -m rust_prover_tools.kani_snapshot.producer.entrypoint` accepts no
+other input:
+
+- `resolve` runs the scheduled route against `collect_candidates`' projected
+  release and check-run evidence, or the manual route against the dispatched
+  full SHA. The upstream tag is not dispatch input: `operations` defaults it to
+  the pinned recipe's tag, so a dispatch names only a commit and cannot pair a
+  foreign commit with a trusted tag. `collect_releases` projects the bounded
+  release list that identity allocation needs, because the workflow's shell may
+  compose observed documents but must not decide what one means.
+- `build` derives the pinned plan from the resolution and identity, and the
+  workflow executes exactly the plan's argument vectors. `measure_build`
+  records the evidence a build job can only observe: re-executed compiler
+  identities, the hashed channel manifest, the lock digests, the solver digests
+  and reported versions read from the produced bundle, and the wall time and
+  disk high-water mark the workflow measured. A missing solver binary or
+  library fails rather than yielding an evidence document with a gap.
+- `assemble` measures the payloads, writes `manifest.json` and `SHA256SUMS`,
+  and the workflow signs that manifest with `actions/attest-build-provenance`,
+  copying its bundle to `manifest.sigstore.jsonl`. Assembly never executes
+  anything from the build job; it reads the files as bytes.
+- `validate` parses the manifest, refuses one from another run or attempt,
+  re-verifies every payload digest, the manifest bytes on disk and the exact
+  `SHA256SUMS` rows, requires a non-empty attestation bundle, and writes a
+  receipt bound to the run, attempt, tag and manifest digest. The recorded
+  `attestation` check is a presence check: the signature policy belongs to the
+  consumer verifier, and the clean-runner verification from D6 arrives with
+  EP-M5. Claiming otherwise would record a check nobody ran.
+- `publish` requires a successful receipt from the same run and attempt,
+  re-verifies the receipt binding and the payloads, and drives the immutable
+  release to a recorded no-op observation. A changed input, a foreign tag or an
+  extra asset is refused rather than repaired, because published bytes are
+  never replaced.
+
+`make workflow-check` runs the workflow contract tests and actionlint together,
+and CI runs it once the pinned actionlint release is installed.
+`make kani-snapshot-smoke` dispatches a non-publishing run and is opt-in: the
+ordinary test suite performs no real build.
+
+The Python release lifecycle is now implemented as proposed above:
+`.github/workflows/release.yml` builds the wheel inventory, creates or resumes
+a draft, uploads only the missing wheels, verifies the release serves exactly
+the expected bytes, and publishes last. Its `v*.*.*` namespace, composite
+action, interpreter and artefact name are unchanged, and
+`tests/test_python_release_contract.py` pins both the lifecycle and that
+stability.
+
 ## D6: Evidence and operational handoff
 
 Before publication a fresh runner with no Kani build checkout or previous

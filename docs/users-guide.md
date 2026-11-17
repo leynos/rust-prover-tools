@@ -275,6 +275,47 @@ run from the proof package. The
 [Explicit legacy Kani execution](#explicit-legacy-kani-execution) section gives
 the detailed rules.
 
+### Snapshot maintenance workflow
+
+`.github/workflows/kani-monthly.yml` builds, attests, validates and publishes
+one immutable Kani snapshot. Scheduled runs are disabled unless the repository
+variable `KANI_SNAPSHOTS_ENABLED` is set to `true`; any other value, including
+an unset variable, makes the run report that it is disabled and finish without
+building anything.
+
+A manual dispatch takes three inputs:
+
+| Input             | Meaning                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `upstream_commit` | Full 40-hex upstream commit to build. It must be the commit the pinned recipe names; another commit is refused at plan time. |
+| `publication_id`  | The immutable tag to publish, in the form `kani-snapshot-YYYY-MM-<12 hex>-rN`.                                               |
+| `publish`         | Whether to create the release after validation. Defaults to `false`.                                                         |
+
+A dispatch always creates a build attestation with OpenID Connect, even when
+`publish` is `false` and no release is created. A non-publishing dispatch
+therefore still exercises signing and validation without making anything
+public. Published snapshot assets are immutable: correcting a published
+snapshot means choosing a new publication identity, never replacing or moving
+existing bytes. An interrupted draft is resumed by the same run and attempt; a
+different attempt, changed inputs or conflicting bytes require a new identity.
+
+To dispatch a non-publishing run from a checkout:
+
+```sh
+make kani-snapshot-smoke \
+  KANI_SNAPSHOT_UPSTREAM_COMMIT=<full upstream commit> \
+  KANI_SNAPSHOT_PUBLICATION_ID=kani-snapshot-2026-12-<12 hex>-r1
+```
+
+The target is opt-in and never part of `all`, because it builds on a hosted
+runner and creates an attestation.
+
+Ordinary Python releases are unaffected by the snapshot schedule. Pushing a
+`v*.*.*` tag now creates a draft release, uploads the wheel, verifies the
+release serves exactly the expected bytes, and publishes the release only
+afterwards. A rerun resumes an existing draft; a release that is already
+published is refused, because its assets can no longer be changed.
+
 ### Verus commands
 
 `prover-tools verus install` reads `tools/verus/VERSION` and

@@ -852,3 +852,74 @@ Conventions that keep the recipe trustworthy:
   cannot claim a glibc floor older than the image that linked them, and
   `kani-driver` links the host C library, so a prototype built on another
   distribution measures that distribution's floor, not the published one.
+
+## Kani snapshot producer entrypoint
+
+`python -m rust_prover_tools.kani_snapshot.producer.entrypoint` is the
+developer interface `.github/workflows/kani-monthly.yml` calls. It is not a
+consumer API: the CLI does not register these subcommands, and nothing outside
+the snapshot workflow should depend on them. Each subcommand reads the
+documents earlier jobs produced, checks their identity and same-run binding,
+and only then performs its effect, so a stale or foreign document fails before
+anything is written.
+
+| Subcommand | Inputs                                                                                                    | Effect                                             |
+| ---------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `resolve`  | `--route scheduled --candidates` or `--route manual --commit`, plus `--output` and the run identity flags | Writes the resolved upstream commit.               |
+| `identity` | `--resolution`, `--builder-commit`, and either `--month --releases` or `--publication-id`                 | Writes the immutable publication identity.         |
+| `build`    | `--resolution`, `--identity`, `--builder-commit`                                                          | Writes the pinned build plan.                      |
+| `assemble` | `--input` assembly input, `--payloads`, `--output`                                                        | Writes `manifest.json` and `SHA256SUMS`.           |
+| `validate` | `--manifest`, `--payloads`, `--checks`                                                                    | Writes the validation receipt.                     |
+| `publish`  | `--manifest`, `--receipt`, `--payloads`                                                                   | Drives the release to a published, verified state. |
+
+Every subcommand also takes `--run-id`, `--run-attempt`, `--event` and
+`--run-url`. Those four flags are the workflow identity the receipt and
+publication refuse to confuse: a document from another run or attempt is
+rejected even when its bytes are otherwise identical.
+
+The workflow's shell is allowed to compose observed documents and to execute a
+plan, but not to interpret one. Anything that projects an external response
+into a document the next job consumes belongs in a tested module:
+`collect_candidates`, `collect_releases`, `measure_build`, `build_evidence`,
+`inventory_build` and `assemble` each own one such projection. A shell step
+that starts deciding what an API response means is the point to move that
+decision back into Python.
+
+`validate` records the checks it was asked for, but the `attestation` check is
+a presence and non-empty check of `manifest.sigstore.jsonl`. The signature
+policy — `gh attestation verify` with explicit repository, workflow, ref,
+source and signer digests, correlated with the manifest's run and attempt — is
+the consumer's, and EP-M5 exercises it on a clean runner. Do not describe the
+receipt as proof that a signature was verified.
+
+### Workflow contract tests
+
+Workflows are executable policy, so they are tested like code.
+`tests/workflow_contracts/strict_workflow.py` reads them the way GitHub reads
+them: duplicate keys are refused rather than silently keeping the last one, and
+`on:` stays a string instead of becoming YAML 1.1's boolean. The helpers return
+steps, scripts, `needs` and artefact names without assuming a scalar or a list,
+because both are valid YAML for the same field.
+
+`tests/test_kani_workflow_contract.py` pins the snapshot workflow's guards,
+per-job permissions, Action pin shape, artefact routing, job budgets, the order
+of attestation, validation and publication, and the recipe facts the workflow's
+declared environment must match. `tests/test_python_release_contract.py` pins
+the draft-first Python release lifecycle. Both follow the pin policy above:
+they assert that a reference is a full 40-hex commit, never that it equals a
+particular one.
+
+Run them together with actionlint:
+
+```sh
+make workflow-check
+```
+
+`ACTIONLINT` is overridable for a host that installs it elsewhere. actionlint
+lints `.github/workflows/*.yml` only; it cannot lint a composite action, so
+`tests/test_python_release_contract.py` reads
+`.github/actions/pure-python-wheel/action.yml` directly.
+
+`make kani-snapshot-smoke` dispatches a real, non-publishing snapshot run. It
+is opt-in and never part of `all`, because it builds on a hosted runner and
+creates an attestation.
