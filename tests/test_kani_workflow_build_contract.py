@@ -47,7 +47,10 @@ _SUMMARY_FILTER = re.compile(r"jq -r '([^']*)'")
 def _render(program: str, document: bytes) -> str:
     """Run a workflow jq filter over one document, as the summary does."""
     jq = shutil.which("jq")
-    assert jq is not None, "the summary's filter can only be checked with jq"
+    assert jq is not None, (
+        "jq is required to check the run summary's filter; install it and see "
+        "the host tools note in docs/developers-guide.md"
+    )
     return subprocess.run(
         [jq, "-r", program],
         input=document,

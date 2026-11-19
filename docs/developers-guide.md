@@ -955,6 +955,16 @@ lints `.github/workflows/*.yml` only; it cannot lint a composite action, so
 `tests/test_python_release_contract.py` reads
 `.github/actions/pure-python-wheel/action.yml` directly.
 
+The workflow gates also need `jq` on `PATH`. The build job's run summary is a
+`jq` filter, and `tests/test_kani_workflow_build_contract.py` runs that filter
+over a real evidence document rather than trusting its text, so both
+`make test` and `make workflow-check` fail loudly when `jq` is missing. It is a
+host tool the repository does not pin: the GitHub `ubuntu-latest` runner ships
+it, and a developer host needs it installed.
+`tests/test_python_release_lifecycle.py` additionally runs the wheel workflow's
+own steps against a stand-in `gh`, which uses only `bash` and the Python
+standard library.
+
 `make kani-snapshot-smoke` dispatches a real, non-publishing snapshot run. It
 is opt-in and never part of `all`, because it builds on a hosted runner and
 creates an attestation.

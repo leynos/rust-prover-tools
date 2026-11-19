@@ -170,6 +170,15 @@ Terms used here:
   no-op — upload and publish write nothing, and the unchanged byte comparison
   turns any disagreement into a collision error — matching D5 and the snapshot
   publisher's own rule.
+- 19 November 2026: remediated the fifth completeness assessment (A5,
+  `EP258-2026-11-19-A5`). `tests/test_python_release_lifecycle.py` now runs the
+  wheel workflow's own steps against a stand-in `gh` that serves and mutates
+  one recorded release, so the fresh-tag path, an interrupted draft, a matching
+  published no-op and the three collision shapes (missing, extra and changed
+  bytes) are shown to make exactly the writes they claim — none, for a no-op
+  and for a collision. `jq`, which the run-summary contract test needs, is
+  documented as a host tool in the developers' guide rather than left implicit,
+  and `make workflow-check` includes the new module.
 
 ## Surprises & discoveries
 
