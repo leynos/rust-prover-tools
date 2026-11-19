@@ -109,19 +109,20 @@ Adopt it only when a repository wants a reviewed, immutable Kani build rather
 than the pinned legacy release:
 
 ```bash
-prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+prover-tools kani snapshot install
 prover-tools kani snapshot check
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
 ```
 
-`snapshot install` verifies the reviewed pin, the manifest bytes, the
-attestation bundle and every payload digest before running the packaged
-launcher's `setup`. `snapshot check` revalidates the active generation without
-running setup, and `kani run` executes the validated identity. Installation
-requires a local `--asset-dir`; the commands never fall back to the legacy
-release installer or a source build. The
-[users' guide](users-guide.md#kani-snapshot-commands) documents the pin,
-manifest and attestation requirements.
+`snapshot install` downloads the release the reviewed pin names, verifies the
+reviewed pin, the manifest bytes, the attestation bundle and every payload
+digest, and only then runs the packaged launcher's `setup`. Add
+`--asset-dir dist/kani-snapshot` to install from a local directory instead,
+which suits offline reproduction. `snapshot check` revalidates the active
+generation without running setup, and `kani run` executes the validated
+identity. The commands never fall back to the legacy release installer or a
+source build. The [users' guide](users-guide.md#kani-snapshot-commands)
+documents the pin, manifest and attestation requirements.
 
 No action is needed for existing `kani exec` callers. Repositories that relied
 on the old `cargo install` route only for `kani install` should either accept

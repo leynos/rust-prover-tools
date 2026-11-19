@@ -899,12 +899,18 @@ without starting a process, and a transport failure keeps its transient or
 permanent classification through the added context.
 
 Publication follows the same rule from the other side: `publish` depends only
-on the `ReleaseApi` port, `GhReleaseApi` is its one adapter, and
-`producer.entrypoint` is the composition root that chooses it. `observe` is a
-query that downloads nothing; `verify` is the only command that downloads,
+on the `ReleaseApi` port in `release_port`, `GhReleaseApi` is its one adapter,
+and `producer.entrypoint` is the composition root that chooses it. `observe` is
+a query that downloads nothing; `verify` is the only command that downloads,
 hashes and authenticates the served bytes, and the policy asks for it
 explicitly. A digest listed by the API is therefore a claim until a
-verification has computed the same value locally.
+verification has computed the same value locally. Each side of that boundary
+has one module: `release_assets_policy` classifies an observed asset set,
+`release_markers` reads and writes the release-body markers, and the adapter's
+steps are `gh_release_document` for the served documents,
+`gh_release_attestation` for signature policy and `gh_release_download` for the
+download, digest and verification sequence. A change to one seam therefore
+cannot silently reach across into another.
 
 Scheduled runs collect the existing release list in their own `collect` job,
 which holds `contents: write` because GitHub lists draft releases only to a
