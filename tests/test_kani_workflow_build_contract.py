@@ -13,11 +13,19 @@ repeated, so a recipe bump fails here instead of in a monthly run.
 
 from __future__ import annotations
 
+import json
+import re
+import shutil
+import subprocess
 import typing as typ
 
 import pytest
 
+from rust_prover_tools.kani_snapshot.producer.evidence_model import (
+    evidence_to_json,
+)
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
+from rust_prover_tools.unittests import kani_producer_fixtures as producer
 from tests.workflow_contracts.strict_workflow import (
     as_mapping,
     declared_text,
@@ -31,6 +39,21 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.models import PrerequisiteRecord
 
 PINNED = pinned_recipe()
+
+#: The single-quoted program the summary feeds to `jq -r`.
+_SUMMARY_FILTER = re.compile(r"jq -r '([^']*)'")
+
+
+def _render(program: str, document: bytes) -> str:
+    """Run a workflow jq filter over one document, as the summary does."""
+    jq = shutil.which("jq")
+    assert jq is not None, "the summary's filter can only be checked with jq"
+    return subprocess.run(
+        [jq, "-r", program],
+        input=document,
+        capture_output=True,
+        check=True,
+    ).stdout.decode("ascii")
 
 
 @pytest.fixture(scope="module")
@@ -186,10 +209,39 @@ def test_a_failed_build_preserves_its_observations(
     )
 
 
+def test_a_failed_build_still_records_what_it_measured(
+    workflow: dict[str, object],
+) -> None:
+    """A failed build must not discard the numbers that explain the failure.
+
+    The plan commands are the only step where the wall time, disk high-water
+    mark and final source state exist. Letting `set -e` end the script at the
+    first failing command would lose all three, leaving the failure artefact
+    and the run summary empty for exactly the run that needs them. The failure
+    is re-raised afterwards, so capture cannot turn into acceptance.
+    """
+    build = named_scripts(job(workflow, "build"))["Build the upstream payloads"]
+    assert 'plan-commands.sh" || status=$?' in build, (
+        "the planned commands' status must be captured, not terminate the script"
+    )
+    assert "wall_seconds=" in build
+    assert "disk_high_water_bytes=" in build
+    assert "producer/resources.json" in build
+    assert 'source_state > "$RUNNER_TEMP/source-after.txt"' in build
+
+    rethrow = build.index('exit "$status"')
+    assert build.index("producer/resources.json") < rethrow, (
+        "the resources must be written before the failure is re-raised"
+    )
+    assert build.index('source_state > "$RUNNER_TEMP/source-after.txt"') < rethrow, (
+        "the final source state must be written before the failure is re-raised"
+    )
+
+
 def test_the_build_summarises_the_observations_in_the_run(
     workflow: dict[str, object],
 ) -> None:
-    """D5's run summary carries the wall time, disk, cache, sizes and states."""
+    """D5's run summary runs on every outcome and reads its own files."""
     summaries = [
         step
         for step in steps(job(workflow, "build"))
@@ -202,15 +254,49 @@ def test_the_build_summarises_the_observations_in_the_run(
     script = named_scripts(job(workflow, "build"))[
         "Summarise the build in the run summary"
     ]
-    for expected in (
-        "$GITHUB_STEP_SUMMARY",
-        ".wall_seconds",
-        ".disk_high_water_bytes",
-        ".cache.outcome",
-        "source-before",
-        "source-after",
-    ):
+    for expected in ("$GITHUB_STEP_SUMMARY", "source-before", "source-after"):
         assert expected in script, expected
+
+
+def test_the_summary_reads_the_measured_resources_out_of_the_evidence(
+    workflow: dict[str, object],
+) -> None:
+    """The summary's jq filter must render the measured numbers, not `null`.
+
+    The evidence document nests both measurements under `resources`, so an
+    expression that reads them at the top level produces a plausible-looking
+    row of `null`s after a build that actually succeeded. Running the
+    workflow's own filter over a real evidence document is the only check that
+    catches that: asserting the text of the script would accept either path.
+    """
+    script = named_scripts(job(workflow, "build"))[
+        "Summarise the build in the run summary"
+    ]
+    programs = _SUMMARY_FILTER.findall(script)
+    assert len(programs) == 1, "the summary should feed one filter to jq"
+
+    measured = producer.evidence(
+        wall_seconds=1234.5, disk_high_water_bytes=9_876_543_210
+    )
+    rendered = _render(programs[0], evidence_to_json(measured))
+
+    assert "| Wall clock (s) | 1234.5 |" in rendered
+    assert "| Disk high-water (bytes) | 9876543210 |" in rendered
+    assert "| Cache outcome | miss |" in rendered
+    assert "null" not in rendered
+
+    # A failed build has no evidence document, only the observations recorded
+    # before the failure. The same filter must still render them.
+    partial = _render(
+        programs[0],
+        json.dumps({
+            "resources": {"wall_seconds": 42.0, "disk_high_water_bytes": 1024}
+        }).encode("ascii"),
+    )
+    assert "| Wall clock (s) | 42.0 |" in partial
+    assert "| Disk high-water (bytes) | 1024 |" in partial
+    assert "| Cache outcome | not measured |" in partial
+    assert "null" not in partial
 
 
 def test_the_build_lets_the_producer_enumerate_the_shared_libraries(

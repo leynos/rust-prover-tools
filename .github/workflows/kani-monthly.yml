@@ -338,18 +338,34 @@ jobs:
           ( while sleep 15; do df -B1 --output=used -- "$PWD" | tail -1 >> "$RUNNER_TEMP/disk-usage"; done ) &
           sampler=$!
           trap 'kill "$sampler" 2>/dev/null || true' EXIT
-          bash -euo pipefail "$RUNNER_TEMP/plan-commands.sh"
+          status=0
+          bash -euo pipefail "$RUNNER_TEMP/plan-commands.sh" || status=$?
           kill "$sampler" 2>/dev/null || true
           trap - EXIT
-          echo "wall_seconds=$(( $(date +%s) - started ))" >> "$GITHUB_ENV"
+
+          # The observations are written whether or not the build succeeded.
+          # A failed build is exactly when its wall time, disk use and final
+          # source state explain the failure, and the failure-path artefact and
+          # run summary read these files. The exit status is re-raised below,
+          # so nothing downstream can mistake this for a successful build.
+          wall_seconds=$(( $(date +%s) - started ))
           baseline="$(head -1 "$RUNNER_TEMP/disk-usage")"
           peak="$(sort -n "$RUNNER_TEMP/disk-usage" | tail -1)"
-          echo "disk_high_water_bytes=$(( peak - baseline ))" >> "$GITHUB_ENV"
+          disk_high_water_bytes=$(( peak - baseline ))
+          echo "wall_seconds=$wall_seconds" >> "$GITHUB_ENV"
+          echo "disk_high_water_bytes=$disk_high_water_bytes" >> "$GITHUB_ENV"
+          jq -n --argjson wall "$wall_seconds" --argjson disk "$disk_high_water_bytes" \
+            '{resources: {wall_seconds: $wall, disk_high_water_bytes: $disk}}' \
+            > "$GITHUB_WORKSPACE/producer/resources.json"
 
           source_state > "$RUNNER_TEMP/source-after.txt"
           # Copy before comparing, so a build that changed its own input still
           # leaves both observations for the failure-path upload.
           cp "$RUNNER_TEMP/source-after.txt" "$GITHUB_WORKSPACE/producer/"
+          if [[ "$status" -ne 0 ]]; then
+            echo "the planned build commands failed with status $status" >&2
+            exit "$status"
+          fi
           if ! diff -u "$RUNNER_TEMP/source-before.txt" "$RUNNER_TEMP/source-after.txt"; then
             echo "the build changed the checked-out source tree" >&2
             exit 1
@@ -486,6 +502,7 @@ jobs:
             producer/assembly-input.json
             producer/evidence.json
             producer/plan.json
+            producer/resources.json
             producer/source-before.txt
             producer/source-after.txt
           if-no-files-found: error
@@ -516,10 +533,20 @@ jobs:
             echo "| Job result | ${{ job.status }} |"
           } >> "$summary"
           evidence="$GITHUB_WORKSPACE/producer/evidence.json"
+          # A failed build never reaches the evidence step, so it has only the
+          # resources the observation step recorded before the failure. Both
+          # documents are read with the same filter: the measurements are
+          # nested under `resources`, and a missing cache outcome means the
+          # build failed before one could be recorded.
+          if [[ ! -f "$evidence" ]]; then
+            evidence="$GITHUB_WORKSPACE/producer/resources.json"
+          fi
           if [[ -f "$evidence" ]]; then
-            jq -r '"| Wall clock (s) | \(.wall_seconds) |",
-                   "| Disk high-water (bytes) | \(.disk_high_water_bytes) |",
-                   "| Cache outcome | \(.cache.outcome) |"' \
+            # Reading the measurements at the top level would render `null`
+            # while the build itself succeeded.
+            jq -r '"| Wall clock (s) | \(.resources.wall_seconds) |",
+                   "| Disk high-water (bytes) | \(.resources.disk_high_water_bytes) |",
+                   "| Cache outcome | \(.cache.outcome // "not measured") |"' \
               "$evidence" >> "$summary" 2>/dev/null || true
           fi
           for payload in "$GITHUB_WORKSPACE"/payloads/*; do
