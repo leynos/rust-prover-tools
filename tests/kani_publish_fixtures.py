@@ -18,6 +18,7 @@ import json
 import typing as typ
 
 from rust_prover_tools.kani_snapshot.publish import PublicationRequest
+from rust_prover_tools.kani_snapshot.release_model import release_body
 from rust_prover_tools.kani_snapshot.release_policy import (
     ExpectedRelease,
     ObservedAsset,
@@ -36,6 +37,10 @@ BUILDER: typ.Final[str] = "b" * 40
 MANIFEST_SHA: typ.Final[str] = "c" * 64
 RUN_ID: typ.Final[int] = 7
 RUN_ATTEMPT: typ.Final[int] = 1
+#: The build-input fingerprint the fixture release records in its body.
+FINGERPRINT: typ.Final[str] = "d" * 64
+#: A fingerprint for a different input set.
+OTHER_FINGERPRINT: typ.Final[str] = "e" * 64
 
 #: The exact payload bytes a successful publication must serve.
 PAYLOADS: typ.Final[dict[str, bytes]] = {
@@ -47,7 +52,7 @@ PAYLOADS: typ.Final[dict[str, bytes]] = {
 
 #: The `gh api --jq` query the adapter's observation uses.
 OBSERVE_QUERY: typ.Final[str] = (
-    "{id, tag_name, draft, target_commitish, assets: "
+    "{id, tag_name, draft, target_commitish, body, assets: "
     "[.assets[] | {name, size, digest}]}"
 )
 
@@ -73,7 +78,23 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def expected() -> ExpectedRelease:
+def body(
+    *,
+    tag: str = TAG,
+    fingerprint: str = FINGERPRINT,
+    run_id: int = RUN_ID,
+    run_attempt: int = RUN_ATTEMPT,
+) -> str:
+    """Return the release body recording one origin and input set."""
+    return release_body(
+        tag,
+        fingerprint,
+        run_id=run_id,
+        run_attempt=run_attempt,
+    )
+
+
+def expected(*, fingerprint: str = FINGERPRINT) -> ExpectedRelease:
     """Return the immutable identity the fixtures publish."""
     return ExpectedRelease(
         tag=TAG,
@@ -83,6 +104,7 @@ def expected() -> ExpectedRelease:
             for name, data in PAYLOADS.items()
         ),
         manifest_sha256=MANIFEST_SHA,
+        input_fingerprint=fingerprint,
         run_id=RUN_ID,
         run_attempt=RUN_ATTEMPT,
     )
@@ -104,8 +126,12 @@ def observed_asset(name: str, *, sha256: str | None) -> ObservedAsset:
     return ObservedAsset(name=name, size=len(PAYLOADS[name]), sha256=sha256)
 
 
-def draft(assets: tuple[ObservedAsset, ...]) -> ObservedRelease:
-    """Return a draft observation carrying `assets`."""
+def draft(
+    assets: tuple[ObservedAsset, ...],
+    *,
+    body_text: str | None = body(),
+) -> ObservedRelease:
+    """Return a draft observation carrying `assets` and its origin."""
     return ObservedRelease(
         exists=True,
         is_draft=True,
@@ -113,6 +139,26 @@ def draft(assets: tuple[ObservedAsset, ...]) -> ObservedRelease:
         target_commitish=BUILDER,
         assets=assets,
         release_id=99,
+        body=body_text,
+    )
+
+
+def published(
+    assets: tuple[ObservedAsset, ...],
+    *,
+    body_text: str | None = body(),
+    provenance_verified: bool = True,
+) -> ObservedRelease:
+    """Return a published release observed with verified provenance."""
+    return ObservedRelease(
+        exists=True,
+        is_draft=False,
+        tag=TAG,
+        target_commitish=BUILDER,
+        assets=assets,
+        release_id=99,
+        body=body_text,
+        provenance_verified=provenance_verified,
     )
 
 
@@ -177,13 +223,19 @@ def request(
     )
 
 
-def release_json(*, draft: bool, assets: list[dict[str, object]] | None = None) -> str:
+def release_json(
+    *,
+    draft: bool,
+    assets: list[dict[str, object]] | None = None,
+    body_text: str | None = body(),
+) -> str:
     """Return one release API document as `gh --jq` would print it."""
     return json.dumps({
         "id": 4242,
         "tag_name": TAG,
         "draft": draft,
         "target_commitish": BUILDER,
+        "body": body_text,
         "assets": assets or [],
     })
 
@@ -207,6 +259,8 @@ class FakeReleaseApi:
         self.digests_visible = digests_visible
         self.exists = False
         self.is_draft = False
+        self.body_text = body()
+        self.provenance_verified = False
         self.stored: dict[str, bytes] = {}
         self.calls: list[str] = []
         self.uploads: list[str] = []
@@ -253,20 +307,31 @@ class FakeReleaseApi:
             target_commitish=BUILDER,
             assets=assets,
             release_id=99,
+            body=self.body_text,
+            provenance_verified=not self.is_draft and self.provenance_verified,
         )
         self._leave("observe")
         return result
 
     def create_draft(self, expected: ExpectedRelease) -> None:
-        """Create the draft state without any assets."""
+        """Create the draft state recording the inputs it was created from."""
         self._enter("create_draft")
-        self.place_draft()
+        self.place_draft(fingerprint=expected.input_fingerprint)
         self._leave("create_draft")
 
-    def place_draft(self) -> None:
+    def place_draft(self, *, fingerprint: str = FINGERPRINT) -> None:
         """Create the draft state directly, as a previous attempt would have."""
         self.exists = True
         self.is_draft = True
+        self.body_text = body(fingerprint=fingerprint)
+
+    def place_published(self, *, fingerprint: str = FINGERPRINT) -> None:
+        """Place the fixture release as already published and verified."""
+        self.exists = True
+        self.is_draft = False
+        self.body_text = body(fingerprint=fingerprint)
+        self.stored = dict(PAYLOADS)
+        self.provenance_verified = True
 
     def place_asset(self, name: str, path: pathlib.Path) -> None:
         """Store one asset directly, as a previous attempt would have."""
@@ -286,21 +351,27 @@ class FakeReleaseApi:
         self._leave("verify_assets")
         return digests
 
-    def publish(self, tag: str, release_id: int) -> None:
+    def _require_publishable(self) -> None:
         """Refuse to publish anything that is not a complete, exact draft."""
+        checks = (
+            (self.exists, "publish was called without a release"),
+            (self.is_draft, "publish was called without a draft"),
+            (set(self.stored) == set(PAYLOADS), "publish preceded an upload"),
+            (
+                all(self.stored[name] == data for name, data in PAYLOADS.items()),
+                "publish was called with foreign bytes",
+            ),
+        )
+        for satisfied, message in checks:
+            if not satisfied:
+                raise FakeReleaseApiError(message)
+
+    def publish(self, tag: str, release_id: int) -> None:
+        """Publish a complete, exact draft and report it as authenticated."""
         self._enter("publish")
-        if not self.exists:
-            msg = "publish was called without a release"
-            raise FakeReleaseApiError(msg)
-        if not self.is_draft:
-            msg = "publish was called without a draft"
-            raise FakeReleaseApiError(msg)
-        if set(self.stored) != set(PAYLOADS):
-            msg = "publish preceded an upload"
-            raise FakeReleaseApiError(msg)
-        for name, data in PAYLOADS.items():
-            if self.stored[name] != data:
-                msg = "publish was called with foreign bytes"
-                raise FakeReleaseApiError(msg)
+        self._require_publishable()
         self.is_draft = False
+        # Publishing is the last moment the adapter can authenticate the
+        # release's own bytes; the observation that follows reports it.
+        self.provenance_verified = True
         self._leave("publish")

@@ -14,8 +14,7 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.manifest import ParsedManifest, parse_manifest
-from rust_prover_tools.kani_snapshot.models import REPOSITORY, WorkflowIdentity
-from rust_prover_tools.kani_snapshot.policy import reject_unknown_keys
+from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.producer.assemble import (
     MANIFEST_NAME,
     AssemblyRequest,
@@ -24,21 +23,21 @@ from rust_prover_tools.kani_snapshot.producer.assemble import (
 from rust_prover_tools.kani_snapshot.producer.assemble import (
     assemble as assemble_release,
 )
+from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
+    input_fingerprint,
+)
 from rust_prover_tools.kani_snapshot.producer.lifecycle import (
-    WORKFLOW_PATH,
-    WORKFLOW_REF,
     BuildRequest,
     Resolution,
-    ResolutionRoute,
     parse_resolution,
     plan_build,
     plan_to_json,
-    resolution_to_json,
     same_run,
     write_document,
 )
 from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     PUBLICATION_IDENTITY_SCHEMA_VERSION,
+    AllocationRequest,
     PublicationIdentity,
     allocate_publication_id,
     parse_publication_identity,
@@ -52,11 +51,10 @@ from rust_prover_tools.kani_snapshot.producer.release_assets import (
     release_assets,
     verify_release,
 )
-from rust_prover_tools.kani_snapshot.producer.resolution import (
-    CandidateCommit,
-    candidate_from_api,
-    resolve_manual_commit,
-    select_newest_candidate,
+from rust_prover_tools.kani_snapshot.producer.resolve_operations import (
+    TRUSTED_EVENTS,
+    resolve,
+    workflow_identity,
 )
 from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     build_receipt,
@@ -74,15 +72,8 @@ from rust_prover_tools.kani_snapshot.release_policy import (
     ExpectedRelease,
     ReleaseAction,
 )
-from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.tags import validate_tag
-from rust_prover_tools.kani_snapshot.validation import (
-    require_full_sha,
-    require_int,
-    require_mapping,
-    require_sequence,
-    require_truthy_text,
-)
+from rust_prover_tools.kani_snapshot.validation import require_full_sha
 
 if typ.TYPE_CHECKING:
     import argparse
@@ -98,127 +89,26 @@ __all__ = (
     "workflow_identity",
 )
 
-_CANDIDATE_KEYS: typ.Final[frozenset[str]] = frozenset({
-    "release",
-    "tag_ref",
-    "checks",
-})
-#: Events whose identity the producer trusts.
-TRUSTED_EVENTS: typ.Final[tuple[str, ...]] = (
-    "schedule",
-    "workflow_dispatch",
-)
-
-
-def workflow_identity(namespace: argparse.Namespace) -> WorkflowIdentity:
-    """Build the trusted workflow identity from parsed arguments."""
-    return WorkflowIdentity(
-        path=WORKFLOW_PATH,
-        event=require_truthy_text(namespace.event, "workflow event"),
-        ref=WORKFLOW_REF,
-        run_id=require_int(namespace.run_id, "workflow run_id"),
-        run_attempt=require_int(namespace.run_attempt, "workflow run_attempt"),
-        run_url=namespace.run_url,
-    )
-
-
-def _candidates(data: bytes) -> list[CandidateCommit]:
-    """Parse the candidate document written by the resolve job's collector."""
-    items = require_sequence(
-        strict_json_loads(data, "candidate document"), "candidates"
-    )
-    parsed: list[CandidateCommit] = []
-    for index, item in enumerate(items):
-        record = require_mapping(item, f"candidate {index}")
-        reject_unknown_keys(record, _CANDIDATE_KEYS, f"candidate {index}")
-        missing = sorted(_CANDIDATE_KEYS - set(record))
-        if missing:
-            msg = f"candidate {index} is missing keys: {', '.join(missing)}"
-            raise ProverToolError(msg)
-        parsed.append(
-            candidate_from_api(
-                require_mapping(record["release"], f"candidate {index} release"),
-                require_mapping(record["tag_ref"], f"candidate {index} tag_ref"),
-                require_sequence(record["checks"], f"candidate {index} checks"),
-            )
-        )
-    return parsed
-
-
-def _require_manual_inputs(namespace: argparse.Namespace) -> None:
-    """Require the one explicit identity a manual resolution needs."""
-    if not namespace.commit:
-        msg = "manual resolution requires --commit"
-        raise ProverToolError(msg)
-
-
-def _manual_resolution(
-    namespace: argparse.Namespace,
-    workflow: WorkflowIdentity,
-) -> Resolution:
-    """Build a resolution from an explicit full commit.
-
-    The upstream tag comes from the pinned recipe unless the caller names one.
-    A dispatch input can only name the commit it intends to build; letting it
-    choose the tag would allow one release's identity to be paired with another
-    release's source, and the plan refuses that pairing later anyway.
-    """
-    tag = namespace.upstream_tag or pinned_recipe().upstream.tag
-    return Resolution(
-        schema_version=1,
-        route=ResolutionRoute.MANUAL,
-        upstream_commit=resolve_manual_commit(namespace.commit),
-        upstream_tag=require_truthy_text(tag, "upstream tag"),
-        workflow=workflow,
-    )
-
-
-def _scheduled_resolution(
-    namespace: argparse.Namespace,
-    workflow: WorkflowIdentity,
-) -> Resolution:
-    """Select the newest qualified upstream release from collected evidence."""
-    candidates = _candidates(pathlib.Path(namespace.candidates).read_bytes())
-    commit = select_newest_candidate(candidates)
-    selected = next(candidate for candidate in candidates if candidate.commit == commit)
-    return Resolution(
-        schema_version=1,
-        route=ResolutionRoute.SCHEDULED,
-        upstream_commit=commit,
-        upstream_tag=selected.tag,
-        workflow=workflow,
-    )
-
-
-def resolve(namespace: argparse.Namespace) -> int:
-    """Select the upstream commit this run may build."""
-    workflow = workflow_identity(namespace)
-    if namespace.route == ResolutionRoute.MANUAL.value:
-        _require_manual_inputs(namespace)
-        resolution = _manual_resolution(namespace, workflow)
-    else:
-        if not namespace.candidates:
-            msg = "scheduled resolution requires --candidates"
-            raise ProverToolError(msg)
-        resolution = _scheduled_resolution(namespace, workflow)
-    write_document(pathlib.Path(namespace.output), resolution_to_json(resolution))
-    return 0
-
 
 def _allocated_identity(
     namespace: argparse.Namespace,
     resolution: Resolution,
     builder_commit: str,
+    fingerprint: str,
 ) -> PublicationIdentity:
     """Allocate the identity a scheduled run may build and publish."""
     if not namespace.month or not namespace.releases:
         msg = "scheduled identity allocation requires --month and --releases"
         raise ProverToolError(msg)
     tag = allocate_publication_id(
-        upstream_commit=resolution.upstream_commit,
-        month=namespace.month,
-        builder_commit=builder_commit,
-        releases=parse_publications(pathlib.Path(namespace.releases).read_bytes()),
+        AllocationRequest(
+            upstream_commit=resolution.upstream_commit,
+            month=namespace.month,
+            builder_commit=builder_commit,
+            input_fingerprint=fingerprint,
+            workflow=resolution.workflow,
+            releases=parse_publications(pathlib.Path(namespace.releases).read_bytes()),
+        )
     )
     return PublicationIdentity(
         schema_version=PUBLICATION_IDENTITY_SCHEMA_VERSION,
@@ -226,6 +116,7 @@ def _allocated_identity(
         month=namespace.month,
         upstream_commit=resolution.upstream_commit,
         builder_commit=builder_commit,
+        input_fingerprint=fingerprint,
         workflow=resolution.workflow,
     )
 
@@ -234,6 +125,7 @@ def _manual_identity(
     namespace: argparse.Namespace,
     resolution: Resolution,
     builder_commit: str,
+    fingerprint: str,
 ) -> PublicationIdentity:
     """Adopt the tag an operator dispatched, bound to the resolved commit."""
     tag = validate_tag(namespace.publication_id, resolution.upstream_commit)
@@ -247,6 +139,7 @@ def _manual_identity(
         month=month,
         upstream_commit=resolution.upstream_commit,
         builder_commit=builder_commit,
+        input_fingerprint=fingerprint,
         workflow=resolution.workflow,
     )
 
@@ -261,8 +154,13 @@ def identity(namespace: argparse.Namespace) -> int:
     builder_commit = require_full_sha(
         namespace.builder_commit, "identity builder commit"
     )
+    fingerprint = input_fingerprint(
+        upstream_commit=resolution.upstream_commit,
+        builder_commit=builder_commit,
+        recipe=pinned_recipe(),
+    )
     choose = _manual_identity if namespace.publication_id else _allocated_identity
-    identity = choose(namespace, resolution, builder_commit)
+    identity = choose(namespace, resolution, builder_commit, fingerprint)
     write_document(
         pathlib.Path(namespace.output), publication_identity_to_json(identity)
     )
@@ -338,13 +236,24 @@ def validate(namespace: argparse.Namespace) -> int:
 def _expected_release(
     parsed: ParsedManifest, directory: pathlib.Path
 ) -> ExpectedRelease:
-    """Build the immutable identity publication must match."""
+    """Build the immutable identity publication must match.
+
+    The input fingerprint is recomputed from the pinned recipe and the
+    manifest's recorded commits. It must equal the fingerprint the resolve job
+    recorded, because that value is what the release body advertises and what
+    decides whether an existing publication may answer with a no-op.
+    """
     manifest = parsed.manifest
     return ExpectedRelease(
         tag=manifest.tag,
         builder_commit=manifest.builder_commit,
         assets=release_assets(parsed, directory),
         manifest_sha256=parsed.sha256,
+        input_fingerprint=input_fingerprint(
+            upstream_commit=manifest.upstream_commit,
+            builder_commit=manifest.builder_commit,
+            recipe=pinned_recipe(),
+        ),
         run_id=manifest.workflow.run_id,
         run_attempt=manifest.workflow.run_attempt,
     )

@@ -94,6 +94,8 @@ def _arguments(tmp_path: pathlib.Path, sysroot: pathlib.Path) -> list[str]:
         LIBRARY,
         "--lock",
         str(lockfile),
+        "--submodule",
+        "library=0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
         "--solver",
         f"kissat=4.0.1={sha256_file(solver)}",
         "--cache-outcome",

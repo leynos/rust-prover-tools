@@ -25,6 +25,7 @@ from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     CacheObservation,
     SolverRecord,
+    SubmoduleRecord,
 )
 from rust_prover_tools.kani_snapshot.producer.build_evidence import (
     EVIDENCE_SCHEMA_VERSION,
@@ -112,6 +113,26 @@ def _solver_records(values: cabc.Sequence[str]) -> tuple[SolverRecord, ...]:
     return tuple(sorted(records, key=lambda record: record.name))
 
 
+def _submodule_records(values: cabc.Sequence[str]) -> tuple[SubmoduleRecord, ...]:
+    """Parse `path=commit` submodule measurements read from the checkout."""
+    if not values:
+        msg = "build measurement requires at least one --submodule"
+        raise ProverToolError(msg)
+    records: list[SubmoduleRecord] = []
+    for value in values:
+        path, _, commit = value.rpartition("=")
+        if not path or not commit:
+            msg = f"submodule measurement {value!r} must be path=commit"
+            raise ProverToolError(msg)
+        records.append(
+            SubmoduleRecord(
+                path=require_truthy_text(path, "submodule path"),
+                commit=require_full_sha(commit, "submodule commit"),
+            )
+        )
+    return tuple(sorted(records, key=lambda record: record.path))
+
+
 def measure(namespace: argparse.Namespace) -> BuildEvidence:
     """Measure one build job's evidence from the paths it was given.
 
@@ -168,6 +189,7 @@ def measure(namespace: argparse.Namespace) -> BuildEvidence:
             namespace.launcher_package_version, "launcher package version"
         ),
         lock_digests=_lock_digests([pathlib.Path(path) for path in namespace.lock]),
+        submodules=_submodule_records(namespace.submodule),
         cache=CacheObservation(
             outcome=require_truthy_text(namespace.cache_outcome, "cache outcome"),
             key=namespace.cache_key,
@@ -193,6 +215,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--launcher-package-version", required=True)
     parser.add_argument("--library", action="append", default=[])
     parser.add_argument("--lock", action="append", default=[])
+    parser.add_argument(
+        "--submodule",
+        action="append",
+        default=[],
+        help="recursive submodule revision observed in the checkout, path=commit",
+    )
     parser.add_argument("--solver", action="append", default=[])
     parser.add_argument("--cache-outcome", required=True)
     parser.add_argument("--cache-key", default=None)

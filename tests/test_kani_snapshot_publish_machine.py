@@ -176,9 +176,7 @@ def test_witness_a_published_release_is_not_republished(
 ) -> None:
     """Named witness: a matching published release is a no-op."""
     api = fixtures.FakeReleaseApi()
-    api.exists = True
-    api.is_draft = False
-    api.stored = dict(fixtures.PAYLOADS)
+    api.place_published()
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
     assert api.calls.count("publish") == 0

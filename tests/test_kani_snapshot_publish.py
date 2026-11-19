@@ -41,6 +41,38 @@ def _request(
     return fixtures.request(tmp_path, validation)
 
 
+def test_an_unchanged_input_set_is_a_no_op_for_the_published_release(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A rebuild produces a new manifest, so only the fingerprint can match.
+
+    The published release's bytes are its own: the fake reports them verified
+    against its own manifest. This run's locally assembled manifest has a
+    different digest, and that must not turn an unchanged input set into a
+    conflict or a second publication.
+    """
+    api = fixtures.FakeReleaseApi()
+    api.place_published()
+    api.stored = {name: data + b"\nrebuilt" for name, data in fixtures.PAYLOADS.items()}
+    decision = publish_release(_request(tmp_path), api)
+    assert decision.action is ReleaseAction.NOOP
+    assert api.calls.count("publish") == 0
+    assert not api.uploads, "an unchanged input set uploaded assets again"
+
+
+def test_a_draft_from_another_attempt_is_refused_before_any_write(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Draft recovery is bound to the run and attempt that created it."""
+    api = fixtures.FakeReleaseApi()
+    api.place_draft()
+    api.body_text = fixtures.body(run_attempt=2)
+    with pytest.raises(ProverToolError, match="another workflow run or attempt"):
+        publish_release(_request(tmp_path), api)
+    assert api.calls == ["observe"]
+    assert not api.uploads
+
+
 def test_publication_uploads_then_publishes_in_order(tmp_path: pathlib.Path) -> None:
     """The full transition is observe, create, upload, publish, observe."""
     api = fixtures.FakeReleaseApi()

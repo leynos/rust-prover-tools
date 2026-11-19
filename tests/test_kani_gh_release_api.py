@@ -42,7 +42,7 @@ def test_create_draft_builds_a_draft_prerelease_at_the_builder_commit(
         "-f",
         f"name={fixtures.TAG}",
         "-f",
-        f"body=Immutable Kani snapshot {fixtures.TAG}",
+        f"body={fixtures.body()}",
         "-F",
         "draft=true",
         "-F",
@@ -97,15 +97,24 @@ def test_observe_parses_a_draft_without_assets(cmd_mox: CmdMox) -> None:
 
 
 def test_observe_reports_a_missing_release(cmd_mox: CmdMox) -> None:
-    """A 404 is the absent state."""
-    cmd_mox.mock("gh").with_args(
-        "api",
-        f"repos/{REPOSITORY}/releases/tags/{fixtures.TAG}",
-        "--jq",
-        fixtures.OBSERVE_QUERY,
-    ).returns(exit_code=1, stderr="gh: HTTP 404: Not Found")
+    """The tag endpoint hides drafts, so an absent tag is confirmed by list."""
+    calls: list[str] = []
+
+    def handler(invocation: Invocation) -> tuple[str, str, int]:
+        """Answer the tag endpoint with 404 and the list with no releases."""
+        path = invocation.args[1]
+        calls.append(path)
+        if "/releases/tags/" in path:
+            return ("", "gh: HTTP 404: Not Found", 1)
+        return ("[]", "", 0)
+
+    cmd_mox.stub("gh").runs(handler)
     observed = GhReleaseApi().observe(fixtures.TAG)
     assert not observed.exists
+    assert calls == [
+        f"repos/{REPOSITORY}/releases/tags/{fixtures.TAG}",
+        f"repos/{REPOSITORY}/releases?per_page=100&page=1",
+    ], "the list endpoint was not consulted for the draft-visible answer"
 
 
 def test_observe_classifies_a_server_error_as_transient(cmd_mox: CmdMox) -> None:

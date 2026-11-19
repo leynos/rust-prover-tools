@@ -112,6 +112,17 @@ jobs:
           uv run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.collect_candidates \
             --output producer/candidates.json
+      - name: Collect the dispatched commit's checks
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_COMMIT: ${{ inputs.upstream_commit }}
+        run: |
+          set -euo pipefail
+          uv run --frozen --no-dev python -m \
+            rust_prover_tools.kani_snapshot.producer.collect_candidates \
+            --commit "$UPSTREAM_COMMIT" \
+            --output producer/checks.json
       - name: Collect existing releases
         if: github.event_name == 'schedule'
         env:
@@ -129,7 +140,7 @@ jobs:
           set -euo pipefail
           route=(--route scheduled --candidates producer/candidates.json)
           if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            route=(--route manual --commit "$UPSTREAM_COMMIT")
+            route=(--route manual --commit "$UPSTREAM_COMMIT" --checks producer/checks.json)
           fi
           uv run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.entrypoint resolve \
@@ -239,7 +250,13 @@ jobs:
           printf '%s  %s\n' "$KISSAT_SHA256" "$RUNNER_TEMP/kissat.tar.gz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/kissat-src"
           tar -xzf "$RUNNER_TEMP/kissat.tar.gz" -C "$RUNNER_TEMP/kissat-src" --strip-components=1
-          make -C "$RUNNER_TEMP/kissat-src" -j"$(nproc)"
+          # The release archive carries `configure` and `makefile.in`; there is
+          # no ready Makefile, so the build directory must be generated first.
+          (
+            cd "$RUNNER_TEMP/kissat-src"
+            ./configure
+            make -j"$(nproc)"
+          )
           sudo install -m 0755 "$RUNNER_TEMP/kissat-src/build/kissat" /usr/local/bin/kissat
       - name: Download the pinned Rust channel metadata
         env:
@@ -257,6 +274,30 @@ jobs:
         run: |
           set -euo pipefail
           jq -r '.commands[] | @sh' ../producer/plan.json > "$RUNNER_TEMP/plan-commands.sh"
+
+          # The resolved checkout is the build input, so its identity before and
+          # after the build must agree. A command that rewrote a lockfile or a
+          # submodule would otherwise be recorded as if it had built the pinned
+          # tree. `--untracked-files=no` keeps build output out of the
+          # comparison; ignored paths never appear in either state.
+          source_state() {
+            git -C "$GITHUB_WORKSPACE/upstream" rev-parse HEAD
+            git -C "$GITHUB_WORKSPACE/upstream" submodule status --recursive
+            git -C "$GITHUB_WORKSPACE/upstream" status --porcelain --untracked-files=no
+          }
+          source_state > "$RUNNER_TEMP/source-before.txt"
+
+          # The recipe's submodule gitlinks are checked against what this
+          # checkout actually carries. A leading status flag (' ', '+', '-',
+          # 'U') is stripped so only the recorded commit and path remain.
+          : > "$RUNNER_TEMP/submodule-args"
+          while read -r sha path _; do
+            printf -- '--submodule\n%s=%s\n' "$path" "$sha" >> "$RUNNER_TEMP/submodule-args"
+          done < <(
+            git -C "$GITHUB_WORKSPACE/upstream" submodule status --recursive \
+              | sed -E 's/^[^0-9a-f]+//'
+          )
+
           started="$(date +%s)"
           printf '%s\n' "$(df -B1 --output=used -- "$PWD" | tail -1)" > "$RUNNER_TEMP/disk-usage"
           ( while sleep 15; do df -B1 --output=used -- "$PWD" | tail -1 >> "$RUNNER_TEMP/disk-usage"; done ) &
@@ -269,6 +310,12 @@ jobs:
           baseline="$(head -1 "$RUNNER_TEMP/disk-usage")"
           peak="$(sort -n "$RUNNER_TEMP/disk-usage" | tail -1)"
           echo "disk_high_water_bytes=$(( peak - baseline ))" >> "$GITHUB_ENV"
+
+          source_state > "$RUNNER_TEMP/source-after.txt"
+          if ! diff -u "$RUNNER_TEMP/source-before.txt" "$RUNNER_TEMP/source-after.txt"; then
+            echo "the build changed the checked-out source tree" >&2
+            exit 1
+          fi
       - name: Assemble the release payloads
         env:
           KISSAT_SOURCE: ${{ runner.temp }}/kissat-src
@@ -289,10 +336,19 @@ jobs:
           test -n "$bundle" || { echo "the build produced no $bundle_asset" >&2; exit 1; }
           cp "$bundle" "payloads/$bundle_asset"
 
-          # The launcher archive is exactly the two documented binaries, packed
-          # reproducibly so an unchanged input set yields an unchanged digest.
+          # The consumer extracts with `--strip-components=1` under a required
+          # `kani-<version>/` root and then reads `bin/cargo-kani`, so the
+          # launcher archive must carry the same root and `bin` directory as
+          # the backend bundle. It is exactly the two documented binaries,
+          # packed reproducibly so an unchanged input set yields an unchanged
+          # digest.
+          bundle_root="kani-${version}"
+          launcher_root="$RUNNER_TEMP/launcher-root/$bundle_root"
+          mkdir -p "$launcher_root/bin"
+          install -m 0755 upstream/target/release/kani \
+            upstream/target/release/cargo-kani "$launcher_root/bin/"
           tar --sort=name --mtime='UTC 2026-01-01' --owner=0 --group=0 --numeric-owner \
-            -czf "payloads/$launcher_asset" -C upstream/target/release kani cargo-kani
+            -czf "payloads/$launcher_asset" -C "$RUNNER_TEMP/launcher-root" "$bundle_root"
 
           # Notices are upstream's own inventory plus the Kissat licence the
           # pinned Kissat tarball carries; nothing else is redistributed.
@@ -304,12 +360,19 @@ jobs:
             -czf "payloads/$notices_asset" -C "$RUNNER_TEMP/notices" .
 
           # The inventory describes the distributable tree, so it is measured
-          # from the extracted bundle rather than from the archive bytes.
+          # from the extracted bundle rather than from the archive bytes. Its
+          # paths are relative to the `kani-<version>/` root, because the
+          # consumer strips that root before comparing the inventory with the
+          # installed tree.
           mkdir -p "$RUNNER_TEMP/bundle-tree"
           tar -xzf "payloads/$bundle_asset" -C "$RUNNER_TEMP/bundle-tree"
+          test -d "$RUNNER_TEMP/bundle-tree/$bundle_root" || {
+            echo "the bundle does not carry the $bundle_root root" >&2
+            exit 1
+          }
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.inventory_build \
-            --tree "$RUNNER_TEMP/bundle-tree" \
+            --tree "$RUNNER_TEMP/bundle-tree/$bundle_root" \
             --output "$GITHUB_WORKSPACE/payloads/inventory.json"
       - name: Measure the build evidence
         env:
@@ -334,6 +397,8 @@ jobs:
           while IFS= read -r library; do
             library_args+=(--library "$library")
           done < <(cd "$sysroot" && ls lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-*.so)
+          submodule_args=()
+          mapfile -t submodule_args < "$RUNNER_TEMP/submodule-args"
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.measure_build \
             --sysroot "$sysroot" \
@@ -341,10 +406,11 @@ jobs:
             --kani-compiler "$GITHUB_WORKSPACE/upstream/target/release/kani-compiler" \
             --backend-version "$version" \
             --launcher-package-version "$version" \
-            --upstream-commit "$(jq -r .upstream_commit producer/plan.json)" \
+            --upstream-commit "$(jq -r .upstream_commit "$GITHUB_WORKSPACE/producer/plan.json")" \
             "${library_args[@]}" \
             --lock "$GITHUB_WORKSPACE/upstream/Cargo.lock" \
             --lock "$GITHUB_WORKSPACE/builder/uv.lock" \
+            "${submodule_args[@]}" \
             "${solver_args[@]}" \
             --cache-outcome none \
             --wall-seconds "$wall_seconds" \
@@ -353,11 +419,13 @@ jobs:
       - name: Derive the assembly input
         run: |
           set -euo pipefail
+          # `uv --directory` changes the child's working directory, so every path
+          # passed to this invocation is workspace-absolute.
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.build_evidence \
-            --plan producer/plan.json \
-            --evidence producer/evidence.json \
-            --output producer/assembly-input.json \
+            --plan "$GITHUB_WORKSPACE/producer/plan.json" \
+            --evidence "$GITHUB_WORKSPACE/producer/evidence.json" \
+            --output "$GITHUB_WORKSPACE/producer/assembly-input.json" \
             --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --event "$GITHUB_EVENT_NAME" \
@@ -409,11 +477,15 @@ jobs:
           mkdir -p release
           cp build/payloads/* release/
       - name: Assemble the manifest and checksums
+        # The build artefact lists `payloads/` and `producer/...`, so the upload
+        # action preserves both directory trees relative to their common
+        # ancestor and the download lands them under `build/payloads/` and
+        # `build/producer/`. The input document is the second of those.
         run: |
           set -euo pipefail
           uv run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.entrypoint assemble \
-            --input build/assembly-input.json \
+            --input build/producer/assembly-input.json \
             --payloads release \
             --output release \
             --run-id "$GITHUB_RUN_ID" \

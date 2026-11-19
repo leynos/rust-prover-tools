@@ -23,7 +23,7 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.manifest import ParsedManifest
-    from rust_prover_tools.kani_snapshot.models import SnapshotManifest
+    from rust_prover_tools.kani_snapshot.models import AssetRecord, SnapshotManifest
 
 __all__ = (
     "ATTESTATION_NAME",
@@ -62,17 +62,27 @@ def _payload_assets(manifest: SnapshotManifest) -> list[ReleaseAsset]:
     ]
 
 
+def _require_regular_file(name: str, path: Path, *, what: str) -> None:
+    """Require `path` to be a regular file, naming it as `what`."""
+    if not path.is_file():
+        msg = f"{what} {name!r} is not a regular file"
+        raise ProverToolError(msg)
+
+
+def _stat_size(path: Path, *, what: str) -> int:
+    """Return the size of `path`, reporting an unreadable file as an error."""
+    try:
+        return path.stat().st_size
+    except OSError as exc:
+        msg = f"failed to stat {what} '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
 def _evidence_asset(name: str, directory: Path) -> ReleaseAsset:
     """Return one evidence asset measured from the release directory."""
     path = directory / name
-    if not path.is_file():
-        msg = f"release evidence {name!r} is not a regular file"
-        raise ProverToolError(msg)
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        msg = f"failed to stat release evidence '{path}': {exc}"
-        raise ProverToolError(msg) from exc
+    _require_regular_file(name, path, what="release evidence")
+    size = _stat_size(path, what="release evidence")
     if size <= 0:
         msg = f"release evidence {name!r} is empty"
         raise ProverToolError(msg)
@@ -104,6 +114,18 @@ def release_assets(parsed: ParsedManifest, directory: Path) -> tuple[ReleaseAsse
     return (*payloads, *evidence)
 
 
+def _require_payload(asset: AssetRecord, payloads: Path) -> None:
+    """Require one payload file to hold exactly the bytes the manifest measured."""
+    path = payloads / asset.name
+    _require_regular_file(asset.name, path, what="validated payload")
+    if _stat_size(path, what="payload") != asset.size:
+        msg = f"payload {asset.name!r} size does not match the manifest"
+        raise ProverToolError(msg)
+    if sha256_file(path) != asset.sha256:
+        msg = f"payload {asset.name!r} digest does not match the manifest"
+        raise ProverToolError(msg)
+
+
 def verify_payloads(parsed: ParsedManifest, payloads: Path) -> None:
     """Require every payload file to match the manifest's measured bytes.
 
@@ -121,39 +143,35 @@ def verify_payloads(parsed: ParsedManifest, payloads: Path) -> None:
         or digest other than the one the manifest records.
     """
     for asset in parsed.manifest.assets:
-        path = payloads / asset.name
-        if not path.is_file():
-            msg = f"validated payload {asset.name!r} is not a regular file"
-            raise ProverToolError(msg)
-        try:
-            size = path.stat().st_size
-        except OSError as exc:
-            msg = f"failed to stat payload '{path}': {exc}"
-            raise ProverToolError(msg) from exc
-        if size != asset.size:
-            msg = f"payload {asset.name!r} size does not match the manifest"
-            raise ProverToolError(msg)
-        if sha256_file(path) != asset.sha256:
-            msg = f"payload {asset.name!r} digest does not match the manifest"
-            raise ProverToolError(msg)
+        _require_payload(asset, payloads)
+
+
+def _malformed_row(number: int) -> typ.NoReturn:
+    """Refuse one checksum row that is not `<digest>  <name>`."""
+    msg = f"checksum row {number} is not '<digest>  <name>'"
+    raise ProverToolError(msg)
+
+
+def _checksum_row(number: int, line: str) -> tuple[str, str]:
+    """Split one `<digest>  <name>` row, refusing a malformed one."""
+    digest, separator, name = line.partition("  ")
+    if not separator:
+        _malformed_row(number)
+    if not digest or not name:
+        _malformed_row(number)
+    return name, digest
 
 
 def _checksum_rows(data: bytes) -> dict[str, str]:
     """Parse `SHA256SUMS` into a name-to-digest mapping."""
-    rows: dict[str, str] = {}
     try:
         text = data.decode("ascii")
     except UnicodeDecodeError as exc:
         msg = f"checksums are not ASCII: {exc}"
         raise ProverToolError(msg) from exc
+    rows: dict[str, str] = {}
     for number, line in enumerate(text.splitlines(), start=1):
-        digest, separator, name = line.partition("  ")
-        if not separator:
-            msg = f"checksum row {number} is not '<digest>  <name>'"
-            raise ProverToolError(msg)
-        if not digest or not name:
-            msg = f"checksum row {number} is not '<digest>  <name>'"
-            raise ProverToolError(msg)
+        name, digest = _checksum_row(number, line)
         if name in rows:
             msg = f"checksum row {number} repeats {name!r}"
             raise ProverToolError(msg)
@@ -161,12 +179,28 @@ def _checksum_rows(data: bytes) -> dict[str, str]:
     return rows
 
 
+def _require_manifest_bytes(parsed: ParsedManifest, directory: Path) -> None:
+    """Require the manifest on disk to be the exact bytes that were parsed."""
+    manifest = directory / MANIFEST_NAME
+    _require_regular_file(MANIFEST_NAME, manifest, what="release evidence")
+    if sha256_file(manifest) != parsed.sha256:
+        msg = "manifest bytes on disk differ from the parsed manifest"
+        raise ProverToolError(msg)
+
+
+def _require_nonempty_evidence(name: str, directory: Path) -> None:
+    """Require one evidence asset to be present and non-empty."""
+    path = directory / name
+    _require_regular_file(name, path, what="release evidence")
+    if _stat_size(path, what="release evidence") <= 0:
+        msg = f"release evidence {name!r} is empty"
+        raise ProverToolError(msg)
+
+
 def verify_checksums(parsed: ParsedManifest, directory: Path) -> None:
     """Require the checksum document to describe exactly this release."""
     checksums = directory / CHECKSUMS_NAME
-    if not checksums.is_file():
-        msg = f"release evidence {CHECKSUMS_NAME!r} is not a regular file"
-        raise ProverToolError(msg)
+    _require_regular_file(CHECKSUMS_NAME, checksums, what="release evidence")
     rows = _checksum_rows(checksums.read_bytes())
     expected = {asset.name: asset.sha256 for asset in parsed.manifest.assets}
     expected[MANIFEST_NAME] = parsed.sha256
@@ -195,18 +229,6 @@ def verify_release(parsed: ParsedManifest, directory: Path) -> None:
         Raised when a payload, evidence asset or checksum row disagrees.
     """
     verify_payloads(parsed, directory)
-    manifest = directory / MANIFEST_NAME
-    if not manifest.is_file():
-        msg = f"release evidence {MANIFEST_NAME!r} is not a regular file"
-        raise ProverToolError(msg)
-    if sha256_file(manifest) != parsed.sha256:
-        msg = "manifest bytes on disk differ from the parsed manifest"
-        raise ProverToolError(msg)
+    _require_manifest_bytes(parsed, directory)
     verify_checksums(parsed, directory)
-    attestation = directory / ATTESTATION_NAME
-    if not attestation.is_file():
-        msg = f"release evidence {ATTESTATION_NAME!r} is not a regular file"
-        raise ProverToolError(msg)
-    if attestation.stat().st_size <= 0:
-        msg = f"release evidence {ATTESTATION_NAME!r} is empty"
-        raise ProverToolError(msg)
+    _require_nonempty_evidence(ATTESTATION_NAME, directory)

@@ -34,7 +34,13 @@ from rust_prover_tools.kani_snapshot.validation import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("candidates_to_json", "collect_candidates", "main")
+__all__ = (
+    "candidates_to_json",
+    "checks_to_json",
+    "collect_candidates",
+    "collect_commit_checks",
+    "main",
+)
 
 #: Upstream repository whose releases a Kani snapshot may be built from.
 #:
@@ -164,21 +170,72 @@ def candidates_to_json(candidates: cabc.Sequence[dict[str, object]]) -> bytes:
     return (text + "\n").encode("ascii")
 
 
+def collect_commit_checks(commit: str) -> bytes:
+    """Collect the observed check runs for one dispatched commit.
+
+    A manual dispatch must present the same upstream-check evidence a scheduled
+    candidate does. The commit is validated before it is placed in a URL, so a
+    hostile dispatch input cannot redirect the request.
+
+    Parameters
+    ----------
+    commit : str
+        Full lowercase 40-hex upstream commit.
+
+    Returns
+    -------
+    bytes
+        Deterministic JSON `{"commit": <commit>, "checks": [...]}` document.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the commit is malformed, the API fails, or a response is
+        not the expected shape.
+    """
+    resolved = require_full_sha(commit, "workflow_dispatch upstream_commit")
+    checks = _gh_json(
+        [
+            (
+                f"repos/{UPSTREAM_REPOSITORY}/commits/{resolved}/check-runs"
+                f"?per_page={_CHECK_LIMIT}"
+            )
+        ],
+        f"upstream check runs for {resolved}",
+    )
+    return checks_to_json(resolved, _check_runs(checks))
+
+
+def checks_to_json(commit: str, checks: cabc.Sequence[dict[str, object]]) -> bytes:
+    """Render one commit's check evidence as deterministic JSON bytes."""
+    document = {"commit": commit, "checks": list(checks)}
+    text = json.dumps(document, sort_keys=True, indent=2, ensure_ascii=True)
+    return (text + "\n").encode("ascii")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Return the candidate collector's command line parser."""
     parser = argparse.ArgumentParser(
         prog="kani-snapshot-candidates",
-        description="Collect upstream release evidence for scheduled resolution.",
+        description="Collect upstream release evidence for resolution.",
+    )
+    parser.add_argument(
+        "--commit",
+        default=None,
+        help="collect check evidence for one dispatched commit instead",
     )
     parser.add_argument("--output", required=True)
     return parser
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
-    """Write the candidate document for one resolve job."""
+    """Write the evidence document for one resolve job."""
     namespace = build_parser().parse_args(argv)
     try:
-        document = collect_candidates()
+        if namespace.commit:
+            document = collect_commit_checks(namespace.commit)
+        else:
+            document = collect_candidates()
         write_document(pathlib.Path(namespace.output), document)
     except (ProverToolError, OSError) as exc:
         print(f"kani-snapshot-candidates: {exc}", file=sys.stderr)

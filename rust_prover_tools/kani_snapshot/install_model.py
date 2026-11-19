@@ -186,8 +186,8 @@ class InstallOptions:
     pin : SnapshotPin
         Reviewed consumer pin.
     assets_dir : Path | None
-        Local directory holding the release files. Remote transport is not
-        available until the producer release exists.
+        Local directory holding the release files. `None` downloads them from
+        the public release the pin names.
     cache_home : Path | None
         Explicit cache root. Defaults to `XDG_CACHE_HOME`, then `~/.cache`.
     lock_timeout_seconds : float

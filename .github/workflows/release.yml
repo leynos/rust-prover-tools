@@ -66,6 +66,14 @@ jobs:
             exit 1
           fi
           printf '%s\n' "${wheels[@]}" | sort > wheel-inventory.txt
+          for wheel in "${wheels[@]}"; do basename "$wheel"; done \
+            | sort > wheel-names.txt
+          # The release serves assets by basename, so the expected set is
+          # compared as names; two wheels with one basename would collapse.
+          if [[ $(sort -u wheel-names.txt | wc -l) -ne ${#wheels[@]} ]]; then
+            echo "the wheel inventory repeats a basename" >&2
+            exit 1
+          fi
           cat wheel-inventory.txt
       - name: Create the draft or resume it
         env:
@@ -112,16 +120,15 @@ jobs:
           mkdir -p verified
           gh release download "$GITHUB_REF_NAME" --dir verified --pattern '*.whl'
 
-          sort wheel-inventory.txt > expected.txt
           find verified -type f -name '*.whl' -printf '%f\n' | sort > downloaded.txt
-          if ! diff -u expected.txt downloaded.txt; then
+          if ! diff -u wheel-names.txt downloaded.txt; then
             echo "the release does not serve the expected wheel set" >&2
             exit 1
           fi
 
           gh release view "$GITHUB_REF_NAME" --json assets \
             --jq '.assets[].name' | sort > remote.txt
-          if ! diff -u expected.txt remote.txt; then
+          if ! diff -u wheel-names.txt remote.txt; then
             echo "the release carries assets outside the expected inventory" >&2
             exit 1
           fi

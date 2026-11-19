@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import dataclasses as dc
 import enum
+import re
+import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.tags import TAG_PATTERN
@@ -30,7 +32,59 @@ __all__ = (
     "ReleaseDecision",
     "ReleaseTransientError",
     "ValidationBinding",
+    "parse_input_marker",
+    "parse_run_marker",
+    "release_body",
 )
+
+#: Machine-readable record of the run that created a draft.
+_RUN_MARKER: typ.Final[re.Pattern[str]] = re.compile(
+    r"<!-- kani-snapshot-run: (?P<run_id>[1-9]\d*)/(?P<run_attempt>[1-9]\d*) -->"
+)
+
+#: Machine-readable record of the build inputs a release was created from.
+_INPUT_MARKER: typ.Final[re.Pattern[str]] = re.compile(
+    r"<!-- kani-snapshot-input: (?P<fingerprint>[0-9a-f]{64}) -->"
+)
+
+
+def release_body(
+    tag: str,
+    fingerprint: str,
+    *,
+    run_id: int,
+    run_attempt: int,
+) -> str:
+    """Return the release body that records a release's origin.
+
+    A draft may be resumed only by the run and attempt that created it, and may
+    be published as a no-op only by a run with the same build inputs. Both
+    facts are written into the body so an observer can read them back without
+    downloading assets, and so they survive publication unchanged.
+    """
+    return (
+        f"Immutable Kani snapshot {tag}\n\n"
+        f"<!-- kani-snapshot-input: {fingerprint} -->\n"
+        f"<!-- kani-snapshot-run: {run_id}/{run_attempt} -->\n"
+    )
+
+
+def parse_run_marker(body: str | None) -> tuple[int, int] | None:
+    """Return the run and attempt a release body records, when it does."""
+    if body is None:
+        return None
+    match = _RUN_MARKER.search(body)
+    if match is None:
+        return None
+    return int(match.group("run_id")), int(match.group("run_attempt"))
+
+
+def parse_input_marker(body: str | None) -> str | None:
+    """Return the build-input fingerprint a release body records, when it does."""
+    if body is None:
+        return None
+    match = _INPUT_MARKER.search(body)
+    return None if match is None else match.group("fingerprint")
 
 
 class ReleaseTransientError(ProverToolError):
@@ -108,6 +162,10 @@ class ExpectedRelease:
         Complete expected asset set, in manifest order.
     manifest_sha256 : str
         Digest of the exact manifest bytes the validation receipt names.
+    input_fingerprint : str
+        Digest of the declared build inputs. Two runs with the same value
+        would rebuild the same bytes, so an existing publication may answer
+        with a verified no-op.
     run_id : int
         Trusted workflow run that produced the artefacts.
     run_attempt : int
@@ -118,6 +176,7 @@ class ExpectedRelease:
     builder_commit: str
     assets: tuple[ReleaseAsset, ...]
     manifest_sha256: str
+    input_fingerprint: str
     run_id: int
     run_attempt: int
 
@@ -128,6 +187,7 @@ class ExpectedRelease:
             raise ProverToolError(msg)
         require_truthy_text(self.builder_commit, "expected builder commit")
         require_sha256(self.manifest_sha256, "expected manifest digest")
+        require_sha256(self.input_fingerprint, "expected input fingerprint")
         require_positive_int(self.run_id, "expected run id")
         require_positive_int(self.run_attempt, "expected run attempt")
         names = [asset.name for asset in self.assets]
@@ -177,6 +237,12 @@ class ObservedRelease:
         Assets currently attached to the release.
     release_id : int | None
         API identifier needed to publish or inspect the release.
+    body : str | None
+        Release body, which records the creating run and the build inputs.
+    provenance_verified : bool
+        Whether a published release's own manifest, checksums and payload
+        digests were re-verified from the downloaded bytes. `False` for a
+        draft, which has no complete set to verify yet.
     """
 
     exists: bool
@@ -185,11 +251,16 @@ class ObservedRelease:
     target_commitish: str | None = None
     assets: tuple[ObservedAsset, ...] = ()
     release_id: int | None = None
+    body: str | None = None
+    provenance_verified: bool = False
 
     def __post_init__(self) -> None:
         """Reject an impossible observation shape."""
         if not self.exists and any((self.is_draft, bool(self.assets))):
             msg = "an absent release cannot be a draft or carry assets"
+            raise ProverToolError(msg)
+        if self.is_draft and self.provenance_verified:
+            msg = "a draft has no complete publication to verify"
             raise ProverToolError(msg)
 
 

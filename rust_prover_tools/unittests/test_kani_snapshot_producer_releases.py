@@ -2,28 +2,36 @@
 
 An allocator that cannot see the newest tag will happily reuse it, so the
 resolve job's release read is a correctness boundary rather than
-bookkeeping. These tests pin the projection, the refusal to truncate, and the
-fact that the collector's document is exactly what `identity` accepts.
+bookkeeping. These tests pin the projection, the pagination, the refusal to
+truncate, and the fact that the collector's document is exactly what
+`identity` accepts.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import typing as typ
 
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.producer.collect_releases import (
-    RELEASE_LIMIT,
+    PAGE_SIZE,
+    RELEASE_PAGE_LIMIT,
     collect_releases,
     main,
 )
 from rust_prover_tools.kani_snapshot.producer.entrypoint import main as entrypoint
+from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
+    input_fingerprint,
+)
 from rust_prover_tools.kani_snapshot.producer.lifecycle import resolution_to_json
 from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     parse_publications,
 )
+from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
+from rust_prover_tools.kani_snapshot.release_model import release_body
 from rust_prover_tools.unittests import kani_producer_fixtures as fixtures
 
 if typ.TYPE_CHECKING:
@@ -34,29 +42,42 @@ if typ.TYPE_CHECKING:
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
-RELEASE_LIST = [
-    "release",
-    "list",
-    "--limit",
-    str(RELEASE_LIMIT),
-    "--json",
-    "tagName,targetCommitish",
-]
+_PAGE_ARGUMENT: typ.Final[re.Pattern[str]] = re.compile(r"[?&]page=(?P<page>\d+)")
 
 
 def _serve(
-    releases: cabc.Sequence[dict[str, object]],
+    pages: cabc.Mapping[int, cabc.Sequence[dict[str, object]]],
 ) -> cabc.Callable[[Invocation], tuple[str, str, int]]:
-    """Return a `gh` handler serving one release list."""
+    """Return a `gh` handler serving the paged release list."""
 
     def handle(invocation: Invocation) -> tuple[str, str, int]:
-        """Answer the release list, refusing any other call."""
-        if list(invocation.args) != RELEASE_LIST:
-            msg = f"unexpected gh call: {list(invocation.args)}"
+        """Answer one page, refusing any other call shape."""
+        arguments = list(invocation.args)
+        if arguments[:1] != ["api"] or "--jq" not in arguments:
+            msg = f"unexpected gh call: {arguments}"
             raise AssertionError(msg)
-        return (json.dumps(list(releases)), "", 0)
+        match = _PAGE_ARGUMENT.search(arguments[1])
+        if match is None:
+            msg = f"release URL has no page: {arguments[1]}"
+            raise AssertionError(msg)
+        page = int(match.group("page"))
+        if page not in pages:
+            msg = f"unexpected release page {page}"
+            raise AssertionError(msg)
+        return (json.dumps(list(pages[page])), "", 0)
 
     return handle
+
+
+def _release(tag: str, **extra: object) -> dict[str, object]:
+    """Return one release API record with the fields the query projects."""
+    return {
+        "tag": tag,
+        "builder_commit": fixtures.BUILDER_COMMIT,
+        "draft": False,
+        "body": None,
+        **extra,
+    }
 
 
 def test_the_collector_projects_only_the_identity_fields(
@@ -64,30 +85,44 @@ def test_the_collector_projects_only_the_identity_fields(
 ) -> None:
     """A field identity allocation does not read is not carried forward."""
     cmd_mox.stub("gh").runs(
-        _serve([
-            {
-                "tagName": fixtures.TAG,
-                "targetCommitish": fixtures.BUILDER_COMMIT,
-                "name": "notes the collector must not copy",
-            }
-        ])
+        _serve({1: [_release(fixtures.TAG, name="notes to ignore")]})
     )
 
     document = json.loads(collect_releases())
 
     assert document == [
-        {"tag": fixtures.TAG, "builder_commit": fixtures.BUILDER_COMMIT}
+        {
+            "tag": fixtures.TAG,
+            "builder_commit": fixtures.BUILDER_COMMIT,
+            "draft": False,
+            "body": None,
+        }
     ]
+
+
+def test_a_full_page_is_followed_by_the_next(cmd_mox: CmdMox) -> None:
+    """A full page does not prove the list ended, so the next page is read."""
+    first = [
+        _release(f"kani-snapshot-2026-01-{'a' * 12}-r{index}")
+        for index in range(PAGE_SIZE)
+    ]
+    second = [_release(fixtures.TAG)]
+    cmd_mox.stub("gh").runs(_serve({1: first, 2: second}))
+
+    document = json.loads(collect_releases())
+
+    assert [record["tag"] for record in document][-1] == fixtures.TAG
+    assert len(document) == PAGE_SIZE + 1
 
 
 def test_an_exhausted_release_list_is_refused(cmd_mox: CmdMox) -> None:
     """A truncated view could hide the newest revision."""
-    cmd_mox.stub("gh").runs(
-        _serve([
-            {"tagName": f"kani-snapshot-2026-01-{'a' * 12}-r1", "targetCommitish": ""}
-            for _ in range(RELEASE_LIMIT)
-        ])
-    )
+    page = [
+        _release(f"kani-snapshot-2026-01-{'a' * 12}-r{index}")
+        for index in range(PAGE_SIZE)
+    ]
+    pages = dict.fromkeys(range(1, RELEASE_PAGE_LIMIT + 1), page)
+    cmd_mox.stub("gh").runs(_serve(pages))
 
     with pytest.raises(ProverToolError, match="bound"):
         collect_releases()
@@ -95,7 +130,7 @@ def test_an_exhausted_release_list_is_refused(cmd_mox: CmdMox) -> None:
 
 def test_a_release_without_a_tag_is_refused(cmd_mox: CmdMox) -> None:
     """A tagless release cannot inform revision allocation."""
-    cmd_mox.stub("gh").runs(_serve([{"tagName": "", "targetCommitish": ""}]))
+    cmd_mox.stub("gh").runs(_serve({1: [_release("")]}))
 
     with pytest.raises(ProverToolError, match="tag"):
         collect_releases()
@@ -118,9 +153,7 @@ def test_the_command_writes_the_release_document(
     tmp_path: pathlib.Path, cmd_mox: CmdMox
 ) -> None:
     """The resolve job runs a command, not an imported function."""
-    cmd_mox.stub("gh").runs(
-        _serve([{"tagName": fixtures.TAG, "targetCommitish": fixtures.BUILDER_COMMIT}])
-    )
+    cmd_mox.stub("gh").runs(_serve({1: [_release(fixtures.TAG)]}))
     output = tmp_path / "releases.json"
 
     assert main(["--output", str(output)]) == 0
@@ -132,9 +165,22 @@ def test_collected_releases_drive_identity_allocation(
     tmp_path: pathlib.Path, cmd_mox: CmdMox
 ) -> None:
     """The collector's document is exactly what `identity` accepts."""
-    cmd_mox.stub("gh").runs(
-        _serve([{"tagName": fixtures.TAG, "targetCommitish": fixtures.BUILDER_COMMIT}])
+    workflow = fixtures.workflow()
+    fingerprint = input_fingerprint(
+        upstream_commit=fixtures.UPSTREAM_COMMIT,
+        builder_commit=fixtures.BUILDER_COMMIT,
+        recipe=pinned_recipe(),
     )
+    published = _release(
+        fixtures.TAG,
+        body=release_body(
+            fixtures.TAG,
+            fingerprint,
+            run_id=workflow.run_id,
+            run_attempt=workflow.run_attempt,
+        ),
+    )
+    cmd_mox.stub("gh").runs(_serve({1: [published]}))
     releases = tmp_path / "releases.json"
     assert main(["--output", str(releases)]) == 0
     resolution = tmp_path / "resolution.json"
@@ -154,11 +200,11 @@ def test_collected_releases_drive_identity_allocation(
             "--output",
             str(tmp_path / "identity.json"),
             "--run-id",
-            str(fixtures.workflow().run_id),
+            str(workflow.run_id),
             "--run-attempt",
-            str(fixtures.workflow().run_attempt),
+            str(workflow.run_attempt),
             "--event",
-            fixtures.workflow().event,
+            workflow.event,
         ])
         == 0
     )

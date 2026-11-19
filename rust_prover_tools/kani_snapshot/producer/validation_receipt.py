@@ -68,6 +68,47 @@ _RECEIPT_KEYS: typ.Final[frozenset[str]] = frozenset({
 })
 
 
+def _require_schema_version(schema_version: int) -> None:
+    """Require the one receipt schema version this module understands."""
+    if schema_version != RECEIPT_SCHEMA_VERSION:
+        msg = f"validation receipt schema_version must be {RECEIPT_SCHEMA_VERSION}"
+        raise ProverToolError(msg)
+
+
+def _require_run_identity(run_id: int, run_attempt: int) -> None:
+    """Require positive run and attempt identifiers."""
+    require_positive_int(run_id, "validation run_id")
+    require_positive_int(run_attempt, "validation run_attempt")
+
+
+def _require_tag(tag: str) -> None:
+    """Require a tag in the immutable snapshot grammar."""
+    validated = require_truthy_text(tag, "validation tag")
+    if TAG_PATTERN.fullmatch(validated) is None:
+        msg = "validation tag must match the immutable snapshot grammar"
+        raise ProverToolError(msg)
+
+
+def _require_assets(assets: tuple[str, ...]) -> None:
+    """Require a non-empty set of unique, safe asset basenames."""
+    if not assets:
+        msg = "validation receipt must name at least one asset"
+        raise ProverToolError(msg)
+    if len(set(assets)) != len(assets):
+        msg = "validation receipt repeats an asset name"
+        raise ProverToolError(msg)
+    if not all(is_safe_asset_name(name) for name in assets):
+        msg = "validation receipt asset names must be plain basenames"
+        raise ProverToolError(msg)
+
+
+def _require_checks(checks: tuple[str, ...]) -> None:
+    """Require at least one recorded check name."""
+    if not checks:
+        msg = "validation receipt must record at least one check"
+        raise ProverToolError(msg)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class ValidationReceipt:
     """Evidence that clean validation passed for one manifest.
@@ -103,28 +144,12 @@ class ValidationReceipt:
 
     def __post_init__(self) -> None:
         """Reject a receipt that cannot authorise publication."""
-        if self.schema_version != RECEIPT_SCHEMA_VERSION:
-            msg = f"validation receipt schema_version must be {RECEIPT_SCHEMA_VERSION}"
-            raise ProverToolError(msg)
-        require_positive_int(self.run_id, "validation run_id")
-        require_positive_int(self.run_attempt, "validation run_attempt")
-        tag = require_truthy_text(self.tag, "validation tag")
-        if TAG_PATTERN.fullmatch(tag) is None:
-            msg = "validation tag must match the immutable snapshot grammar"
-            raise ProverToolError(msg)
+        _require_schema_version(self.schema_version)
+        _require_run_identity(self.run_id, self.run_attempt)
+        _require_tag(self.tag)
         require_sha256(self.manifest_sha256, "validation manifest_sha256")
-        if not self.assets:
-            msg = "validation receipt must name at least one asset"
-            raise ProverToolError(msg)
-        if len(set(self.assets)) != len(self.assets):
-            msg = "validation receipt repeats an asset name"
-            raise ProverToolError(msg)
-        if not all(is_safe_asset_name(name) for name in self.assets):
-            msg = "validation receipt asset names must be plain basenames"
-            raise ProverToolError(msg)
-        if not self.checks:
-            msg = "validation receipt must record at least one check"
-            raise ProverToolError(msg)
+        _require_assets(self.assets)
+        _require_checks(self.checks)
 
     def binding(self) -> ValidationBinding:
         """Return the release-policy binding this receipt justifies."""
@@ -214,18 +239,24 @@ def verify_receipt(receipt: ValidationReceipt, parsed: ParsedManifest) -> None:
         Raised when the tag, digest or asset set differs, or when the receipt
         recorded a failed validation.
     """
-    if not receipt.verification_passed:
-        msg = "validation receipt records a failed validation"
-        raise ProverToolError(msg)
-    if receipt.tag != parsed.manifest.tag:
-        msg = "validation receipt names another tag"
-        raise ProverToolError(msg)
-    if receipt.manifest_sha256 != parsed.sha256:
-        msg = "validation receipt names another manifest digest"
-        raise ProverToolError(msg)
-    if set(receipt.assets) != set(release_asset_names(parsed.manifest)):
-        msg = "validation receipt records an incomplete asset set"
-        raise ProverToolError(msg)
+    required = (
+        (
+            receipt.verification_passed,
+            "validation receipt records a failed validation",
+        ),
+        (receipt.tag == parsed.manifest.tag, "validation receipt names another tag"),
+        (
+            receipt.manifest_sha256 == parsed.sha256,
+            "validation receipt names another manifest digest",
+        ),
+        (
+            set(receipt.assets) == set(release_asset_names(parsed.manifest)),
+            "validation receipt records an incomplete asset set",
+        ),
+    )
+    for satisfied, message in required:
+        if not satisfied:
+            raise ProverToolError(message)
 
 
 def receipt_to_json(receipt: ValidationReceipt) -> bytes:

@@ -133,18 +133,22 @@ def run_scripts(declaration: dict[str, object]) -> list[str]:
     ]
 
 
+def _step_text(step: dict[str, object]) -> list[str]:
+    """Return the shell body and the env and input values one step declares."""
+    parts = [
+        value for key, value in step.items() if key == "run" and isinstance(value, str)
+    ]
+    for key in ("env", "with"):
+        values = step.get(key)
+        if isinstance(values, dict):
+            declared = typ.cast("dict[str, object]", values)
+            parts += [str(value) for value in declared.values()]
+    return parts
+
+
 def declared_text(declaration: dict[str, object]) -> str:
     """Return every string a job declares, in steps, env and inputs."""
-    parts: list[str] = []
-    for step in steps(declaration):
-        for key, value in step.items():
-            if key == "run" and isinstance(value, str):
-                parts.append(value)
-        for key in ("env", "with"):
-            values = step.get(key)
-            if isinstance(values, dict):
-                parts += [str(value) for value in values.values()]
-    return "\n".join(parts)
+    return "\n".join(part for step in steps(declaration) for part in _step_text(step))
 
 
 def named_scripts(declaration: dict[str, object]) -> dict[str, str]:

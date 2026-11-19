@@ -155,11 +155,19 @@ def test_only_missing_wheels_are_uploaded(
 def test_the_release_is_verified_against_downloaded_bytes(
     workflow: dict[str, object],
 ) -> None:
-    """A successful upload is not proof of the bytes a consumer receives."""
+    """A successful upload is not proof of the bytes a consumer receives.
+
+    The release serves assets by basename, so the byte comparison must map a
+    local build path to the name GitHub actually serves. Comparing the local
+    path against the download directory would fail for every wheel, or worse,
+    compare two different paths that happen to share a name.
+    """
     verify = named_scripts(job(workflow, "release"))["Verify the complete asset set"]
     assert "gh release download" in verify
-    assert "cmp " in verify
-    assert "expected.txt" in verify
+    assert 'cmp "$wheel" "verified/$(basename "$wheel")"' in verify
+    assert "wheel-inventory.txt" in verify
+    assert "diff -u wheel-names.txt downloaded.txt" in verify
+    assert "diff -u wheel-names.txt remote.txt" in verify
     assert "outside the expected inventory" in verify
 
 

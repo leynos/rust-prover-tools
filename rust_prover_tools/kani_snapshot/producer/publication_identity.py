@@ -1,10 +1,14 @@
 """Choose the immutable publication identity a producer run may use.
 
 The month and the upstream prefix already bind a tag to one upstream commit.
-What remains is the revision: a run whose builder commit matches the newest
-existing revision may resume it, and any other run takes the next unused
-revision. A look-alike tag under the prefix is an error rather than something
-to skip, because skipping it would publish a second "r1".
+What remains is the revision: a run whose declared build inputs match the
+newest existing revision may reuse it — resuming its draft when it is the same
+run and attempt, or answering with a verified no-op when it is published — and
+any other run takes the next unused revision. The inputs are compared by the
+fingerprint recorded on the release, not by the builder commit alone, so a
+change to the recipe or the toolchain gets its own identity. A look-alike tag
+under the prefix is an error rather than something to skip, because skipping it
+would publish a second "r1".
 
 A manual dispatch supplies its identity instead of allocating one, so the same
 grammar and upstream binding are checked without consulting existing releases.
@@ -15,20 +19,27 @@ parsed strictly and only the fields it needs are read.
 from __future__ import annotations
 
 import dataclasses as dc
-import json
 import re
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.manifest_groups import parse_workflow
 from rust_prover_tools.kani_snapshot.policy import reject_unknown_keys
+from rust_prover_tools.kani_snapshot.producer.publication_document import (
+    PUBLICATION_IDENTITY_SCHEMA_VERSION,
+    PublicationIdentity,
+    parse_publication_identity,
+    publication_identity_to_json,
+)
+from rust_prover_tools.kani_snapshot.release_model import (
+    parse_input_marker,
+    parse_run_marker,
+)
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
-from rust_prover_tools.kani_snapshot.tags import validate_tag
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
-    require_int,
     require_mapping,
     require_sequence,
+    require_sha256,
     require_text,
     require_truthy_text,
 )
@@ -40,6 +51,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "PUBLICATION_IDENTITY_SCHEMA_VERSION",
+    "AllocationRequest",
     "PublicationIdentity",
     "PublicationRef",
     "allocate_publication_id",
@@ -49,9 +61,6 @@ __all__ = (
     "publication_month",
     "publication_prefix",
 )
-
-#: Version of the identity document the resolve job hands to the build job.
-PUBLICATION_IDENTITY_SCHEMA_VERSION: typ.Final[int] = 1
 
 #: Publication month shape, `YYYY-MM`, as the immutable tag grammar records it.
 _MONTH: typ.Final[re.Pattern[str]] = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])")
@@ -64,14 +73,11 @@ _TAG_MONTH: typ.Final[re.Pattern[str]] = re.compile(
     r"kani-snapshot-(?P<month>\d{4}-(?:0[1-9]|1[0-2]))-[0-9a-f]{12}-r[1-9]\d*"
 )
 
-_RELEASE_KEYS: typ.Final[frozenset[str]] = frozenset({"tag", "builder_commit"})
-_IDENTITY_KEYS: typ.Final[frozenset[str]] = frozenset({
-    "schema_version",
+_RELEASE_KEYS: typ.Final[frozenset[str]] = frozenset({
     "tag",
-    "month",
-    "upstream_commit",
     "builder_commit",
-    "workflow",
+    "draft",
+    "body",
 })
 
 
@@ -85,38 +91,17 @@ class PublicationRef:
         Published or drafted snapshot tag.
     builder_commit : str
         Commit the release records as its builder target.
+    is_draft : bool
+        Whether the release is still a draft, whose bytes are incomplete.
+    body : str | None
+        Release body, which records the build-input fingerprint and, for a
+        draft, the run and attempt that created it.
     """
 
     tag: str
     builder_commit: str
-
-
-@dc.dataclass(frozen=True, slots=True)
-class PublicationIdentity:
-    """The immutable identity one producer run builds and publishes.
-
-    Attributes
-    ----------
-    schema_version : int
-        Document version, so a reader refuses a shape it does not know.
-    tag : str
-        Immutable snapshot tag.
-    month : str
-        Publication month in UTC, `YYYY-MM`.
-    upstream_commit : str
-        Full upstream commit the snapshot is built from.
-    builder_commit : str
-        Trusted builder commit of this run.
-    workflow : WorkflowIdentity
-        Run that allocated the identity.
-    """
-
-    schema_version: int
-    tag: str
-    month: str
-    upstream_commit: str
-    builder_commit: str
-    workflow: WorkflowIdentity
+    is_draft: bool
+    body: str | None = None
 
 
 def publication_prefix(upstream_commit: str, month: str) -> str:
@@ -185,23 +170,35 @@ def _revision(prefix: str, tag: str) -> int:
     return int(match.group("revision"))
 
 
-def allocate_publication_id(
+def _reusable(
+    newest: PublicationRef,
     *,
-    upstream_commit: str,
-    month: str,
-    builder_commit: str,
-    releases: cabc.Sequence[PublicationRef],
-) -> str:
-    """Choose the immutable identity this run may publish under.
+    fingerprint: str,
+    workflow: WorkflowIdentity,
+) -> bool:
+    """Return whether this run may reuse the newest existing revision.
 
-    The recipe, the lockfiles and the toolchain all come from the builder
-    commit, so two runs with the same upstream commit and the same builder
-    commit have the same build inputs. The newest revision that recorded this
-    builder commit is reused, which lets an interrupted draft resume and lets
-    an already published release answer with a no-op. Any other case takes the
-    next unused revision of the month and prefix.
+    A published release may answer with a no-op only when it recorded exactly
+    these build inputs. A draft may be resumed only by the run and attempt that
+    created it; a later attempt, or a draft from other inputs, needs its own
+    revision because only that attempt holds the validation evidence the
+    draft's uploads were authorised by.
+    """
+    if parse_input_marker(newest.body) != fingerprint:
+        return False
+    if not newest.is_draft:
+        return True
+    return parse_run_marker(newest.body) == (workflow.run_id, workflow.run_attempt)
 
-    Parameters
+
+@dc.dataclass(frozen=True, slots=True)
+class AllocationRequest:
+    """Everything allocation needs to choose this run's revision.
+
+    The values are grouped so the allocator takes one argument and each caller
+    names every input it supplies.
+
+    Attributes
     ----------
     upstream_commit : str
         Full upstream commit the snapshot is built from.
@@ -209,8 +206,36 @@ def allocate_publication_id(
         Publication month in UTC, `YYYY-MM`.
     builder_commit : str
         Trusted builder commit of this run.
+    input_fingerprint : str
+        Digest of the declared build inputs this run would build.
+    workflow : WorkflowIdentity
+        Run allocating the identity, which a draft must match to resume.
     releases : collections.abc.Sequence of PublicationRef
         Existing releases, in any order.
+    """
+
+    upstream_commit: str
+    month: str
+    builder_commit: str
+    input_fingerprint: str
+    workflow: WorkflowIdentity
+    releases: cabc.Sequence[PublicationRef]
+
+
+def allocate_publication_id(request: AllocationRequest) -> str:
+    """Choose the immutable identity this run may publish under.
+
+    The newest revision of the month and prefix is reused when its recorded
+    build inputs equal this run's, which lets an interrupted draft resume and
+    lets an already published release answer with a verified no-op. Any other
+    case — changed inputs, a draft from another attempt, or a release with no
+    recorded inputs — takes the next unused revision.
+
+    Parameters
+    ----------
+    request : AllocationRequest
+        Resolved commit, month, builder, inputs, workflow and existing
+        releases.
 
     Returns
     -------
@@ -222,10 +247,14 @@ def allocate_publication_id(
     ProverToolError
         Raised when an identity is malformed or a prefix look-alike exists.
     """
-    prefix = publication_prefix(upstream_commit, month)
-    builder = require_full_sha(builder_commit, "publication builder commit")
+    prefix = publication_prefix(request.upstream_commit, request.month)
+    require_full_sha(request.builder_commit, "publication builder commit")
+    fingerprint = require_sha256(
+        request.input_fingerprint,
+        "publication input fingerprint",
+    )
     revisions: dict[int, PublicationRef] = {}
-    for release in releases:
+    for release in request.releases:
         if not release.tag.startswith(f"{prefix}-"):
             continue
         revision = _revision(prefix, release.tag)
@@ -236,9 +265,50 @@ def allocate_publication_id(
     if not revisions:
         return f"{prefix}-r1"
     newest = revisions[max(revisions)]
-    if newest.builder_commit == builder:
+    if _reusable(newest, fingerprint=fingerprint, workflow=request.workflow):
         return newest.tag
     return f"{prefix}-r{max(revisions) + 1}"
+
+
+def _require_complete(record: dict[str, object], field: str) -> None:
+    """Require the release-list keys to be exactly the documented set."""
+    reject_unknown_keys(record, _RELEASE_KEYS, field)
+    missing = sorted(_RELEASE_KEYS - set(record))
+    if missing:
+        msg = f"{field} is missing keys: {', '.join(missing)}"
+        raise ProverToolError(msg)
+
+
+def _require_draft(value: object, field: str) -> bool:
+    """Require the `draft` flag to be a boolean."""
+    if not isinstance(value, bool):
+        msg = f"{field} draft must be a boolean"
+        raise ProverToolError(msg)
+    return value
+
+
+def _optional_body(value: object, field: str) -> str | None:
+    """Require `body` to be a string or null."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"{field} body must be a string or null"
+        raise ProverToolError(msg)
+    return value
+
+
+def _publication_ref(item: object, field: str) -> PublicationRef:
+    """Parse one release-list member into the identity the allocator reads."""
+    record = require_mapping(item, field)
+    _require_complete(record, field)
+    return PublicationRef(
+        tag=require_truthy_text(record["tag"], f"{field} tag"),
+        builder_commit=require_text(
+            record["builder_commit"], f"{field} builder_commit"
+        ),
+        is_draft=_require_draft(record["draft"], field),
+        body=_optional_body(record["body"], field),
+    )
 
 
 def parse_publications(data: bytes) -> tuple[PublicationRef, ...]:
@@ -247,7 +317,8 @@ def parse_publications(data: bytes) -> tuple[PublicationRef, ...]:
     Parameters
     ----------
     data : bytes
-        Exact document bytes: a JSON array of `{tag, builder_commit}` objects.
+        Exact document bytes: a JSON array of
+        `{tag, builder_commit, draft, body}` objects.
 
     Returns
     -------
@@ -261,100 +332,7 @@ def parse_publications(data: bytes) -> tuple[PublicationRef, ...]:
         key, or a member that is not a string.
     """
     items = require_sequence(strict_json_loads(data, "release list"), "release list")
-    releases: list[PublicationRef] = []
-    for index, item in enumerate(items):
-        record = require_mapping(item, f"release {index}")
-        reject_unknown_keys(record, _RELEASE_KEYS, f"release {index}")
-        missing = sorted(_RELEASE_KEYS - set(record))
-        if missing:
-            msg = f"release {index} is missing keys: {', '.join(missing)}"
-            raise ProverToolError(msg)
-        releases.append(
-            PublicationRef(
-                tag=require_truthy_text(record["tag"], f"release {index} tag"),
-                builder_commit=require_text(
-                    record["builder_commit"], f"release {index} builder_commit"
-                ),
-            )
-        )
+    releases = [
+        _publication_ref(item, f"release {index}") for index, item in enumerate(items)
+    ]
     return tuple(releases)
-
-
-def _workflow_document(workflow: WorkflowIdentity) -> dict[str, object]:
-    """Render a workflow identity as JSON-compatible values."""
-    return {
-        "path": workflow.path,
-        "event": workflow.event,
-        "ref": workflow.ref,
-        "run_id": workflow.run_id,
-        "run_attempt": workflow.run_attempt,
-        "run_url": workflow.run_url,
-    }
-
-
-def publication_identity_to_json(identity: PublicationIdentity) -> bytes:
-    """Render a publication identity as deterministic JSON bytes."""
-    document = {
-        "schema_version": identity.schema_version,
-        "tag": identity.tag,
-        "month": identity.month,
-        "upstream_commit": identity.upstream_commit,
-        "builder_commit": identity.builder_commit,
-        "workflow": _workflow_document(identity.workflow),
-    }
-    text = json.dumps(document, sort_keys=True, indent=2, ensure_ascii=True)
-    return (text + "\n").encode("ascii")
-
-
-def parse_publication_identity(data: bytes) -> PublicationIdentity:
-    """Parse exact identity bytes into a validated record.
-
-    Parameters
-    ----------
-    data : bytes
-        Exact document bytes as written by `publication_identity_to_json`.
-
-    Returns
-    -------
-    PublicationIdentity
-        Validated identity.
-
-    Raises
-    ------
-    ProverToolError
-        Raised for invalid JSON, unknown or missing keys, an unsupported
-        schema version, or an identity that is not in the tag grammar.
-    """
-    document = require_mapping(
-        strict_json_loads(data, "publication identity"), "publication identity"
-    )
-    reject_unknown_keys(document, _IDENTITY_KEYS, "publication identity")
-    missing = sorted(_IDENTITY_KEYS - set(document))
-    if missing:
-        msg = f"publication identity is missing keys: {', '.join(missing)}"
-        raise ProverToolError(msg)
-    version = require_int(
-        document["schema_version"], "publication identity schema_version"
-    )
-    if version != PUBLICATION_IDENTITY_SCHEMA_VERSION:
-        msg = (
-            "publication identity schema_version must be "
-            f"{PUBLICATION_IDENTITY_SCHEMA_VERSION}, got {version}"
-        )
-        raise ProverToolError(msg)
-    upstream_commit = require_full_sha(
-        document["upstream_commit"], "publication identity upstream_commit"
-    )
-    return PublicationIdentity(
-        schema_version=version,
-        tag=validate_tag(document["tag"], upstream_commit),
-        month=require_truthy_text(document["month"], "publication identity month"),
-        upstream_commit=upstream_commit,
-        builder_commit=require_full_sha(
-            document["builder_commit"], "publication identity builder_commit"
-        ),
-        workflow=parse_workflow(
-            require_mapping(document["workflow"], "publication identity workflow"),
-            "publication identity workflow",
-        ),
-    )

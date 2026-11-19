@@ -60,6 +60,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="upstream release tag; defaults to the pinned recipe's tag",
     )
     resolve_parser.add_argument("--candidates", default=None)
+    resolve_parser.add_argument(
+        "--checks",
+        default=None,
+        help="observed check evidence for a manual dispatch's commit",
+    )
     resolve_parser.add_argument("--output", required=True)
     resolve_parser.set_defaults(handler=resolve)
 

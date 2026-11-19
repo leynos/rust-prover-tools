@@ -63,8 +63,8 @@ def test_missing_evidence_keys_are_refused() -> None:
 
 def test_another_evidence_schema_is_refused() -> None:
     """A schema this producer does not run fails closed."""
-    with pytest.raises(ProverToolError, match="schema_version must be 1"):
-        parse_build_evidence(_document(schema_version=2))
+    with pytest.raises(ProverToolError, match="schema_version must be 2"):
+        parse_build_evidence(_document(schema_version=1))
 
 
 def test_the_derived_input_carries_recipe_owned_fields() -> None:
@@ -204,8 +204,8 @@ def test_evidence_records_a_lockfile_path_once() -> None:
 
 def test_a_build_evidence_record_requires_the_supported_schema() -> None:
     """The record itself refuses a schema it cannot represent."""
-    with pytest.raises(ProverToolError, match="schema_version must be 1"):
-        dc.replace(fixtures.evidence(), schema_version=2)
+    with pytest.raises(ProverToolError, match="schema_version must be 2"):
+        dc.replace(fixtures.evidence(), schema_version=1)
 
 
 def test_duplicate_lockfile_entries_are_refused_on_parse() -> None:

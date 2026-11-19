@@ -2,9 +2,12 @@
 
 These witnesses hold the lemma the policy exists for: `PUBLISH` is never chosen
 while an expected asset is absent, the wrong size, or unhashed; `NOOP` is never
-chosen for a published release whose bytes differ; and no decision ever deletes,
-replaces or moves a published asset. Each case names the one property that makes
-the state safe to act on, so a regression points at the rule that broke.
+chosen for a published release whose recorded inputs differ or whose own bytes
+were not re-verified; and no decision ever deletes, replaces or moves a
+published asset. A published release is compared by the input fingerprint in its
+body rather than by this run's asset bytes, because a rebuild of unchanged
+inputs still produces a new manifest. Each case names the one property that
+makes the state safe to act on, so a regression points at the rule that broke.
 """
 
 from __future__ import annotations
@@ -157,35 +160,73 @@ def test_a_draft_targeting_another_commit_conflicts() -> None:
 
 def test_a_published_release_matching_exactly_is_a_no_op() -> None:
     """Recovery from a lost response ends in observation, not a second write."""
-    observed = dc.replace(fixtures.draft(fixtures.verified_assets()), is_draft=False)
+    observed = fixtures.published(fixtures.verified_assets())
     decision = decide(fixtures.expected(), observed, fixtures.validation())
     assert decision.action is ReleaseAction.NOOP
 
 
-def test_a_published_release_with_other_bytes_conflicts() -> None:
-    """Published bytes are never replaced, however they differ."""
-    wrong = fixtures.assets_with_digest("backend.tar.gz", fixtures.digest(b"other"))
-    observed = dc.replace(fixtures.draft(wrong), is_draft=False)
+def test_a_published_release_with_unverified_provenance_conflicts() -> None:
+    """A published release whose bytes did not re-verify is never a no-op."""
+    unhashed = tuple(
+        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
+    )
+    observed = fixtures.published(unhashed, provenance_verified=False)
     decision = decide(fixtures.expected(), observed, fixtures.validation())
     assert decision.action is ReleaseAction.CONFLICT
-    assert "differs from the expected bytes" in decision.reason
+    assert "not verified against its own manifest" in decision.reason
 
 
 def test_a_published_release_with_a_different_asset_set_conflicts() -> None:
     """An asset set that changed after publication is never repaired in place."""
-    observed = dc.replace(
-        fixtures.draft(fixtures.verified_assets()[:-1]), is_draft=False
-    )
+    observed = fixtures.published(fixtures.verified_assets()[:-1])
     decision = decide(fixtures.expected(), observed, fixtures.validation())
     assert decision.action is ReleaseAction.CONFLICT
     assert "different asset set" in decision.reason
 
 
-def test_a_published_release_with_unhashed_assets_is_reverified() -> None:
-    """A published release's digests are observed, not trusted from the API."""
-    unhashed = tuple(
-        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
+def test_a_published_release_recording_other_inputs_conflicts() -> None:
+    """A newer input set takes a new revision, never this release."""
+    observed = fixtures.published(
+        fixtures.verified_assets(),
+        body_text=fixtures.body(fingerprint=fixtures.OTHER_FINGERPRINT),
     )
-    observed = dc.replace(fixtures.draft(unhashed), is_draft=False)
     decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.VERIFY_ASSETS
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "different build inputs" in decision.reason
+
+
+def test_a_published_release_without_recorded_inputs_conflicts() -> None:
+    """A release that cannot name its inputs is not assumed to match."""
+    observed = fixtures.published(fixtures.verified_assets(), body_text=None)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "does not record its build inputs" in decision.reason
+
+
+def test_a_draft_from_another_attempt_is_never_resumed() -> None:
+    """Only the attempt holding the validation evidence may finish a draft."""
+    observed = fixtures.draft(
+        fixtures.verified_assets(), body_text=fixtures.body(run_attempt=2)
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "another workflow run or attempt" in decision.reason
+
+
+def test_a_draft_from_other_inputs_is_never_resumed() -> None:
+    """A draft built from other inputs belongs to a different revision."""
+    observed = fixtures.draft(
+        fixtures.verified_assets(),
+        body_text=fixtures.body(fingerprint=fixtures.OTHER_FINGERPRINT),
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "different build inputs" in decision.reason
+
+
+def test_a_draft_without_recorded_origin_conflicts() -> None:
+    """A draft whose creator cannot be identified is not adoptable."""
+    observed = fixtures.draft(fixtures.verified_assets(), body_text=None)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "does not record the run" in decision.reason

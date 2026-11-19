@@ -162,7 +162,7 @@ def evidence(
 ) -> BuildEvidence:
     """Return measured build evidence for the pinned recipe."""
     return BuildEvidence(
-        schema_version=1,
+        schema_version=2,
         toolchain=toolchain(),
         backend=BackendIdentity(
             version=CRATE_VERSION,
@@ -171,6 +171,7 @@ def evidence(
         ),
         launcher_package_version=CRATE_VERSION,
         lock_digests=(("Cargo.lock", "8" * 64),),
+        submodules=PINNED.submodules,
         cache=CacheObservation("miss", f"kani-{PINNED.upstream.toolchain_channel}"),
         wall_seconds=wall_seconds,
         disk_high_water_bytes=disk_high_water_bytes,

@@ -125,22 +125,37 @@ def _require_payload_directory(payloads: Path) -> None:
         raise ProverToolError(msg)
 
 
-def _require_exact_names(payloads: Path, expected: cabc.Mapping[str, str]) -> None:
-    """Require exactly the expected payload files, with no extras or links."""
-    wanted = set(expected.values())
-    present = {entry.name for entry in payloads.iterdir()}
+def _require_no_missing(present: set[str], wanted: set[str]) -> None:
+    """Require every expected payload name to be present."""
     missing = sorted(wanted - present)
     if missing:
         msg = f"payload directory is missing files: {', '.join(missing)}"
         raise ProverToolError(msg)
+
+
+def _require_no_extras(present: set[str], wanted: set[str]) -> None:
+    """Require the directory to carry nothing the manifest does not name."""
     extra = sorted(present - wanted)
     if extra:
         msg = f"payload directory carries unexpected files: {', '.join(extra)}"
         raise ProverToolError(msg)
-    for name in sorted(wanted):
+
+
+def _require_regular_payloads(payloads: Path, names: cabc.Iterable[str]) -> None:
+    """Require every payload entry to be a regular file, not a link or directory."""
+    for name in names:
         if not (payloads / name).is_file():
             msg = f"payload {name!r} must be a regular file"
             raise ProverToolError(msg)
+
+
+def _require_exact_names(payloads: Path, expected: cabc.Mapping[str, str]) -> None:
+    """Require exactly the expected payload files, with no extras or links."""
+    wanted = set(expected.values())
+    present = {entry.name for entry in payloads.iterdir()}
+    _require_no_missing(present, wanted)
+    _require_no_extras(present, wanted)
+    _require_regular_payloads(payloads, sorted(wanted))
 
 
 def _asset(role: str, name: str, media_type: str, path: Path) -> AssetRecord:

@@ -69,6 +69,28 @@ def _run_flags(
     ]
 
 
+def _write_checks(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Write passing check evidence for the dispatched commit."""
+    path = tmp_path / "checks.json"
+    path.write_text(
+        json.dumps({
+            "commit": fixtures.UPSTREAM_COMMIT,
+            "checks": [
+                {
+                    "name": name,
+                    "status": "completed",
+                    "conclusion": "success",
+                    "id": index + 1,
+                    "started_at": "2026-09-16T03:00:00Z",
+                }
+                for index, name in enumerate(REQUIRED_UPSTREAM_CHECKS)
+            ],
+        }),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _resolve(tmp_path: pathlib.Path, *flags: str) -> int:
     """Resolve the pinned upstream commit by explicit manual input.
 
@@ -81,6 +103,8 @@ def _resolve(tmp_path: pathlib.Path, *flags: str) -> int:
         "manual",
         "--commit",
         fixtures.UPSTREAM_COMMIT,
+        "--checks",
+        str(_write_checks(tmp_path)),
         "--output",
         str(tmp_path / "resolution.json"),
         *_run_flags(),
@@ -411,6 +435,7 @@ class FakeGitHub:
         self.is_draft = False
         self.assets: dict[str, bytes] = {}
         self.target = ""
+        self.body: str | None = None
         self.published = False
 
     def document(self) -> str:
@@ -420,6 +445,7 @@ class FakeGitHub:
             "tag_name": fixtures.TAG,
             "draft": self.is_draft,
             "target_commitish": self.target,
+            "body": self.body,
             "assets": [
                 {
                     "name": name,
@@ -444,25 +470,43 @@ class FakeGitHub:
         """Answer one REST call."""
         endpoint = args[1]
         if endpoint == f"repos/{REPOSITORY}/releases/tags/{fixtures.TAG}":
-            if not self.exists:
-                return ("", "gh: HTTP 404: Not Found", 1)
-            return (self.document(), "", 0)
+            return self._read_by_tag()
+        if endpoint.startswith(f"repos/{REPOSITORY}/releases?"):
+            listed = [json.loads(self.document())] if self.exists else []
+            return (json.dumps(listed), "", 0)
         if args[1:3] == ["--method", "POST"]:
-            self.exists = True
-            self.is_draft = True
-            self.target = next(
-                value.removeprefix("target_commitish=")
-                for value in args
-                if value.startswith("target_commitish=")
-            )
-            return ("{}", "", 0)
+            return self._create(args)
         if args[1:3] == ["--method", "PATCH"]:
-            assert set(self.assets) == _release_names()
-            self.is_draft = False
-            self.published = True
-            return ("{}", "", 0)
+            return self._publish()
         msg = f"unexpected gh api call: {args}"
         raise AssertionError(msg)
+
+    def _read_by_tag(self) -> tuple[str, str, int]:
+        """Answer the release-by-tag endpoint."""
+        if not self.exists:
+            return ("", "gh: HTTP 404: Not Found", 1)
+        return (self.document(), "", 0)
+
+    def _create(self, args: list[str]) -> tuple[str, str, int]:
+        """Answer a draft-creation call, recording what the draft declares."""
+        self.exists = True
+        self.is_draft = True
+        self.target = next(
+            value.removeprefix("target_commitish=")
+            for value in args
+            if value.startswith("target_commitish=")
+        )
+        self.body = next(
+            value.removeprefix("body=") for value in args if value.startswith("body=")
+        )
+        return ("{}", "", 0)
+
+    def _publish(self) -> tuple[str, str, int]:
+        """Answer a publication call, refusing an incomplete draft."""
+        assert set(self.assets) == _release_names()
+        self.is_draft = False
+        self.published = True
+        return ("{}", "", 0)
 
     def _release(self, args: list[str]) -> tuple[str, str, int]:
         """Answer one release upload or download."""

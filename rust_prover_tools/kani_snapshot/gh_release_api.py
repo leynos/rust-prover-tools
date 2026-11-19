@@ -13,7 +13,6 @@ release serves.
 from __future__ import annotations
 
 import dataclasses as dc
-import json
 import pathlib
 import tempfile
 import typing as typ
@@ -21,13 +20,18 @@ import typing as typ
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.gh_release_document import (
+    decoded,
+    parse_release,
+    verify_publication,
+)
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.release_model import (
     ExpectedRelease,
-    ObservedAsset,
     ObservedRelease,
     ReleaseAsset,
     ReleaseTransientError,
+    release_body,
 )
 
 if typ.TYPE_CHECKING:
@@ -39,9 +43,6 @@ __all__ = ("GhReleaseApi",)
 #: Cuprum terminates a command that exceeds its timeout and reports this code.
 _TIMEOUT_EXIT_CODE: typ.Final[int] = 124
 
-#: Width of the hexadecimal part of a SHA-256 digest.
-_SHA256_HEX_LENGTH: typ.Final[int] = 64
-
 #: Transport-shaped markers that make a failed call worth re-observing.
 _TRANSIENT_MARKERS: typ.Final[tuple[str, ...]] = (
     "HTTP 502",
@@ -49,6 +50,18 @@ _TRANSIENT_MARKERS: typ.Final[tuple[str, ...]] = (
     "HTTP 504",
     "HTTP 500",
     "timeout",
+)
+
+#: Releases requested per page when the tag endpoint cannot see a draft.
+_RELEASE_PAGE_SIZE: typ.Final[int] = 100
+
+#: Pages the draft lookup may read. Reaching it is a failure, not an absence.
+_RELEASE_PAGE_LIMIT: typ.Final[int] = 10
+
+#: Fields every observation needs, from either release endpoint.
+_RELEASE_QUERY: typ.Final[str] = (
+    "{id, tag_name, draft, target_commitish, body, assets: "
+    "[.assets[] | {name, size, digest}]}"
 )
 
 
@@ -96,84 +109,13 @@ def _is_not_found(stderr: str) -> bool:
     return "HTTP 404" in stderr or "not found" in stderr.lower()
 
 
-def _is_sha256_hex(candidate: str) -> bool:
-    """Return whether `candidate` is lowercase hexadecimal of the right width."""
-    return len(candidate) == _SHA256_HEX_LENGTH and all(
-        char in "0123456789abcdef" for char in candidate
-    )
-
-
-def _require_asset_size(name: str, size: object) -> int:
-    """Return a validated asset size, refusing booleans and negatives."""
-    msg = f"release asset {name!r} size must be a non-negative integer"
-    if not isinstance(size, int) or isinstance(size, bool):
-        raise ProverToolError(msg)
-    if size < 0:
-        raise ProverToolError(msg)
-    return size
-
-
-def _parse_asset(value: object) -> ObservedAsset:
-    """Parse one asset record, refusing a malformed size or digest."""
-    if not isinstance(value, dict):
-        msg = "release asset API response must be an object"
-        raise ProverToolError(msg)
-    record = typ.cast("dict[str, object]", value)
-    name = record.get("name")
-    if not isinstance(name, str) or not name:
-        msg = "release asset name must be a non-empty string"
-        raise ProverToolError(msg)
-    size = _require_asset_size(name, record.get("size"))
-    digest = record.get("digest")
-    sha256: str | None = None
-    if isinstance(digest, str) and digest.startswith("sha256:"):
-        candidate = digest.removeprefix("sha256:")
-        if _is_sha256_hex(candidate):
-            sha256 = candidate
-    return ObservedAsset(name=name, size=size, sha256=sha256)
-
-
-def _parse_release(document: object) -> ObservedRelease:
-    """Parse one release API document into an observation without digests."""
-    if not isinstance(document, dict):
-        msg = "release API response must be an object"
-        raise ProverToolError(msg)
-    record = typ.cast("dict[str, object]", document)
-    release_id = record.get("id")
-    draft = record.get("draft")
-    tag = record.get("tag_name")
-    target = record.get("target_commitish")
-    assets = record.get("assets")
-    if not isinstance(release_id, int) or isinstance(release_id, bool):
-        msg = "release API response id must be an integer"
-        raise ProverToolError(msg)
-    if not isinstance(draft, bool):
-        msg = "release API response draft must be a boolean"
-        raise ProverToolError(msg)
-    if not isinstance(tag, str) or not isinstance(target, str):
-        msg = "release API response tag and target must be strings"
-        raise ProverToolError(msg)
-    if not isinstance(assets, list):
-        msg = "release API response assets must be an array"
-        raise ProverToolError(msg)
-    parsed = tuple(_parse_asset(asset) for asset in typ.cast("list[object]", assets))
-    return ObservedRelease(
-        exists=True,
-        is_draft=draft,
-        tag=tag,
-        target_commitish=target,
-        assets=parsed,
-        release_id=release_id,
-    )
-
-
-def _decoded(result_stdout: str) -> object:
-    """Decode a JSON response, refusing anything that is not JSON."""
-    try:
-        return json.loads(result_stdout)
-    except json.JSONDecodeError as exc:
-        msg = f"release API response is not JSON: {exc}"
-        raise ProverToolError(msg) from exc
+def _find_tag(records: list[object], tag: str) -> ObservedRelease | None:
+    """Return the listed release whose tag matches, or `None` when absent."""
+    for item in records:
+        candidate = parse_release(item)
+        if candidate.tag == tag:
+            return candidate
+    return None
 
 
 class GhReleaseApi:
@@ -196,42 +138,124 @@ class GhReleaseApi:
     def observe(self, tag: str) -> ObservedRelease:
         """Return the release state, re-downloading every asset's bytes.
 
-        A missing release is an observation, not an error. Any other permanent
-        failure is refused so a publication cannot proceed blind.
+        A missing release is an observation, not an error. The release-by-tag
+        endpoint is tried first; when it cannot see the tag, the bounded
+        release list is searched, because that endpoint is the one that
+        reports an existing draft. Any other permanent failure is refused so a
+        publication cannot proceed blind.
+
+        A published release's own manifest, checksums and payload digests are
+        re-verified from the downloaded bytes, so a later run need not compare
+        its new asset bytes against the published ones.
         """
-        query = (
-            "{id, tag_name, draft, target_commitish, assets: "
-            "[.assets[] | {name, size, digest}]}"
-        )
+        observed = self._observe_by_tag(tag)
+        if observed is None:
+            observed = self._observe_by_list(tag)
+        if observed is None:
+            return ObservedRelease(exists=False, is_draft=False)
+        return self._with_verified_assets(tag, observed)
+
+    def _observe_by_tag(self, tag: str) -> ObservedRelease | None:
+        """Read one release by tag, or `None` when the endpoint has no answer."""
         result = run_command(
             CommandSpec((
                 "gh",
                 "api",
                 f"repos/{self._repository}/releases/tags/{tag}",
                 "--jq",
-                query,
+                _RELEASE_QUERY,
             ))
         )
-        if result.exit_code != 0:
-            if _is_not_found(result.stderr):
-                return ObservedRelease(exists=False, is_draft=False)
-            if _is_transient(result.exit_code, result.stderr):
-                msg = f"transient release API failure: {result.stderr.strip()}"
-                raise ReleaseTransientError(msg)
-            msg = f"release API command failed ({result.exit_code}): {result.stderr}"
+        if result.exit_code == 0:
+            return parse_release(decoded(result.stdout))
+        if _is_not_found(result.stderr):
+            return None
+        if _is_transient(result.exit_code, result.stderr):
+            msg = f"transient release API failure: {result.stderr.strip()}"
+            raise ReleaseTransientError(msg)
+        msg = f"release API command failed ({result.exit_code}): {result.stderr}"
+        raise ProverToolError(msg)
+
+    def _list_page(self, page: int) -> list[object]:
+        """Read one page of the release list."""
+        path = (
+            f"repos/{self._repository}/releases"
+            f"?per_page={_RELEASE_PAGE_SIZE}&page={page}"
+        )
+        items = decoded(
+            _gh((
+                "gh",
+                "api",
+                path,
+                "--jq",
+                f"[.[] | {_RELEASE_QUERY}]",
+            ))
+        )
+        if not isinstance(items, list):
+            msg = "release API list response must be an array"
             raise ProverToolError(msg)
-        observed = _parse_release(_decoded(result.stdout))
-        digests = self.verify_assets(tag, [asset.name for asset in observed.assets])
+        return typ.cast("list[object]", items)
+
+    def _observe_by_list(self, tag: str) -> ObservedRelease | None:
+        """Search the bounded release list, which is where drafts are visible."""
+        for page in range(1, _RELEASE_PAGE_LIMIT + 1):
+            records = self._list_page(page)
+            found = _find_tag(records, tag)
+            if found is not None:
+                return found
+            if len(records) < _RELEASE_PAGE_SIZE:
+                return None
+        msg = (
+            f"release list reached its {_RELEASE_PAGE_LIMIT}-page bound without "
+            f"finding {tag}; raise the bound deliberately after reviewing older "
+            "releases"
+        )
+        raise ProverToolError(msg)
+
+    def _with_verified_assets(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+    ) -> ObservedRelease:
+        """Download every asset, recording digests and publication provenance."""
+        names = [asset.name for asset in observed.assets]
+        with tempfile.TemporaryDirectory(prefix="kani-publish-") as name:
+            directory = pathlib.Path(name)
+            self._download(tag, names, directory)
+            assets = tuple(
+                dc.replace(asset, sha256=sha256_file(directory / asset.name))
+                for asset in observed.assets
+            )
+            verified = not observed.is_draft and verify_publication(directory, names)
         return dc.replace(
             observed,
-            assets=tuple(
-                dc.replace(asset, sha256=digests.get(asset.name, asset.sha256))
-                for asset in observed.assets
-            ),
+            assets=assets,
+            provenance_verified=verified,
         )
 
+    def _download(
+        self,
+        tag: str,
+        names: cabc.Sequence[str],
+        directory: Path,
+    ) -> None:
+        """Download the named assets into one directory."""
+        for name in names:
+            _gh((
+                "gh",
+                "release",
+                "download",
+                tag,
+                "--repo",
+                self._repository,
+                "--pattern",
+                name,
+                "--dir",
+                str(directory),
+            ))
+
     def create_draft(self, expected: ExpectedRelease) -> None:
-        """Create a draft pre-release at the expected builder commit."""
+        """Create a draft pre-release that records its run and build inputs."""
         _gh((
             "gh",
             "api",
@@ -245,7 +269,13 @@ class GhReleaseApi:
             "-f",
             f"name={expected.tag}",
             "-f",
-            f"body=Immutable Kani snapshot {expected.tag}",
+            "body="
+            + release_body(
+                expected.tag,
+                expected.input_fingerprint,
+                run_id=expected.run_id,
+                run_attempt=expected.run_attempt,
+            ),
             "-F",
             "draft=true",
             "-F",
@@ -266,25 +296,12 @@ class GhReleaseApi:
 
     def verify_assets(self, tag: str, names: cabc.Sequence[str]) -> dict[str, str]:
         """Download the named assets and return their locally computed digests."""
-        digests: dict[str, str] = {}
         if not names:
-            return digests
-        with tempfile.TemporaryDirectory(prefix="kani-publish-") as directory:
-            for name in names:
-                _gh((
-                    "gh",
-                    "release",
-                    "download",
-                    tag,
-                    "--repo",
-                    self._repository,
-                    "--pattern",
-                    name,
-                    "--dir",
-                    directory,
-                ))
-                digests[name] = sha256_file(pathlib.Path(directory) / name)
-        return digests
+            return {}
+        with tempfile.TemporaryDirectory(prefix="kani-publish-") as name:
+            directory = pathlib.Path(name)
+            self._download(tag, names, directory)
+            return {asset: sha256_file(directory / asset) for asset in names}
 
     def publish(self, tag: str, release_id: int) -> None:
         """Make a verified draft public without marking it latest."""
