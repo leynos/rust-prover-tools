@@ -62,10 +62,12 @@ class _ReleaseServer:
         *,
         release: str | None,
         objects: dict[str, tuple[str, str]] | None = None,
+        listed: str = "[]",
     ) -> None:
-        """Record the release document and any resolvable tag objects."""
+        """Record the release document, tag objects and list response."""
         self._release = release
         self._objects = objects or {}
+        self._listed = listed
         self.calls: list[list[str]] = []
 
     def handle(self, invocation: Invocation) -> tuple[str, str, int]:
@@ -80,7 +82,7 @@ class _ReleaseServer:
             assert args[2:] == ["--jq", fixtures.OBSERVE_QUERY], args
             return (self._release, "", 0)
         if path.startswith(f"repos/{REPOSITORY}/releases?"):
-            return ("[]", "", 0)
+            return (self._listed, "", 0)
         return ("", "gh: HTTP 404: Not Found", 1)
 
 
@@ -286,6 +288,26 @@ def test_observe_reports_a_missing_release(cmd_mox: CmdMox) -> None:
         f"repos/{REPOSITORY}/releases?per_page=100&page=1",
         f"repos/{REPOSITORY}/git/ref/tags/{fixtures.TAG}",
     ], "the list endpoint was not consulted for the draft-visible answer"
+
+
+def test_observe_finds_a_draft_through_the_release_list(cmd_mox: CmdMox) -> None:
+    """A draft the tag endpoint cannot see is still observed, not absent."""
+    server = _ReleaseServer(
+        release=None,
+        listed=f"[{fixtures.release_json(draft=True)}]",
+        objects={
+            f"repos/{REPOSITORY}/git/ref/tags/{fixtures.TAG}": (
+                "commit",
+                TAG_COMMIT,
+            )
+        },
+    )
+    cmd_mox.stub("gh").runs(server.handle)
+    observed = GhReleaseApi().observe(fixtures.TAG)
+    assert observed.exists
+    assert observed.is_draft
+    assert observed.release_id == 4242
+    assert observed.target_commitish == TAG_COMMIT
 
 
 def test_observe_classifies_a_server_error_as_transient(cmd_mox: CmdMox) -> None:
