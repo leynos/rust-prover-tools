@@ -898,6 +898,20 @@ source and signer digests, correlated with the manifest's run and attempt — is
 the consumer's, and EP-M5 exercises it on a clean runner. Do not describe the
 receipt as proof that a signature was verified.
 
+The publisher's own release observation does run that policy. When a published
+release is re-verified from its downloaded bytes, the structural attestation
+checks are followed by `verify_attestation` with the consumer's
+`AttestationPolicy`, so a bundle signed by another workflow, or for another run
+or attempt, leaves the release unverified instead of reaching a no-op. The
+ledger still rests on EP-M5: a real clean-runner signature has not yet been
+exercised end to end.
+
+The producer and the consumer share `shared_libraries`: `measure_build` hashes
+every shared object under `<toolchain>/lib` that the function returns, and
+`toolchain_binding` refuses any it returns that the manifest does not record.
+Do not reintroduce a workflow-supplied list — a narrow list would let a build
+publish a toolchain the consumer then refuses.
+
 Identity reuse is decided by `input_fingerprint`, a SHA-256 over a canonical
 document of declared inputs: the upstream commit, this repository's build
 commit, and the pinned recipe's toolchain, prerequisites, submodules, runtime

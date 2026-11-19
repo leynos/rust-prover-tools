@@ -744,10 +744,15 @@ feasibility; no larger paid runner is implied. Proposed job deadlines are 10
 minutes for resolution, 180 for build, 15 for attestation, 45 for clean
 validation and 15 for publication. Exceeding runner/disk/budget limits requires
 review rather than automatic upgrades. Record wall time, cache hit/miss, disk
-high-water mark, asset sizes and failures in run summaries. Cache keys bind
-trust class, OS, target, upstream SHA, recursive submodules, toolchain, locks
-and recipe; privileged jobs do not restore writable source-build caches.
-Ordinary PR caches cannot feed signing or publication.
+high-water mark, asset sizes and failures in run summaries. The build job
+writes those observations to the run summary with `always()`, so a failed run
+still reports them, and uploads whatever it observed under a distinct
+failure-path artefact name that no consumer reads as a publishable build.
+Guarded jobs name their prerequisite's result explicitly, because a job-level
+`if` replaces the implicit `success()` check. Cache keys bind trust class, OS,
+target, upstream SHA, recursive submodules, toolchain, locks and recipe;
+privileged jobs do not restore writable source-build caches. Ordinary PR caches
+cannot feed signing or publication.
 
 Serialize the entire snapshot workflow, starting before resolution and revision
 allocation, with `cancel-in-progress: false` and a snapshot-specific
@@ -841,11 +846,18 @@ other input:
   identities, the hashed channel manifest, the lock digests, the solver digests
   and reported versions read from the produced bundle, and the wall time and
   disk high-water mark the workflow measured. A missing solver binary or
-  library fails rather than yielding an evidence document with a gap.
+  library fails rather than yielding an evidence document with a gap. The
+  recorded shared-library set is the one `shared_libraries` walks out of the
+  toolchain's `lib` directory — the same function the consumer's binding check
+  calls — so a library the producer measured is exactly a library the consumer
+  will require, and no YAML list can narrow the set.
 - `assemble` measures the payloads, writes `manifest.json` and `SHA256SUMS`,
   and the workflow signs that manifest with `actions/attest-build-provenance`,
   copying its bundle to `manifest.sigstore.jsonl`. Assembly never executes
-  anything from the build job; it reads the files as bytes.
+  anything from the build job; it reads the files as bytes. It also compares
+  the build's recorded tag, upstream commit and builder commit with the
+  identity the resolve job wrote, downloaded independently of the build
+  artefact, so the least trusted job cannot choose what the manifest names.
 - `validate` parses the manifest, refuses one from another run or attempt,
   re-verifies every payload digest, the manifest bytes on disk and the exact
   `SHA256SUMS` rows, requires a non-empty attestation bundle, and writes a
@@ -863,13 +875,18 @@ Publication observation resolves `refs/tags/<tag>` rather than trusting the
 release's `target_commitish`, which GitHub ignores once the tag exists: an
 existing tag therefore decides the commit an observation reports, an annotated
 tag is peeled to its commit, and a tag no release carries is refused before a
-draft could adopt it. A published release is then re-verified from its own
-downloaded bytes — the manifest must record this tag, its checksums and
-payloads must match, its attestation must be a well-formed in-toto provenance
-statement naming its digest, and its recorded identities must reproduce the
-build-input fingerprint in the release body. Signature validity under a trusted
-root remains a consumer check (D6, EP-M5), so `provenance_verified` records
-exactly the checks the publisher could run.
+draft could adopt it. A published release must also resolve to a tag ref: one
+whose tag cannot be resolved has no confirmed target, so observation refuses it
+rather than letting policy reach a no-op. A published release is then
+re-verified from its own downloaded bytes — the manifest must record this tag,
+its checksums and payloads must match, its attestation must be a well-formed
+in-toto provenance statement naming its digest, its recorded identities must
+reproduce the build-input fingerprint in the release body, and the bundle must
+satisfy the consumer's own `gh attestation verify` policy for this repository's
+signer workflow, the manifest's builder commit and this run and attempt. The
+structural checks are a cheap refusal; the verifier alone decides
+`provenance_verified`. Exercising the same policy on a clean runner remains D6
+and EP-M5.
 
 `make workflow-check` runs the workflow contract tests and actionlint together,
 and CI runs it once the pinned actionlint release is installed.

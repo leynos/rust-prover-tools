@@ -140,6 +140,21 @@ Terms used here:
   module at pylint's 400-line limit, so the adapter's two copies of the `gh`
   failure classification became one helper and the build-job contracts moved to
   `tests/test_kani_workflow_build_contract.py`.
+- 19 November 2026: remediated the third completeness assessment (A3,
+  `EP258-2026-11-19-A3`). Four blocking findings and two in-scope gaps: the
+  producer and consumer now share one `shared_libraries` walk, so the manifest
+  records exactly the libraries `toolchain_binding` requires, and the workflow
+  no longer passes a hand-built `--library` subset; assembly takes the resolve
+  job's independently downloaded identity and refuses a tag, upstream commit or
+  builder commit the resolve job did not allocate; `provenance_verified` is now
+  decided by the consumer's own `gh attestation verify` policy and this run's
+  identity, not by structural checks alone; and a published release that does
+  not resolve to a tag ref is refused rather than accepted as a no-op. The
+  build now copies each source-state observation into the artefact as it is
+  taken, uploads what it has on failure under its own artefact name, and writes
+  D5's wall time, disk, cache outcome, payload sizes and source HEADs to the
+  run summary. Every downstream job names its prerequisite's result, because an
+  explicit job-level `if` drops the implicit `success()`.
 
 ## Surprises & discoveries
 
@@ -174,9 +189,40 @@ Terms used here:
   reached by a feature-sized module, so a split is cheaper than a suppression.
   The build-job contracts now have their own module, and the adapter's three
   copies of the `gh` failure classification became one `_failure` helper.
+- A job-level `if:` in GitHub Actions **replaces** the implicit `success()`
+  check on `needs`, rather than adding to it. Every guarded job therefore names
+  `needs.<job>.result == 'success'` explicitly. Without it, a failed build
+  could still allow assembly and a failed validation could still allow
+  publication, because the guard condition alone evaluated true.
+- The producer's measurement and the consumer's coverage check were two
+  definitions of "the toolchain's shared libraries": one trusted a `--library`
+  list assembled in YAML, the other walked `<toolchain>/lib`. They now call the
+  same `shared_libraries` function, and a test pins the measured set equal to
+  the consumer's walk.
+- `gh attestation verify` is usable from the adapter as well as from a
+  consumer: it reports a non-zero exit for a bundle outside the pinned policy
+  or for another run's attempt, which is exactly the signal
+  `provenance_verified` needs.
 
 ## Decision log
 
+- *One module owns the shared-library set.* `shared_libraries` walks
+  `<toolchain>/lib`, refuses a directory or link that escapes it, and is the
+  only definition of the set. `measure_build` hashes what it returns;
+  `toolchain_binding` refuses any unrecorded file it returns.
+- *Assembly takes the identity from the job that allocated it.* The build
+  artefact is produced by the least trusted job, so the tag, upstream commit
+  and builder commit it reports are compared with the resolve job's own
+  identity, downloaded separately. Publication's target therefore cannot be
+  chosen by the build.
+- *`provenance_verified` includes the signature.* A published release's
+  attestation is checked with the consumer's `AttestationPolicy` — this
+  repository's signer workflow, the manifest's builder commit as source and
+  signer digest — and the verified statement must name this run and attempt.
+  The structural checks stay as a cheap refusal and never decide the flag.
+- *A published release must resolve to a tag.* A published release whose tag ref
+  cannot be resolved has no confirmed target, so observation refuses it instead
+  of letting policy reach a no-op.
 - *Build evidence is measured in Python, not shell.* The build job observes
   files: compiler identities, channel manifest, lock digests, solver digests
   and versions, wall time and disk high-water mark. `measure_build` turns them
@@ -191,9 +237,9 @@ Terms used here:
   tag.
 - *Validation records what it verifies.* `validate` checks payload digests, the
   manifest bytes on disk, the exact `SHA256SUMS` rows and a non-empty
-  attestation bundle. Cryptographic verification stays with the consumer
-  verifier and with EP-M5's clean runner; the design document and developers'
-  guide say so explicitly.
+  attestation bundle. Its receipt is a record of those checks, not a statement
+  about the signature; the publisher's own observation verifies the signature
+  under the consumer's policy, and EP-M5's clean runner exercises it end to end.
 - *The Python release is draft-first.* Creating a public release before
   uploading publishes immutable assets that cannot be repaired. The workflow
   now creates or resumes a draft, uploads only missing wheels, downloads and
@@ -214,9 +260,10 @@ Terms used here:
   releases alike.
 - *`provenance_verified` states exactly what the publisher checked.* A published
   release must re-verify from its own bytes: manifest, checksums, payloads, a
-  well-formed SLSA statement naming the manifest digest, and identities that
-  reproduce the body's build-input fingerprint. Signature validity stays a
-  consumer check, and the name says so.
+  well-formed SLSA statement naming the manifest digest, identities that
+  reproduce the body's build-input fingerprint, and — since A3 — a signature
+  the consumer's own policy accepts for this run and attempt. The structural
+  checks run first as a cheap refusal; the verifier alone decides the flag.
 
 ## Outcomes & retrospective
 
