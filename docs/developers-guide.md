@@ -559,14 +559,20 @@ counts. A repository that selects no backend emits no such event.
 `rust_prover_tools.kani_snapshot.install` orchestrates one installation: stage
 and verify transport files, extract the launcher, run setup, probe the
 installed compiler, write the receipt, then publish the next activation record.
-`install_state` owns locking and cache revalidation, `activation` owns the
-ordered create-only records, `completion` owns the per-identity completion
-watermark those records advance, `durability` owns the flushes that make state
-durable, and `cleanup` owns bounded removal of private, uniquely named state.
-`run` only revalidates and executes; it never installs. `kani_snapshot_cli`
-registers the public commands, and `cli_support` holds the repository-root and
-error-exit helpers shared with the legacy CLI. Keep lifecycle code out of the
-legacy `kani_release` modules.
+`install_sender` owns where those files come from: `ReleaseSender` downloads
+the release the reviewed pin names, pinning the manifest to the pin's digest
+and each payload to its manifest record, while `LocalSender` copies from
+`--asset-dir` under the same envelopes. Neither decides trust; both bound and
+verify bytes, and `install_transport` keeps the order in which the manifest,
+checksums, attestation and payloads may be trusted. `install_state` owns
+locking and cache revalidation, `activation` owns the ordered create-only
+records, `completion` owns the per-identity completion watermark those records
+advance, `durability` owns the flushes that make state durable, and `cleanup`
+owns bounded removal of private, uniquely named state. `run` only revalidates
+and executes; it never installs. `kani_snapshot_cli` registers the public
+commands, and `cli_support` holds the repository-root and error-exit helpers
+shared with the legacy CLI. Keep lifecycle code out of the legacy
+`kani_release` modules.
 
 The dependency direction is CLI to orchestration to validated models and
 command adapters. `InstallHooks` is the injection seam for setup, probe and
@@ -891,6 +897,20 @@ policy — `gh attestation verify` with explicit repository, workflow, ref,
 source and signer digests, correlated with the manifest's run and attempt — is
 the consumer's, and EP-M5 exercises it on a clean runner. Do not describe the
 receipt as proof that a signature was verified.
+
+Identity reuse is decided by `input_fingerprint`, a SHA-256 over a canonical
+document of declared inputs: the upstream commit, this repository's build
+commit, and the pinned recipe's toolchain, prerequisites, submodules, runtime
+and builder facts. Run and attempt numbers, timings, cache outcomes and asset
+sizes are deliberately excluded, because a rebuild of unchanged inputs produces
+a new manifest but the same inputs. The `identity` subcommand writes that
+fingerprint into `identity.json`, `publish` recomputes it from the manifest's
+commits, and `release_body` records it in the release body next to the creating
+run and attempt. A draft is resumable only by that run and attempt; a published
+release answers with a no-op only when the fingerprint matches and the adapter
+re-verified the release's own assets against its own manifest. Nothing compares
+this run's manifest digest with the published one, because they legitimately
+differ.
 
 ### Workflow contract tests
 

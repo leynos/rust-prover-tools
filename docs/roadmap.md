@@ -5,19 +5,20 @@ was approved on 9 November 2026. All entries remain open until their acceptance
 evidence exists; plan approval and merging code do not complete them on their
 own.
 
-## Status, 15 November 2026
+## Status, 19 November 2026
 
 - **Merged:** the EP-M2 and EP-M3 implementations, in #131 (14 November): pin
   and manifest contracts, and isolated snapshot installation, identity checking
-  and execution. The installer takes separately staged, verified assets from a
-  local `--asset-dir`; release download isn't connected yet.
+  and execution. The installer downloads the release its pin names, with a local
+  `--asset-dir` retained as an offline override.
 - **Completed (15 November):** EP-M1, the upstream recipe and the demonstrated
   Rust 1.94 compiler floor. The released `kani-0.68.0` tag is pinned, the
   producer recipe and its evidence tests are in place, and the prototype bundle
   built, installed through local setup and verified the floor harness.
-- **Not started:** EP-M4 (build and publication), EP-M5 (smoke build and
-  handoff), and the first live publication. This project has not published a
-  snapshot.
+- **In review:** EP-M4 (build and publication), in #258. The schedule stays
+  disabled, so no snapshot has been published.
+- **Not started:** EP-M5 (smoke build and handoff) and the first live
+  publication. This project has not published a snapshot.
 
 ## 1. Immutable Kani snapshot distribution
 

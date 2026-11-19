@@ -157,35 +157,41 @@ for the tag grammar and field constraints.
 `tools/kani/snapshot.toml`:
 
 ```sh
-prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+prover-tools kani snapshot install
 ```
+
+Add `--asset-dir dist/kani-snapshot` to copy the same files from a local
+directory instead of downloading the release.
 
 Installation requires the prebuilt GitHub CLI (`gh`) on the caller's `PATH`;
 the installer runs `gh attestation verify` and bundles no verifier of its own. A
 `PATH` entry under a directory another user can write can replace `gh`, so run
 the command with a `PATH` whose entries you trust.
 
-Installation requires `--asset-dir` until the release download transport is
-implemented. The directory must contain `manifest.json`,
-`manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the manifest names. The
-installer checks, in order, that the manifest bytes match the reviewed pin
-digest, that the pin binds to the manifest, that the checksums agree, that
-`gh attestation verify` accepts the bundle under the repository policy, and
-that every payload matches its recorded size and digest. It then compares the
-backend archive's members with `inventory.json` and runs the packaged launcher's
-`setup --use-local-bundle` with generation-private `KANI_HOME`, `RUSTUP_HOME`
-and `CARGO_HOME`. Only after the installed `rustc -vV` and
-`kani-compiler --version` match the manifest does the command record the active
-generation. The same check that `snapshot check` performs runs first: every
-runtime file the launcher needs must be present and executable, `pyroot` must
-be a real directory whose links resolve inside that directory and whose members
-exactly match the record written after setup, and the recorded toolchain's
-shared libraries must live inside the private rustup home with no unrecorded
-library beside them. The rustup home itself must also resolve inside the
-generation. When an existing generation is reused, the backend archive is
-rehashed rather than trusted by size, so an equal-size edit is still refused.
-The compiler probes load the verified toolchain's `lib` directory first, so an
-inherited `LD_LIBRARY_PATH` cannot shadow it.
+Installation downloads the release the reviewed pin names: `manifest.json` is
+authenticated against the pin's digest, and every payload and evidence file is
+authenticated against what that manifest records. Add `--asset-dir` to install
+from a local directory instead, which is useful for offline reproduction and
+for reviewing a release before it is published. The directory must contain
+`manifest.json`, `manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the
+manifest names. The installer checks, in order, that the manifest bytes match
+the reviewed pin digest, that the pin binds to the manifest, that the checksums
+agree, that `gh attestation verify` accepts the bundle under the repository
+policy, and that every payload matches its recorded size and digest. It then
+compares the backend archive's members with `inventory.json` and runs the
+packaged launcher's `setup --use-local-bundle` with generation-private
+`KANI_HOME`, `RUSTUP_HOME` and `CARGO_HOME`. Only after the installed
+`rustc -vV` and `kani-compiler --version` match the manifest does the command
+record the active generation. The same check that `snapshot check` performs
+runs first: every runtime file the launcher needs must be present and
+executable, `pyroot` must be a real directory whose links resolve inside that
+directory and whose members exactly match the record written after setup, and
+the recorded toolchain's shared libraries must live inside the private rustup
+home with no unrecorded library beside them. The rustup home itself must also
+resolve inside the generation. When an existing generation is reused, the
+backend archive is rehashed rather than trusted by size, so an equal-size edit
+is still refused. The compiler probes load the verified toolchain's `lib`
+directory first, so an inherited `LD_LIBRARY_PATH` cannot shadow it.
 
 `prover-tools kani snapshot check` revalidates the active generation without
 running setup:

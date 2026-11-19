@@ -41,8 +41,7 @@ installation never enters either release installer fallback. These consumer
 commands are implemented and are existing APIs:
 
 ```bash
-prover-tools kani snapshot install --pin tools/kani/snapshot.toml \
-  --asset-dir dist/kani-snapshot
+prover-tools kani snapshot install --pin tools/kani/snapshot.toml
 prover-tools kani snapshot check --pin tools/kani/snapshot.toml
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
 ```
@@ -401,14 +400,17 @@ compiler identity. Compare executable digests and effective compiler
 `cargo kani --version`. Record and validate setup-generated paths. Reports omit
 tokens, signed redirect URLs and inherited secret-bearing environment values.
 
-### Implemented consumer boundary (EP-M3)
+### Implemented consumer boundary (EP-M3, EP-M4)
 
 The installation pipeline is manifest digest, pin binding, checksums,
-attestation, payload copies and digests, archive structure, setup, launcher
-placement, probes, receipt, activation. A local `--asset-dir` is the only
-transport implemented so far; refusing to run without it is explicit rather
-than a silent fallback to a host installation. The remote download policy in
-this section remains the design for the later transport milestone.
+attestation, payload arrival and digests, archive structure, setup, launcher
+placement, probes, receipt, activation. Bytes arrive through one of two
+transports selected by `sender_for`: the public release the reviewed pin names
+is the default, and a local `--asset-dir` remains available for offline
+transfers. The manifest is pinned to the reviewed digest, payloads are pinned
+to the manifest's records, and the two self-authenticating evidence files are
+bounded by size alone; `install_sender` never decides trust, only bounds and
+verifies bytes.
 
 Structural agreement is checked before setup. The manifest pins the backend
 archive's bytes, and the separately hashed `inventory.json` is compared with
