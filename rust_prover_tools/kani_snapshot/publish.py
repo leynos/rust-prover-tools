@@ -116,6 +116,25 @@ def _discard(
         api.discard(request.expected.tag, asset)
 
 
+def _state_key(observed: ObservedRelease) -> tuple[object, ...]:
+    """Return the parts of an observation that decide what the draft holds.
+
+    Only the identity of each record is compared, not the digest: the two
+    readings sit on either side of a download, so one of them carries hashes
+    the other cannot, and that difference alone is not a change of state.
+    """
+    return (
+        observed.exists,
+        observed.is_draft,
+        observed.release_id,
+        tuple(
+            sorted(
+                (asset.name, asset.size, asset.asset_id) for asset in observed.assets
+            )
+        ),
+    )
+
+
 def _recheck(
     api: ReleaseApi,
     request: PublicationRequest,
@@ -128,6 +147,16 @@ def _recheck(
     download: only a verification run against the current bytes can say the
     draft still deserves to become public.
 
+    The download takes time, and the listing it was started from is not
+    evidence of what is still there when it finishes: an asset removed after
+    its own bytes were hashed would otherwise be published missing. So the
+    state is read once more after the verification, and the decision is made
+    from that reading. When the two readings agree, the verified observation is
+    the one decided on, because it carries the digests and the provenance
+    verdict the second reading cannot; when they disagree, the draft moved
+    while it was being read and the verified set no longer describes it, so the
+    newer reading is decided on instead.
+
     The recheck narrows the window before the write; it does not close it.
     GitHub's release update has no conditional form, so the state can still
     change between this decision and the PATCH. What the recheck guarantees is
@@ -137,14 +166,18 @@ def _recheck(
     always followed by another observation rather than assumed to have landed
     in the state that authorised it.
     """
-    fresh = api.observe(request.expected.tag)
-    names = tuple(asset.name for asset in fresh.assets)
-    if names:
-        fresh = _with_verification(
-            fresh,
-            api.verify(request.expected.tag, fresh, names),
-        )
-    return fresh, decide(request.expected, fresh, request.validation)
+    observed = api.observe(request.expected.tag)
+    names = tuple(asset.name for asset in observed.assets)
+    if not names:
+        return observed, decide(request.expected, observed, request.validation)
+    verified = _with_verification(
+        observed,
+        api.verify(request.expected.tag, observed, names),
+    )
+    confirmed = api.observe(request.expected.tag)
+    if _state_key(confirmed) != _state_key(observed):
+        return confirmed, decide(request.expected, confirmed, request.validation)
+    return verified, decide(request.expected, verified, request.validation)
 
 
 def _publish(

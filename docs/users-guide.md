@@ -312,8 +312,10 @@ stale draft, or choose a new publication identity, before retrying. A record
 left by a failed upload that holds no bytes is removed and the file is uploaded
 again, but only after any asset already in the draft whose digest GitHub did
 not report has been downloaded and checked, so a draft that turns out to hold
-conflicting bytes is never edited. Changed inputs or conflicting bytes require
-a new identity.
+conflicting bytes is never edited. Publication re-reads the draft once that
+download finishes and uploads again anything that disappeared while it ran, so
+a release is never made public missing an asset that was removed during the
+check. Changed inputs or conflicting bytes require a new identity.
 
 To dispatch a non-publishing run from a checkout:
 

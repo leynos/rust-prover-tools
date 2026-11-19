@@ -810,6 +810,17 @@ from the full verification that authenticates a release's own evidence: it
 downloads only the assets the edit depends on and claims no provenance, while a
 draft that needs no edit is verified whole before publication.
 
+The write that makes the draft public is decided from a reading taken after
+that download. A download takes time, and the listing it started from cannot
+show an asset removed while its own bytes were being hashed; publishing from
+that listing would make an incomplete release public and report the loss only
+afterwards. Publication therefore reads the draft again once verification
+completes and does not act on a verified set that the newer reading no longer
+matches, restoring the asset that disappeared before anything becomes public.
+The window between that reading and the PATCH cannot be closed, because
+GitHub's release update has no conditional form; the observation that follows
+the write is what reports a divergence there.
+
 Repository-wide immutable releases are proposed for operational bootstrap, not
 enabled by implementation or this planning task. First adjust
 `.github/workflows/release.yml` to assemble all wheels, create a draft, upload

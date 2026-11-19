@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.documentation_examples import load_examples
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MAKE = shutil.which("make")
@@ -24,6 +26,11 @@ NEEDS_MAKE = pytest.mark.skipif(MAKE is None, reason="GNU make is required")
 _SHA = "a" * 40
 _TAG = "kani-snapshot-2026-12-0123456789ab-r1"
 _GH_STUB = '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$GH_ARGS_FILE"\n'
+_USERS_GUIDE = REPO_ROOT / "docs" / "users-guide.md"
+#: The identifier the guide gives its smoke-dispatch example.
+_SMOKE_EXAMPLE = "kani-snapshot-smoke"
+#: The placeholders the example shows, with representative values substituted.
+_SUBSTITUTIONS = {"<full upstream commit>": _SHA, "<12 hex>": "0123456789ab"}
 
 
 def _make(
@@ -105,3 +112,44 @@ def test_the_smoke_target_validates_its_inputs_and_dispatches_as_data(
         "workflow\nrun\nkani-monthly.yml\n--ref\nmain\n-f\n"
         f"upstream_commit={_SHA}\n-f\npublication_id={_TAG}\n-f\npublish=false\n"
     )
+
+
+@NEEDS_MAKE
+def test_the_documented_smoke_example_dispatches_without_publishing(
+    tmp_path: Path,
+) -> None:
+    """The guide's own command runs, and the dispatch it makes cannot publish.
+
+    The example is read from the shipped guide rather than restated here, so
+    the documented invocation and the tested recipe are checked against each
+    other: an edit to either one that breaks the reader's command fails this
+    test, without dispatching a hosted run.
+    """
+    example = load_examples(
+        _USERS_GUIDE.read_text(encoding="utf-8"), source=str(_USERS_GUIDE)
+    )[_SMOKE_EXAMPLE]
+    command = example.body
+    for placeholder, value in _SUBSTITUTIONS.items():
+        assert placeholder in command, (
+            f"the example no longer shows the placeholder {placeholder!r}"
+        )
+        command = command.replace(placeholder, value)
+    environment, log = _gh_stub(tmp_path)
+    shell = shutil.which("sh")
+    assert shell is not None, "a POSIX shell is required to run the example"
+
+    completed = subprocess.run(
+        [shell, "-eu", "-c", command],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert log.read_text(encoding="utf-8") == (
+        "workflow\nrun\nkani-monthly.yml\n--ref\nmain\n-f\n"
+        f"upstream_commit={_SHA}\n-f\npublication_id={_TAG}\n-f\npublish=false\n"
+    ), "the documented command did not dispatch a non-publishing run"

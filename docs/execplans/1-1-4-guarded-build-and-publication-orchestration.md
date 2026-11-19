@@ -258,6 +258,24 @@ Terms used here:
   byte check and a provenance verdict, and the developers guide now names
   `download_unverified` as the one bounded exception to the `download_pinned`
   rule instead of implying that no download path may use anything else.
+- 19 November 2026: remediated the ninth completeness assessment (A9,
+  `EP258-2026-11-19-A9`). Three findings were open. First, publication was
+  decided from the asset listing the recheck made before its download, so an
+  asset removed after its own bytes were hashed was still published and the
+  loss surfaced only once the release was public. `publish._recheck` now reads
+  the draft again once verification completes: when the two readings agree it
+  decides on the verified observation, and when they disagree it decides on the
+  newer reading, which restores the vanished asset before anything becomes
+  public. `tests/test_kani_snapshot_publish_race.py` fails on the old code with
+  a publish that precedes the upload. Second, the `verify` port contract
+  claimed a result could never describe another release than the observation,
+  which the adapter cannot prove: it downloads by tag, and a tag is not a
+  lease. The docstring now states that limit and says the caller confirms the
+  state after the download, as publication does. Third, the smoke example in
+  the users guide is executed rather than string-matched:
+  `tests/test_workflow_makefile_contract.py` loads the fence from the guide,
+  substitutes representative inputs and runs it against the `gh` stand-in,
+  asserting the exact dispatch vector including `publish=false`.
 
 ## Surprises & discoveries
 
@@ -412,6 +430,12 @@ Terms used here:
   claims no provenance. A draft that needs no edit is verified whole instead,
   because that download already hashes every asset; paying for both would
   double the transfer for no extra evidence.
+- *Publication is decided from a reading taken after its download.* The listing
+  a recheck starts from cannot show an asset removed while its bytes were being
+  hashed, so the recheck reads the draft again and acts on the newer reading
+  when the two disagree. The window between that reading and the PATCH is
+  unavoidable — GitHub's release update has no conditional form — and the
+  observation after the write is what reports a divergence there.
 
 ## Outcomes & retrospective
 

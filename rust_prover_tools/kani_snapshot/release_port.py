@@ -5,12 +5,12 @@ module owns the contract between them. Keeping the port separate means the
 orchestration can be read without also reading every operation's contract, and
 an adapter can be written against the port alone.
 
-The port separates reading state from verifying bytes: `observe` performs
-queries only, and `verify` is the one command that downloads and authenticates.
-A caller can therefore tell whether an observation cost a download, and the
-policy can ask for verification explicitly rather than receiving hashes that
-may or may not have been computed. `hash_assets` is the narrower read: it hashes
-the assets a draft edit is about to rely on, without claiming provenance.
+The port separates reading state from reading bytes: `observe` performs queries
+only, `verify` downloads the whole release and authenticates it, and
+`hash_assets` is the narrower read that hashes the assets a draft edit is about
+to rely on without claiming provenance. A caller can therefore tell whether an
+observation cost a download, and the policy can ask for verification explicitly
+rather than receiving hashes that may or may not have been computed.
 """
 
 from __future__ import annotations
@@ -35,11 +35,12 @@ __all__ = ("ReleaseApi",)
 class ReleaseApi(typ.Protocol):
     """The release operations publication needs from an adapter.
 
-    The port separates reading state from verifying bytes: `observe` performs
-    queries only, and `verify` is the one command that downloads and
-    authenticates. A caller can therefore tell whether an observation cost a
-    download, and the policy can ask for verification explicitly rather than
-    receiving hashes that may or may not have been computed.
+    The port separates reading state from reading bytes: `observe` performs
+    queries only, `verify` downloads the whole release and authenticates it,
+    and `hash_assets` downloads only the assets a draft edit depends on. A
+    caller can therefore tell whether an observation cost a download, and the
+    policy can ask for verification explicitly rather than receiving hashes
+    that may or may not have been computed.
     """
 
     def observe(self, tag: str) -> ObservedRelease:
@@ -82,8 +83,12 @@ class ReleaseApi(typ.Protocol):
             Release to read.
         observed : ObservedRelease
             Observation the result is bound to. The release identity, body and
-            asset set come from it, so a result can never describe another
-            release than the one the caller decided about.
+            asset set come from it, and the adapter refuses a name it does not
+            report. The downloaded bytes, however, are whatever the `tag`
+            serves when the download runs: the adapter cannot prove they belong
+            to the release it observed, so a caller that needs the two to be
+            the same reads the state again after the download and decides from
+            that reading, as publication does before its write.
         names : collections.abc.Sequence[str]
             Asset names the caller intends to rely on. The adapter refuses a
             name the observation does not report.
