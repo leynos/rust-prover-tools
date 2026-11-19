@@ -120,15 +120,38 @@ def test_an_empty_wheel_inventory_refuses_to_release(
     assert "refusing to create a release" in inventory
 
 
-def test_a_published_release_is_never_touched(
+def test_a_published_release_is_recovered_as_a_verified_no_op(
     workflow: dict[str, object],
 ) -> None:
-    """Published bytes are immutable, so a rerun must refuse."""
-    draft = named_scripts(job(workflow, "release"))["Create the draft or resume it"]
+    """D5: a matching published release is a no-op; a collision still fails.
+
+    The release is neither refused outright nor repaired. Publication writes
+    nothing, upload and publish are skipped, and the ordinary verification
+    step still compares the released bytes with this run's build — so a
+    release serving anything else fails there instead of being replaced.
+    """
+    named = named_scripts(job(workflow, "release"))
+    draft = named["Create the draft or resume it"]
     assert "isDraft" in draft
-    assert '!= "true"' in draft
-    assert "already published" in draft
+    assert '== "true"' in draft
+    assert "RELEASE_STATE=published" in draft
+    assert "RELEASE_STATE=draft" in draft
     assert "resuming the existing draft" in draft
+    assert "published bytes are never replaced" in draft
+
+    assert 'RELEASE_STATE:-}" == "published"' in named["Upload the missing wheels"]
+    assert 'RELEASE_STATE:-}" == "published"' in named["Publish the release"]
+    assert 'RELEASE_STATE:-}" == "published"' in named["Verify the complete asset set"]
+
+
+def test_a_published_release_that_disagrees_is_a_collision(
+    workflow: dict[str, object],
+) -> None:
+    """The no-op cannot hide a different asset set behind a success status."""
+    verify = named_scripts(job(workflow, "release"))["Verify the complete asset set"]
+    assert "the release does not serve the expected wheel set" in verify
+    assert "outside the expected inventory" in verify
+    assert 'cmp "$wheel" "verified/$(basename "$wheel")"' in verify
 
 
 def test_the_release_is_created_as_a_draft_with_generated_notes(

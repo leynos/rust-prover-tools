@@ -6,7 +6,9 @@ name: Release Wheels
 # against the downloaded bytes, and only then is the draft published. A
 # published release's assets are immutable, so creating it first — as this
 # workflow used to — would leave no way to attach a wheel that failed to
-# upload. An interrupted draft is resumed; a published release is refused.
+# upload. An interrupted draft is resumed. An already-published release is
+# verified and left untouched: it succeeds only if it serves exactly the
+# expected wheel set and bytes, and any disagreement is a collision error.
 
 on:
   push:
@@ -82,13 +84,22 @@ jobs:
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft' \
               > draft-state.txt 2>/dev/null; then
-            if [[ "$(cat draft-state.txt)" != "true" ]]; then
-              echo "release $GITHUB_REF_NAME is already published" >&2
-              echo "published assets are immutable; cut a new version instead" >&2
-              exit 1
+            if [[ "$(cat draft-state.txt)" == "true" ]]; then
+              echo "RELEASE_STATE=draft" >> "$GITHUB_ENV"
+              echo "resuming the existing draft for $GITHUB_REF_NAME"
+            else
+              # A published release is recovered as a no-op, never repaired:
+              # the upload and publish steps write nothing, and verification
+              # below still proves the release serves exactly these bytes. A
+              # release that serves anything else is a collision and fails
+              # there, so a rerun can neither replace published bytes nor
+              # quietly accept a different asset set.
+              echo "RELEASE_STATE=published" >> "$GITHUB_ENV"
+              echo "release $GITHUB_REF_NAME is already published"
+              echo "verifying it as a no-op; published bytes are never replaced"
             fi
-            echo "resuming the existing draft for $GITHUB_REF_NAME"
           else
+            echo "RELEASE_STATE=draft" >> "$GITHUB_ENV"
             gh release create "$GITHUB_REF_NAME" \
               --draft \
               --generate-notes \
@@ -100,6 +111,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [[ "${RELEASE_STATE:-}" == "published" ]]; then
+            echo "release $GITHUB_REF_NAME is published; no asset may be added"
+            exit 0
+          fi
           gh release view "$GITHUB_REF_NAME" --json assets \
             --jq '.assets[].name' | sort > uploaded.txt
           while IFS= read -r wheel; do
@@ -136,9 +151,17 @@ jobs:
           while IFS= read -r wheel; do
             cmp "$wheel" "verified/$(basename "$wheel")"
           done < wheel-inventory.txt
+
+          if [[ "${RELEASE_STATE:-}" == "published" ]]; then
+            echo "the published release serves exactly these bytes; no-op"
+          fi
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [[ "${RELEASE_STATE:-}" == "published" ]]; then
+            echo "release $GITHUB_REF_NAME is already published; nothing to publish"
+            exit 0
+          fi
           gh release edit "$GITHUB_REF_NAME" --draft=false
