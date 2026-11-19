@@ -189,8 +189,14 @@ snapshot is built from a released tag, so a commit qualifies only if a release
 object names it, and an unreleased default-branch head is not a candidate even
 when its checks are green. Scheduled runs therefore inspect the newest releases
 (up to 20) rather than raw commits, selecting the newest whose required
-upstream Linux checks completed successfully. This is the rule EP-M4 follows;
-the default-branch wording above is superseded where the two disagree. Record
+upstream Linux checks completed successfully. This is the rule EP-M4 follows,
+with one narrowing that EP-M4 records explicitly: the scheduled route selects
+the newest qualified release, but it builds only the commit a reviewed recipe
+pins, and a newer qualified release is refused with the instruction to update
+the recipe rather than pairing the pinned source with a new release's identity
+(see
+[Implemented producer boundary (EP-M4)](#implemented-producer-boundary-ep-m4)).
+The default-branch wording above is superseded where the two disagree. Record
 the exact check names, run URLs, head SHAs and conclusions; empty or ambiguous
 check sets fail closed. Manual input is a full SHA, with the same checks and
 compiler-floor policy. Never interpret arbitrary input as a shell fragment, ref
@@ -816,6 +822,19 @@ other input:
   foreign commit with a trusted tag. `collect_releases` projects the bounded
   release list that identity allocation needs, because the workflow's shell may
   compose observed documents but must not decide what one means.
+
+  The scheduled route is observation-complete but deliberately not
+  self-advancing. `collect_candidates` records every check run with its head
+  SHA, run URL and conclusion, and refuses a truncated page set or a run about
+  another commit; `resolve` then selects the newest qualified release and
+  refuses to build it unless its commit and tag are the reviewed recipe's,
+  naming the recipe update it needs. D3 says to select the newest qualified
+  release, so this is a recorded design change rather than an accidental
+  divergence: an implementation that built the pinned source while recording a
+  newer release's tag would break D1's immutability, and automatic selection
+  may never drift to an unreviewed upstream commit. A manual dispatch is not a
+  bypass either; it may only resolve the pinned commit, so the dispatch exists
+  for recovery of that build rather than for selecting another.
 - `build` derives the pinned plan from the resolution and identity, and the
   workflow executes exactly the plan's argument vectors. `measure_build`
   records the evidence a build job can only observe: re-executed compiler
@@ -839,6 +858,18 @@ other input:
   release to a recorded no-op observation. A changed input, a foreign tag or an
   extra asset is refused rather than repaired, because published bytes are
   never replaced.
+
+Publication observation resolves `refs/tags/<tag>` rather than trusting the
+release's `target_commitish`, which GitHub ignores once the tag exists: an
+existing tag therefore decides the commit an observation reports, an annotated
+tag is peeled to its commit, and a tag no release carries is refused before a
+draft could adopt it. A published release is then re-verified from its own
+downloaded bytes — the manifest must record this tag, its checksums and
+payloads must match, its attestation must be a well-formed in-toto provenance
+statement naming its digest, and its recorded identities must reproduce the
+build-input fingerprint in the release body. Signature validity under a trusted
+root remains a consumer check (D6, EP-M5), so `provenance_verified` records
+exactly the checks the publisher could run.
 
 `make workflow-check` runs the workflow contract tests and actionlint together,
 and CI runs it once the pinned actionlint release is installed.

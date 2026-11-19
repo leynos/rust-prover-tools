@@ -138,6 +138,20 @@ def test_a_draft_with_other_bytes_conflicts() -> None:
     assert "differ from the expected bytes" in decision.reason
 
 
+def test_a_draft_that_is_wrong_and_incomplete_conflicts_before_uploading() -> None:
+    """A present asset with other bytes outranks an absent one.
+
+    A draft that carries the wrong bytes can never be completed, so the
+    conflict must be diagnosed before an upload for a missing asset is
+    requested; otherwise the run would write to a draft it has to abandon.
+    """
+    wrong = fixtures.assets_with_digest("backend.tar.gz", fixtures.digest(b"other"))
+    decision = decide(fixtures.expected(), fixtures.draft(wrong), fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "differ from the expected bytes" in decision.reason
+    assert not decision.uploads
+
+
 def test_a_draft_for_another_tag_conflicts() -> None:
     """A draft under the expected tag that reports another one is ambiguous."""
     observed = dc.replace(
@@ -173,7 +187,7 @@ def test_a_published_release_with_unverified_provenance_conflicts() -> None:
     observed = fixtures.published(unhashed, provenance_verified=False)
     decision = decide(fixtures.expected(), observed, fixtures.validation())
     assert decision.action is ReleaseAction.CONFLICT
-    assert "not verified against its own manifest" in decision.reason
+    assert "did not authenticate its own publication" in decision.reason
 
 
 def test_a_published_release_with_a_different_asset_set_conflicts() -> None:

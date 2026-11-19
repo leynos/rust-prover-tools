@@ -22,6 +22,8 @@ from rust_prover_tools.kani_snapshot.producer.commands import (
     bundle_asset_name,
     bundle_command,
     launcher_asset_name,
+    launcher_extract_command,
+    launcher_install_command,
     launcher_package_command,
     toolchain_install_command,
 )
@@ -53,6 +55,7 @@ from rust_prover_tools.kani_snapshot.validation import (
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.models import WorkflowIdentity
+    from rust_prover_tools.kani_snapshot.producer.recipe_model import Recipe
 
 __all__ = (
     "LIFECYCLE_SCHEMA_VERSION",
@@ -90,6 +93,32 @@ _PLAN_KEYS: typ.Final[frozenset[str]] = frozenset({
     "commands",
     "workflow",
 })
+
+#: Where `cargo package` leaves a packaged crate, relative to the checkout the
+#: plan runs in.
+_LAUNCHER_PACKAGE_DIR: typ.Final[pathlib.Path] = pathlib.Path("target/package")
+
+#: Prefix the locked launcher install writes its `bin` directory into.
+_LAUNCHER_PREFIX: typ.Final[pathlib.Path] = pathlib.Path("target/launcher-prefix")
+
+
+def _launcher_commands(recipe: Recipe) -> tuple[tuple[str, ...], ...]:
+    """Return the pinned package, extract and locked-install sequence.
+
+    The design produces the launchers from the packaged crate with
+    `cargo install --locked`, not by copying `target/release` binaries, so the
+    plan carries every step: packaging writes the crate, extraction produces
+    the directory the design names, and the install writes the private prefix
+    the workflow archives.
+    """
+    crate = _LAUNCHER_PACKAGE_DIR / (
+        f"{recipe.launcher.package}-{recipe.upstream.crate_version}.crate"
+    )
+    return (
+        launcher_package_command(recipe.launcher.package),
+        launcher_extract_command(crate),
+        launcher_install_command(crate.with_suffix(""), _LAUNCHER_PREFIX),
+    )
 
 
 def plan_build(request: BuildRequest) -> BuildPlan:
@@ -141,7 +170,7 @@ def plan_build(request: BuildRequest) -> BuildPlan:
         commands=(
             toolchain_install_command(recipe.upstream.toolchain_channel),
             bundle_command(recipe.upstream.crate_version),
-            launcher_package_command(recipe.launcher.package),
+            *_launcher_commands(recipe),
         ),
         workflow=request.workflow,
     )

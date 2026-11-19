@@ -8,8 +8,11 @@ instead of leaving tests behind on a stale identity.
 
 from __future__ import annotations
 
+import base64
+import json
 import typing as typ
 
+from rust_prover_tools.kani_snapshot.attestation import ATTESTATION_PREDICATE
 from rust_prover_tools.kani_snapshot.manifest import ParsedManifest, parse_manifest
 from rust_prover_tools.kani_snapshot.models import (
     REPOSITORY,
@@ -232,8 +235,31 @@ def assemble_into(directory: pathlib.Path) -> Assembly:
 def parsed_manifest(directory: pathlib.Path) -> ParsedManifest:
     """Return the parsed manifest assembled from the pinned payloads."""
     return parse_manifest(assemble_into(directory).manifest_bytes)
-    """Return the role-to-basename payload mapping for the pinned recipe."""
-    return payload_names(CRATE_VERSION, SUPPORTED_TARGET)
+
+
+def attestation_bundle(manifest_sha256: str) -> bytes:
+    """Return a Sigstore bundle whose statement covers `manifest_sha256`.
+
+    This models what `actions/attest-build-provenance` emits: a DSSE envelope
+    whose base64 payload is an in-toto statement naming the manifest's digest.
+    Signature validity under a trusted root is a consumer concern, so the
+    signature here is present but unchecked.
+    """
+    statement = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [{"name": "manifest.json", "digest": {"sha256": manifest_sha256}}],
+        "predicateType": ATTESTATION_PREDICATE,
+        "predicate": {"buildDefinition": {}},
+    }
+    payload = base64.b64encode(json.dumps(statement).encode("utf-8")).decode("ascii")
+    return json.dumps({
+        "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.3",
+        "dsseEnvelope": {
+            "payload": payload,
+            "payloadType": "application/vnd.in-toto+json",
+            "signatures": [{"sig": "c2ln"}],
+        },
+    }).encode("ascii")
 
 
 def write_payloads(directory: pathlib.Path) -> dict[str, pathlib.Path]:

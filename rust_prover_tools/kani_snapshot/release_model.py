@@ -232,7 +232,10 @@ class ObservedRelease:
     tag : str | None
         Tag the release reports.
     target_commitish : str | None
-        Commit the release tag targets.
+        Commit the tag resolves to. The adapter resolves the tag ref rather
+        than trusting the release metadata, which GitHub ignores when the tag
+        already exists; for a release whose tag is not created yet (a fresh
+        draft), it is the recorded target the tag will be created at.
     assets : tuple[ObservedAsset, ...]
         Assets currently attached to the release.
     release_id : int | None
@@ -240,9 +243,12 @@ class ObservedRelease:
     body : str | None
         Release body, which records the creating run and the build inputs.
     provenance_verified : bool
-        Whether a published release's own manifest, checksums and payload
-        digests were re-verified from the downloaded bytes. `False` for a
-        draft, which has no complete set to verify yet.
+        Whether a published release authenticated its own publication: its
+        manifest, checksums and payload digests were re-verified from the
+        downloaded bytes, its attestation names that manifest, and its
+        recorded identities reproduce the build-input fingerprint in the
+        release body. `False` for a draft, which has no complete set to verify
+        yet. Signature validity under a trusted root remains a consumer check.
     """
 
     exists: bool

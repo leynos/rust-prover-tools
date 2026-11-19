@@ -29,6 +29,7 @@ from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
     require_mapping,
+    require_non_negative_int,
     require_sequence,
 )
 
@@ -47,7 +48,11 @@ __all__ = (
 )
 
 #: Keys of the check evidence a manual dispatch must present for its commit.
-_COMMIT_CHECK_KEYS: typ.Final[frozenset[str]] = frozenset({"commit", "checks"})
+_COMMIT_CHECK_KEYS: typ.Final[frozenset[str]] = frozenset({
+    "commit",
+    "total_count",
+    "checks",
+})
 
 #: Upstream checks that must pass for the x86_64 Linux payloads.
 #:
@@ -219,10 +224,17 @@ def parse_commit_checks(data: bytes) -> str:
         msg = f"manual check evidence is missing keys: {', '.join(missing)}"
         raise ProverToolError(msg)
     commit = require_full_sha(document["commit"], "manual check evidence commit")
-    checks = tuple(
-        parse_check_run(run)
-        for run in require_sequence(document["checks"], "manual check evidence checks")
+    observed = require_sequence(document["checks"], "manual check evidence checks")
+    total = require_non_negative_int(
+        document["total_count"], "manual check evidence total_count"
     )
+    if total != len(observed):
+        msg = (
+            f"manual check evidence records {len(observed)} of {total} check "
+            "runs; an incomplete observation cannot prove the commit qualified"
+        )
+        raise ProverToolError(msg)
+    checks = tuple(parse_check_run(run) for run in observed)
     require_required_checks(checks, subject=f"upstream commit {commit}")
     return commit
 

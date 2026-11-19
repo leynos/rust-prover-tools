@@ -75,6 +75,7 @@ def _write_checks(tmp_path: pathlib.Path) -> pathlib.Path:
     path.write_text(
         json.dumps({
             "commit": fixtures.UPSTREAM_COMMIT,
+            "total_count": len(REQUIRED_UPSTREAM_CHECKS),
             "checks": [
                 {
                     "name": name,
@@ -178,9 +179,10 @@ def _assemble(tmp_path: pathlib.Path, *flags: str) -> int:
 
 
 def _attest(tmp_path: pathlib.Path) -> None:
-    """Stand in for the attestation job's bundle."""
+    """Stand in for the attestation job's bundle about the assembled manifest."""
+    manifest = (tmp_path / "release" / "manifest.json").read_bytes()
     (tmp_path / "release" / "manifest.sigstore.jsonl").write_bytes(
-        b'{"mediaType": "application/vnd.dev.sigstore.bundle+json"}\n'
+        fixtures.attestation_bundle(hashlib.sha256(manifest).hexdigest())
     )
 
 
@@ -270,6 +272,7 @@ def test_a_scheduled_resolution_selects_the_newest_qualified_release(
                     "ref": f"refs/tags/{PINNED.upstream.tag}",
                     "object": {"type": "commit", "sha": fixtures.UPSTREAM_COMMIT},
                 },
+                "total_count": len(REQUIRED_UPSTREAM_CHECKS),
                 "checks": [
                     {
                         "name": name,
@@ -471,6 +474,8 @@ class FakeGitHub:
         endpoint = args[1]
         if endpoint == f"repos/{REPOSITORY}/releases/tags/{fixtures.TAG}":
             return self._read_by_tag()
+        if endpoint == f"repos/{REPOSITORY}/git/ref/tags/{fixtures.TAG}":
+            return self._read_tag_ref()
         if endpoint.startswith(f"repos/{REPOSITORY}/releases?"):
             listed = [json.loads(self.document())] if self.exists else []
             return (json.dumps(listed), "", 0)
@@ -486,6 +491,16 @@ class FakeGitHub:
         if not self.exists:
             return ("", "gh: HTTP 404: Not Found", 1)
         return (self.document(), "", 0)
+
+    def _read_tag_ref(self) -> tuple[str, str, int]:
+        """Answer the tag-ref lookup with the commit the tag addresses.
+
+        Creating the draft creates the tag at the draft's target, so an absent
+        release has no tag either.
+        """
+        if not self.exists:
+            return ("", "gh: HTTP 404: Not Found", 1)
+        return (json.dumps({"type": "commit", "sha": self.target}), "", 0)
 
     def _create(self, args: list[str]) -> tuple[str, str, int]:
         """Answer a draft-creation call, recording what the draft declares."""

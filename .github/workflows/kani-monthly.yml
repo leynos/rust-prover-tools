@@ -271,9 +271,12 @@ jobs:
         working-directory: upstream
         env:
           TOOLCHAIN_CHANNEL: nightly-2026-08-21
+          UPSTREAM_COMMIT: ${{ needs.resolve.outputs.upstream_commit }}
         run: |
           set -euo pipefail
           jq -r '.commands[] | @sh' ../producer/plan.json > "$RUNNER_TEMP/plan-commands.sh"
+
+          upstream_dir="$GITHUB_WORKSPACE/upstream"
 
           # The resolved checkout is the build input, so its identity before and
           # after the build must agree. A command that rewrote a lockfile or a
@@ -281,22 +284,45 @@ jobs:
           # tree. `--untracked-files=no` keeps build output out of the
           # comparison; ignored paths never appear in either state.
           source_state() {
-            git -C "$GITHUB_WORKSPACE/upstream" rev-parse HEAD
-            git -C "$GITHUB_WORKSPACE/upstream" submodule status --recursive
-            git -C "$GITHUB_WORKSPACE/upstream" status --porcelain --untracked-files=no
+            git -C "$upstream_dir" rev-parse HEAD
+            git -C "$upstream_dir" submodule status --recursive
+            git -C "$upstream_dir" status --porcelain --untracked-files=no
           }
           source_state > "$RUNNER_TEMP/source-before.txt"
 
+          # A clean input is established before anything runs. Comparing the
+          # before and after states alone would accept a tree that was already
+          # dirty and stayed that way.
+          head="$(git -C "$upstream_dir" rev-parse HEAD)"
+          test "$head" = "$UPSTREAM_COMMIT" || {
+            echo "the checkout resolved to $head, not the resolved commit $UPSTREAM_COMMIT" >&2
+            exit 1
+          }
+          dirty="$(git -C "$upstream_dir" status --porcelain --untracked-files=no)"
+          test -z "$dirty" || {
+            echo "the checked-out source tree is not clean:" >&2
+            printf '%s\n' "$dirty" >&2
+            exit 1
+          }
+
           # The recipe's submodule gitlinks are checked against what this
-          # checkout actually carries. A leading status flag (' ', '+', '-',
-          # 'U') is stripped so only the recorded commit and path remain.
+          # checkout actually carries. `git submodule status` prefixes a clean
+          # submodule with a space and a rewritten, missing or conflicted one
+          # with a flag, so any other prefix is refused rather than stripped:
+          # an uninitialised or rewritten submodule is not the pinned tree.
           : > "$RUNNER_TEMP/submodule-args"
-          while read -r sha path _; do
+          while IFS= read -r line; do
+            case "$line" in
+              " "*) ;;
+              *)
+                echo "submodule is not at its recorded commit: $line" >&2
+                exit 1
+                ;;
+            esac
+            sha="$(printf '%s' "$line" | cut -c2-41)"
+            path="$(printf '%s' "$line" | cut -c43- | sed -E 's/ \(.*\)$//')"
             printf -- '--submodule\n%s=%s\n' "$path" "$sha" >> "$RUNNER_TEMP/submodule-args"
-          done < <(
-            git -C "$GITHUB_WORKSPACE/upstream" submodule status --recursive \
-              | sed -E 's/^[^0-9a-f]+//'
-          )
+          done < <(git -C "$upstream_dir" submodule status --recursive)
 
           started="$(date +%s)"
           printf '%s\n' "$(df -B1 --output=used -- "$PWD" | tail -1)" > "$RUNNER_TEMP/disk-usage"
@@ -316,6 +342,11 @@ jobs:
             echo "the build changed the checked-out source tree" >&2
             exit 1
           fi
+
+          # Preserve both observations in the build artefact so the input a
+          # failed or suspicious run built from can be inspected afterwards.
+          cp "$RUNNER_TEMP/source-before.txt" "$RUNNER_TEMP/source-after.txt" \
+            "$GITHUB_WORKSPACE/producer/"
       - name: Assemble the release payloads
         env:
           KISSAT_SOURCE: ${{ runner.temp }}/kissat-src
@@ -332,21 +363,35 @@ jobs:
           )"
           notices_asset="kani-${version}-notices-${target}.tar.gz"
 
-          bundle="$(find upstream/target -type f -name "$bundle_asset" -print -quit)"
-          test -n "$bundle" || { echo "the build produced no $bundle_asset" >&2; exit 1; }
+          # `cargo bundle` runs `build-kani` as a child of the workspace root,
+          # and that tool writes the tarball into its current directory, so the
+          # bundle lands in `upstream/`, not in `upstream/target`.
+          bundle="upstream/$bundle_asset"
+          test -f "$bundle" || {
+            echo "the build produced no $bundle_asset in the upstream workspace root" >&2
+            exit 1
+          }
           cp "$bundle" "payloads/$bundle_asset"
 
           # The consumer extracts with `--strip-components=1` under a required
           # `kani-<version>/` root and then reads `bin/cargo-kani`, so the
           # launcher archive must carry the same root and `bin` directory as
-          # the backend bundle. It is exactly the two documented binaries,
-          # packed reproducibly so an unchanged input set yields an unchanged
-          # digest.
+          # the backend bundle. The binaries come from the plan's locked
+          # `cargo install --root target/launcher-prefix`, which is the recipe
+          # the design pins, rather than from `target/release`. It is exactly
+          # the two documented binaries, packed reproducibly so an unchanged
+          # input set yields an unchanged digest.
           bundle_root="kani-${version}"
+          launcher_prefix="upstream/target/launcher-prefix"
           launcher_root="$RUNNER_TEMP/launcher-root/$bundle_root"
           mkdir -p "$launcher_root/bin"
-          install -m 0755 upstream/target/release/kani \
-            upstream/target/release/cargo-kani "$launcher_root/bin/"
+          for binary in kani cargo-kani; do
+            test -x "$launcher_prefix/bin/$binary" || {
+              echo "the locked launcher install produced no $binary" >&2
+              exit 1
+            }
+            install -m 0755 "$launcher_prefix/bin/$binary" "$launcher_root/bin/"
+          done
           tar --sort=name --mtime='UTC 2026-01-01' --owner=0 --group=0 --numeric-owner \
             -czf "payloads/$launcher_asset" -C "$RUNNER_TEMP/launcher-root" "$bundle_root"
 
@@ -439,6 +484,8 @@ jobs:
             producer/assembly-input.json
             producer/evidence.json
             producer/plan.json
+            producer/source-before.txt
+            producer/source-after.txt
           if-no-files-found: error
           retention-days: 7
 

@@ -33,6 +33,10 @@ from rust_prover_tools.kani_snapshot.release_model import (
     ReleaseTransientError,
     release_body,
 )
+from rust_prover_tools.kani_snapshot.validation import (
+    require_full_sha,
+    require_mapping,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -57,6 +61,9 @@ _RELEASE_PAGE_SIZE: typ.Final[int] = 100
 
 #: Pages the draft lookup may read. Reaching it is a failure, not an absence.
 _RELEASE_PAGE_LIMIT: typ.Final[int] = 10
+
+#: How many annotated tag objects one tag may chain through before it is refused.
+_TAG_PEEL_LIMIT: typ.Final[int] = 4
 
 #: Fields every observation needs, from either release endpoint.
 _RELEASE_QUERY: typ.Final[str] = (
@@ -87,21 +94,27 @@ def _gh(argv: cabc.Sequence[str]) -> str:
         Raised for a permanent failure such as an authentication refusal.
     """
     result = run_command(CommandSpec(tuple(argv)))
-    if result.exit_code == 0:
-        return result.stdout
-    stderr = result.stderr.strip()
-    if _is_transient(result.exit_code, stderr):
-        msg = f"transient release API failure: {stderr or result.exit_code}"
+    if result.exit_code != 0:
+        _failure(result.exit_code, result.stderr)
+    return result.stdout
+
+
+def _failure(exit_code: int, stderr: str) -> typ.NoReturn:
+    """Raise the error one failed `gh` call deserves.
+
+    Every API read classifies its failure the same way, so a new read cannot
+    accidentally report a retryable server error as permanent or the reverse.
+    A timeout, a connection failure or a retryable server status may still
+    reconcile on a fresh observation; anything else is permanent.
+    """
+    transient = exit_code == _TIMEOUT_EXIT_CODE or any(
+        marker in stderr for marker in _TRANSIENT_MARKERS
+    )
+    if transient:
+        msg = f"transient release API failure: {stderr.strip() or exit_code}"
         raise ReleaseTransientError(msg)
-    msg = f"release API command failed ({result.exit_code}): {stderr}"
+    msg = f"release API command failed ({exit_code}): {stderr.strip()}"
     raise ProverToolError(msg)
-
-
-def _is_transient(exit_code: int, stderr: str) -> bool:
-    """Return whether a failed `gh` call is worth re-observing."""
-    if exit_code == _TIMEOUT_EXIT_CODE:
-        return True
-    return any(marker in stderr for marker in _TRANSIENT_MARKERS)
 
 
 def _is_not_found(stderr: str) -> bool:
@@ -116,6 +129,37 @@ def _find_tag(records: list[object], tag: str) -> ObservedRelease | None:
         if candidate.tag == tag:
             return candidate
     return None
+
+
+def _object_document(document: object, field: str) -> tuple[str, str]:
+    """Return the type and full SHA of one Git object reference."""
+    record = require_mapping(document, field)
+    kind = record.get("type")
+    if not isinstance(kind, str):
+        msg = f"{field} must report an object type"
+        raise ProverToolError(msg)
+    return kind, require_full_sha(record.get("sha"), f"{field} sha")
+
+
+def _optional_object(path: str, field: str) -> tuple[str, str] | None:
+    """Read one Git object reference, or `None` when it does not exist."""
+    result = run_command(CommandSpec(("gh", "api", path, "--jq", ".object")))
+    if result.exit_code == 0:
+        return _object_document(decoded(result.stdout), field)
+    if _is_not_found(result.stderr):
+        return None
+    _failure(result.exit_code, result.stderr)
+
+
+def _absent(tag: str, tag_commit: str | None) -> ObservedRelease:
+    """Return the absent state, refusing a tag that already points somewhere."""
+    if tag_commit is None:
+        return ObservedRelease(exists=False, is_draft=False)
+    msg = (
+        f"tag {tag!r} already addresses {tag_commit} but no release carries it; "
+        "refusing to create a draft that would adopt the existing tag"
+    )
+    raise ProverToolError(msg)
 
 
 class GhReleaseApi:
@@ -144,16 +188,53 @@ class GhReleaseApi:
         reports an existing draft. Any other permanent failure is refused so a
         publication cannot proceed blind.
 
-        A published release's own manifest, checksums and payload digests are
-        re-verified from the downloaded bytes, so a later run need not compare
-        its new asset bytes against the published ones.
+        The tag ref is resolved to the commit it addresses, because release
+        metadata's `target_commitish` is ignored when the tag already exists.
+        An existing tag therefore decides what the release points at, and an
+        annotated tag is peeled to its commit rather than reported as its own
+        tag object. A tag with no release at all is refused: creating a draft
+        would silently adopt it.
+
+        A published release's own manifest, checksums, payloads, attestation
+        and identity are re-verified from the downloaded bytes, so a later run
+        need not compare its new asset bytes against the published ones.
         """
         observed = self._observe_by_tag(tag)
         if observed is None:
             observed = self._observe_by_list(tag)
+        tag_commit = self._tag_commit(tag)
         if observed is None:
-            return ObservedRelease(exists=False, is_draft=False)
-        return self._with_verified_assets(tag, observed)
+            return _absent(tag, tag_commit)
+        return self._with_verified_assets(
+            tag,
+            dc.replace(
+                observed,
+                target_commitish=tag_commit or observed.target_commitish,
+            ),
+        )
+
+    def _tag_commit(self, tag: str) -> str | None:
+        """Resolve `tag` to the commit it addresses, or `None` when absent."""
+        current = _optional_object(
+            f"repos/{self._repository}/git/ref/tags/{tag}", f"tag ref {tag}"
+        )
+        if current is None:
+            return None
+        for _ in range(_TAG_PEEL_LIMIT):
+            kind, sha = current
+            if kind == "commit":
+                return sha
+            if kind != "tag":
+                msg = f"tag {tag!r} addresses a {kind!r}, not a commit"
+                raise ProverToolError(msg)
+            current = _optional_object(
+                f"repos/{self._repository}/git/tags/{sha}", f"tag object {sha}"
+            )
+            if current is None:
+                msg = f"tag {tag!r} names a missing tag object {sha}"
+                raise ProverToolError(msg)
+        msg = f"tag {tag!r} chains through more than {_TAG_PEEL_LIMIT} objects"
+        raise ProverToolError(msg)
 
     def _observe_by_tag(self, tag: str) -> ObservedRelease | None:
         """Read one release by tag, or `None` when the endpoint has no answer."""
@@ -170,11 +251,7 @@ class GhReleaseApi:
             return parse_release(decoded(result.stdout))
         if _is_not_found(result.stderr):
             return None
-        if _is_transient(result.exit_code, result.stderr):
-            msg = f"transient release API failure: {result.stderr.strip()}"
-            raise ReleaseTransientError(msg)
-        msg = f"release API command failed ({result.exit_code}): {result.stderr}"
-        raise ProverToolError(msg)
+        _failure(result.exit_code, result.stderr)
 
     def _list_page(self, page: int) -> list[object]:
         """Read one page of the release list."""
@@ -226,7 +303,12 @@ class GhReleaseApi:
                 dc.replace(asset, sha256=sha256_file(directory / asset.name))
                 for asset in observed.assets
             )
-            verified = not observed.is_draft and verify_publication(directory, names)
+            verified = not observed.is_draft and verify_publication(
+                directory,
+                names,
+                tag=tag,
+                body=observed.body,
+            )
         return dc.replace(
             observed,
             assets=assets,

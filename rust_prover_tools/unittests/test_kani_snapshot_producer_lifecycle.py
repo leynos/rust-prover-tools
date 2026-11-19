@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import json
+import pathlib
 import typing as typ
 
 import pytest
@@ -88,10 +89,23 @@ def test_the_plan_records_the_pinned_recipe_argument_vectors() -> None:
     assert plan.launcher_asset == launcher_asset_name(
         PINNED.upstream.crate_version, PINNED.target
     )
+    crate = pathlib.Path("target/package") / (
+        f"{PINNED.launcher.package}-{PINNED.upstream.crate_version}.crate"
+    )
     assert plan.commands == (
         toolchain_install_command(PINNED.upstream.toolchain_channel),
         bundle_command(PINNED.upstream.crate_version),
         launcher_package_command(PINNED.launcher.package),
+        ("tar", "-xzf", str(crate), "-C", str(crate.parent)),
+        (
+            "cargo",
+            "install",
+            "--locked",
+            "--path",
+            str(crate.with_suffix("")),
+            "--root",
+            "target/launcher-prefix",
+        ),
     )
 
 

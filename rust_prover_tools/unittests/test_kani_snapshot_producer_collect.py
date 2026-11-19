@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import typing as typ
+from itertools import starmap
 
 import pytest
 
@@ -41,8 +42,10 @@ RELEASES = f"repos/{UPSTREAM_REPOSITORY}/releases?per_page=10"
 TAG_REF = f"repos/{UPSTREAM_REPOSITORY}/git/ref/tags/{TAG}"
 CHECKS = (
     f"repos/{UPSTREAM_REPOSITORY}/commits/{fixtures.UPSTREAM_COMMIT}/check-runs"
-    "?per_page=100"
+    "?per_page=100&page=1"
 )
+CHECKS_PAGE_2 = CHECKS.removesuffix("&page=1") + "&page=2"
+NOTICES_URL: typ.Final[str] = "https://github.com/kani/kani/actions/runs/9001"
 
 
 def _release(*, tag: str = TAG, draft: bool = False, prerelease: bool = False) -> dict:
@@ -65,21 +68,26 @@ def _tag_ref(sha: str = fixtures.UPSTREAM_COMMIT) -> dict:
     }
 
 
+def _run(index: int, name: str, *, head: str = fixtures.UPSTREAM_COMMIT) -> dict:
+    """Return one successful check run as the API serves it."""
+    return {
+        "id": index + 1,
+        "name": name,
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-16T03:00:00Z",
+        "head_sha": head,
+        "html_url": f"{NOTICES_URL}/{index}",
+        "details_url": f"https://api.github.com/ignored/{index}",
+        "output": {"title": "not copied"},
+    }
+
+
 def _checks() -> dict:
     """Return one successful run per required upstream check."""
     return {
         "total_count": len(REQUIRED_UPSTREAM_CHECKS),
-        "check_runs": [
-            {
-                "id": index + 1,
-                "name": name,
-                "status": "completed",
-                "conclusion": "success",
-                "started_at": "2026-09-16T03:00:00Z",
-                "output": {"title": "not copied"},
-            }
-            for index, name in enumerate(REQUIRED_UPSTREAM_CHECKS)
-        ],
+        "check_runs": list(starmap(_run, enumerate(REQUIRED_UPSTREAM_CHECKS))),
     }
 
 
@@ -122,10 +130,75 @@ def test_the_collector_composes_one_candidate_per_stable_release(
         "prerelease": False,
     }
     assert candidate["tag_ref"]["object"]["sha"] == fixtures.UPSTREAM_COMMIT
+    assert candidate["total_count"] == len(REQUIRED_UPSTREAM_CHECKS)
     assert [run["name"] for run in candidate["checks"]] == list(
         REQUIRED_UPSTREAM_CHECKS
     )
     assert "output" not in candidate["checks"][0]
+    assert candidate["checks"][0]["head_sha"] == fixtures.UPSTREAM_COMMIT
+    assert candidate["checks"][0]["html_url"] == f"{NOTICES_URL}/0"
+
+
+def test_every_check_run_page_is_collected(cmd_mox: CmdMox) -> None:
+    """Completeness is the reported total, not the length of the first page."""
+    cmd_mox.stub("gh").runs(
+        _serve({
+            RELEASES: [_release()],
+            TAG_REF: _tag_ref(),
+            CHECKS: {"total_count": 3, "check_runs": [_run(0, "a"), _run(1, "b")]},
+            CHECKS_PAGE_2: {"total_count": 3, "check_runs": [_run(2, "c")]},
+        })
+    )
+
+    document = json.loads(collect_candidates())
+
+    candidate = document[0]
+    assert candidate["total_count"] == 3
+    assert [run["name"] for run in candidate["checks"]] == ["a", "b", "c"]
+
+
+def test_a_truncated_check_observation_is_refused(cmd_mox: CmdMox) -> None:
+    """An empty page before the reported total is not a complete observation."""
+    cmd_mox.stub("gh").runs(
+        _serve({
+            RELEASES: [_release()],
+            TAG_REF: _tag_ref(),
+            CHECKS: {"total_count": 5, "check_runs": [_run(0, "a")]},
+            CHECKS_PAGE_2: {"total_count": 5, "check_runs": []},
+        })
+    )
+
+    with pytest.raises(ProverToolError, match="was empty before"):
+        collect_candidates()
+
+
+def test_a_check_run_about_another_commit_is_refused(cmd_mox: CmdMox) -> None:
+    """A run for another commit is not evidence about the released one."""
+    cmd_mox.stub("gh").runs(
+        _serve({
+            RELEASES: [_release()],
+            TAG_REF: _tag_ref(),
+            CHECKS: {"total_count": 1, "check_runs": [_run(0, "a", head="f" * 40)]},
+        })
+    )
+
+    with pytest.raises(ProverToolError, match="not the queried commit"):
+        collect_candidates()
+
+
+def test_manual_check_evidence_records_its_total(
+    tmp_path: pathlib.Path, cmd_mox: CmdMox
+) -> None:
+    """A dispatch's evidence carries the reported total beside the runs."""
+    cmd_mox.stub("gh").runs(_serve({CHECKS: _checks()}))
+    output = tmp_path / "checks.json"
+
+    assert main(["--commit", fixtures.UPSTREAM_COMMIT, "--output", str(output)]) == 0
+
+    document = json.loads(output.read_bytes())
+    assert document["commit"] == fixtures.UPSTREAM_COMMIT
+    assert document["total_count"] == len(REQUIRED_UPSTREAM_CHECKS)
+    assert len(document["checks"]) == len(REQUIRED_UPSTREAM_CHECKS)
 
 
 def test_draft_and_prerelease_releases_are_skipped(cmd_mox: CmdMox) -> None:

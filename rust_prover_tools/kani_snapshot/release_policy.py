@@ -188,8 +188,16 @@ def _asset_problem_decision(
     wanted: dict[str, ReleaseAsset | ObservedAsset],
     seen: dict[str, ReleaseAsset | ObservedAsset],
 ) -> ReleaseDecision | None:
-    """Refuse differing bytes, or ask for a verification while digests are absent."""
-    mismatched, unverified = _asset_problems(wanted, seen)
+    """Refuse differing bytes, or ask for a verification while digests are absent.
+
+    Only assets the draft already carries are compared. A present asset with
+    other bytes already proves the draft cannot be resumed, so that conflict
+    must be found before an upload for an absent asset is requested; otherwise
+    a draft that is both incomplete and wrong would be written to first and
+    diagnosed afterwards.
+    """
+    present = {name: asset for name, asset in wanted.items() if name in seen}
+    mismatched, unverified = _asset_problems(present, seen)
     if mismatched:
         return ReleaseDecision(
             ReleaseAction.CONFLICT,
@@ -208,13 +216,19 @@ def _classify_assets(
     expected: ExpectedRelease,
     observed: tuple[ObservedAsset, ...],
 ) -> ReleaseDecision:
-    """Decide what a draft's current asset set requires next."""
+    """Decide what a draft's current asset set requires next.
+
+    Classifiers run from "does this draft belong to us at all" to "what must
+    happen next", so a conflict is never reported after an effect that a
+    conflicting state did not authorise. In particular, a wrong existing asset
+    is detected before a missing one is uploaded.
+    """
     wanted = _asset_map(expected.assets)
     seen = _asset_map(observed)
     classifiers = (
         _extra_asset_decision,
-        _missing_asset_decision,
         _asset_problem_decision,
+        _missing_asset_decision,
     )
     for classifier in classifiers:
         decision = classifier(wanted, seen)
@@ -301,7 +315,7 @@ def _classify_published(
         ),
         (
             not observed.provenance_verified,
-            "published release bytes are not verified against its own manifest",
+            "published release did not authenticate its own publication",
         ),
     ))
     if conflict is not None:

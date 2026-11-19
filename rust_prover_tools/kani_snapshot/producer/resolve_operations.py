@@ -35,6 +35,7 @@ from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.validation import (
     require_int,
     require_mapping,
+    require_non_negative_int,
     require_sequence,
     require_truthy_text,
 )
@@ -51,6 +52,7 @@ __all__ = (
 _CANDIDATE_KEYS: typ.Final[frozenset[str]] = frozenset({
     "release",
     "tag_ref",
+    "total_count",
     "checks",
 })
 #: Events whose identity the producer trusts.
@@ -72,6 +74,25 @@ def workflow_identity(namespace: argparse.Namespace) -> WorkflowIdentity:
     )
 
 
+def _candidate(index: int, record: dict[str, object]) -> CandidateCommit:
+    """Parse one candidate, refusing an incomplete check observation."""
+    checks = require_sequence(record["checks"], f"candidate {index} checks")
+    total = require_non_negative_int(
+        record["total_count"], f"candidate {index} total_count"
+    )
+    if total != len(checks):
+        msg = (
+            f"candidate {index} records {len(checks)} of {total} check runs; a "
+            "truncated observation cannot prove the release qualified"
+        )
+        raise ProverToolError(msg)
+    return candidate_from_api(
+        require_mapping(record["release"], f"candidate {index} release"),
+        require_mapping(record["tag_ref"], f"candidate {index} tag_ref"),
+        checks,
+    )
+
+
 def _candidates(data: bytes) -> list[CandidateCommit]:
     """Parse the candidate document written by the resolve job's collector."""
     items = require_sequence(
@@ -85,13 +106,7 @@ def _candidates(data: bytes) -> list[CandidateCommit]:
         if missing:
             msg = f"candidate {index} is missing keys: {', '.join(missing)}"
             raise ProverToolError(msg)
-        parsed.append(
-            candidate_from_api(
-                require_mapping(record["release"], f"candidate {index} release"),
-                require_mapping(record["tag_ref"], f"candidate {index} tag_ref"),
-                require_sequence(record["checks"], f"candidate {index} checks"),
-            )
-        )
+        parsed.append(_candidate(index, record))
     return parsed
 
 

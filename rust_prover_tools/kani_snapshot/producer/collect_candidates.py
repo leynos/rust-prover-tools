@@ -27,6 +27,7 @@ from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
     require_mapping,
+    require_non_negative_int,
     require_sequence,
     require_truthy_text,
 )
@@ -55,8 +56,12 @@ UPSTREAM_TAG_PREFIX: typ.Final[str] = "kani-"
 #: Releases considered per run; older ones have long since been superseded.
 _RELEASE_LIMIT: typ.Final[int] = 10
 
-#: Check runs fetched per commit. Resolution needs the newest per check name.
-_CHECK_LIMIT: typ.Final[int] = 100
+#: Check runs requested per page.
+_CHECK_PAGE_SIZE: typ.Final[int] = 100
+
+#: Pages one commit's check runs may occupy. Reaching it is a failure, because
+#: a truncated observation would silently drop evidence resolution depends on.
+_CHECK_PAGE_LIMIT: typ.Final[int] = 10
 
 
 def _gh_json(arguments: cabc.Sequence[str], field: str) -> object:
@@ -90,22 +95,112 @@ def _release_document(release: object) -> dict[str, object] | None:
     }
 
 
-def _check_runs(document: object) -> list[dict[str, object]]:
-    """Project the check runs resolution reads from one commit."""
+def _optional_text(value: object, field: str) -> str | None:
+    """Return a string, `None`, or refuse anything else."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"{field} must be a string or null"
+        raise ProverToolError(msg)
+    return value
+
+
+def _check_run(commit: str, run: object, index: int) -> dict[str, object]:
+    """Project one check run, keeping the evidence a reviewer would check.
+
+    The head SHA is required to name the commit that was queried: a response
+    about another commit is not evidence about this release. The URLs are
+    retained so a recorded candidate can be inspected without re-querying
+    GitHub.
+    """
+    check = require_mapping(run, f"upstream check run {index}")
+    head = require_full_sha(
+        check.get("head_sha"), f"upstream check run {index} head_sha"
+    )
+    if head != commit:
+        msg = (
+            f"upstream check run {index} reports head {head}, not the queried "
+            f"commit {commit}"
+        )
+        raise ProverToolError(msg)
+    return {
+        "id": check.get("id"),
+        "name": check.get("name"),
+        "status": check.get("status"),
+        "conclusion": check.get("conclusion"),
+        "started_at": check.get("started_at"),
+        "head_sha": head,
+        "html_url": require_truthy_text(
+            check.get("html_url"), f"upstream check run {index} html_url"
+        ),
+        "details_url": _optional_text(
+            check.get("details_url"), f"upstream check run {index} details_url"
+        ),
+    }
+
+
+def _check_page(
+    commit: str,
+    page: int,
+) -> tuple[int, list[dict[str, object]]]:
+    """Read one page of a commit's check runs and its reported total."""
+    document = _gh_json(
+        [
+            (
+                f"repos/{UPSTREAM_REPOSITORY}/commits/{commit}/check-runs"
+                f"?per_page={_CHECK_PAGE_SIZE}&page={page}"
+            )
+        ],
+        f"upstream check runs for {commit}",
+    )
     record = require_mapping(document, "upstream check-run document")
-    runs: list[dict[str, object]] = []
-    for index, run in enumerate(
-        require_sequence(record.get("check_runs"), "upstream check runs")
-    ):
-        check = require_mapping(run, f"upstream check run {index}")
-        runs.append({
-            "id": check.get("id"),
-            "name": check.get("name"),
-            "status": check.get("status"),
-            "conclusion": check.get("conclusion"),
-            "started_at": check.get("started_at"),
-        })
-    return runs
+    total = require_non_negative_int(
+        record.get("total_count"), "upstream check-run total_count"
+    )
+    runs = [
+        _check_run(commit, run, index)
+        for index, run in enumerate(
+            require_sequence(record.get("check_runs"), "upstream check runs")
+        )
+    ]
+    return total, runs
+
+
+def _check_runs(commit: str) -> tuple[int, list[dict[str, object]]]:
+    """Collect every check run for `commit`, refusing a truncated answer.
+
+    GitHub reports `total_count` beside one page of runs, so the count is what
+    proves completeness: a single-page request used to treat the first 100 of
+    a larger set as the whole observation. Collection stops only when the
+    reported total has been reached, and reaching the page bound or an empty
+    page first is an actionable failure rather than a smaller document.
+    """
+    collected: list[dict[str, object]] = []
+    total: int | None = None
+    for page in range(1, _CHECK_PAGE_LIMIT + 1):
+        total, runs = _check_page(commit, page)
+        collected += runs
+        if len(collected) >= total:
+            break
+        if not runs:
+            msg = (
+                f"upstream check-run page {page} for {commit} was empty before "
+                f"its {total} runs were observed"
+            )
+            raise ProverToolError(msg)
+    else:
+        msg = (
+            f"upstream check runs for {commit} exceeded {_CHECK_PAGE_LIMIT} "
+            f"pages; raise the bound deliberately after reviewing the commit"
+        )
+        raise ProverToolError(msg)
+    if total is None or len(collected) != total:
+        msg = (
+            f"upstream check runs for {commit} observed {len(collected)} runs "
+            f"of a reported {total}"
+        )
+        raise ProverToolError(msg)
+    return total, collected
 
 
 def _candidate(release: dict[str, object]) -> dict[str, object]:
@@ -118,19 +213,12 @@ def _candidate(release: dict[str, object]) -> dict[str, object]:
     reference = require_mapping(tag_ref, f"upstream tag ref {tag}")
     target = require_mapping(reference.get("object"), f"upstream tag ref {tag} object")
     commit = require_full_sha(target.get("sha"), f"upstream tag ref {tag} commit")
-    checks = _gh_json(
-        [
-            (
-                f"repos/{UPSTREAM_REPOSITORY}/commits/{commit}/check-runs"
-                f"?per_page={_CHECK_LIMIT}"
-            )
-        ],
-        f"upstream check runs for {commit}",
-    )
+    total, checks = _check_runs(commit)
     return {
         "release": release,
         "tag_ref": reference,
-        "checks": _check_runs(checks),
+        "total_count": total,
+        "checks": checks,
     }
 
 
@@ -140,14 +228,18 @@ def collect_candidates() -> bytes:
     Returns
     -------
     bytes
-        Deterministic JSON array of `{release, tag_ref, checks}` objects, one
-        per stable `kani-` release, newest first as the API returned them.
+        Deterministic JSON array of
+        `{release, tag_ref, total_count, checks}` objects, one per stable
+        `kani-` release, newest first as the API returned them. Each check run
+        keeps its head SHA and URLs, and `total_count` records how many runs
+        the API reported.
 
     Raises
     ------
     ProverToolError
-        Raised when the API fails, a response is not the expected shape, or a
-        tag ref does not name a full commit.
+        Raised when the API fails, a response is not the expected shape, a tag
+        ref does not name a full commit, or a commit's check-run observation
+        cannot be completed within its page bound.
     """
     releases = _gh_json(
         [f"repos/{UPSTREAM_REPOSITORY}/releases?per_page={_RELEASE_LIMIT}"],
@@ -194,21 +286,22 @@ def collect_commit_checks(commit: str) -> bytes:
         not the expected shape.
     """
     resolved = require_full_sha(commit, "workflow_dispatch upstream_commit")
-    checks = _gh_json(
-        [
-            (
-                f"repos/{UPSTREAM_REPOSITORY}/commits/{resolved}/check-runs"
-                f"?per_page={_CHECK_LIMIT}"
-            )
-        ],
-        f"upstream check runs for {resolved}",
-    )
-    return checks_to_json(resolved, _check_runs(checks))
+    total, checks = _check_runs(resolved)
+    return checks_to_json(resolved, checks, total_count=total)
 
 
-def checks_to_json(commit: str, checks: cabc.Sequence[dict[str, object]]) -> bytes:
-    """Render one commit's check evidence as deterministic JSON bytes."""
-    document = {"commit": commit, "checks": list(checks)}
+def checks_to_json(
+    commit: str,
+    checks: cabc.Sequence[dict[str, object]],
+    *,
+    total_count: int,
+) -> bytes:
+    """Render one commit's check evidence as deterministic JSON bytes.
+
+    `total_count` is recorded beside the projected runs, so a reader can see
+    that the observation was complete without trusting the length of the list.
+    """
+    document = {"commit": commit, "total_count": total_count, "checks": list(checks)}
     text = json.dumps(document, sort_keys=True, indent=2, ensure_ascii=True)
     return (text + "\n").encode("ascii")
 

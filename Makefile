@@ -77,6 +77,7 @@ test-workflow-contracts: ## Check the CV-005 CodeScene workflow contracts
 ACTIONLINT ?= actionlint
 WORKFLOW_CONTRACT_TESTS ?= \
 	tests/test_kani_workflow_contract.py \
+	tests/test_kani_workflow_build_contract.py \
 	tests/test_python_release_contract.py \
 	tests/test_workflow_contract.py
 

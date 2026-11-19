@@ -125,6 +125,21 @@ Terms used here:
   Mermaid validation all passed. The spelling gate caught one en-GB-oxendict
   spelling, `authorises`, which is fixed to `authorizes`.
 - 17 November 2026: draft pull request #258 opened; roadmap 1.1.4 marked done.
+- 19 November 2026: remediated the second completeness assessment (A2,
+  `EP258-2026-11-19-A2`). Present-but-wrong release assets are now diagnosed
+  before a missing one is uploaded; publication observation resolves
+  `refs/tags/<tag>` instead of trusting `target_commitish`, peels annotated
+  tags and refuses an orphan tag; a published release is re-verified against
+  its own manifest, checksums, attestation and recorded build inputs; check-run
+  evidence is paginated to the reported total, retains head SHAs and URLs, and
+  is refused when truncated; the launcher plan carries the design's package,
+  extract and locked-install steps; and the workflow reads the bundle from the
+  workspace root, proves a clean pinned checkout and packs the installed
+  launchers. D3's scheduled rule is reconciled with the pinned-recipe guard in
+  the design. The lint gate then found the adapter and the workflow-contract
+  module at pylint's 400-line limit, so the adapter's two copies of the `gh`
+  failure classification became one helper and the build-job contracts moved to
+  `tests/test_kani_workflow_build_contract.py`.
 
 ## Surprises & discoveries
 
@@ -146,6 +161,19 @@ Terms used here:
 - A dispatch that supplies only a commit cannot also supply a trusted tag
   without letting the two disagree. The tag now defaults to the pinned
   recipe's, and a foreign commit still fails at plan time.
+- `cmd_mox` keeps one double per command name, so two `.mock("gh")`
+  registrations in one test compete rather than compose. A test needing a
+  release document and a tag ref answers both from one stub handler.
+- Upstream `cargo bundle` runs `build-kani` from the workspace root, so the
+  tarball lands in `upstream/` rather than `upstream/target`; the assemble step
+  reads it there and fails if it is absent.
+- `cargo package` writes `<crate>.crate` beside the unpacked directory it
+  verifies, so the plan extracts the archive beside it and installs from the
+  unpacked path into a private prefix.
+- pylint's `too-many-lines` counts physical lines and its 400-line limit is
+  reached by a feature-sized module, so a split is cheaper than a suppression.
+  The build-job contracts now have their own module, and the adapter's three
+  copies of the `gh` failure classification became one `_failure` helper.
 
 ## Decision log
 
@@ -174,6 +202,21 @@ Terms used here:
   runs the contract tests and actionlint; CI installs a digest-verified
   actionlint release and runs the target. `make all` includes it,
   `kani-snapshot-smoke` deliberately does not.
+- *The scheduled route selects but does not self-advance.* D3 says to build the
+  newest qualified release; the recipe is reviewed data, so the route selects
+  that release and refuses it unless it is the pinned one, naming the recipe
+  update required. The design records this narrowing explicitly rather than
+  leaving the code and the approved text disagreeing.
+- *The adapter, not release metadata, decides the commit.* GitHub ignores
+  `target_commitish` when the tag exists, so observation resolves the tag ref,
+  peels annotated tags and refuses an orphan tag before any write. This keeps
+  the policy's existing commit comparison meaningful for drafts and published
+  releases alike.
+- *`provenance_verified` states exactly what the publisher checked.* A published
+  release must re-verify from its own bytes: manifest, checksums, payloads, a
+  well-formed SLSA statement naming the manifest digest, and identities that
+  reproduce the body's build-input fingerprint. Signature validity stays a
+  consumer check, and the name says so.
 
 ## Outcomes & retrospective
 
@@ -231,7 +274,11 @@ Workflow and test surfaces:
   validate, publish.
 - `.github/workflows/release.yml` — draft-first Python release.
 - `tests/workflow_contracts/strict_workflow.py` — strict workflow reader.
-- `tests/test_kani_workflow_contract.py` — 20 snapshot workflow contracts.
+- `tests/test_kani_workflow_contract.py` — the snapshot workflow contracts for
+  the guard, permissions, budgets and artefact routing.
+- `tests/test_kani_workflow_build_contract.py` — the build job's hand-offs:
+  pinned solver digests, bundle location, source-state evidence and the
+  launcher archive.
 - `tests/test_python_release_contract.py` — 14 release lifecycle contracts.
 
 ## Conformance basis
