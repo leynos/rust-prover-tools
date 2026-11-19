@@ -22,7 +22,6 @@ import typing as typ
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.gh_release_document import verify_publication
 from rust_prover_tools.kani_snapshot.gh_transport import (
     TRANSFER_TIMEOUT_SECONDS,
     gh,
@@ -32,6 +31,8 @@ from rust_prover_tools.kani_snapshot.release_model import (
     VerifiedAssets,
 )
 from rust_prover_tools.observability import log_event
+
+from .document import verify_publication
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

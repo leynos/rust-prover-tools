@@ -1,6 +1,6 @@
 """The release port publication needs from a GitHub adapter.
 
-`publish` owns the orchestration and `gh_release_api` owns the commands; this
+`publish` owns the orchestration and `gh_release.api` owns the commands; this
 module owns the contract between them. Keeping the port separate means the
 orchestration can be read without also reading every operation's contract, and
 an adapter can be written against the port alone.

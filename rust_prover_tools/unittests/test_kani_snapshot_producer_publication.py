@@ -18,7 +18,8 @@ import typing as typ
 
 from rust_prover_tools.kani_snapshot.manifest import parse_manifest
 from rust_prover_tools.kani_snapshot.models import REPOSITORY, SUPPORTED_TARGET
-from rust_prover_tools.kani_snapshot.producer.entrypoint import main
+from rust_prover_tools.kani_snapshot.orchestrator.entrypoint import main
+from rust_prover_tools.kani_snapshot.orchestrator.release_evidence import EVIDENCE_NAMES
 from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     parse_build_plan,
     parse_resolution,
@@ -26,7 +27,6 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import (
 from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     parse_publication_identity,
 )
-from rust_prover_tools.kani_snapshot.producer.release_assets import EVIDENCE_NAMES
 from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     parse_receipt,
     verify_receipt,

@@ -19,7 +19,10 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.producer.release_assets import release_asset_names
+from rust_prover_tools.kani_snapshot.orchestrator.release_evidence import (
+    release_asset_names,
+    verify_payloads,
+)
 from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     RECEIPT_SCHEMA_VERSION,
     ValidationReceipt,
@@ -27,7 +30,6 @@ from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     parse_receipt,
     receipt_to_json,
     require_same_run,
-    verify_payloads,
     verify_receipt,
 )
 from rust_prover_tools.kani_snapshot.release_policy import ValidationBinding

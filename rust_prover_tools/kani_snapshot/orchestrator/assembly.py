@@ -35,14 +35,13 @@ from rust_prover_tools.kani_snapshot.producer.assemble_input import (
     assembly_input_to_json,
     parse_assembly_input,
 )
-from rust_prover_tools.kani_snapshot.producer.commands import (
-    bundle_asset_name,
-    launcher_asset_name,
+from rust_prover_tools.kani_snapshot.producer.asset_names import (
+    MANIFEST_NAME,
+    payload_names,
 )
 from rust_prover_tools.kani_snapshot.producer.lifecycle_model import same_run
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
 from rust_prover_tools.kani_snapshot.tags import validate_tag
-from rust_prover_tools.kani_snapshot.validation import validate_target
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -63,9 +62,6 @@ _ARCHIVE_MEDIA_TYPE: typ.Final[str] = "application/gzip"
 
 #: Media type of the separately bounded inventory document.
 _INVENTORY_MEDIA_TYPE: typ.Final[str] = "application/json"
-
-#: The name of the rendered manifest inside the release asset set.
-MANIFEST_NAME: typ.Final[str] = "manifest.json"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -88,35 +84,6 @@ class Assembly:
     manifest_bytes: bytes
     manifest_sha256: str
     checksums: bytes
-
-
-def payload_names(version: str, target: str) -> dict[str, str]:
-    """Return the payload basename for every manifest role.
-
-    Parameters
-    ----------
-    version : str
-        Kani package version from the pinned recipe.
-    target : str
-        The single supported target triple.
-
-    Returns
-    -------
-    dict[str, str]
-        Role-to-basename mapping, so a caller cannot rename an asset.
-
-    Raises
-    ------
-    ProverToolError
-        Raised when the version or target is malformed.
-    """
-    validated = validate_target(target)
-    return {
-        "backend": bundle_asset_name(version, validated),
-        "launcher": launcher_asset_name(version, validated),
-        "notices": f"kani-{version}-notices-{validated}.tar.gz",
-        "inventory": "inventory.json",
-    }
 
 
 def _require_payload_directory(payloads: Path) -> None:

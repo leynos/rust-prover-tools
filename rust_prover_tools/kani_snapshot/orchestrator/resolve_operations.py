@@ -14,6 +14,9 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.models import WorkflowIdentity
+from rust_prover_tools.kani_snapshot.orchestrator.documents import (
+    write_document,
+)
 from rust_prover_tools.kani_snapshot.policy import reject_unknown_keys
 from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     WORKFLOW_PATH,
@@ -21,7 +24,6 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     Resolution,
     ResolutionRoute,
     resolution_to_json,
-    write_document,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
 from rust_prover_tools.kani_snapshot.producer.resolution import (

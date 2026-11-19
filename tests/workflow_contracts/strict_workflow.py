@@ -33,6 +33,7 @@ __all__ = (
     "run_scripts",
     "steps",
     "strict_load",
+    "suppresses_implicit_success",
     "triggers",
     "uses_entries",
 )
@@ -212,6 +213,17 @@ def dependency_names(declaration: dict[str, object]) -> list[str]:
     if isinstance(needed, list):
         return [typ.cast("str", item) for item in needed]
     return []
+
+
+#: The status-check functions (`always`, `failure`, `cancelled`, `success`)
+#: whose presence in a job-level `if` replaces the implicit `success()` check
+#: on `needs`. An ordinary comparison keeps that check.
+_STATUS_CHECKS = re.compile(r"(?<![\w.-])(?:always|failure|cancelled|success)\s*\(")
+
+
+def suppresses_implicit_success(condition: str) -> bool:
+    """Return whether a job-level `if` replaces the implicit success check."""
+    return bool(_STATUS_CHECKS.search(condition))
 
 
 def as_sequence(value: object, what: str) -> cabc.Sequence[object]:

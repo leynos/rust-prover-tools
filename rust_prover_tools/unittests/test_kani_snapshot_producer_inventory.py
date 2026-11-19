@@ -22,7 +22,7 @@ from rust_prover_tools.kani_snapshot.inventory_model import (
     KIND_SYMLINK,
 )
 from rust_prover_tools.kani_snapshot.inventory_parse import parse_inventory
-from rust_prover_tools.kani_snapshot.producer.inventory_build import (
+from rust_prover_tools.kani_snapshot.orchestrator.inventory_build import (
     build_inventory,
     inventory_to_json,
     main,

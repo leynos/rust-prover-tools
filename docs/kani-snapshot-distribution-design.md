@@ -833,8 +833,13 @@ creates an attestation, so a non-publishing dispatch still has an OIDC side
 effect.
 
 Each job hands the next one a document, and the developer entrypoint
-`python -m rust_prover_tools.kani_snapshot.producer.entrypoint` accepts no
-other input:
+`python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint` accepts no
+other input. That entrypoint and every other job command live in
+`rust_prover_tools.kani_snapshot.orchestrator`, the effect layer:
+`rust_prover_tools.kani_snapshot.producer` stays pure policy and rendering, and
+the orchestrator imports it but never the reverse. A structural test refuses an
+effectful import or call in the producer and any producer import of the
+orchestrator. The entrypoint's subcommands are:
 
 - `resolve` runs the scheduled route against `collect_candidates`' projected
   release and check-run evidence, or the manual route against the dispatched

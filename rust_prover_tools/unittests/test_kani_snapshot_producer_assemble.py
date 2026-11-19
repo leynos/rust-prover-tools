@@ -21,7 +21,7 @@ from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.manifest import parse_manifest
 from rust_prover_tools.kani_snapshot.models import ASSET_ROLES, SUPPORTED_TARGET
-from rust_prover_tools.kani_snapshot.producer.assemble import (
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import (
     MANIFEST_NAME,
     AssemblyInput,
     AssemblyRequest,
@@ -37,7 +37,7 @@ if typ.TYPE_CHECKING:
 
     from syrupy.assertion import SnapshotAssertion
 
-    from rust_prover_tools.kani_snapshot.producer.assemble import Assembly
+    from rust_prover_tools.kani_snapshot.orchestrator.assembly import Assembly
     from rust_prover_tools.kani_snapshot.producer.publication_identity import (
         PublicationIdentity,
     )

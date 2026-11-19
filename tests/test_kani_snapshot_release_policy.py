@@ -123,6 +123,33 @@ def test_a_placeholder_left_by_an_interrupted_upload_is_discarded() -> None:
     assert [asset.name for asset in decision.discards] == [name]
 
 
+def test_a_placeholder_beside_a_mismatched_asset_is_a_conflict() -> None:
+    """A conflicting draft is refused before any of its records are deleted.
+
+    D5 keeps the bytes of a conflicting draft for diagnosis, so a discard is
+    only authorised by a draft that is otherwise sound. The placeholder alone
+    would be recoverable; the mismatched asset beside it is not, and it must
+    be reported first.
+    """
+    reserved = "backend.tar.gz"
+    wrong = "launcher.tar.gz"
+    assets = tuple(
+        fixtures.placeholder(reserved)
+        if asset.name == reserved
+        else fixtures.observed_asset(wrong, sha256="f" * 64)
+        if asset.name == wrong
+        else asset
+        for asset in fixtures.verified_assets()
+    )
+    decision = decide(
+        fixtures.expected(), fixtures.draft(assets), fixtures.validation()
+    )
+    assert decision.action is ReleaseAction.CONFLICT
+    assert wrong in decision.reason
+    assert decision.discards == ()
+    assert decision.uploads == ()
+
+
 def test_a_complete_verified_draft_is_published() -> None:
     """Only a complete, hashed draft may become public."""
     decision = decide(

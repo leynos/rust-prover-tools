@@ -23,7 +23,7 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.gh_transport import GhRunner, gh
-from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
+from rust_prover_tools.kani_snapshot.orchestrator.documents import write_document
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
 from rust_prover_tools.kani_snapshot.producer.upstream_evidence import (
     UPSTREAM_TAG_PREFIX,

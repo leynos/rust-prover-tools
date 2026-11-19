@@ -23,17 +23,17 @@ from rust_prover_tools.kani_snapshot.attestation import (
     SIGNER_WORKFLOW_PATH,
     AttestationPolicy,
 )
-from rust_prover_tools.kani_snapshot.gh_release_api import GhReleaseApi
+from rust_prover_tools.kani_snapshot.gh_release.api import GhReleaseApi
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
-from rust_prover_tools.kani_snapshot.producer.assemble import MANIFEST_NAME
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import MANIFEST_NAME
+from rust_prover_tools.kani_snapshot.orchestrator.release_evidence import (
+    ATTESTATION_NAME,
+    CHECKSUMS_NAME,
+)
 from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
     input_fingerprint,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
-from rust_prover_tools.kani_snapshot.producer.release_assets import (
-    ATTESTATION_NAME,
-    CHECKSUMS_NAME,
-)
 from rust_prover_tools.kani_snapshot.release_model import (
     ReleaseTransientError,
     VerifiedAssets,
@@ -341,7 +341,7 @@ def test_verify_propagates_a_verifier_timeout_as_transient(
     # The attestation step re-imports the verifier by name, so the patch must
     # replace the binding in the module that calls it, not its origin.
     monkeypatch.setattr(
-        "rust_prover_tools.kani_snapshot.gh_release_attestation.verify_attestation",
+        "rust_prover_tools.kani_snapshot.gh_release.attestation.verify_attestation",
         _timed_out,
     )
 

@@ -214,6 +214,31 @@ Terms used here:
   contract moved into their own modules, and the Makefile's
   `WORKFLOW_CONTRACT_TESTS` list names the new one so `make workflow-check`
   still runs every contract test it did before.
+- 19 November 2026: remediated the seventh completeness assessment (A7,
+  `EP258-2026-11-19-A7`) by restoring the two boundaries the approved documents
+  state. First, the `collect` job is gone: it held `contents: write`, which the
+  plan and D5 reserve for publication. The resolve job now reads the release
+  list itself with its read-only token, and it no longer downloads an artefact
+  to do it, so its only permission is `contents: read`. The consequence is
+  recorded rather than hidden: a draft left by an interrupted run is invisible
+  to allocation, which numbers the identity from published tags, and
+  publication observes the tag again with the writer token and refuses a draft
+  bound to another run or attempt. Second, the producer package is pure again.
+  Every job command and every path effect moved to a new peer package,
+  `rust_prover_tools.kani_snapshot.orchestrator`: `entrypoint`, `operations`,
+  `resolve_operations`, `assembly`, `release_evidence`, `measure_build`,
+  `build_evidence`, `inventory_build`, the two collectors and the one atomic
+  document writer. The shared asset names stay in `producer/asset_names.py`, so
+  both layers read one definition without the pure package importing an effect.
+  `gh_release_api`, `gh_release_document`, `gh_release_attestation` and
+  `gh_release_download` became one `gh_release` package with the same split.
+  The workflow invokes only `orchestrator` commands, and
+  `tests/test_kani_snapshot_producer_purity.py` reads every producer syntax
+  tree and refuses an effectful import, an effectful call or an `orchestrator`
+  import. The condition tests were rewritten for the simpler graph: no job
+  accepts a skipped prerequisite, so every condition is an ordinary comparison
+  and the implicit `success()` check is what stops a job after a failed
+  prerequisite.
 
 ## Surprises & discoveries
 
@@ -265,6 +290,13 @@ Terms used here:
   consumer: it reports a non-zero exit for a bundle outside the pinned policy
   or for another run's attempt, which is exactly the signal
   `provenance_verified` needs.
+- GitHub lists draft releases only to a push-capable token, so removing the
+  write-capable collection job also removes draft visibility from allocation.
+  The allocator numbers an identity from published tags, and publication —
+  which does hold the writer token — re-observes the tag and refuses a draft
+  bound to another run or attempt. Recovery is therefore a refusal with a
+  reason, not a resumed draft; the earlier design that resumed one is only
+  available to a run that can still see its own draft.
 
 ## Decision log
 
@@ -336,6 +368,17 @@ Terms used here:
   peels annotated tags and refuses an orphan tag before any write. This keeps
   the policy's existing commit comparison meaningful for drafts and published
   releases alike.
+- *The producer is pure and the orchestrator holds every effect.* The approved
+  plan's producer line is read literally: no path read or write, no process, no
+  environment and no network call in `kani_snapshot.producer`. Job commands and
+  file effects live in `kani_snapshot.orchestrator`, which imports the producer
+  and is never imported by it. Asset names shared by both layers live in
+  `producer/asset_names.py`, so the split costs one module rather than a
+  duplicated constant. A structural test enforces the direction.
+- *Only publication holds `contents: write`.* The resolve job reads what it
+  needs with `contents: read`, including the release list. Because a read token
+  cannot see drafts, draft recovery belongs to publication, which re-observes
+  the tag before it writes and refuses a foreign draft instead of adopting it.
 - *`provenance_verified` states exactly what the publisher checked.* A published
   release must re-verify from its own bytes: manifest, checksums, payloads, a
   well-formed SLSA statement naming the manifest digest, identities that
@@ -374,17 +417,20 @@ What to carry forward:
 
 Producer modules added or extended on this branch:
 
-- `producer/operations.py` — the five subcommands' orchestration, each checking
-  input and same-run binding before any effect.
-- `producer/entrypoint.py` — argument parsing and dispatch only.
-- `producer/collect_candidates.py`, `producer/collect_releases.py` — bounded
-  GitHub response projections.
-- `producer/measure_build.py` — build-evidence measurement from observed files.
-- `producer/build_evidence.py`, `producer/inventory_build.py`,
-  `producer/publication_identity.py`, `producer/assemble.py`,
-  `producer/assemble_input.py`, `producer/lifecycle.py`,
-  `producer/lifecycle_model.py`, `producer/validation_receipt.py`,
-  `producer/release_assets.py`.
+- `orchestrator/operations.py` — the five subcommands' orchestration, each
+  checking input and same-run binding before any effect.
+- `orchestrator/entrypoint.py` — argument parsing and dispatch only.
+- `orchestrator/collect_candidates.py`, `orchestrator/collect_releases.py` —
+  bounded GitHub reads, projected by the producer's pure modules.
+- `orchestrator/measure_build.py` — build-evidence measurement from observed
+  files.
+- `orchestrator/build_evidence.py`, `orchestrator/inventory_build.py`,
+  `orchestrator/assembly.py`, `orchestrator/release_evidence.py`,
+  `orchestrator/documents.py` — the file steps and the one atomic writer.
+- The pure producer keeps the records and rules those steps call:
+  `producer/publication_identity.py`, `producer/assemble_input.py`,
+  `producer/lifecycle.py`, `producer/lifecycle_model.py`,
+  `producer/validation_receipt.py`, `producer/asset_names.py`.
 
 Consumer-side publication modules added on this branch:
 
@@ -509,7 +555,7 @@ shared Cargo or uv cache.
 
 ## Interfaces and dependencies
 
-- `python -m rust_prover_tools.kani_snapshot.producer.entrypoint {resolve,identity,build,assemble,validate,publish}`
+- `python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint {resolve,identity,build,assemble,validate,publish}`
   is the internal automation interface. It is not registered on the consumer
   CLI.
 - Publication depends on `gh` on `PATH`; validation depends only on the

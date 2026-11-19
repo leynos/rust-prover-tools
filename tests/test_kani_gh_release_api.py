@@ -15,7 +15,7 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.gh_release_api import GhReleaseApi
+from rust_prover_tools.kani_snapshot.gh_release.api import GhReleaseApi
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.release_policy import ReleaseTransientError
 from tests import kani_publish_fixtures as fixtures

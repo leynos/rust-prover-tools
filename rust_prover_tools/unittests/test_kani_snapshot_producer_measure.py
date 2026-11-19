@@ -17,10 +17,10 @@ import pytest
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.producer.build_evidence import (
+from rust_prover_tools.kani_snapshot.orchestrator.build_evidence import (
     parse_build_evidence,
 )
-from rust_prover_tools.kani_snapshot.producer.measure_build import (
+from rust_prover_tools.kani_snapshot.orchestrator.measure_build import (
     build_parser,
     main,
     measure,

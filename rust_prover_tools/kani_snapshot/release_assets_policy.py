@@ -6,7 +6,8 @@ us at all" to "what must happen next", so a conflict is never reported after an
 effect that a conflicting state did not authorise. In particular, a wrong
 existing asset is detected before a missing one is uploaded, and a record that
 reserves a name without holding bytes is discarded rather than reported as a
-conflict a retry could have repaired.
+conflict a retry could have repaired — but only when nothing else in the draft
+already disagrees, so a refusal never edits the draft it refused.
 
 Nothing here performs an effect or reads the API: the functions are total over
 an observation and return the next `ReleaseDecision`.
@@ -55,8 +56,21 @@ def unverified_message(subject: str, reason: str | None) -> str:
     return subject if reason is None else f"{subject}: {reason}"
 
 
+def _is_placeholder_pair(seen: ObservedAsset, wanted: ReleaseAsset) -> bool:
+    """Return whether a record reserves an expected, non-empty asset's name.
+
+    Such a record holds no bytes at all: an upload interrupted after GitHub
+    created the row leaves it behind. It is not an asset that disagrees with
+    the manifest, so it is neither a mismatch nor an unverified copy of one;
+    the classifier that runs before an upload decides whether to delete it.
+    """
+    return seen.is_placeholder and wanted.size > 0
+
+
 def _asset_problem(seen: ObservedAsset, wanted: ReleaseAsset) -> str | None:
     """Classify one asset pair as `"size"`, `"digest"`, `"unverified"` or `None`."""
+    if _is_placeholder_pair(seen, wanted):
+        return None
     if seen.size != wanted.size:
         return "size"
     if seen.sha256 is None:
@@ -116,8 +130,10 @@ def _placeholder_decision(
         typ.cast("ObservedAsset", seen[name])
         for name, expected_asset in sorted(wanted.items())
         if name in seen
-        and typ.cast("ObservedAsset", seen[name]).is_placeholder
-        and typ.cast("ReleaseAsset", expected_asset).size > 0
+        and _is_placeholder_pair(
+            typ.cast("ObservedAsset", seen[name]),
+            typ.cast("ReleaseAsset", expected_asset),
+        )
     )
     if not placeholders:
         return None
@@ -186,7 +202,10 @@ def classify_assets(
     Classifiers run from "does this draft belong to us at all" to "what must
     happen next", so a conflict is never reported after an effect that a
     conflicting state did not authorise. In particular, a wrong existing asset
-    is detected before a missing one is uploaded.
+    is detected before a missing one is uploaded, and before a placeholder is
+    discarded: a state that already conflicts must leave the draft exactly as
+    the run found it, so the bytes someone can inspect are the bytes that
+    caused the refusal.
 
     Publication additionally requires the draft's own served evidence to have
     authenticated its manifest. Verifying only at the next observation would
@@ -198,8 +217,8 @@ def classify_assets(
     seen = _asset_map(assets)
     classifiers = (
         _extra_asset_decision,
-        _placeholder_decision,
         _asset_mismatch_decision,
+        _placeholder_decision,
         _missing_asset_decision,
         _unverified_asset_decision,
     )

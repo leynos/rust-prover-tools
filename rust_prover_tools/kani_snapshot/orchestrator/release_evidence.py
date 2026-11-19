@@ -16,7 +16,14 @@ import typing as typ
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.producer.assemble import MANIFEST_NAME
+from rust_prover_tools.kani_snapshot.producer.asset_names import (
+    ATTESTATION_NAME,
+    CHECKSUMS_NAME,
+    EVIDENCE_NAMES,
+    MANIFEST_NAME,
+    PERFORMED_CHECKS,
+    release_asset_names,
+)
 from rust_prover_tools.kani_snapshot.release_model import ReleaseAsset
 
 if typ.TYPE_CHECKING:
@@ -35,51 +42,6 @@ __all__ = (
     "verify_payloads",
     "verify_release",
 )
-
-#: The checksum document assembly writes beside the manifest.
-CHECKSUMS_NAME: typ.Final[str] = "SHA256SUMS"
-
-#: The attestation bundle the assembly job produces for the manifest.
-ATTESTATION_NAME: typ.Final[str] = "manifest.sigstore.jsonl"
-
-#: Assets derived from the payloads and the manifest, in publication order.
-EVIDENCE_NAMES: typ.Final[tuple[str, str, str]] = (
-    MANIFEST_NAME,
-    CHECKSUMS_NAME,
-    ATTESTATION_NAME,
-)
-
-#: The checks `verify_release` performs, in the order a receipt records them.
-#:
-#: The validate operation records this tuple instead of a label list supplied
-#: on the command line, so a receipt can only name checks the code actually
-#: performed. The names are part of the receipt document's vocabulary.
-PERFORMED_CHECKS: typ.Final[tuple[str, ...]] = (
-    "manifest-digest",
-    "payload-digest",
-    "checksums",
-    "attestation",
-)
-
-
-def release_asset_names(manifest: SnapshotManifest) -> tuple[str, ...]:
-    """Return every asset name a release of `manifest` must serve.
-
-    Parameters
-    ----------
-    manifest : SnapshotManifest
-        Validated manifest whose payload assets were measured by assembly.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Payload asset names in manifest order, followed by the fixed evidence
-        assets in `EVIDENCE_NAMES` order (`manifest.json`, `SHA256SUMS`, then
-        the attestation). Uploads, checksum rows and receipt asset sets all
-        derive from this ordering, so callers must preserve it rather than
-        treating the result as an unordered set.
-    """
-    return tuple(asset.name for asset in manifest.assets) + EVIDENCE_NAMES
 
 
 def _payload_assets(manifest: SnapshotManifest) -> list[ReleaseAsset]:

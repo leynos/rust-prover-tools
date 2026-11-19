@@ -37,7 +37,7 @@ from rust_prover_tools.kani_snapshot.inventory_model import (
 )
 from rust_prover_tools.kani_snapshot.inventory_parse import normalize_inventory_path
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION
-from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
+from rust_prover_tools.kani_snapshot.orchestrator.documents import write_document
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

@@ -7,7 +7,7 @@ actually happened instead of the caller assuming either outcome. Publication is
 the one write that cannot be taken back, so it is preceded by a fresh
 observation and a second decision: state that stopped authorising the write is
 acted on instead of being published from a stale reading. The adapter
-itself lives in `gh_release_api`; this module only depends on the `ReleaseApi`
+itself lives in `gh_release.api`; this module only depends on the `ReleaseApi`
 port, so the orchestration is testable against any conforming double.
 """
 

@@ -26,14 +26,14 @@ from rust_prover_tools.kani_snapshot.models import (
     ToolchainIdentity,
     WorkflowIdentity,
 )
-from rust_prover_tools.kani_snapshot.producer.assemble import (
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import (
     Assembly,
     AssemblyInput,
     AssemblyRequest,
     assemble,
     payload_names,
 )
-from rust_prover_tools.kani_snapshot.producer.build_evidence import BuildEvidence
+from rust_prover_tools.kani_snapshot.orchestrator.build_evidence import BuildEvidence
 from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
     input_fingerprint,
 )

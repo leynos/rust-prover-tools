@@ -171,6 +171,7 @@ record, replay, and verify loop:
    ```python
    from cmd_mox import CmdMox
 
+
    def test_record(tmp_path: Path) -> None:
        artifact_dir = tmp_path / "act-artifacts"
        with CmdMox() as mox:

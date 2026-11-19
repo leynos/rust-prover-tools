@@ -771,10 +771,16 @@ is unsupported.
 
 `rust_prover_tools.kani_snapshot.producer` is the producer-side domain package.
 It decides what may be built and how, and executes nothing: no subprocess,
-network call, environment read or filesystem write belongs in it. Adapters
-elsewhere receive its argument vectors and run them. The package is not named
-`build`: the repository-wide `build/` ignore rule drops such a directory from
-version control at any depth, and the code indexer skips it too.
+network call, environment read or filesystem write belongs in it. Its sibling
+`rust_prover_tools.kani_snapshot.orchestrator` carries every decision out — it
+reads and writes the job documents, runs the pinned commands and performs the
+bounded `gh` reads, and it is the only layer a workflow job invokes. The
+dependency direction is one way: the orchestrator imports the producer, never
+the reverse. `tests/test_kani_snapshot_producer_purity.py` reads the producer's
+syntax trees and refuses an effectful import, an effectful call or an
+orchestrator import, so the boundary cannot erode silently. The package is not
+named `build`: the repository-wide `build/` ignore rule drops such a directory
+from version control at any depth, and the code indexer skips it too.
 
 - `recipe_model` holds the frozen records (`Recipe`, `UpstreamIdentity`,
   `BuilderRecord`, `LauncherRecipe`, `AttestationRecipe`, `LicenceRecord`).
@@ -861,7 +867,7 @@ Conventions that keep the recipe trustworthy:
 
 ## Kani snapshot producer entrypoint
 
-`python -m rust_prover_tools.kani_snapshot.producer.entrypoint` is the
+`python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint` is the
 developer interface `.github/workflows/kani-monthly.yml` calls. It is not a
 consumer API: the CLI does not register these subcommands, and nothing outside
 the snapshot workflow should depend on them. Each subcommand reads the
@@ -885,37 +891,41 @@ rejected even when its bytes are otherwise identical.
 
 The workflow's shell is allowed to compose observed documents and to execute a
 plan, but not to interpret one. Anything that projects an external response
-into a document the next job consumes belongs in a tested module:
-`collect_candidates`, `collect_releases`, `measure_build`, `build_evidence`,
-`inventory_build` and `assemble` each own one such projection. A shell step
-that starts deciding what an API response means is the point to move that
-decision back into Python.
+into a document the next job consumes belongs in a tested module. The
+`orchestrator` collectors (`collect_candidates`, `collect_releases`) and the
+file steps (`measure_build`, `build_evidence`, `inventory_build`, `assembly`)
+each own one such projection; the decisions they apply live in the producer
+modules those steps call.
 
-Fetching and shaping are separate modules as well. `collect_candidates`
-performs the upstream `gh` reads; `upstream_evidence` decides what a response
-may contribute and renders the document deterministically. Both collectors take
-a `GhRunner`, so a test asserts the exact argument vector each job sends
-without starting a process, and a transport failure keeps its transient or
-permanent classification through the added context.
+Fetching and shaping are separate modules as well.
+`orchestrator.collect_candidates` performs the upstream `gh` reads;
+`producer.upstream_evidence` decides what a response may contribute and renders
+the document deterministically. Both collectors take a `GhRunner`, so a test
+asserts the exact argument vector each job sends without starting a process,
+and a transport failure keeps its transient or permanent classification through
+the added context.
 
 Publication follows the same rule from the other side: `publish` depends only
-on the `ReleaseApi` port in `release_port`, `GhReleaseApi` is its one adapter,
-and `producer.entrypoint` is the composition root that chooses it. `observe` is
-a query that downloads nothing; `verify` is the only command that downloads,
-hashes and authenticates the served bytes, and the policy asks for it
-explicitly. A digest listed by the API is therefore a claim until a
+on the `ReleaseApi` port in `release_port`, `gh_release.api` is its one
+adapter, and `orchestrator.entrypoint` is the composition root that chooses it.
+`observe` is a query that downloads nothing; `verify` is the only command that
+downloads, hashes and authenticates the served bytes, and the policy asks for
+it explicitly. A digest listed by the API is therefore a claim until a
 verification has computed the same value locally. Each side of that boundary
 has one module: `release_assets_policy` classifies an observed asset set,
 `release_markers` reads and writes the release-body markers, and the adapter's
-steps are `gh_release_document` for the served documents,
-`gh_release_attestation` for signature policy and `gh_release_download` for the
+steps are `gh_release.document` for the served documents,
+`gh_release.attestation` for signature policy and `gh_release.download` for the
 download, digest and verification sequence. A change to one seam therefore
 cannot silently reach across into another.
 
-Scheduled runs collect the existing release list in their own `collect` job,
-which holds `contents: write` because GitHub lists draft releases only to a
-token with push access. `resolve` stays read-only and downloads that document
-as a same-run artefact; a manual dispatch skips the job and collects nothing.
+Scheduled runs collect the existing release list inside the read-only `resolve`
+job, because identity allocation is a decision about the tags that already
+exist. GitHub lists draft releases only to a push-capable token, so that
+document holds the published releases alone; a draft left by an interrupted run
+stays invisible to allocation and is refused by publication, which observes the
+tag again with the writer token and will not adopt a draft bound to another run
+or attempt. A manual dispatch names its own publication id and collects nothing.
 
 `validate` records the checks `verify_release` performs, so a caller cannot
 label work that never ran; the `attestation` check is a presence and non-empty
@@ -933,11 +943,11 @@ or attempt, leaves the release unverified instead of reaching a no-op. The
 ledger still rests on EP-M5: a real clean-runner signature has not yet been
 exercised end to end.
 
-The producer and the consumer share `shared_libraries`: `measure_build` hashes
-every shared object under `<toolchain>/lib` that the function returns, and
-`toolchain_binding` refuses any it returns that the manifest does not record.
-Do not reintroduce a workflow-supplied list — a narrow list would let a build
-publish a toolchain the consumer then refuses.
+The producer and the consumer share `shared_libraries`:
+`orchestrator.measure_build` hashes every shared object under `<toolchain>/lib`
+that the function returns, and `toolchain_binding` refuses any it returns that
+the manifest does not record. Do not reintroduce a workflow-supplied list — a
+narrow list would let a build publish a toolchain the consumer then refuses.
 
 Identity reuse is decided by `input_fingerprint`, a SHA-256 over a canonical
 document of declared inputs: the upstream commit, this repository's build

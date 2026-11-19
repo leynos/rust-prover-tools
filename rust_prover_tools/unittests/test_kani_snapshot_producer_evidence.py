@@ -16,18 +16,18 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.producer.assemble import (
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import (
     AssemblyRequest,
     assemble,
 )
-from rust_prover_tools.kani_snapshot.producer.assemble_input import (
-    parse_assembly_input,
-)
-from rust_prover_tools.kani_snapshot.producer.build_evidence import (
+from rust_prover_tools.kani_snapshot.orchestrator.build_evidence import (
     assembly_input_from_evidence,
     evidence_to_json,
     main,
     parse_build_evidence,
+)
+from rust_prover_tools.kani_snapshot.producer.assemble_input import (
+    parse_assembly_input,
 )
 from rust_prover_tools.kani_snapshot.producer.lifecycle import plan_to_json
 from rust_prover_tools.unittests import kani_producer_fixtures as fixtures

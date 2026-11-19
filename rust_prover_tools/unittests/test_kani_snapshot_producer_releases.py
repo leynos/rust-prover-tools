@@ -18,13 +18,13 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.gh_transport import gh
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
-from rust_prover_tools.kani_snapshot.producer.collect_releases import (
+from rust_prover_tools.kani_snapshot.orchestrator.collect_releases import (
     PAGE_SIZE,
     RELEASE_PAGE_LIMIT,
     collect_releases,
     main,
 )
-from rust_prover_tools.kani_snapshot.producer.entrypoint import main as entrypoint
+from rust_prover_tools.kani_snapshot.orchestrator.entrypoint import main as entrypoint
 from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
     input_fingerprint,
 )

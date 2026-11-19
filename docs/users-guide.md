@@ -302,10 +302,15 @@ A dispatch always creates a build attestation with OpenID Connect, even when
 therefore still exercises signing and validation without making anything
 public. Published snapshot assets are immutable: correcting a published
 snapshot means choosing a new publication identity, never replacing or moving
-existing bytes. An interrupted draft is resumed by the same run and attempt; a
-record left by a failed upload that holds no bytes is removed and the file is
-uploaded again. A different attempt, changed inputs or conflicting bytes
-require a new identity.
+existing bytes. An interrupted draft is resumed only by the same run and
+attempt. Identity allocation reads the published tags alone, because GitHub
+lists drafts only to a token that may push, so a draft left by an earlier
+attempt is not counted when the next run numbers its identity. Publication
+re-reads the tag with the write token and refuses a draft that records another
+run or attempt, naming that disagreement instead of adopting it; remove the
+stale draft, or choose a new publication identity, before retrying. A record
+left by a failed upload that holds no bytes is removed and the file is uploaded
+again. Changed inputs or conflicting bytes require a new identity.
 
 To dispatch a non-publishing run from a checkout:
 

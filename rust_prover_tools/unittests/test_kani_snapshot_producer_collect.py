@@ -17,13 +17,13 @@ import pytest
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.gh_transport import GhRunner, gh
-from rust_prover_tools.kani_snapshot.producer.collect_candidates import (
+from rust_prover_tools.kani_snapshot.orchestrator.collect_candidates import (
     UPSTREAM_REPOSITORY,
     collect_candidates,
     collect_commit_checks,
     main,
 )
-from rust_prover_tools.kani_snapshot.producer.entrypoint import main as entrypoint
+from rust_prover_tools.kani_snapshot.orchestrator.entrypoint import main as entrypoint
 from rust_prover_tools.kani_snapshot.producer.lifecycle import parse_resolution
 from rust_prover_tools.kani_snapshot.producer.resolution import (
     REQUIRED_UPSTREAM_CHECKS,

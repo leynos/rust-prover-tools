@@ -25,8 +25,10 @@ from rust_prover_tools.kani_snapshot.attestation import (
     AttestationRequest,
     verify_attestation,
 )
-from rust_prover_tools.kani_snapshot.producer.assemble import MANIFEST_NAME
-from rust_prover_tools.kani_snapshot.producer.release_assets import ATTESTATION_NAME
+from rust_prover_tools.kani_snapshot.producer.asset_names import (
+    ATTESTATION_NAME,
+    MANIFEST_NAME,
+)
 from rust_prover_tools.kani_snapshot.release_model import ReleaseTransientError
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.validation import (

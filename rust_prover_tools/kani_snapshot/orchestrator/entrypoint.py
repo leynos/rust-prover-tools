@@ -1,6 +1,6 @@
 """Developer entrypoint for the guarded producer workflow.
 
-Run `python -m rust_prover_tools.kani_snapshot.producer.entrypoint --help` for
+Run `python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint --help` for
 the argument list of each command. `resolve` selects an upstream commit,
 `identity` records the immutable tag, `build` derives the pinned plan,
 `assemble` hashes the payloads into a manifest, `validate` writes same-run
@@ -18,9 +18,8 @@ import sys
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.gh_release_api import GhReleaseApi
-from rust_prover_tools.kani_snapshot.producer.lifecycle import ResolutionRoute
-from rust_prover_tools.kani_snapshot.producer.operations import (
+from rust_prover_tools.kani_snapshot.gh_release.api import GhReleaseApi
+from rust_prover_tools.kani_snapshot.orchestrator.operations import (
     TRUSTED_EVENTS,
     assemble,
     build,
@@ -29,6 +28,7 @@ from rust_prover_tools.kani_snapshot.producer.operations import (
     resolve,
     validate,
 )
+from rust_prover_tools.kani_snapshot.producer.lifecycle import ResolutionRoute
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc

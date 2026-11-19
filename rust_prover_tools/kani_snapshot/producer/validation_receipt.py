@@ -22,10 +22,7 @@ from rust_prover_tools.kani_snapshot.policy import (
     is_safe_asset_name,
     reject_unknown_keys,
 )
-from rust_prover_tools.kani_snapshot.producer.release_assets import (
-    release_asset_names,
-    verify_payloads,
-)
+from rust_prover_tools.kani_snapshot.producer.asset_names import release_asset_names
 from rust_prover_tools.kani_snapshot.release_policy import ValidationBinding
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.tags import TAG_PATTERN
@@ -49,7 +46,6 @@ __all__ = (
     "parse_receipt",
     "receipt_to_json",
     "require_same_run",
-    "verify_payloads",
     "verify_receipt",
 )
 

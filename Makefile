@@ -78,6 +78,8 @@ ACTIONLINT ?= actionlint
 WORKFLOW_CONTRACT_TESTS ?= \
 	tests/test_kani_workflow_contract.py \
 	tests/test_kani_workflow_build_contract.py \
+	tests/test_kani_workflow_condition_contract.py \
+	tests/test_kani_snapshot_producer_purity.py \
 	tests/test_python_release_contract.py \
 	tests/test_python_release_lifecycle.py \
 	tests/test_workflow_contract.py \

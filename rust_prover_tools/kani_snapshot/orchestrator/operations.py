@@ -15,13 +15,24 @@ import typing as typ
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.manifest import ParsedManifest, parse_manifest
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
-from rust_prover_tools.kani_snapshot.producer.assemble import (
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import (
     MANIFEST_NAME,
     AssemblyRequest,
     parse_assembly_input,
 )
-from rust_prover_tools.kani_snapshot.producer.assemble import (
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import (
     assemble as assemble_release,
+)
+from rust_prover_tools.kani_snapshot.orchestrator.documents import write_document
+from rust_prover_tools.kani_snapshot.orchestrator.release_evidence import (
+    CHECKSUMS_NAME,
+    release_assets,
+    verify_release,
+)
+from rust_prover_tools.kani_snapshot.orchestrator.resolve_operations import (
+    TRUSTED_EVENTS,
+    resolve,
+    workflow_identity,
 )
 from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
     input_fingerprint,
@@ -33,7 +44,6 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     plan_build,
     plan_to_json,
     same_run,
-    write_document,
 )
 from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     PUBLICATION_IDENTITY_SCHEMA_VERSION,
@@ -46,16 +56,6 @@ from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     publication_month,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
-from rust_prover_tools.kani_snapshot.producer.release_assets import (
-    CHECKSUMS_NAME,
-    release_assets,
-    verify_release,
-)
-from rust_prover_tools.kani_snapshot.producer.resolve_operations import (
-    TRUSTED_EVENTS,
-    resolve,
-    workflow_identity,
-)
 from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     build_receipt,
     parse_receipt,

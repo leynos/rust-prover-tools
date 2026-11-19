@@ -1,10 +1,15 @@
 """Collect this repository's existing releases for identity allocation.
 
 Allocating a publication revision is a decision about tags that already
-exist, so the resolve job must observe them — including drafts, which the
-release-by-tag endpoint does not report reliably. This module projects the
+exist, so the resolve job must observe them. This module projects the
 paginated release API into the one document `identity --releases` parses: a
 JSON array of `{tag, builder_commit, draft, body}` records.
+
+The resolve job holds only a read token, and GitHub lists draft releases only
+to a push-capable one. A draft left by an interrupted run is therefore absent
+here, so allocation numbers the identity from the published tags. That draft
+is not lost: publication observes the tag again with the writer token and
+refuses a draft bound to another run or attempt, rather than overwriting it.
 
 The page bound is a failure rather than a silently truncated view. A truncated
 view could hide the newest revision and make the allocator reuse it, which is
@@ -22,7 +27,7 @@ import typing as typ
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.gh_transport import GhRunner, gh
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
-from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
+from rust_prover_tools.kani_snapshot.orchestrator.documents import write_document
 from rust_prover_tools.kani_snapshot.release_model import ReleaseTransientError
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.validation import (

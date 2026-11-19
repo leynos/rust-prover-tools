@@ -27,15 +27,15 @@ from rust_prover_tools.kani_snapshot.models import (
     SolverRecord,
     SubmoduleRecord,
 )
-from rust_prover_tools.kani_snapshot.producer.assemble_input import (
-    resources_document,
-)
-from rust_prover_tools.kani_snapshot.producer.build_evidence import (
+from rust_prover_tools.kani_snapshot.orchestrator.build_evidence import (
     EVIDENCE_SCHEMA_VERSION,
     BuildEvidence,
     evidence_to_json,
 )
-from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
+from rust_prover_tools.kani_snapshot.orchestrator.documents import write_document
+from rust_prover_tools.kani_snapshot.producer.assemble_input import (
+    resources_document,
+)
 from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_model import (
     FileRecord,

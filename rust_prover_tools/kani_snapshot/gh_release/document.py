@@ -1,6 +1,6 @@
 """Parse and verify the release documents the GitHub adapter reads.
 
-The adapter in `gh_release_api` owns command execution and the publication
+The adapter in `gh_release.api` owns command execution and the publication
 state machine; this module owns the answer: turning one API document into an
 `ObservedRelease` without trusting its digests, and re-verifying a published
 release's own manifest, checksums, payloads, attestation and identity. Keeping
@@ -22,29 +22,30 @@ import json
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.gh_release_attestation import (
-    require_attestation,
-    require_verified_signature,
-)
 from rust_prover_tools.kani_snapshot.integrity import (
     verify_asset,
     verify_checksums,
 )
 from rust_prover_tools.kani_snapshot.manifest import parse_manifest
-from rust_prover_tools.kani_snapshot.producer.assemble import MANIFEST_NAME
+from rust_prover_tools.kani_snapshot.producer.asset_names import (
+    CHECKSUMS_NAME,
+    EVIDENCE_NAMES,
+    MANIFEST_NAME,
+)
 from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
     input_fingerprint,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
-from rust_prover_tools.kani_snapshot.producer.release_assets import (
-    CHECKSUMS_NAME,
-    EVIDENCE_NAMES,
-)
 from rust_prover_tools.kani_snapshot.release_model import (
     ObservedAsset,
     ObservedRelease,
     ReleaseTransientError,
     parse_input_marker,
+)
+
+from .attestation import (
+    require_attestation,
+    require_verified_signature,
 )
 
 if typ.TYPE_CHECKING:

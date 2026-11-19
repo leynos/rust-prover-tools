@@ -16,13 +16,15 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
-from rust_prover_tools.kani_snapshot.producer.assemble import (
+from rust_prover_tools.kani_snapshot.orchestrator.assembly import (
     assembly_input_to_json,
 )
-from rust_prover_tools.kani_snapshot.producer.entrypoint import build_parser, main
+from rust_prover_tools.kani_snapshot.orchestrator.entrypoint import build_parser, main
+from rust_prover_tools.kani_snapshot.orchestrator.release_evidence import (
+    PERFORMED_CHECKS,
+)
 from rust_prover_tools.kani_snapshot.producer.lifecycle import parse_resolution
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
-from rust_prover_tools.kani_snapshot.producer.release_assets import PERFORMED_CHECKS
 from rust_prover_tools.kani_snapshot.producer.resolution import (
     REQUIRED_UPSTREAM_CHECKS,
 )

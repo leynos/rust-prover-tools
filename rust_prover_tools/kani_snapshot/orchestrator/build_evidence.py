@@ -22,6 +22,9 @@ from rust_prover_tools.kani_snapshot.models import (
     SubmoduleRecord,
     WorkflowIdentity,
 )
+from rust_prover_tools.kani_snapshot.orchestrator.documents import (
+    write_document,
+)
 from rust_prover_tools.kani_snapshot.producer.assemble_input import (
     AssemblyInput,
     assembly_input_to_json,
@@ -37,7 +40,6 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     WORKFLOW_REF,
     BuildPlan,
     parse_build_plan,
-    write_document,
 )
 from rust_prover_tools.kani_snapshot.producer.lifecycle_model import same_run
 from rust_prover_tools.kani_snapshot.producer.recipe import (

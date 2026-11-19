@@ -22,11 +22,6 @@ import logging
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.gh_release_document import (
-    decoded,
-    parse_release,
-)
-from rust_prover_tools.kani_snapshot.gh_release_download import verify_assets
 from rust_prover_tools.kani_snapshot.gh_transport import (
     TRANSFER_TIMEOUT_SECONDS,
     gh,
@@ -45,6 +40,12 @@ from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
     require_mapping,
 )
+
+from .document import (
+    decoded,
+    parse_release,
+)
+from .download import verify_assets
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
