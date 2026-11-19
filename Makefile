@@ -79,6 +79,7 @@ WORKFLOW_CONTRACT_TESTS ?= \
 	tests/test_kani_workflow_contract.py \
 	tests/test_kani_workflow_build_contract.py \
 	tests/test_python_release_contract.py \
+	tests/test_python_release_lifecycle.py \
 	tests/test_workflow_contract.py
 
 workflow-check: build ## Lint workflows and check their contracts
