@@ -939,9 +939,10 @@ because both are valid YAML for the same field.
 per-job permissions, Action pin shape, artefact routing, job budgets, the order
 of attestation, validation and publication, and the recipe facts the workflow's
 declared environment must match. `tests/test_python_release_contract.py` pins
-the draft-first Python release lifecycle. Both follow the pin policy above:
-they assert that a reference is a full 40-hex commit, never that it equals a
-particular one.
+the draft-first Python release lifecycle, including that a rerun of an
+already-published release is a verified no-op rather than a repair. Both follow
+the pin policy above: they assert that a reference is a full 40-hex commit,
+never that it equals a particular one.
 
 Run them together with actionlint:
 

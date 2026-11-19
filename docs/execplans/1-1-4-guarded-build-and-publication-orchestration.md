@@ -155,6 +155,21 @@ Terms used here:
   D5's wall time, disk, cache outcome, payload sizes and source HEADs to the
   run summary. Every downstream job names its prerequisite's result, because an
   explicit job-level `if` drops the implicit `success()`.
+- 19 November 2026: remediated the fourth completeness assessment (A4,
+  `EP258-2026-11-19-A4`). The shared-library walk now sorts each directory and
+  records every shared object by its resolved path, so two copies of one
+  toolchain cannot spell the same library differently according to the order
+  the filesystem returned it. The run summary reads the measurements from
+  `resources` where the evidence document nests them, and the same filter is
+  tested by running it over a real evidence document and over the failure-path
+  document. A failing plan command no longer discards its observations: wall
+  time, disk high-water mark, the final source state and a minimal
+  `resources.json` are written before the original status is re-raised, so the
+  failure artefact and the summary carry them while the job still fails. The
+  Python wheel workflow now recovers an already-published release as a verified
+  no-op — upload and publish write nothing, and the unchanged byte comparison
+  turns any disagreement into a collision error — matching D5 and the snapshot
+  publisher's own rule.
 
 ## Surprises & discoveries
 
@@ -244,6 +259,22 @@ Terms used here:
   uploading publishes immutable assets that cannot be repaired. The workflow
   now creates or resumes a draft, uploads only missing wheels, downloads and
   byte-compares the release's assets, and publishes last.
+- *A published Python release is a verified no-op, not a refusal.* D5's rule
+  applies to both publishers: an existing published release is accepted only
+  when it serves exactly the expected asset names and bytes, and any
+  disagreement is a collision. The wheel workflow records the published state,
+  skips upload and publish, and still runs the ordinary byte comparison, so
+  recovery never writes while a collision still fails.
+- *Observations survive a failed build.* The plan command's exit status is
+  captured rather than allowed to end the step, the wall time, disk high-water
+  mark and final source state are written to the artefact, and the status is
+  then re-raised. A failed run therefore explains itself without becoming
+  publishable.
+- *The shared-library walk is canonical and ordered.* Entries are sorted and
+  each shared object is recorded by its resolved path inside the toolchain.
+  `os.scandir` order is arbitrary and aliased directories would otherwise spell
+  one library two ways, which would make the manifest disagree with the
+  consumer's own walk.
 - *Workflow checks are a Makefile target and a CI step.* `make workflow-check`
   runs the contract tests and actionlint; CI installs a digest-verified
   actionlint release and runs the target. `make all` includes it,

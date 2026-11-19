@@ -901,6 +901,15 @@ action, interpreter and artefact name are unchanged, and
 `tests/test_python_release_contract.py` pins both the lifecycle and that
 stability.
 
+A rerun against an already-published release is the recorded no-op D5 asks for,
+not an unconditional refusal: the step records the published state, upload and
+publish write nothing, and the ordinary verification still compares the served
+asset names and bytes with this run's build. A release that serves exactly the
+expected wheels therefore finishes cleanly, while any difference — a missing or
+extra name, or different bytes under a known name — fails as a collision. This
+mirrors the snapshot publisher's rule, where an exactly matching published
+release returns a no-op only after its provenance is verified again.
+
 ## D6: Evidence and operational handoff
 
 Before publication a fresh runner with no Kani build checkout or previous
