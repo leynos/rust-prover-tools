@@ -93,6 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_workflow_arguments(assembly_parser)
     assembly_parser.add_argument("--input", required=True)
+    assembly_parser.add_argument(
+        "--identity",
+        required=True,
+        help="identity the resolve job allocated for this run",
+    )
     assembly_parser.add_argument("--payloads", required=True)
     assembly_parser.add_argument("--output", required=True)
     assembly_parser.set_defaults(handler=assemble)

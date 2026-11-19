@@ -1,0 +1,157 @@
+"""The set of shared objects one toolchain exposes, defined once.
+
+The producer records the toolchain's shared objects in the manifest and the
+consumer refuses to install a toolchain that carries one the manifest does not
+record. Both sides must therefore select exactly the same files: a producer
+that recorded less would publish a snapshot no consumer accepts, and the gap
+would only appear after the build had run.
+
+The naming rule and the walk live here so neither side can drift. The walk
+follows directory links, visits each real directory once so a link cycle
+terminates, and refuses a link that resolves outside the toolchain, because a
+shared object reached through it would be hashed from outside the tree the
+manifest claims to describe.
+"""
+
+from __future__ import annotations
+
+import os
+import typing as typ
+from pathlib import Path
+
+from rust_prover_tools.errors import ProverToolError
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+__all__ = ("LIBRARY_DIRECTORY", "is_shared_library", "shared_libraries")
+
+#: Directory below a toolchain root whose shared objects are loadable.
+LIBRARY_DIRECTORY: typ.Final[str] = "lib"
+
+
+def is_shared_library(name: str) -> bool:
+    """Return whether a file name denotes an ELF shared object.
+
+    Parameters
+    ----------
+    name : str
+        Base name of one directory entry.
+
+    Returns
+    -------
+    bool
+        Whether the name is an unversioned or versioned shared object.
+    """
+    return name.endswith(".so") or ".so." in name
+
+
+def _resolve(path: Path, description: str) -> Path:
+    """Resolve one path, reporting an unreadable path or a link cycle."""
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError) as exc:
+        msg = f"failed to resolve toolchain {description} '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def _entries(directory: Path) -> list[os.DirEntry[str]]:
+    """Return one directory's entries, reporting inspection failures."""
+    try:
+        with os.scandir(directory) as children:
+            return list(children)
+    except OSError as exc:
+        msg = f"failed to inspect toolchain library directory: {exc}"
+        raise ProverToolError(msg) from exc
+
+
+class _LibraryWalk:
+    """Collect the shared objects below one resolved toolchain root.
+
+    Holding the traversal state on an object keeps the recursive step to one
+    argument and lets the root and the progress callback be threaded through
+    without being repeated at every call site.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        resolved_root: Path,
+        progress: cabc.Callable[[], None] | None,
+    ) -> None:
+        """Record the toolchain root, its resolution and the work callback."""
+        self._root = root
+        self._resolved_root = resolved_root
+        self._progress = progress
+        self._visited: set[Path] = set()
+        self.found: set[str] = set()
+
+    def walk(self, directory: Path) -> None:
+        """Collect the shared objects below one directory into `found`."""
+        self._tick()
+        if not directory.is_dir():
+            return
+        resolved = self._resolve_inside(directory, "library directory")
+        if resolved in self._visited:
+            # A link cycle is harmless once its real directory has been walked.
+            return
+        self._visited.add(resolved)
+        for child in _entries(directory):
+            self._tick()
+            self._visit(Path(child.path), child)
+
+    def _visit(self, path: Path, child: os.DirEntry[str]) -> None:
+        """Descend into a directory, or record one shared object."""
+        if child.is_dir(follow_symlinks=True):
+            self.walk(path)
+        elif child.is_file(follow_symlinks=True) and is_shared_library(child.name):
+            self._record(path)
+
+    def _record(self, path: Path) -> None:
+        """Record one shared object, refusing one that resolves outside."""
+        self._resolve_inside(path, "library")
+        self.found.add(path.relative_to(self._root).as_posix())
+
+    def _resolve_inside(self, path: Path, description: str) -> Path:
+        """Resolve `path`, refusing one that leaves the toolchain."""
+        resolved = _resolve(path, description)
+        if not resolved.is_relative_to(self._resolved_root):
+            msg = f"toolchain {description} escapes its toolchain: {path}"
+            raise ProverToolError(msg)
+        return resolved
+
+    def _tick(self) -> None:
+        """Account for one inspected entry, when the caller asked to."""
+        if self._progress is not None:
+            self._progress()
+
+
+def shared_libraries(
+    root: Path,
+    progress: cabc.Callable[[], None] | None = None,
+) -> tuple[str, ...]:
+    """Return the toolchain-relative path of every shared object below `lib`.
+
+    Parameters
+    ----------
+    root : Path
+        Toolchain root, the directory that holds `lib`.
+    progress : collections.abc.Callable[[], None] | None
+        Optional callback invoked once per inspected entry, so a caller with a
+        work budget can account for the traversal.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Sorted POSIX paths relative to `root`, so a recorded digest and a
+        checked file share one spelling.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the directory tree cannot be inspected, or when a link in
+        it resolves outside the toolchain.
+    """
+    walk = _LibraryWalk(root, _resolve(root, "root"), progress)
+    walk.walk(root / LIBRARY_DIRECTORY)
+    return tuple(sorted(walk.found))

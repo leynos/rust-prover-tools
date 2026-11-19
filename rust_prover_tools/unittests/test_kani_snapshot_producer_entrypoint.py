@@ -169,6 +169,8 @@ def _assemble(tmp_path: pathlib.Path, *flags: str) -> int:
         "assemble",
         "--input",
         str(_write_assembly_input(tmp_path)),
+        "--identity",
+        str(tmp_path / "identity.json"),
         "--payloads",
         str(release),
         "--output",
@@ -462,12 +464,48 @@ class FakeGitHub:
     def handle(self, invocation: Invocation) -> tuple[str, str, int]:
         """Answer one `gh` invocation as the release API would."""
         args = invocation.args
+        if args[0] == "attestation":
+            return self._attestation(args)
         if args[0] == "api":
             return self._api(args)
         if args[0] == "release":
             return self._release(args)
         msg = f"unexpected gh command: {args}"
         raise AssertionError(msg)
+
+    def _attestation(self, args: list[str]) -> tuple[str, str, int]:
+        """Answer `gh attestation verify` for a bundle this run signed.
+
+        Publication re-verifies a published release under the consumer's
+        policy, so the double refuses a command that does not ask for the
+        pinned signer and builder commit. A matching answer names this run and
+        attempt, which is what the manifest records.
+        """
+        assert args[1] == "verify", args
+        assert args[args.index("--signer-workflow") + 1] == (
+            f"{REPOSITORY}/.github/workflows/kani-monthly.yml"
+        ), "the verifier was not asked for the pinned signer workflow"
+        assert args[args.index("--source-digest") + 1] == fixtures.BUILDER_COMMIT
+        workflow = fixtures.workflow(event=MANUAL_EVENT)
+        invocation = (
+            f"https://github.com/{REPOSITORY}"
+            f"/actions/runs/{workflow.run_id}/attempts/{workflow.run_attempt}"
+        )
+        return (
+            json.dumps([
+                {
+                    "verificationResult": {
+                        "statement": {
+                            "predicate": {
+                                "runDetails": {"metadata": {"invocationId": invocation}}
+                            }
+                        }
+                    }
+                }
+            ]),
+            "",
+            0,
+        )
 
     def _api(self, args: list[str]) -> tuple[str, str, int]:
         """Answer one REST call."""

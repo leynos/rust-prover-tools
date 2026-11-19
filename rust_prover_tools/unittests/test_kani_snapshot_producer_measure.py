@@ -1,11 +1,12 @@
 """The build job's evidence is measured, not asserted.
 
 The workflow cannot run in the unit suite, so the build job's only job here is
-to hand `measure_build` a sysroot and a set of paths and trust what comes back.
-These tests build a throwaway sysroot whose `rustc` and `kani-compiler` are
-scripts, then pin three properties: every recorded digest is the digest of the
-named bytes, every probe is a real command rather than a version string, and a
-missing or failing input is a refusal.
+to hand `measure_build` a sysroot and trust what comes back. These tests build a
+throwaway sysroot whose `rustc` and `kani-compiler` are scripts, then pin three
+properties: every recorded digest is the digest of the measured bytes, every
+probe is a real command rather than a version string, and the recorded library
+set is exactly the set the consumer's own walk requires. A missing or failing
+input is a refusal.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from rust_prover_tools.kani_snapshot.producer.measure_build import (
     main,
     measure,
 )
+from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -90,8 +92,6 @@ def _arguments(tmp_path: pathlib.Path, sysroot: pathlib.Path) -> list[str]:
         "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
         "--launcher-package-version",
         "0.68.0",
-        "--library",
-        LIBRARY,
         "--lock",
         str(lockfile),
         "--submodule",
@@ -145,16 +145,58 @@ def test_the_measurement_records_what_it_observed(tmp_path: pathlib.Path) -> Non
     assert measured.disk_high_water_bytes == 7340032000
 
 
-def test_a_toolchain_without_a_recorded_library_is_refused(
+def test_a_toolchain_without_a_shared_library_is_refused(
     tmp_path: pathlib.Path,
 ) -> None:
-    """An unrecorded library would be distributed with no digest at all."""
-    arguments = _arguments(tmp_path, _sysroot(tmp_path))
-    library = arguments.index("--library")
-    del arguments[library : library + 2]
+    """A toolchain with nothing to record cannot be described by the manifest."""
+    sysroot = _sysroot(tmp_path)
+    (sysroot / LIBRARY).unlink()
+    arguments = _arguments(tmp_path, sysroot)
 
     assert main(arguments) == 1
     assert not (tmp_path / "evidence.json").exists()
+
+
+def test_the_recorded_libraries_are_the_set_the_consumer_checks(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Producer and consumer select the same files, including extra ones.
+
+    The consumer refuses to install a toolchain carrying a shared object the
+    manifest does not record, so recording only `libstd` would publish a
+    snapshot no consumer accepts. The measurement therefore enumerates the
+    toolchain rather than trusting the job to name the files.
+    """
+    sysroot = _sysroot(tmp_path)
+    extra = sysroot / "lib" / "libextra.so"
+    extra.write_bytes(b"\x7fELF extra shared object")
+    versioned = sysroot / "lib" / "rustlib" / "x86_64-unknown-linux-gnu" / "lib"
+    versioned.mkdir(parents=True, exist_ok=True)
+    (versioned / "libLLVM-21.so.1").write_bytes(b"\x7fELF LLVM shared object")
+
+    measured = measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
+
+    assert [record.path for record in measured.toolchain.libraries] == list(
+        shared_libraries(sysroot)
+    )
+    assert set(shared_libraries(sysroot)) == {
+        LIBRARY,
+        "lib/libextra.so",
+        "lib/rustlib/x86_64-unknown-linux-gnu/lib/libLLVM-21.so.1",
+    }
+
+
+def test_a_library_link_out_of_the_toolchain_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A shared object reached outside the sysroot is not the measured tree."""
+    sysroot = _sysroot(tmp_path)
+    outside = tmp_path / "outside.so"
+    outside.write_bytes(b"\x7fELF outside shared object")
+    (sysroot / "lib" / "liboutside.so").symlink_to(outside)
+
+    with pytest.raises(ProverToolError, match="escapes its toolchain"):
+        measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
 
 
 def test_a_failing_compiler_probe_is_refused(tmp_path: pathlib.Path) -> None:
@@ -165,16 +207,6 @@ def test_a_failing_compiler_probe_is_refused(tmp_path: pathlib.Path) -> None:
 
     assert main(arguments) == 1
     assert not (tmp_path / "evidence.json").exists()
-
-
-def test_a_missing_library_file_is_refused(tmp_path: pathlib.Path) -> None:
-    """A path the job named but the toolchain lacks is a failed measurement."""
-    sysroot = _sysroot(tmp_path)
-    (sysroot / LIBRARY).unlink()
-    arguments = _arguments(tmp_path, sysroot)
-
-    with pytest.raises(ProverToolError, match="not a regular file"):
-        measure(build_parser().parse_args(arguments))
 
 
 def test_a_malformed_solver_measurement_is_refused(tmp_path: pathlib.Path) -> None:

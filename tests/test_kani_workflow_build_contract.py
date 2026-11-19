@@ -157,6 +157,76 @@ def test_the_build_artefact_preserves_the_observed_source_state(
     assert "producer/source-after.txt" in paths
 
 
+def test_a_failed_build_preserves_its_observations(
+    workflow: dict[str, object],
+) -> None:
+    """The run whose evidence matters most is the one that failed.
+
+    The success-path upload runs only after every earlier step passed, so a
+    build that failed halfway would leave nothing behind. The failure artefact
+    carries the same trees under a distinct name, so no consumer can mistake a
+    partial observation set for a publishable build.
+    """
+    failure = [
+        step
+        for step in steps(job(workflow, "build"))
+        if step.get("name") == "Preserve the build observations on failure"
+    ]
+    assert len(failure) == 1
+    assert failure[0]["if"] == "failure()", "a failed build always uploads"
+    with_ = as_mapping(failure[0]["with"], "failure upload inputs")
+    assert with_["name"] == (
+        "kani-snapshot-build-failure-${{ github.run_id }}-${{ github.run_attempt }}"
+    )
+    paths = str(with_["path"]).splitlines()
+    assert "producer/" in paths
+    assert "payloads/" in paths
+    assert with_["if-no-files-found"] == "ignore", (
+        "a run that failed before producing anything still reports its status"
+    )
+
+
+def test_the_build_summarises_the_observations_in_the_run(
+    workflow: dict[str, object],
+) -> None:
+    """D5's run summary carries the wall time, disk, cache, sizes and states."""
+    summaries = [
+        step
+        for step in steps(job(workflow, "build"))
+        if step.get("name") == "Summarise the build in the run summary"
+    ]
+    assert len(summaries) == 1
+    assert summaries[0]["if"] == "always()", (
+        "a summary that skipped on failure would hide the failing run's numbers"
+    )
+    script = named_scripts(job(workflow, "build"))[
+        "Summarise the build in the run summary"
+    ]
+    for expected in (
+        "$GITHUB_STEP_SUMMARY",
+        ".wall_seconds",
+        ".disk_high_water_bytes",
+        ".cache.outcome",
+        "source-before",
+        "source-after",
+    ):
+        assert expected in script, expected
+
+
+def test_the_build_lets_the_producer_enumerate_the_shared_libraries(
+    workflow: dict[str, object],
+) -> None:
+    """The measured library set and the consumer's check come from one place.
+
+    A `--library` list built in YAML would drift from the set the consumer
+    requires, so the measurement walks the sysroot itself and the workflow
+    must not pass a hand-built subset.
+    """
+    evidence = named_scripts(job(workflow, "build"))["Measure the build evidence"]
+    assert "--library" not in evidence
+    assert "libstd-*.so" not in evidence
+
+
 def test_the_assembly_input_is_read_from_the_build_artefact(
     workflow: dict[str, object],
 ) -> None:

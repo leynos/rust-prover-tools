@@ -185,7 +185,12 @@ jobs:
   build:
     name: Build the upstream payloads
     needs: [guard, resolve]
-    if: needs.guard.outputs.trusted == 'true'
+    # A job-level `if` replaces the implicit success() check, so the
+    # dependency's own result is named here: a failed resolve must not
+    # reach a build that would then download nothing.
+    if: |
+      needs.guard.outputs.trusted == 'true' &&
+      needs.resolve.result == 'success'
     # The recipe's builder image: its glibc is the published runtime floor.
     runs-on: ubuntu-22.04
     timeout-minutes: 180
@@ -289,6 +294,10 @@ jobs:
             git -C "$upstream_dir" status --porcelain --untracked-files=no
           }
           source_state > "$RUNNER_TEMP/source-before.txt"
+          # Preserve the input observation immediately: a build that fails
+          # later still leaves the tree it built from inspectable, and the
+          # failure-path upload below picks this copy up.
+          cp "$RUNNER_TEMP/source-before.txt" "$GITHUB_WORKSPACE/producer/"
 
           # A clean input is established before anything runs. Comparing the
           # before and after states alone would accept a tree that was already
@@ -338,15 +347,13 @@ jobs:
           echo "disk_high_water_bytes=$(( peak - baseline ))" >> "$GITHUB_ENV"
 
           source_state > "$RUNNER_TEMP/source-after.txt"
+          # Copy before comparing, so a build that changed its own input still
+          # leaves both observations for the failure-path upload.
+          cp "$RUNNER_TEMP/source-after.txt" "$GITHUB_WORKSPACE/producer/"
           if ! diff -u "$RUNNER_TEMP/source-before.txt" "$RUNNER_TEMP/source-after.txt"; then
             echo "the build changed the checked-out source tree" >&2
             exit 1
           fi
-
-          # Preserve both observations in the build artefact so the input a
-          # failed or suspicious run built from can be inspected afterwards.
-          cp "$RUNNER_TEMP/source-before.txt" "$RUNNER_TEMP/source-after.txt" \
-            "$GITHUB_WORKSPACE/producer/"
       - name: Assemble the release payloads
         env:
           KISSAT_SOURCE: ${{ runner.temp }}/kissat-src
@@ -438,10 +445,6 @@ jobs:
             reported="$("$path" --version | head -1 | tr -d '[:space:]')"
             solver_args+=(--solver "$solver=$reported=$digest")
           done
-          library_args=()
-          while IFS= read -r library; do
-            library_args+=(--library "$library")
-          done < <(cd "$sysroot" && ls lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-*.so)
           submodule_args=()
           mapfile -t submodule_args < "$RUNNER_TEMP/submodule-args"
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
@@ -452,7 +455,6 @@ jobs:
             --backend-version "$version" \
             --launcher-package-version "$version" \
             --upstream-commit "$(jq -r .upstream_commit "$GITHUB_WORKSPACE/producer/plan.json")" \
-            "${library_args[@]}" \
             --lock "$GITHUB_WORKSPACE/upstream/Cargo.lock" \
             --lock "$GITHUB_WORKSPACE/builder/uv.lock" \
             "${submodule_args[@]}" \
@@ -488,11 +490,57 @@ jobs:
             producer/source-after.txt
           if-no-files-found: error
           retention-days: 7
+      # A failed build is exactly when its observations matter most. The
+      # artefact has its own name, so nothing downstream can mistake a partial
+      # observation set for a publishable build.
+      - name: Preserve the build observations on failure
+        if: failure()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kani-snapshot-build-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            producer/
+            payloads/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Summarise the build in the run summary
+        if: always()
+        run: |
+          set -uo pipefail
+          summary="$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Kani snapshot build"
+            echo
+            echo "| Observation | Value |"
+            echo "| --- | --- |"
+            echo "| Job result | ${{ job.status }} |"
+          } >> "$summary"
+          evidence="$GITHUB_WORKSPACE/producer/evidence.json"
+          if [[ -f "$evidence" ]]; then
+            jq -r '"| Wall clock (s) | \(.wall_seconds) |",
+                   "| Disk high-water (bytes) | \(.disk_high_water_bytes) |",
+                   "| Cache outcome | \(.cache.outcome) |"' \
+              "$evidence" >> "$summary" 2>/dev/null || true
+          fi
+          for payload in "$GITHUB_WORKSPACE"/payloads/*; do
+            [[ -f "$payload" ]] || continue
+            printf '| %s | %s bytes |\n' \
+              "$(basename "$payload")" "$(wc -c < "$payload")" >> "$summary"
+          done
+          for state in source-before source-after; do
+            recorded="$GITHUB_WORKSPACE/producer/$state.txt"
+            [[ -f "$recorded" ]] || continue
+            printf '| %s HEAD | %s |\n' "$state" "$(head -1 "$recorded")" >> "$summary"
+          done
 
   assemble:
     name: Assemble the manifest and attest it
     needs: [guard, build]
-    if: needs.guard.outputs.trusted == 'true'
+    # As for the build: the assembly never runs on a failed build, because a
+    # partial observation set is not a snapshot.
+    if: |
+      needs.guard.outputs.trusted == 'true' &&
+      needs.build.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -511,6 +559,14 @@ jobs:
         with:
           name: kani-snapshot-build-${{ github.run_id }}-${{ github.run_attempt }}
           path: build
+      # The resolve job's identity is downloaded independently of the build
+      # job, so assembly compares the build's metadata with a record the least
+      # trusted job never had a chance to rewrite.
+      - name: Download the resolution and identity
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: kani-snapshot-resolution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: resolution
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -533,6 +589,7 @@ jobs:
           uv run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.producer.entrypoint assemble \
             --input build/producer/assembly-input.json \
+            --identity resolution/identity.json \
             --payloads release \
             --output release \
             --run-id "$GITHUB_RUN_ID" \
@@ -563,7 +620,9 @@ jobs:
   validate:
     name: Validate the release on a clean runner
     needs: [guard, assemble]
-    if: needs.guard.outputs.trusted == 'true'
+    if: |
+      needs.guard.outputs.trusted == 'true' &&
+      needs.assemble.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -611,8 +670,11 @@ jobs:
   publish:
     name: Publish the immutable release
     needs: [guard, validate]
+    # A receipt is the only thing that may authorise a publication, so a
+    # failed validation cannot fall through to publish.
     if: |
       needs.guard.outputs.trusted == 'true' &&
+      needs.validate.result == 'success' &&
       (github.event_name == 'schedule' || inputs.publish == true)
     runs-on: ubuntu-24.04
     timeout-minutes: 15

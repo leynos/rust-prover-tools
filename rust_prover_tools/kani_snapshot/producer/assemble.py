@@ -201,6 +201,40 @@ def _checksums(assets: tuple[AssetRecord, ...], manifest_sha256: str) -> bytes:
     ).encode("ascii")
 
 
+def _require_bound_identity(request: AssemblyRequest) -> None:
+    """Require the build job's metadata to name the resolve job's identity.
+
+    Assembly signs the manifest, and publication derives the release's target
+    from that manifest. The build job compiles upstream source and is therefore
+    the least trusted producer, so the tag and both commits are compared with
+    the record the resolve job allocated instead of being accepted from the
+    build job's own document.
+    """
+    identity = request.identity
+    if not same_run(identity.workflow, request.workflow):
+        msg = "publication identity belongs to another workflow run or attempt"
+        raise ProverToolError(msg)
+    inputs = request.inputs
+    if inputs.tag != identity.tag:
+        msg = (
+            f"assembly input tag {inputs.tag!r} is not the allocated tag "
+            f"{identity.tag!r}"
+        )
+        raise ProverToolError(msg)
+    if inputs.upstream_commit != identity.upstream_commit:
+        msg = (
+            f"assembly input upstream commit {inputs.upstream_commit!r} is not "
+            f"the allocated upstream commit {identity.upstream_commit!r}"
+        )
+        raise ProverToolError(msg)
+    if inputs.builder_commit != identity.builder_commit:
+        msg = (
+            f"assembly input builder commit {inputs.builder_commit!r} is not the "
+            f"allocated builder commit {identity.builder_commit!r}"
+        )
+        raise ProverToolError(msg)
+
+
 def _pinned_version(inputs: AssemblyInput) -> str:
     """Return the recipe version, refusing any other upstream identity.
 
@@ -221,7 +255,8 @@ def assemble(request: AssemblyRequest) -> Assembly:
     Parameters
     ----------
     request : AssemblyRequest
-        Payload directory, measured metadata and the assembling run.
+        Payload directory, measured metadata, the allocated identity and the
+        assembling run.
 
     Returns
     -------
@@ -231,12 +266,14 @@ def assemble(request: AssemblyRequest) -> Assembly:
     Raises
     ------
     ProverToolError
-        Raised when the request belongs to another run, the tag does not bind
-        to the upstream commit, or the payload set is not exact.
+        Raised when the request belongs to another run, the build job's
+        metadata does not name the allocated identity, the tag does not bind to
+        the upstream commit, or the payload set is not exact.
     """
     if not same_run(request.inputs.workflow, request.workflow):
         msg = "assembly input belongs to another workflow run or attempt"
         raise ProverToolError(msg)
+    _require_bound_identity(request)
     inputs = request.inputs
     validate_tag(inputs.tag, inputs.upstream_commit)
     names = payload_names(_pinned_version(inputs), SUPPORTED_TARGET)

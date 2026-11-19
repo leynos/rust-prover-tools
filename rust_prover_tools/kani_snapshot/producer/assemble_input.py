@@ -53,6 +53,10 @@ from rust_prover_tools.kani_snapshot.validation import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from rust_prover_tools.kani_snapshot.producer.publication_document import (
+        PublicationIdentity,
+    )
+
 __all__ = (
     "AssemblyInput",
     "AssemblyRequest",
@@ -161,12 +165,18 @@ class AssemblyRequest:
         Directory holding exactly the four payload files.
     inputs : AssemblyInput
         Measured metadata from the build job.
+    identity : PublicationIdentity
+        Identity the resolve job allocated for this run. The build job is the
+        least trusted producer, so the tag, upstream commit and builder commit
+        that reach the signed manifest are compared with this record rather
+        than taken from the build job's own document.
     workflow : WorkflowIdentity
         Run that is assembling the manifest.
     """
 
     payloads: Path
     inputs: AssemblyInput
+    identity: PublicationIdentity
     workflow: WorkflowIdentity
 
 

@@ -34,6 +34,9 @@ from rust_prover_tools.kani_snapshot.producer.assemble import (
     payload_names,
 )
 from rust_prover_tools.kani_snapshot.producer.build_evidence import BuildEvidence
+from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
+    input_fingerprint,
+)
 from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     WORKFLOW_PATH,
     WORKFLOW_REF,
@@ -42,6 +45,10 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import (
     Resolution,
     ResolutionRoute,
     plan_build,
+)
+from rust_prover_tools.kani_snapshot.producer.publication_identity import (
+    PUBLICATION_IDENTITY_SCHEMA_VERSION,
+    PublicationIdentity,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import (
     pinned_recipe,
@@ -215,6 +222,30 @@ def assembly_input(
     )
 
 
+def publication_identity(
+    *,
+    identity: WorkflowIdentity | None = None,
+    tag: str = TAG,
+    upstream_commit: str = UPSTREAM_COMMIT,
+    builder_commit: str = BUILDER_COMMIT,
+) -> PublicationIdentity:
+    """Return the identity the resolve job allocates for the pinned build."""
+    measured = workflow() if identity is None else identity
+    return PublicationIdentity(
+        schema_version=PUBLICATION_IDENTITY_SCHEMA_VERSION,
+        tag=tag,
+        month="2026-09",
+        upstream_commit=upstream_commit,
+        builder_commit=builder_commit,
+        input_fingerprint=input_fingerprint(
+            upstream_commit=upstream_commit,
+            builder_commit=builder_commit,
+            recipe=PINNED,
+        ),
+        workflow=measured,
+    )
+
+
 def names() -> dict[str, str]:
     """Return the role-to-basename payload mapping for the pinned recipe."""
     return payload_names(CRATE_VERSION, SUPPORTED_TARGET)
@@ -227,6 +258,7 @@ def assemble_into(directory: pathlib.Path) -> Assembly:
         AssemblyRequest(
             payloads=directory,
             inputs=assembly_input(),
+            identity=publication_identity(),
             workflow=workflow(),
         )
     )

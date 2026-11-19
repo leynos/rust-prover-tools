@@ -38,15 +38,25 @@ if typ.TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
     from rust_prover_tools.kani_snapshot.producer.assemble import Assembly
+    from rust_prover_tools.kani_snapshot.producer.publication_identity import (
+        PublicationIdentity,
+    )
 
 
-def _assemble(directory: pathlib.Path, inputs: AssemblyInput | None = None) -> Assembly:
+def _assemble(
+    directory: pathlib.Path,
+    inputs: AssemblyInput | None = None,
+    identity: PublicationIdentity | None = None,
+) -> Assembly:
     """Write the pinned payloads and assemble them for the trusted run."""
     fixtures.write_payloads(directory)
     return assemble(
         AssemblyRequest(
             payloads=directory,
             inputs=fixtures.assembly_input() if inputs is None else inputs,
+            identity=(
+                fixtures.publication_identity() if identity is None else identity
+            ),
             workflow=fixtures.workflow(),
         )
     )
@@ -134,14 +144,21 @@ def test_assembly_refuses_an_upstream_commit_outside_the_recipe(
     tmp_path: pathlib.Path,
 ) -> None:
     """Payload names derive from the pinned recipe, so nothing else may pass."""
+    other = "e" * 40
+    identity = dc.replace(
+        fixtures.publication_identity(),
+        upstream_commit=other,
+        tag=f"kani-snapshot-2026-09-{other[:12]}-r1",
+    )
     with pytest.raises(ProverToolError, match="outside the pinned recipe"):
         _assemble(
             tmp_path,
             inputs=dc.replace(
                 fixtures.assembly_input(),
-                upstream_commit="e" * 40,
-                tag=f"kani-snapshot-2026-09-{'e' * 12}-r1",
+                upstream_commit=other,
+                tag=identity.tag,
             ),
+            identity=identity,
         )
 
 
@@ -158,6 +175,53 @@ def test_assembly_refuses_a_tag_that_does_not_bind_the_commit(
         )
 
 
+def test_assembly_refuses_a_tag_the_identity_did_not_allocate(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A build job cannot sign a different, otherwise valid tag into the manifest.
+
+    Publication derives its target from the manifest, so a tag the resolve job
+    never allocated would let the least trusted job choose what gets released.
+    """
+    other = fixtures.TAG.replace("-r1", "-r2")
+    with pytest.raises(ProverToolError, match="not the allocated tag"):
+        _assemble(
+            tmp_path,
+            identity=fixtures.publication_identity(tag=other),
+        )
+
+
+def test_assembly_refuses_a_builder_commit_the_identity_did_not_allocate(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A foreign builder commit cannot be signed as this run's provenance."""
+    with pytest.raises(ProverToolError, match="not the allocated builder commit"):
+        _assemble(
+            tmp_path,
+            identity=fixtures.publication_identity(builder_commit="f" * 40),
+        )
+
+
+def test_assembly_refuses_an_upstream_commit_the_identity_did_not_allocate(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The signed manifest must name the upstream commit the resolve job chose."""
+    identity = dc.replace(fixtures.publication_identity(), upstream_commit="d" * 40)
+    with pytest.raises(ProverToolError, match="not the allocated upstream commit"):
+        _assemble(tmp_path, identity=identity)
+
+
+def test_assembly_refuses_an_identity_from_another_run(tmp_path: pathlib.Path) -> None:
+    """A stale identity cannot authorise this attempt's manifest."""
+    with pytest.raises(ProverToolError, match="another workflow run"):
+        _assemble(
+            tmp_path,
+            identity=fixtures.publication_identity(
+                identity=fixtures.workflow(run_attempt=2)
+            ),
+        )
+
+
 def test_assembly_refuses_a_missing_payload(tmp_path: pathlib.Path) -> None:
     """A partial payload set cannot describe a complete snapshot."""
     fixtures.write_payloads(tmp_path)
@@ -167,6 +231,7 @@ def test_assembly_refuses_a_missing_payload(tmp_path: pathlib.Path) -> None:
             AssemblyRequest(
                 payloads=tmp_path,
                 inputs=fixtures.assembly_input(),
+                identity=fixtures.publication_identity(),
                 workflow=fixtures.workflow(),
             )
         )
@@ -181,6 +246,7 @@ def test_assembly_refuses_an_unexpected_payload(tmp_path: pathlib.Path) -> None:
             AssemblyRequest(
                 payloads=tmp_path,
                 inputs=fixtures.assembly_input(),
+                identity=fixtures.publication_identity(),
                 workflow=fixtures.workflow(),
             )
         )
@@ -199,6 +265,7 @@ def test_assembly_refuses_a_payload_that_is_not_a_file(
             AssemblyRequest(
                 payloads=tmp_path,
                 inputs=fixtures.assembly_input(),
+                identity=fixtures.publication_identity(),
                 workflow=fixtures.workflow(),
             )
         )
@@ -213,6 +280,7 @@ def test_assembly_refuses_a_missing_payload_directory(
             AssemblyRequest(
                 payloads=tmp_path / "absent",
                 inputs=fixtures.assembly_input(),
+                identity=fixtures.publication_identity(),
                 workflow=fixtures.workflow(),
             )
         )
@@ -291,6 +359,7 @@ def test_assembly_always_records_the_measured_bytes(
         AssemblyRequest(
             payloads=directory,
             inputs=fixtures.assembly_input(wall_seconds=wall_seconds),
+            identity=fixtures.publication_identity(),
             workflow=fixtures.workflow(),
         )
     )

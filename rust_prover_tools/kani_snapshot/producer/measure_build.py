@@ -33,6 +33,7 @@ from rust_prover_tools.kani_snapshot.producer.build_evidence import (
     evidence_to_json,
 )
 from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
+from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_model import (
     FileRecord,
     ToolchainIdentity,
@@ -72,18 +73,26 @@ def _require_file(path: Path, what: str) -> Path:
     return path
 
 
-def _library_records(
-    sysroot: Path, libraries: cabc.Sequence[str]
-) -> tuple[FileRecord, ...]:
-    """Hash the recorded toolchain libraries, relative to the sysroot."""
+def _library_records(sysroot: Path) -> tuple[FileRecord, ...]:
+    """Hash every shared object the consumer will require to be recorded.
+
+    The set is not named by the job: `shared_libraries` is the same walk the
+    consumer runs before installation, so a toolchain with a shared object this
+    measurement missed cannot be published and then refused.
+    """
+    libraries = shared_libraries(sysroot)
     if not libraries:
-        msg = "build measurement requires at least one --library"
+        msg = "build measurement found no shared library in the toolchain's lib"
         raise ProverToolError(msg)
-    records: list[FileRecord] = []
-    for relative in libraries:
-        path = _require_file(sysroot / relative, f"toolchain library {relative!r}")
-        records.append(FileRecord(path=relative, sha256=sha256_file(path)))
-    return tuple(records)
+    return tuple(
+        FileRecord(
+            path=relative,
+            sha256=sha256_file(
+                _require_file(sysroot / relative, f"toolchain library {relative!r}")
+            ),
+        )
+        for relative in libraries
+    )
 
 
 def _lock_digests(paths: cabc.Sequence[Path]) -> tuple[tuple[str, str], ...]:
@@ -174,7 +183,7 @@ def measure(namespace: argparse.Namespace) -> BuildEvidence:
         rustup_components_sha256=sha256_file(
             _require_file(sysroot / _COMPONENTS, "rustup components list")
         ),
-        libraries=_library_records(sysroot, namespace.library),
+        libraries=_library_records(sysroot),
     )
     backend = BackendIdentity(
         version=require_truthy_text(namespace.backend_version, "backend version"),
@@ -213,7 +222,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend-version", required=True)
     parser.add_argument("--upstream-commit", required=True)
     parser.add_argument("--launcher-package-version", required=True)
-    parser.add_argument("--library", action="append", default=[])
     parser.add_argument("--lock", action="append", default=[])
     parser.add_argument(
         "--submodule",

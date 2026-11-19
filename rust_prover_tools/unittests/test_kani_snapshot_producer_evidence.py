@@ -99,6 +99,7 @@ def test_the_derived_input_assembles_the_exact_payloads(tmp_path: pathlib.Path) 
         AssemblyRequest(
             payloads=tmp_path,
             inputs=assembly_input,
+            identity=fixtures.publication_identity(),
             workflow=fixtures.workflow(),
         )
     )

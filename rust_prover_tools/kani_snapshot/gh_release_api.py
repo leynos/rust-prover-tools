@@ -25,12 +25,12 @@ from rust_prover_tools.kani_snapshot.gh_release_document import (
     parse_release,
     verify_publication,
 )
+from rust_prover_tools.kani_snapshot.gh_transport import failed, gh, is_not_found
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.release_model import (
     ExpectedRelease,
     ObservedRelease,
     ReleaseAsset,
-    ReleaseTransientError,
     release_body,
 )
 from rust_prover_tools.kani_snapshot.validation import (
@@ -43,18 +43,6 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = ("GhReleaseApi",)
-
-#: Cuprum terminates a command that exceeds its timeout and reports this code.
-_TIMEOUT_EXIT_CODE: typ.Final[int] = 124
-
-#: Transport-shaped markers that make a failed call worth re-observing.
-_TRANSIENT_MARKERS: typ.Final[tuple[str, ...]] = (
-    "HTTP 502",
-    "HTTP 503",
-    "HTTP 504",
-    "HTTP 500",
-    "timeout",
-)
 
 #: Releases requested per page when the tag endpoint cannot see a draft.
 _RELEASE_PAGE_SIZE: typ.Final[int] = 100
@@ -70,56 +58,6 @@ _RELEASE_QUERY: typ.Final[str] = (
     "{id, tag_name, draft, target_commitish, body, assets: "
     "[.assets[] | {name, size, digest}]}"
 )
-
-
-def _gh(argv: cabc.Sequence[str]) -> str:
-    """Run one `gh` command, classifying transport failures.
-
-    Parameters
-    ----------
-    argv : collections.abc.Sequence of str
-        Complete argument vector.
-
-    Returns
-    -------
-    str
-        Captured standard output.
-
-    Raises
-    ------
-    ReleaseTransientError
-        Raised for a timeout, a connection failure or a retryable server error,
-        because a fresh observation may still reconcile the attempt.
-    ProverToolError
-        Raised for a permanent failure such as an authentication refusal.
-    """
-    result = run_command(CommandSpec(tuple(argv)))
-    if result.exit_code != 0:
-        _failure(result.exit_code, result.stderr)
-    return result.stdout
-
-
-def _failure(exit_code: int, stderr: str) -> typ.NoReturn:
-    """Raise the error one failed `gh` call deserves.
-
-    Every API read classifies its failure the same way, so a new read cannot
-    accidentally report a retryable server error as permanent or the reverse.
-    A timeout, a connection failure or a retryable server status may still
-    reconcile on a fresh observation; anything else is permanent.
-    """
-    transient = exit_code == _TIMEOUT_EXIT_CODE or any(
-        marker in stderr for marker in _TRANSIENT_MARKERS
-    )
-    if transient:
-        msg = f"transient release API failure: {stderr.strip() or exit_code}"
-        raise ReleaseTransientError(msg)
-    msg = f"release API command failed ({exit_code}): {stderr.strip()}"
-    raise ProverToolError(msg)
-
-
-def _is_not_found(stderr: str) -> bool:
-    """Return whether a failed `gh api` call means the release does not exist."""
-    return "HTTP 404" in stderr or "not found" in stderr.lower()
 
 
 def _find_tag(records: list[object], tag: str) -> ObservedRelease | None:
@@ -146,9 +84,9 @@ def _optional_object(path: str, field: str) -> tuple[str, str] | None:
     result = run_command(CommandSpec(("gh", "api", path, "--jq", ".object")))
     if result.exit_code == 0:
         return _object_document(decoded(result.stdout), field)
-    if _is_not_found(result.stderr):
+    if is_not_found(result.stderr):
         return None
-    _failure(result.exit_code, result.stderr)
+    raise failed(result.exit_code, result.stderr)
 
 
 def _absent(tag: str, tag_commit: str | None) -> ObservedRelease:
@@ -195,6 +133,12 @@ class GhReleaseApi:
         tag object. A tag with no release at all is refused: creating a draft
         would silently adopt it.
 
+        A published release must resolve to a tag ref: GitHub creates the tag
+        when a draft is published, so a published release whose tag cannot be
+        resolved describes a state this run must not accept, and policy would
+        otherwise reach a no-op without confirming any target. A draft has no
+        tag yet by design, so its recorded `target_commitish` stands.
+
         A published release's own manifest, checksums, payloads, attestation
         and identity are re-verified from the downloaded bytes, so a later run
         need not compare its new asset bytes against the published ones.
@@ -205,6 +149,12 @@ class GhReleaseApi:
         tag_commit = self._tag_commit(tag)
         if observed is None:
             return _absent(tag, tag_commit)
+        if tag_commit is None and not observed.is_draft:
+            msg = (
+                f"published release {tag!r} does not resolve to a tag ref; "
+                "refusing to accept a publication with no confirmed target"
+            )
+            raise ProverToolError(msg)
         return self._with_verified_assets(
             tag,
             dc.replace(
@@ -249,9 +199,9 @@ class GhReleaseApi:
         )
         if result.exit_code == 0:
             return parse_release(decoded(result.stdout))
-        if _is_not_found(result.stderr):
+        if is_not_found(result.stderr):
             return None
-        _failure(result.exit_code, result.stderr)
+        raise failed(result.exit_code, result.stderr)
 
     def _list_page(self, page: int) -> list[object]:
         """Read one page of the release list."""
@@ -260,7 +210,7 @@ class GhReleaseApi:
             f"?per_page={_RELEASE_PAGE_SIZE}&page={page}"
         )
         items = decoded(
-            _gh((
+            gh((
                 "gh",
                 "api",
                 path,
@@ -323,7 +273,7 @@ class GhReleaseApi:
     ) -> None:
         """Download the named assets into one directory."""
         for name in names:
-            _gh((
+            gh((
                 "gh",
                 "release",
                 "download",
@@ -338,7 +288,7 @@ class GhReleaseApi:
 
     def create_draft(self, expected: ExpectedRelease) -> None:
         """Create a draft pre-release that records its run and build inputs."""
-        _gh((
+        gh((
             "gh",
             "api",
             "--method",
@@ -366,7 +316,7 @@ class GhReleaseApi:
 
     def upload(self, tag: str, asset: ReleaseAsset, path: Path) -> None:
         """Upload one asset without clobbering an existing one."""
-        _gh((
+        gh((
             "gh",
             "release",
             "upload",
@@ -387,7 +337,7 @@ class GhReleaseApi:
 
     def publish(self, tag: str, release_id: int) -> None:
         """Make a verified draft public without marking it latest."""
-        _gh((
+        gh((
             "gh",
             "api",
             "--method",

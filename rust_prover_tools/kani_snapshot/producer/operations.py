@@ -201,11 +201,13 @@ def assemble(namespace: argparse.Namespace) -> int:
     """Measure the payloads and write the manifest and checksums."""
     workflow = workflow_identity(namespace)
     inputs = parse_assembly_input(pathlib.Path(namespace.input).read_bytes())
+    identity = parse_publication_identity(pathlib.Path(namespace.identity).read_bytes())
     output = pathlib.Path(namespace.output)
     assembly = assemble_release(
         AssemblyRequest(
             payloads=pathlib.Path(namespace.payloads),
             inputs=inputs,
+            identity=identity,
             workflow=workflow,
         )
     )

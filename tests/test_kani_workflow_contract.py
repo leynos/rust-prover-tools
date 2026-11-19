@@ -129,6 +129,32 @@ def test_every_trusted_job_repeats_the_guard(
     assert 'GITHUB_REF" != "refs/heads/main' in guard
 
 
+@pytest.mark.parametrize(
+    ("name", "prerequisite"),
+    [
+        ("build", "resolve"),
+        ("assemble", "build"),
+        ("validate", "assemble"),
+        ("publish", "validate"),
+    ],
+)
+def test_a_failed_prerequisite_stops_the_next_job(
+    workflow: dict[str, object],
+    name: str,
+    prerequisite: str,
+) -> None:
+    """A job-level `if` drops the implicit `success()` a `needs` would give.
+
+    Naming the guard explicitly therefore also opts out of the default result
+    check, so each job must name its prerequisite's own result. Without that,
+    a failed build could still reach assembly and, worse, a failed validation
+    could still reach publication.
+    """
+    condition = typ.cast("str", job(workflow, name)["if"])
+    assert f"needs.{prerequisite}.result == 'success'" in condition, name
+    assert prerequisite in dependency_names(job(workflow, name)), name
+
+
 def test_the_run_is_serialized_and_never_cancelled(
     workflow: dict[str, object],
 ) -> None:
@@ -237,6 +263,33 @@ def test_attestation_precedes_clean_validation(
 
     recorded = "\n".join(run_scripts(job(workflow, "assemble")))
     assert "release/manifest.sigstore.jsonl" in recorded
+
+
+def test_assembly_binds_the_build_metadata_to_the_resolve_job_s_identity(
+    workflow: dict[str, object],
+) -> None:
+    """Assembly must read the identity from the job the build cannot rewrite.
+
+    The build artefact is produced by the least trusted job, so a tag or
+    commit taken from it would let that job choose the publication target.
+    The identity is therefore downloaded from the resolve job separately.
+    """
+    downloads = [
+        as_mapping(step["with"], "download inputs")
+        for step in steps(job(workflow, "assemble"))
+        if "kani-snapshot-resolution-" in str(step.get("with", ""))
+    ]
+    assert len(downloads) == 1
+    assert (
+        "kani-snapshot-resolution-${{ github.run_id }}-${{ github.run_attempt }}"
+        in str(downloads[0]["name"])
+    )
+    assert downloads[0]["path"] == "resolution", (
+        "the identity must land outside the build artefact's own tree"
+    )
+
+    assemble = "\n".join(run_scripts(job(workflow, "assemble")))
+    assert "--identity resolution/identity.json" in assemble
 
 
 def test_publication_needs_this_run_s_validation_receipt(

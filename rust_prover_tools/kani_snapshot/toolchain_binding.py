@@ -17,19 +17,18 @@ verifies.
 from __future__ import annotations
 
 import dataclasses as dc
-import os
 import stat
 import typing as typ
-from pathlib import Path
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
+from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_name import is_safe_toolchain_name
 from rust_prover_tools.kani_snapshot.validation import is_contained_relative_path
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
@@ -41,9 +40,6 @@ _RUSTC: typ.Final[str] = "bin/rustc"
 
 #: Rustup's record of the components installed in one toolchain.
 _RUSTUP_COMPONENTS: typ.Final[str] = "lib/rustlib/components"
-
-#: Directory whose shared objects the pinned dynamic-loader path exposes.
-_LIBRARY_DIRECTORY: typ.Final[str] = "lib"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -198,57 +194,14 @@ def _require_library_coverage(tree: _ToolchainTree, recorded: set[str]) -> None:
 
     The proof environment puts `<toolchain>/lib` first on `LD_LIBRARY_PATH`, so
     a shared object there is loadable even when the manifest does not list it.
-    Walking the directory rejects that gap, and any library or directory link
-    that resolves outside the toolchain.
+    The walk itself lives in `shared_libraries`, which the producer uses to
+    decide what to record: one definition means the producer cannot publish a
+    toolchain this check would refuse.
     """
-    root = tree.root / _LIBRARY_DIRECTORY
-    for path in _walk_library_directory(tree, root, set()):
-        relative = path.relative_to(tree.root).as_posix()
+    for relative in shared_libraries(tree.root, tree.progress):
         if relative not in recorded:
             msg = (
                 "snapshot toolchain provides a shared library the manifest "
                 f"does not record: {relative}"
             )
             raise ProverToolError(msg)
-
-
-def _walk_library_directory(
-    tree: _ToolchainTree,
-    directory: Path,
-    visited: set[Path],
-) -> cabc.Iterator[Path]:
-    """Yield shared objects below one directory, following contained links."""
-    tree.progress()
-    if not directory.is_dir():
-        return
-    resolved = _resolve(directory, "toolchain library directory")
-    if not resolved.is_relative_to(tree.resolved):
-        msg = f"snapshot toolchain library directory escapes: {directory}"
-        raise ProverToolError(msg)
-    if resolved in visited:
-        # A link cycle is harmless once its real directory has been walked.
-        return
-    visited.add(resolved)
-    for child in _list_directory(directory):
-        tree.progress()
-        path = Path(child.path)
-        if child.is_dir(follow_symlinks=True):
-            yield from _walk_library_directory(tree, path, visited)
-        elif child.is_file(follow_symlinks=True) and _is_shared_library(child.name):
-            _require_contained(path, tree, "library")
-            yield path
-
-
-def _list_directory(directory: Path) -> list[os.DirEntry[str]]:
-    """Return one directory's entries, reporting inspection failures."""
-    try:
-        with os.scandir(directory) as children:
-            return list(children)
-    except OSError as exc:
-        msg = f"failed to inspect snapshot toolchain library directory: {exc}"
-        raise ProverToolError(msg) from exc
-
-
-def _is_shared_library(name: str) -> bool:
-    """Return whether a file name denotes an ELF shared object."""
-    return name.endswith(".so") or ".so." in name

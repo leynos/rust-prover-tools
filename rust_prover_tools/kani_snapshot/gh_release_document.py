@@ -7,13 +7,13 @@ release's own manifest, checksums, payloads, attestation and identity. Keeping
 parsing here means the adapter cannot accidentally treat a claimed digest as
 evidence.
 
-A published release is authenticated as far as is possible without a trusted
-root: its attestation must be a well-formed DSSE bundle whose statement names
-this manifest digest, and its manifest must record the tag and build-input
-fingerprint the release body advertises. Whether that signature chains to a
-trusted certificate root is a consumer concern, exercised on a clean runner in
-EP-M5; a publisher that claimed more here would be recording a check nobody
-ran.
+A published release is authenticated by the same verifier a consumer installs
+with: the bundle must satisfy the pinned certificate, workflow, ref and digest
+policy, and the verified statement must name this manifest's own run and
+attempt. Structural checks alone would accept an unsigned statement, so they
+run first as a cheap refusal and never on their own decide
+`provenance_verified`. Exercising the verifier against a real clean-runner
+signature remains EP-M5.
 """
 
 from __future__ import annotations
@@ -24,7 +24,13 @@ import typing as typ
 from pathlib import PurePosixPath
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.attestation import ATTESTATION_PREDICATE
+from rust_prover_tools.kani_snapshot.attestation import (
+    ATTESTATION_PREDICATE,
+    SIGNER_WORKFLOW_PATH,
+    AttestationPolicy,
+    AttestationRequest,
+    verify_attestation,
+)
 from rust_prover_tools.kani_snapshot.integrity import (
     verify_asset,
     verify_checksums,
@@ -58,6 +64,9 @@ __all__ = ("decoded", "parse_release", "verify_publication")
 
 #: Width of the hexadecimal part of a SHA-256 digest.
 _SHA256_HEX_LENGTH: typ.Final[int] = 64
+
+#: Budget for one `gh attestation verify` run against a published release.
+_ATTESTATION_TIMEOUT_SECONDS: typ.Final[float] = 300.0
 
 
 def _is_sha256_hex(candidate: str) -> bool:
@@ -196,10 +205,11 @@ def _subject_names_manifest(subject: dict[str, object], manifest_sha256: str) ->
 def _require_attestation(directory: Path, manifest_sha256: str) -> None:
     """Require the attestation to be a well-formed statement about the manifest.
 
-    Signature validity under a trusted root is deliberately not asserted here;
-    this check rejects an empty bundle, an unrelated statement and a statement
-    about some other digest, which is what a publication observation can
-    establish before a clean runner exercises the full verifier.
+    This is the cheap half of the check: it rejects an empty bundle, an
+    unrelated statement and a statement about some other digest before a
+    verifier process is started. It never establishes authenticity on its own;
+    `_require_verified_signature` does that, and it alone decides
+    `provenance_verified`.
     """
     statement = _attestation_statement(directory)
     if statement.get("_type") not in _STATEMENT_TYPES:
@@ -249,6 +259,36 @@ def _require_bound_identity(
         raise ProverToolError(msg)
 
 
+def _require_verified_signature(directory: Path, parsed: ParsedManifest) -> None:
+    """Require the bundle to authenticate under the consumer's own policy.
+
+    The policy is the one a consumer installs with: this repository's signing
+    workflow, the trusted source ref, and the manifest's builder commit as both
+    source and signer digest. The verifier also has to name this manifest's run
+    and attempt, so an attestation for another run cannot authenticate these
+    bytes. Anything short of that raises, and the caller reports the release as
+    unverified rather than trusting the structural checks alone.
+    """
+    # The verifier raises unless it returns at least one authenticated
+    # statement for this run, so its return value carries no further decision.
+    verify_attestation(
+        AttestationRequest(
+            policy=AttestationPolicy(
+                repository=parsed.manifest.repository,
+                signer_workflow=(
+                    f"{parsed.manifest.repository}/{SIGNER_WORKFLOW_PATH}"
+                ),
+                source_digest=parsed.manifest.builder_commit,
+                signer_digest=parsed.manifest.builder_commit,
+            ),
+            artifact=directory / MANIFEST_NAME,
+            bundle=directory / ATTESTATION_NAME,
+            workflow=parsed.manifest.workflow,
+        ),
+        timeout_seconds=_ATTESTATION_TIMEOUT_SECONDS,
+    )
+
+
 def _verify_release(directory: Path, tag: str, body: str | None) -> None:
     """Require a published release's bytes, evidence and identity to agree."""
     parsed = parse_manifest((directory / MANIFEST_NAME).read_bytes())
@@ -261,6 +301,7 @@ def _verify_release(directory: Path, tag: str, body: str | None) -> None:
     for asset in parsed.manifest.assets:
         verify_asset(directory / asset.name, asset)
     _require_attestation(directory, parsed.sha256)
+    _require_verified_signature(directory, parsed)
 
 
 def verify_publication(
@@ -274,11 +315,11 @@ def verify_publication(
 
     The published manifest is the authority for the published bytes: its
     checksums must describe it and each payload it names, every evidence asset
-    must be present, its attestation must name its digest, and its recorded
-    identities must reproduce the build-input fingerprint the release body
-    advertises. A verification failure is reported as an unverified
-    observation rather than raised, because the policy owns what an
-    unverifiable publication means.
+    must be present, its attestation must name its digest under the consumer's
+    own policy and this run, and its recorded identities must reproduce the
+    build-input fingerprint the release body advertises. A verification failure
+    is reported as an unverified observation rather than raised, because the
+    policy owns what an unverifiable publication means.
 
     Parameters
     ----------
