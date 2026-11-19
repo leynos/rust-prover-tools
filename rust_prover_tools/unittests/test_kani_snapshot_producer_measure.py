@@ -186,6 +186,51 @@ def test_the_recorded_libraries_are_the_set_the_consumer_checks(
     }
 
 
+def _aliased_sysroot(base: pathlib.Path, *, link_first: bool) -> pathlib.Path:
+    """Create a sysroot whose shared object is reachable under two names."""
+    (base / TOOLCHAIN / "lib").mkdir(parents=True)
+    alias = base / TOOLCHAIN / "lib" / "aaa-alias"
+    if link_first:
+        # A dangling link now, filled in by `_sysroot`, so the alias is the
+        # first entry this directory ever holds.
+        alias.symlink_to("rustlib")
+    sysroot = _sysroot(base)
+    if not link_first:
+        alias.symlink_to("rustlib")
+    return sysroot
+
+
+def test_the_library_set_does_not_depend_on_directory_order(
+    tmp_path: pathlib.Path,
+) -> None:
+    """One toolchain yields one set of paths however its aliases appeared.
+
+    `os.scandir` reports entries in whatever order the filesystem holds them,
+    which differs between filesystems and machines. A walk that recorded the
+    name it met a file under would spell the same library as either
+    `lib/rustlib/...` or `lib/aaa-alias/...` depending on that order, so the
+    manifest would not describe the same bytes as the consumer's own walk.
+    Both copies below hold identical trees built in opposite orders.
+    """
+    forward = _aliased_sysroot(tmp_path / "forward", link_first=False)
+    backward = _aliased_sysroot(tmp_path / "backward", link_first=True)
+
+    assert shared_libraries(forward) == shared_libraries(backward) == (LIBRARY,)
+
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    recorded = [
+        [
+            record.path
+            for record in measure(
+                build_parser().parse_args(_arguments(scratch, sysroot))
+            ).toolchain.libraries
+        ]
+        for sysroot in (forward, backward)
+    ]
+    assert recorded == [list(shared_libraries(forward))] * 2
+
+
 def test_a_library_link_out_of_the_toolchain_is_refused(
     tmp_path: pathlib.Path,
 ) -> None:

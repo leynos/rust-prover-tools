@@ -56,10 +56,16 @@ def _resolve(path: Path, description: str) -> Path:
 
 
 def _entries(directory: Path) -> list[os.DirEntry[str]]:
-    """Return one directory's entries, reporting inspection failures."""
+    """Return one directory's entries in name order, or report a failure.
+
+    `os.scandir` yields entries in whatever order the filesystem happens to
+    hold them, which differs between machines and between two copies of the
+    same toolchain. Sorting makes the walk reproducible; the recorded paths are
+    canonical, so even the order a link is met in cannot change the result.
+    """
     try:
         with os.scandir(directory) as children:
-            return list(children)
+            return sorted(children, key=lambda child: child.name)
     except OSError as exc:
         msg = f"failed to inspect toolchain library directory: {exc}"
         raise ProverToolError(msg) from exc
@@ -108,9 +114,16 @@ class _LibraryWalk:
             self._record(path)
 
     def _record(self, path: Path) -> None:
-        """Record one shared object, refusing one that resolves outside."""
-        self._resolve_inside(path, "library")
-        self.found.add(path.relative_to(self._root).as_posix())
+        """Record one shared object by its canonical path inside the toolchain.
+
+        Recording where the entry was met rather than where it really lives
+        would make the recorded set depend on the directory order: an aliased
+        directory reached first would spell the same file differently. The
+        consumer resolves and checks the same canonical path, so it can only
+        agree with a producer that records it this way.
+        """
+        resolved = self._resolve_inside(path, "library")
+        self.found.add(resolved.relative_to(self._resolved_root).as_posix())
 
     def _resolve_inside(self, path: Path, description: str) -> Path:
         """Resolve `path`, refusing one that leaves the toolchain."""
