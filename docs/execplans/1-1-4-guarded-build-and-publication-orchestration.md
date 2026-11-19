@@ -153,8 +153,10 @@ Terms used here:
   build now copies each source-state observation into the artefact as it is
   taken, uploads what it has on failure under its own artefact name, and writes
   D5's wall time, disk, cache outcome, payload sizes and source HEADs to the
-  run summary. Every downstream job names its prerequisite's result, because an
-  explicit job-level `if` drops the implicit `success()`.
+  run summary. Every downstream job names its prerequisite's result as an
+  explicit guard; only a status-check function in a job-level `if` drops the
+  implicit `success()`, so the named result states intent rather than relying
+  on that rule.
 - 19 November 2026: remediated the fourth completeness assessment (A4,
   `EP258-2026-11-19-A4`). The shared-library walk now sorts each directory and
   records every shared object by its resolved path, so two copies of one
@@ -179,6 +181,39 @@ Terms used here:
   and for a collision. `jq`, which the run-summary contract test needs, is
   documented as a host tool in the developers' guide rather than left implicit,
   and `make workflow-check` includes the new module.
+- 19 November 2026: remediated the review round on `c99e900` (48 threads). The
+  `ReleaseApi` port now separates `observe(tag)`, which is a metadata query
+  that never claims a verification, from `verify(tag, observed, names)`, whose
+  digests are computed from the bytes the release serves; the adapter's `gh`
+  failure classification is shared through `gh_transport` with a bounded runner
+  protocol, and every call carries a timeout. A draft whose upload was
+  interrupted leaves an asset record of zero bytes and no digest, which GitHub
+  will not let the retry upload over; the policy now returns
+  `DISCARD_PLACEHOLDER` for exactly that record, the observation keeps the
+  asset's numeric identifier, and the adapter deletes it by identifier before
+  the real file is sent. A record with other non-empty bytes is still a
+  conflict, so recovery never clobbers verified bytes and `upload` still never
+  clobbers. The port's methods carry NumPy-style contracts, and the recheck
+  before the PATCH is documented as narrowing rather than closing the window,
+  with the post-write observation as the report of any divergence. The users'
+  guide registers its smoke-dispatch example with a `tested-example` marker and
+  a shared loader in `tests/documentation_examples.py` reads the shipped text,
+  holding the documented command and the Makefile recipe to one contract. Test
+  modules gained assertion messages, the entrypoint publication fake moved to
+  its own module below pylint's line limit, the release-verification digest
+  witness now changes one digest per case, and the generated publication
+  machine derives whether a state must conflict instead of accepting any error.
+  Four production modules this branch had grown past pylint's 400-line limit
+  were split along seams that already existed rather than by raising the limit:
+  the `ReleaseApi` port into `release_port`, asset classification into
+  `release_assets_policy`, the release-body markers into `release_markers`, and
+  the adapter's attestation and download steps into `gh_release_attestation` and
+  `gh_release_download`. Their public names are unchanged and the layering
+  stays acyclic, so no caller needed a shim. The same applies to the test
+  modules: the release API double, the run-summary contract and the Makefile
+  contract moved into their own modules, and the Makefile's
+  `WORKFLOW_CONTRACT_TESTS` list names the new one so `make workflow-check`
+  still runs every contract test it did before.
 
 ## Surprises & discoveries
 
@@ -213,11 +248,14 @@ Terms used here:
   reached by a feature-sized module, so a split is cheaper than a suppression.
   The build-job contracts now have their own module, and the adapter's three
   copies of the `gh` failure classification became one `_failure` helper.
-- A job-level `if:` in GitHub Actions **replaces** the implicit `success()`
-  check on `needs`, rather than adding to it. Every guarded job therefore names
-  `needs.<job>.result == 'success'` explicitly. Without it, a failed build
-  could still allow assembly and a failed validation could still allow
-  publication, because the guard condition alone evaluated true.
+- A job-level `if:` in GitHub Actions replaces the implicit `success()` check
+  on `needs` only when the condition contains a status-check function such as
+  `always()`, `failure()` or `cancelled()`; an ordinary comparison keeps that
+  check, so a failed prerequisite already prevents the job from running. Every
+  guarded job still names `needs.<job>.result` explicitly, as an additional
+  guard that states which prerequisite outcomes the job accepts, so a job
+  deliberately allowed to run after a failure cannot rely on the implicit rule
+  changing.
 - The producer's measurement and the consumer's coverage check were two
   definitions of "the toolchain's shared libraries": one trusted a `--library`
   list assembled in YAML, the other walked `<toolchain>/lib`. They now call the

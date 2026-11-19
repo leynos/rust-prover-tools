@@ -3,48 +3,34 @@
 Each subcommand reads the documents an earlier job wrote, checks that they
 belong to the same run and attempt, and only then writes its own output. These
 tests drive the real command line end to end: a manual resolution becomes a
-plan, measured payloads become a manifest, validation becomes a receipt, and
-publication is refused before any release call when the evidence does not bind.
-The final test runs the whole publication through a modelled `gh`.
+plan, measured payloads become a manifest, and validation becomes a receipt.
+Publication is exercised in `test_kani_snapshot_producer_publication`.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import pathlib
 import typing as typ
 
 import pytest
 
-from rust_prover_tools.kani_snapshot.manifest import parse_manifest
-from rust_prover_tools.kani_snapshot.models import REPOSITORY, SUPPORTED_TARGET
+from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.producer.assemble import (
     assembly_input_to_json,
 )
 from rust_prover_tools.kani_snapshot.producer.entrypoint import build_parser, main
-from rust_prover_tools.kani_snapshot.producer.lifecycle import (
-    parse_build_plan,
-    parse_resolution,
-)
-from rust_prover_tools.kani_snapshot.producer.publication_identity import (
-    parse_publication_identity,
-)
+from rust_prover_tools.kani_snapshot.producer.lifecycle import parse_resolution
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
-from rust_prover_tools.kani_snapshot.producer.release_assets import EVIDENCE_NAMES
+from rust_prover_tools.kani_snapshot.producer.release_assets import PERFORMED_CHECKS
 from rust_prover_tools.kani_snapshot.producer.resolution import (
     REQUIRED_UPSTREAM_CHECKS,
 )
-from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
-    parse_receipt,
-    verify_receipt,
-)
+from rust_prover_tools.kani_snapshot.producer.validation_receipt import parse_receipt
 from rust_prover_tools.unittests import kani_producer_fixtures as fixtures
 
 if typ.TYPE_CHECKING:
-    from cmd_mox import CmdMox, Invocation
-
-pytest_plugins = ("cmd_mox.pytest_plugin",)
+    import pathlib
 
 PINNED = pinned_recipe()
 MANUAL_EVENT = "workflow_dispatch"
@@ -69,6 +55,20 @@ def _run_flags(
     ]
 
 
+def _checks() -> list[dict[str, object]]:
+    """Return one passing record per required upstream check."""
+    return [
+        {
+            "name": name,
+            "status": "completed",
+            "conclusion": "success",
+            "id": index + 1,
+            "started_at": "2026-09-16T03:00:00Z",
+        }
+        for index, name in enumerate(REQUIRED_UPSTREAM_CHECKS)
+    ]
+
+
 def _write_checks(tmp_path: pathlib.Path) -> pathlib.Path:
     """Write passing check evidence for the dispatched commit."""
     path = tmp_path / "checks.json"
@@ -76,16 +76,7 @@ def _write_checks(tmp_path: pathlib.Path) -> pathlib.Path:
         json.dumps({
             "commit": fixtures.UPSTREAM_COMMIT,
             "total_count": len(REQUIRED_UPSTREAM_CHECKS),
-            "checks": [
-                {
-                    "name": name,
-                    "status": "completed",
-                    "conclusion": "success",
-                    "id": index + 1,
-                    "started_at": "2026-09-16T03:00:00Z",
-                }
-                for index, name in enumerate(REQUIRED_UPSTREAM_CHECKS)
-            ],
+            "checks": _checks(),
         }),
         encoding="utf-8",
     )
@@ -147,14 +138,6 @@ def _build(tmp_path: pathlib.Path, *flags: str) -> int:
     ])
 
 
-def _write_assembly_input(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Write the metadata document a build job would hand to assembly."""
-    path = tmp_path / "assembly-input.json"
-    identity = fixtures.workflow(event=MANUAL_EVENT)
-    path.write_bytes(assembly_input_to_json(fixtures.assembly_input(identity=identity)))
-    return path
-
-
 def _release(tmp_path: pathlib.Path) -> pathlib.Path:
     """Stage the payloads in the one directory the release will serve."""
     release = tmp_path / "release"
@@ -163,12 +146,21 @@ def _release(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def _assemble(tmp_path: pathlib.Path, *flags: str) -> int:
-    """Assemble the pinned payloads into the release directory."""
+    """Assemble the pinned payloads into the release directory.
+
+    The assembly input is the document a build job would hand over, written
+    from the fixtures as the metadata job would write it.
+    """
+    inputs = tmp_path / "assembly-input.json"
+    identity = fixtures.workflow(event=MANUAL_EVENT)
+    inputs.write_bytes(
+        assembly_input_to_json(fixtures.assembly_input(identity=identity))
+    )
     release = tmp_path / "release"
     return main([
         "assemble",
         "--input",
-        str(_write_assembly_input(tmp_path)),
+        str(inputs),
         "--identity",
         str(tmp_path / "identity.json"),
         "--payloads",
@@ -182,8 +174,9 @@ def _assemble(tmp_path: pathlib.Path, *flags: str) -> int:
 
 def _attest(tmp_path: pathlib.Path) -> None:
     """Stand in for the attestation job's bundle about the assembled manifest."""
-    manifest = (tmp_path / "release" / "manifest.json").read_bytes()
-    (tmp_path / "release" / "manifest.sigstore.jsonl").write_bytes(
+    release = tmp_path / "release"
+    manifest = (release / "manifest.json").read_bytes()
+    (release / "manifest.sigstore.jsonl").write_bytes(
         fixtures.attestation_bundle(hashlib.sha256(manifest).hexdigest())
     )
 
@@ -206,54 +199,44 @@ def _validate(tmp_path: pathlib.Path, *flags: str) -> int:
 def _prepare(tmp_path: pathlib.Path) -> None:
     """Run resolve, identity, build, assemble, attest and validate."""
     _release(tmp_path)
-    assert _resolve(tmp_path) == 0
-    assert _identity(tmp_path) == 0
-    assert _build(tmp_path) == 0
-    assert _assemble(tmp_path) == 0
+    assert _resolve(tmp_path) == 0, "resolve must succeed before identity"
+    assert _identity(tmp_path) == 0, "identity must succeed before build"
+    assert _build(tmp_path) == 0, "build must succeed before assembly"
+    assert _assemble(tmp_path) == 0, "assemble must succeed after build"
     _attest(tmp_path)
-    assert _validate(tmp_path) == 0
+    assert _validate(tmp_path) == 0, "validate must succeed for the assembly"
 
 
-def test_the_entrypoint_runs_the_whole_producer_sequence(
+def test_validate_records_only_the_checks_it_performed(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Each job's output parses and binds to the run that produced it."""
+    """The receipt names the code's checks, not a caller-supplied label list."""
     _prepare(tmp_path)
-    resolution = parse_resolution((tmp_path / "resolution.json").read_bytes())
-    identity = parse_publication_identity((tmp_path / "identity.json").read_bytes())
-    plan = parse_build_plan((tmp_path / "plan.json").read_bytes())
-    parsed = parse_manifest((tmp_path / "release" / "manifest.json").read_bytes())
+
     receipt = parse_receipt((tmp_path / "receipt.json").read_bytes())
-    assert resolution.route.value == "manual"
-    assert identity.tag == fixtures.TAG
-    assert identity.upstream_commit == resolution.upstream_commit
-    assert plan.upstream_commit == resolution.upstream_commit
-    assert plan.tag == fixtures.TAG
-    assert parsed.manifest.tag == plan.tag
-    assert parsed.manifest.builder_commit == fixtures.BUILDER_COMMIT
-    assert parsed.manifest.workflow == fixtures.workflow(event=MANUAL_EVENT)
-    assert parsed.manifest.target == SUPPORTED_TARGET
-    verify_receipt(receipt, parsed)
+
+    assert receipt.checks == PERFORMED_CHECKS, (
+        "the receipt must record only the checks validation performed"
+    )
 
 
-def test_the_entrypoint_writes_checksums_beside_the_manifest(
+def test_validate_no_longer_accepts_a_checks_override(
     tmp_path: pathlib.Path,
 ) -> None:
-    """`SHA256SUMS` covers the payloads and the manifest bytes it names."""
-    _prepare(tmp_path)
-    manifest = (tmp_path / "release" / "manifest.json").read_bytes()
-    rows = {
-        name: digest
-        for digest, name in (
-            line.split("  ", 1)
-            for line in (tmp_path / "release" / "SHA256SUMS")
-            .read_text(encoding="ascii")
-            .splitlines()
-        )
-    }
-    assert rows["manifest.json"] == hashlib.sha256(manifest).hexdigest()
-    for name in fixtures.names().values():
-        assert name in rows
+    """A label list on the command line could claim checks never performed."""
+    with pytest.raises(SystemExit):
+        main([
+            "validate",
+            "--manifest",
+            str(tmp_path / "release" / "manifest.json"),
+            "--payloads",
+            str(tmp_path / "release"),
+            "--checks",
+            "manifest-digest",
+            "--output",
+            str(tmp_path / "receipt.json"),
+            *_run_flags(),
+        ])
 
 
 def test_a_scheduled_resolution_selects_the_newest_qualified_release(
@@ -275,16 +258,7 @@ def test_a_scheduled_resolution_selects_the_newest_qualified_release(
                     "object": {"type": "commit", "sha": fixtures.UPSTREAM_COMMIT},
                 },
                 "total_count": len(REQUIRED_UPSTREAM_CHECKS),
-                "checks": [
-                    {
-                        "name": name,
-                        "status": "completed",
-                        "conclusion": "success",
-                        "id": index + 1,
-                        "started_at": "2026-09-16T03:00:00Z",
-                    }
-                    for index, name in enumerate(REQUIRED_UPSTREAM_CHECKS)
-                ],
+                "checks": _checks(),
             },
         ]),
         encoding="utf-8",
@@ -300,11 +274,15 @@ def test_a_scheduled_resolution_selects_the_newest_qualified_release(
         str(output),
         *_run_flags(event="schedule"),
     ])
-    assert code == 0
+    assert code == 0, "scheduled resolve must accept qualified evidence"
     resolution = parse_resolution(output.read_bytes())
-    assert resolution.route.value == "scheduled"
-    assert resolution.upstream_commit == fixtures.UPSTREAM_COMMIT
-    assert resolution.upstream_tag == PINNED.upstream.tag
+    assert resolution.route.value == "scheduled", "route must be scheduled"
+    assert resolution.upstream_commit == fixtures.UPSTREAM_COMMIT, (
+        "resolution must select the qualified commit"
+    )
+    assert resolution.upstream_tag == PINNED.upstream.tag, (
+        "resolution must adopt the pinned tag"
+    )
 
 
 def test_a_manual_resolution_requires_a_commit(
@@ -319,8 +297,10 @@ def test_a_manual_resolution_requires_a_commit(
         str(tmp_path / "resolution.json"),
         *_run_flags(),
     ])
-    assert code == 1
-    assert "--commit" in capsys.readouterr().err
+    assert code == 1, "manual resolve must fail without a commit"
+    assert "--commit" in capsys.readouterr().err, (
+        "the failure must name the missing --commit"
+    )
 
 
 def test_a_manual_resolution_adopts_the_pinned_upstream_tag(
@@ -331,11 +311,15 @@ def test_a_manual_resolution_adopts_the_pinned_upstream_tag(
     A dispatch input can only name the commit; accepting a tag from it would
     let a caller pair one release's tag with another release's source.
     """
-    assert _resolve(tmp_path) == 0
+    assert _resolve(tmp_path) == 0, "resolve must succeed before reading output"
 
     resolution = parse_resolution((tmp_path / "resolution.json").read_bytes())
-    assert resolution.upstream_commit == fixtures.UPSTREAM_COMMIT
-    assert resolution.upstream_tag == PINNED.upstream.tag
+    assert resolution.upstream_commit == fixtures.UPSTREAM_COMMIT, (
+        "resolution must record the dispatched commit"
+    )
+    assert resolution.upstream_tag == PINNED.upstream.tag, (
+        "resolution must adopt the recipe's tag"
+    )
 
 
 def test_a_scheduled_resolution_requires_candidates(
@@ -350,265 +334,48 @@ def test_a_scheduled_resolution_requires_candidates(
         str(tmp_path / "resolution.json"),
         *_run_flags(event="schedule"),
     ])
-    assert code == 1
-    assert "--candidates" in capsys.readouterr().err
+    assert code == 1, "scheduled resolve must fail without candidates"
+    assert "--candidates" in capsys.readouterr().err, (
+        "the failure must name the missing --candidates"
+    )
 
 
 def test_build_refuses_a_resolution_from_another_run(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A stale resolution must not authorise this run's build."""
-    assert _resolve(tmp_path) == 0
-    assert _identity(tmp_path) == 0
+    assert _resolve(tmp_path) == 0, "resolve must succeed before identity"
+    assert _identity(tmp_path) == 0, "identity must succeed before build"
     code = _build(tmp_path, *_run_flags(run_id=999))
-    assert code == 1
-    assert "another workflow run" in capsys.readouterr().err
+    assert code == 1, "build must refuse a resolution from another run"
+    assert "another workflow run" in capsys.readouterr().err, (
+        "the refusal must name the run mismatch"
+    )
 
 
 def test_validate_refuses_a_manifest_from_another_attempt(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """A rerun revalidates rather than inheriting the previous verdict."""
-    _release(tmp_path)
-    assert _resolve(tmp_path) == 0
-    assert _identity(tmp_path) == 0
-    assert _build(tmp_path) == 0
-    assert _assemble(tmp_path) == 0
-    _attest(tmp_path)
+    _prepare(tmp_path)
     code = _validate(tmp_path, *_run_flags(run_attempt=2))
-    assert code == 1
-    assert "another workflow run" in capsys.readouterr().err
+    assert code == 1, "validate must refuse a manifest from another attempt"
+    assert "another workflow run" in capsys.readouterr().err, (
+        "the refusal must name the attempt mismatch"
+    )
 
 
 def test_validate_refuses_a_tampered_payload(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Validation hashes the files it is given, not the manifest's claims."""
-    _release(tmp_path)
-    assert _resolve(tmp_path) == 0
-    assert _identity(tmp_path) == 0
-    assert _build(tmp_path) == 0
-    assert _assemble(tmp_path) == 0
-    _attest(tmp_path)
+    _prepare(tmp_path)
     (tmp_path / "release" / fixtures.names()["backend"]).write_bytes(b"tampered")
     code = _validate(tmp_path)
-    assert code == 1
-    assert "does not match the manifest" in capsys.readouterr().err
-
-
-def test_publish_refuses_a_receipt_from_another_run_before_any_call(
-    tmp_path: pathlib.Path,
-    cmd_mox: CmdMox,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """A cross-run receipt is refused before the release API is touched."""
-    _prepare(tmp_path)
-    calls: list[list[str]] = []
-
-    def record(invocation: Invocation) -> tuple[str, str, int]:
-        """Record any accidental release call and answer nothing useful."""
-        calls.append(invocation.args)
-        return ("", "", 0)
-
-    cmd_mox.stub("gh").runs(record)
-    code = main([
-        "publish",
-        "--manifest",
-        str(tmp_path / "release" / "manifest.json"),
-        "--receipt",
-        str(tmp_path / "receipt.json"),
-        "--payloads",
-        str(tmp_path / "release"),
-        *_run_flags(run_id=999),
-    ])
-    assert code == 1
-    assert "another workflow run or attempt" in capsys.readouterr().err
-    assert not calls
-
-
-class FakeGitHub:
-    """A minimal release server that `gh` is stubbed to answer with.
-
-    It stores uploaded bytes and serves them again on download, so the digest
-    that releases publication is computed from what the release would really
-    serve. Every other call shape raises, which catches an adapter drift.
-    """
-
-    def __init__(self) -> None:
-        """Create an absent release."""
-        self.exists = False
-        self.is_draft = False
-        self.assets: dict[str, bytes] = {}
-        self.target = ""
-        self.body: str | None = None
-        self.published = False
-
-    def document(self) -> str:
-        """Return the release as `gh api --jq` would print it."""
-        return json.dumps({
-            "id": 4242,
-            "tag_name": fixtures.TAG,
-            "draft": self.is_draft,
-            "target_commitish": self.target,
-            "body": self.body,
-            "assets": [
-                {
-                    "name": name,
-                    "size": len(data),
-                    "digest": f"sha256:{hashlib.sha256(data).hexdigest()}",
-                }
-                for name, data in sorted(self.assets.items())
-            ],
-        })
-
-    def handle(self, invocation: Invocation) -> tuple[str, str, int]:
-        """Answer one `gh` invocation as the release API would."""
-        args = invocation.args
-        if args[0] == "attestation":
-            return self._attestation(args)
-        if args[0] == "api":
-            return self._api(args)
-        if args[0] == "release":
-            return self._release(args)
-        msg = f"unexpected gh command: {args}"
-        raise AssertionError(msg)
-
-    def _attestation(self, args: list[str]) -> tuple[str, str, int]:
-        """Answer `gh attestation verify` for a bundle this run signed.
-
-        Publication re-verifies a published release under the consumer's
-        policy, so the double refuses a command that does not ask for the
-        pinned signer and builder commit. A matching answer names this run and
-        attempt, which is what the manifest records.
-        """
-        assert args[1] == "verify", args
-        assert args[args.index("--signer-workflow") + 1] == (
-            f"{REPOSITORY}/.github/workflows/kani-monthly.yml"
-        ), "the verifier was not asked for the pinned signer workflow"
-        assert args[args.index("--source-digest") + 1] == fixtures.BUILDER_COMMIT
-        workflow = fixtures.workflow(event=MANUAL_EVENT)
-        invocation = (
-            f"https://github.com/{REPOSITORY}"
-            f"/actions/runs/{workflow.run_id}/attempts/{workflow.run_attempt}"
-        )
-        return (
-            json.dumps([
-                {
-                    "verificationResult": {
-                        "statement": {
-                            "predicate": {
-                                "runDetails": {"metadata": {"invocationId": invocation}}
-                            }
-                        }
-                    }
-                }
-            ]),
-            "",
-            0,
-        )
-
-    def _api(self, args: list[str]) -> tuple[str, str, int]:
-        """Answer one REST call."""
-        endpoint = args[1]
-        if endpoint == f"repos/{REPOSITORY}/releases/tags/{fixtures.TAG}":
-            return self._read_by_tag()
-        if endpoint == f"repos/{REPOSITORY}/git/ref/tags/{fixtures.TAG}":
-            return self._read_tag_ref()
-        if endpoint.startswith(f"repos/{REPOSITORY}/releases?"):
-            listed = [json.loads(self.document())] if self.exists else []
-            return (json.dumps(listed), "", 0)
-        if args[1:3] == ["--method", "POST"]:
-            return self._create(args)
-        if args[1:3] == ["--method", "PATCH"]:
-            return self._publish()
-        msg = f"unexpected gh api call: {args}"
-        raise AssertionError(msg)
-
-    def _read_by_tag(self) -> tuple[str, str, int]:
-        """Answer the release-by-tag endpoint."""
-        if not self.exists:
-            return ("", "gh: HTTP 404: Not Found", 1)
-        return (self.document(), "", 0)
-
-    def _read_tag_ref(self) -> tuple[str, str, int]:
-        """Answer the tag-ref lookup with the commit the tag addresses.
-
-        Creating the draft creates the tag at the draft's target, so an absent
-        release has no tag either.
-        """
-        if not self.exists:
-            return ("", "gh: HTTP 404: Not Found", 1)
-        return (json.dumps({"type": "commit", "sha": self.target}), "", 0)
-
-    def _create(self, args: list[str]) -> tuple[str, str, int]:
-        """Answer a draft-creation call, recording what the draft declares."""
-        self.exists = True
-        self.is_draft = True
-        self.target = next(
-            value.removeprefix("target_commitish=")
-            for value in args
-            if value.startswith("target_commitish=")
-        )
-        self.body = next(
-            value.removeprefix("body=") for value in args if value.startswith("body=")
-        )
-        return ("{}", "", 0)
-
-    def _publish(self) -> tuple[str, str, int]:
-        """Answer a publication call, refusing an incomplete draft."""
-        assert set(self.assets) == _release_names()
-        self.is_draft = False
-        self.published = True
-        return ("{}", "", 0)
-
-    def _release(self, args: list[str]) -> tuple[str, str, int]:
-        """Answer one release upload or download."""
-        if args[1] == "upload":
-            path = pathlib.Path(args[3])
-            self.assets[path.name] = path.read_bytes()
-            return ("", "", 0)
-        if args[1] == "download":
-            name = args[args.index("--pattern") + 1]
-            directory = pathlib.Path(args[args.index("--dir") + 1])
-            (directory / name).write_bytes(self.assets[name])
-            return ("", "", 0)
-        msg = f"unexpected gh release call: {args}"
-        raise AssertionError(msg)
-
-
-def _release_names() -> set[str]:
-    """Return every asset name the release must serve."""
-    return set(fixtures.names().values()) | set(EVIDENCE_NAMES)
-
-
-def test_publish_drives_the_release_through_the_real_adapter(
-    tmp_path: pathlib.Path,
-    cmd_mox: CmdMox,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The whole flow publishes the exact measured bytes and reports success."""
-    _prepare(tmp_path)
-    github = FakeGitHub()
-    cmd_mox.stub("gh").runs(github.handle)
-    code = main([
-        "publish",
-        "--manifest",
-        str(tmp_path / "release" / "manifest.json"),
-        "--receipt",
-        str(tmp_path / "receipt.json"),
-        "--payloads",
-        str(tmp_path / "release"),
-        *_run_flags(),
-    ])
-    assert code == 0
-    assert github.published
-    assert not github.is_draft
-    assert github.target == fixtures.BUILDER_COMMIT
-    expected = {
-        path.name: path.read_bytes() for path in (tmp_path / "release").iterdir()
-    }
-    assert github.assets == expected
-    assert fixtures.TAG in capsys.readouterr().out
+    assert code == 1, "validate must refuse a tampered payload"
+    assert "does not match the manifest" in capsys.readouterr().err, (
+        "the refusal must name the digest mismatch"
+    )
 
 
 def test_the_parser_requires_a_subcommand() -> None:

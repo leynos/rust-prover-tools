@@ -3,34 +3,42 @@
 `publish` owns the orchestration and `release_policy` owns the decisions; this
 module only turns those decisions into `gh` argument vectors and reads the
 resulting state back. The adapter is deliberately narrow: `GhReleaseApi` builds
-argument vectors through `rust_prover_tools.commands`, classifies transport
-failures as transient, and re-downloads every expected asset to hash it. That
-last rule is what makes `ObservedAsset.sha256` evidence rather than a claim: the
-digest that authorises a publish is computed locally from the bytes the public
-release serves.
+argument vectors through `rust_prover_tools.commands` and classifies transport
+failures as transient.
+
+Reading state and verifying bytes are separate commands. `observe` performs
+queries only, so a caller can tell that an observation cost no download.
+`verify` is the one command that downloads, hashes and authenticates, and its
+result is a `VerifiedAssets` record rather than an edited observation. That
+split is what makes `ObservedAsset.sha256` evidence rather than a claim: the
+digest that authorises a publish is computed locally from the bytes the release
+serves, and only a verification asks for it.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
-import pathlib
-import tempfile
+import logging
 import typing as typ
 
-from rust_prover_tools.commands import CommandSpec, run_command
-from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.gh_release_document import (
     decoded,
     parse_release,
-    verify_publication,
 )
-from rust_prover_tools.kani_snapshot.gh_transport import failed, gh, is_not_found
+from rust_prover_tools.kani_snapshot.gh_release_download import verify_assets
+from rust_prover_tools.kani_snapshot.gh_transport import (
+    TRANSFER_TIMEOUT_SECONDS,
+    gh,
+    gh_optional,
+)
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.release_model import (
     ExpectedRelease,
+    ObservedAsset,
     ObservedRelease,
     ReleaseAsset,
+    VerifiedAssets,
     release_body,
 )
 from rust_prover_tools.kani_snapshot.validation import (
@@ -44,6 +52,8 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("GhReleaseApi",)
 
+_LOGGER = logging.getLogger(__name__)
+
 #: Releases requested per page when the tag endpoint cannot see a draft.
 _RELEASE_PAGE_SIZE: typ.Final[int] = 100
 
@@ -56,7 +66,7 @@ _TAG_PEEL_LIMIT: typ.Final[int] = 4
 #: Fields every observation needs, from either release endpoint.
 _RELEASE_QUERY: typ.Final[str] = (
     "{id, tag_name, draft, target_commitish, body, assets: "
-    "[.assets[] | {name, size, digest}]}"
+    "[.assets[] | {id, name, size, digest}]}"
 )
 
 
@@ -81,12 +91,10 @@ def _object_document(document: object, field: str) -> tuple[str, str]:
 
 def _optional_object(path: str, field: str) -> tuple[str, str] | None:
     """Read one Git object reference, or `None` when it does not exist."""
-    result = run_command(CommandSpec(("gh", "api", path, "--jq", ".object")))
-    if result.exit_code == 0:
-        return _object_document(decoded(result.stdout), field)
-    if is_not_found(result.stderr):
+    stdout = gh_optional(("gh", "api", path, "--jq", ".object"))
+    if stdout is None:
         return None
-    raise failed(result.exit_code, result.stderr)
+    return _object_document(decoded(stdout), field)
 
 
 def _absent(tag: str, tag_commit: str | None) -> ObservedRelease:
@@ -118,7 +126,7 @@ class GhReleaseApi:
         self._repository = repository
 
     def observe(self, tag: str) -> ObservedRelease:
-        """Return the release state, re-downloading every asset's bytes.
+        """Return the release metadata without downloading any asset.
 
         A missing release is an observation, not an error. The release-by-tag
         endpoint is tried first; when it cannot see the tag, the bounded
@@ -139,9 +147,9 @@ class GhReleaseApi:
         otherwise reach a no-op without confirming any target. A draft has no
         tag yet by design, so its recorded `target_commitish` stands.
 
-        A published release's own manifest, checksums, payloads, attestation
-        and identity are re-verified from the downloaded bytes, so a later run
-        need not compare its new asset bytes against the published ones.
+        The observation reports `provenance_verified=False`: a state query
+        cannot authenticate anything, and only `verify` may claim it did. A
+        digest the API volunteers is reported as metadata, never as evidence.
         """
         observed = self._observe_by_tag(tag)
         if observed is None:
@@ -155,12 +163,11 @@ class GhReleaseApi:
                 "refusing to accept a publication with no confirmed target"
             )
             raise ProverToolError(msg)
-        return self._with_verified_assets(
-            tag,
-            dc.replace(
-                observed,
-                target_commitish=tag_commit or observed.target_commitish,
-            ),
+        return dc.replace(
+            observed,
+            target_commitish=tag_commit or observed.target_commitish,
+            provenance_verified=False,
+            provenance_reason=None,
         )
 
     def _tag_commit(self, tag: str) -> str | None:
@@ -170,38 +177,42 @@ class GhReleaseApi:
         )
         if current is None:
             return None
-        for _ in range(_TAG_PEEL_LIMIT):
+        peels = 0
+        while True:
             kind, sha = current
             if kind == "commit":
                 return sha
             if kind != "tag":
                 msg = f"tag {tag!r} addresses a {kind!r}, not a commit"
                 raise ProverToolError(msg)
+            # Count only tag-object fetches. The terminal commit is fetched by
+            # the last allowed peel and its type is checked at the loop top.
+            if peels >= _TAG_PEEL_LIMIT:
+                msg = (
+                    f"tag {tag!r} chains through more than "
+                    f"{_TAG_PEEL_LIMIT} annotated tag objects"
+                )
+                raise ProverToolError(msg)
+            peels += 1
             current = _optional_object(
                 f"repos/{self._repository}/git/tags/{sha}", f"tag object {sha}"
             )
             if current is None:
                 msg = f"tag {tag!r} names a missing tag object {sha}"
                 raise ProverToolError(msg)
-        msg = f"tag {tag!r} chains through more than {_TAG_PEEL_LIMIT} objects"
-        raise ProverToolError(msg)
 
     def _observe_by_tag(self, tag: str) -> ObservedRelease | None:
         """Read one release by tag, or `None` when the endpoint has no answer."""
-        result = run_command(
-            CommandSpec((
-                "gh",
-                "api",
-                f"repos/{self._repository}/releases/tags/{tag}",
-                "--jq",
-                _RELEASE_QUERY,
-            ))
-        )
-        if result.exit_code == 0:
-            return parse_release(decoded(result.stdout))
-        if is_not_found(result.stderr):
+        stdout = gh_optional((
+            "gh",
+            "api",
+            f"repos/{self._repository}/releases/tags/{tag}",
+            "--jq",
+            _RELEASE_QUERY,
+        ))
+        if stdout is None:
             return None
-        raise failed(result.exit_code, result.stderr)
+        return parse_release(decoded(stdout))
 
     def _list_page(self, page: int) -> list[object]:
         """Read one page of the release list."""
@@ -239,112 +250,101 @@ class GhReleaseApi:
         )
         raise ProverToolError(msg)
 
-    def _with_verified_assets(
+    def verify(
         self,
         tag: str,
         observed: ObservedRelease,
-    ) -> ObservedRelease:
-        """Download every asset, recording digests and publication provenance."""
-        names = [asset.name for asset in observed.assets]
-        with tempfile.TemporaryDirectory(prefix="kani-publish-") as name:
-            directory = pathlib.Path(name)
-            self._download(tag, names, directory)
-            assets = tuple(
-                dc.replace(asset, sha256=sha256_file(directory / asset.name))
-                for asset in observed.assets
-            )
-            verified = not observed.is_draft and verify_publication(
-                directory,
-                names,
-                tag=tag,
-                body=observed.body,
-            )
-        return dc.replace(
-            observed,
-            assets=assets,
-            provenance_verified=verified,
-        )
-
-    def _download(
-        self,
-        tag: str,
         names: cabc.Sequence[str],
-        directory: Path,
-    ) -> None:
-        """Download the named assets into one directory."""
-        for name in names:
-            gh((
-                "gh",
-                "release",
-                "download",
-                tag,
-                "--repo",
-                self._repository,
-                "--pattern",
-                name,
-                "--dir",
-                str(directory),
-            ))
+    ) -> VerifiedAssets:
+        """Download the release's assets, hash them and authenticate its evidence.
+
+        Every asset the observation reports is downloaded, not only the names
+        the caller asked about, because the manifest, checksums and attestation
+        can only authenticate each other as a complete set.
+        """
+        return verify_assets(self._repository, tag, observed, names)
 
     def create_draft(self, expected: ExpectedRelease) -> None:
         """Create a draft pre-release that records its run and build inputs."""
-        gh((
-            "gh",
-            "api",
-            "--method",
-            "POST",
-            f"repos/{self._repository}/releases",
-            "-f",
-            f"tag_name={expected.tag}",
-            "-f",
-            f"target_commitish={expected.builder_commit}",
-            "-f",
-            f"name={expected.tag}",
-            "-f",
-            "body="
-            + release_body(
-                expected.tag,
-                expected.input_fingerprint,
-                run_id=expected.run_id,
-                run_attempt=expected.run_attempt,
+        gh(
+            (
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                f"repos/{self._repository}/releases",
+                "-f",
+                f"tag_name={expected.tag}",
+                "-f",
+                f"target_commitish={expected.builder_commit}",
+                "-f",
+                f"name={expected.tag}",
+                "-f",
+                "body="
+                + release_body(
+                    expected.tag,
+                    expected.input_fingerprint,
+                    run_id=expected.run_id,
+                    run_attempt=expected.run_attempt,
+                ),
+                "-F",
+                "draft=true",
+                "-F",
+                "prerelease=true",
             ),
-            "-F",
-            "draft=true",
-            "-F",
-            "prerelease=true",
-        ))
+            timeout_seconds=TRANSFER_TIMEOUT_SECONDS,
+        )
+
+    def discard(self, tag: str, asset: ObservedAsset) -> None:
+        """Delete one asset record that holds no uploaded bytes.
+
+        GitHub refuses to upload a second asset under a name it already lists,
+        so a record left behind by an interrupted upload must be removed before
+        the real file can be sent. Only a record the policy classified as a
+        placeholder is ever passed here; verified bytes are never deleted.
+        """
+        if not asset.asset_id:
+            msg = f"asset {asset.name!r} has no server identifier to delete"
+            raise ProverToolError(msg)
+        gh(
+            (
+                "gh",
+                "api",
+                "--method",
+                "DELETE",
+                f"repos/{self._repository}/releases/assets/{asset.asset_id}",
+            ),
+            timeout_seconds=TRANSFER_TIMEOUT_SECONDS,
+        )
 
     def upload(self, tag: str, asset: ReleaseAsset, path: Path) -> None:
         """Upload one asset without clobbering an existing one."""
-        gh((
-            "gh",
-            "release",
-            "upload",
-            tag,
-            str(path),
-            "--repo",
-            self._repository,
-        ))
-
-    def verify_assets(self, tag: str, names: cabc.Sequence[str]) -> dict[str, str]:
-        """Download the named assets and return their locally computed digests."""
-        if not names:
-            return {}
-        with tempfile.TemporaryDirectory(prefix="kani-publish-") as name:
-            directory = pathlib.Path(name)
-            self._download(tag, names, directory)
-            return {asset: sha256_file(directory / asset) for asset in names}
+        gh(
+            (
+                "gh",
+                "release",
+                "upload",
+                tag,
+                str(path),
+                "--repo",
+                self._repository,
+            ),
+            timeout_seconds=TRANSFER_TIMEOUT_SECONDS,
+        )
 
     def publish(self, tag: str, release_id: int) -> None:
         """Make a verified draft public without marking it latest."""
-        gh((
-            "gh",
-            "api",
-            "--method",
-            "PATCH",
-            f"repos/{self._repository}/releases/{release_id}",
-            "-F",
-            "draft=false",
-            "-f",
-            "make_latest=false",
-        ))
+        gh(
+            (
+                "gh",
+                "api",
+                "--method",
+                "PATCH",
+                f"repos/{self._repository}/releases/{release_id}",
+                "-F",
+                "draft=false",
+                "-f",
+                "make_latest=false",
+            ),
+            timeout_seconds=TRANSFER_TIMEOUT_SECONDS,
+        )

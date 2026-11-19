@@ -103,9 +103,18 @@ def _require_assets(assets: tuple[str, ...]) -> None:
 
 
 def _require_checks(checks: tuple[str, ...]) -> None:
-    """Require at least one recorded check name."""
+    """Require at least one unique, non-blank recorded check name.
+
+    This mirrors what `parse_receipt` accepts, so a receipt cannot be
+    constructed here that the publish job would then refuse to read.
+    """
     if not checks:
         msg = "validation receipt must record at least one check"
+        raise ProverToolError(msg)
+    for check in checks:
+        require_truthy_text(check, "validation check")
+    if len(set(checks)) != len(checks):
+        msg = "validation checks must not repeat an entry"
         raise ProverToolError(msg)
 
 

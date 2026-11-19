@@ -16,9 +16,11 @@ from itertools import starmap
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.gh_transport import GhRunner, gh
 from rust_prover_tools.kani_snapshot.producer.collect_candidates import (
     UPSTREAM_REPOSITORY,
     collect_candidates,
+    collect_commit_checks,
     main,
 )
 from rust_prover_tools.kani_snapshot.producer.entrypoint import main as entrypoint
@@ -26,6 +28,7 @@ from rust_prover_tools.kani_snapshot.producer.lifecycle import parse_resolution
 from rust_prover_tools.kani_snapshot.producer.resolution import (
     REQUIRED_UPSTREAM_CHECKS,
 )
+from rust_prover_tools.kani_snapshot.release_model import ReleaseTransientError
 from rust_prover_tools.unittests import kani_producer_fixtures as fixtures
 
 if typ.TYPE_CHECKING:
@@ -46,6 +49,9 @@ CHECKS = (
 )
 CHECKS_PAGE_2 = CHECKS.removesuffix("&page=1") + "&page=2"
 NOTICES_URL: typ.Final[str] = "https://github.com/kani/kani/actions/runs/9001"
+
+#: A failure message an unreachable server would produce.
+_SERVER_UNAVAILABLE: typ.Final[str] = "HTTP 503: Service Unavailable"
 
 
 def _release(*, tag: str = TAG, draft: bool = False, prerelease: bool = False) -> dict:
@@ -119,7 +125,7 @@ def test_the_collector_composes_one_candidate_per_stable_release(
         })
     )
 
-    document = json.loads(collect_candidates())
+    document = json.loads(collect_candidates(run=gh))
 
     assert len(document) == 1
     candidate = document[0]
@@ -150,7 +156,7 @@ def test_every_check_run_page_is_collected(cmd_mox: CmdMox) -> None:
         })
     )
 
-    document = json.loads(collect_candidates())
+    document = json.loads(collect_candidates(run=gh))
 
     candidate = document[0]
     assert candidate["total_count"] == 3
@@ -169,7 +175,7 @@ def test_a_truncated_check_observation_is_refused(cmd_mox: CmdMox) -> None:
     )
 
     with pytest.raises(ProverToolError, match="was empty before"):
-        collect_candidates()
+        collect_candidates(run=gh)
 
 
 def test_a_check_run_about_another_commit_is_refused(cmd_mox: CmdMox) -> None:
@@ -183,7 +189,7 @@ def test_a_check_run_about_another_commit_is_refused(cmd_mox: CmdMox) -> None:
     )
 
     with pytest.raises(ProverToolError, match="not the queried commit"):
-        collect_candidates()
+        collect_candidates(run=gh)
 
 
 def test_manual_check_evidence_records_its_total(
@@ -210,7 +216,7 @@ def test_draft_and_prerelease_releases_are_skipped(cmd_mox: CmdMox) -> None:
     )
 
     with pytest.raises(ProverToolError, match="no stable"):
-        collect_candidates()
+        collect_candidates(run=gh)
 
 
 def test_a_tag_ref_that_is_not_a_full_commit_is_refused(cmd_mox: CmdMox) -> None:
@@ -223,7 +229,7 @@ def test_a_tag_ref_that_is_not_a_full_commit_is_refused(cmd_mox: CmdMox) -> None
     )
 
     with pytest.raises(ProverToolError, match="full lowercase"):
-        collect_candidates()
+        collect_candidates(run=gh)
 
 
 def test_a_failed_api_call_is_refused(cmd_mox: CmdMox) -> None:
@@ -236,7 +242,62 @@ def test_a_failed_api_call_is_refused(cmd_mox: CmdMox) -> None:
     cmd_mox.stub("gh").runs(fail)
 
     with pytest.raises(ProverToolError, match="gh api failed"):
-        collect_candidates()
+        collect_candidates(run=gh)
+
+
+def _record(
+    github: dict[str, object],
+) -> tuple[list[tuple[str, ...]], GhRunner]:
+    """Return a recording runner answering from a path-to-document map."""
+    calls: list[tuple[str, ...]] = []
+
+    def record(
+        argv: cabc.Sequence[str], *, timeout_seconds: float | None = None
+    ) -> str:
+        """Record the request and answer it from the map."""
+        calls.append(tuple(argv))
+        return json.dumps(github[argv[2]])
+
+    return calls, record
+
+
+def test_the_scheduled_route_reads_release_tag_and_checks_in_order() -> None:
+    """The request sequence itself is asserted, without a process boundary."""
+    calls, record = _record({
+        RELEASES: [_release()],
+        TAG_REF: _tag_ref(),
+        CHECKS: _checks(),
+    })
+
+    collect_candidates(run=record)
+
+    assert calls == [
+        ("gh", "api", RELEASES),
+        ("gh", "api", TAG_REF),
+        ("gh", "api", CHECKS),
+    ]
+
+
+def test_the_manual_route_reads_only_the_dispatched_commits_checks() -> None:
+    """A dispatch is evidence about one commit, so no release list is read."""
+    calls, record = _record({CHECKS: _checks()})
+
+    collect_commit_checks(fixtures.UPSTREAM_COMMIT, run=record)
+
+    assert calls == [("gh", "api", CHECKS)]
+
+
+def test_a_transient_transport_failure_stays_transient() -> None:
+    """Naming the failed read must not reclassify a retryable failure."""
+
+    def unavailable(
+        argv: cabc.Sequence[str], *, timeout_seconds: float | None = None
+    ) -> str:
+        """Fail the way an unreachable server does."""
+        raise ReleaseTransientError(_SERVER_UNAVAILABLE)
+
+    with pytest.raises(ReleaseTransientError, match="upstream release list"):
+        collect_candidates(run=unavailable)
 
 
 def test_the_command_writes_the_candidate_document(

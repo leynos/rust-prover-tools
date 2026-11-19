@@ -18,18 +18,13 @@ signature remains EP-M5.
 
 from __future__ import annotations
 
-import base64
 import json
 import typing as typ
-from pathlib import PurePosixPath
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.attestation import (
-    ATTESTATION_PREDICATE,
-    SIGNER_WORKFLOW_PATH,
-    AttestationPolicy,
-    AttestationRequest,
-    verify_attestation,
+from rust_prover_tools.kani_snapshot.gh_release_attestation import (
+    require_attestation,
+    require_verified_signature,
 )
 from rust_prover_tools.kani_snapshot.integrity import (
     verify_asset,
@@ -42,17 +37,15 @@ from rust_prover_tools.kani_snapshot.producer.input_fingerprint import (
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
 from rust_prover_tools.kani_snapshot.producer.release_assets import (
-    ATTESTATION_NAME,
     CHECKSUMS_NAME,
     EVIDENCE_NAMES,
 )
 from rust_prover_tools.kani_snapshot.release_model import (
     ObservedAsset,
     ObservedRelease,
+    ReleaseTransientError,
     parse_input_marker,
 )
-from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
-from rust_prover_tools.kani_snapshot.validation import require_mapping, require_sequence
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -64,9 +57,6 @@ __all__ = ("decoded", "parse_release", "verify_publication")
 
 #: Width of the hexadecimal part of a SHA-256 digest.
 _SHA256_HEX_LENGTH: typ.Final[int] = 64
-
-#: Budget for one `gh attestation verify` run against a published release.
-_ATTESTATION_TIMEOUT_SECONDS: typ.Final[float] = 300.0
 
 
 def _is_sha256_hex(candidate: str) -> bool:
@@ -103,7 +93,31 @@ def _parse_asset(value: object) -> ObservedAsset:
         candidate = digest.removeprefix("sha256:")
         if _is_sha256_hex(candidate):
             sha256 = candidate
-    return ObservedAsset(name=name, size=size, sha256=sha256)
+    return ObservedAsset(
+        name=name,
+        size=size,
+        sha256=sha256,
+        asset_id=_asset_id(record.get("id")),
+    )
+
+
+def _asset_id(value: object) -> int | None:
+    """Return an asset's server identifier, refusing a malformed one.
+
+    The identifier is only used to delete a record left behind by a failed
+    upload, so an observation that does not report one is still usable; a
+    reported identifier that is not a positive integer, however, is a response
+    this adapter does not understand.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        msg = "release asset id must be a positive integer"
+        raise ProverToolError(msg)
+    if value <= 0:
+        msg = "release asset id must be a positive integer"
+        raise ProverToolError(msg)
+    return value
 
 
 def parse_release(document: object) -> ObservedRelease:
@@ -154,81 +168,6 @@ def decoded(result_stdout: str) -> object:
         raise ProverToolError(msg) from exc
 
 
-#: In-toto statement versions GitHub's attestation action emits.
-_STATEMENT_TYPES: typ.Final[frozenset[str]] = frozenset({
-    "https://in-toto.io/Statement/v1",
-    "https://in-toto.io/Statement/v0.1",
-})
-
-
-def _attestation_statement(directory: Path) -> dict[str, object]:
-    """Return the in-toto statement a release's attestation bundle carries."""
-    bundle = require_mapping(
-        strict_json_loads(
-            (directory / ATTESTATION_NAME).read_bytes(), "attestation bundle"
-        ),
-        "attestation bundle",
-    )
-    envelope = require_mapping(bundle.get("dsseEnvelope"), "attestation envelope")
-    payload = envelope.get("payload")
-    signatures = envelope.get("signatures")
-    if not isinstance(payload, str) or not payload:
-        msg = "attestation bundle carries no DSSE payload"
-        raise ProverToolError(msg)
-    if not isinstance(signatures, list) or not signatures:
-        msg = "attestation bundle carries no signature"
-        raise ProverToolError(msg)
-    try:
-        statement = base64.b64decode(payload, validate=True)
-    except ValueError as exc:
-        msg = f"attestation payload is not base64: {exc}"
-        raise ProverToolError(msg) from exc
-    return require_mapping(
-        strict_json_loads(statement, "attestation statement"),
-        "attestation statement",
-    )
-
-
-def _subject_names_manifest(subject: dict[str, object], manifest_sha256: str) -> bool:
-    """Return whether one subject record names the manifest's exact bytes."""
-    digest = subject.get("digest")
-    if not isinstance(digest, dict):
-        return False
-    if typ.cast("dict[str, object]", digest).get("sha256") != manifest_sha256:
-        return False
-    name = subject.get("name")
-    if not isinstance(name, str):
-        return False
-    return PurePosixPath(name).name == MANIFEST_NAME
-
-
-def _require_attestation(directory: Path, manifest_sha256: str) -> None:
-    """Require the attestation to be a well-formed statement about the manifest.
-
-    This is the cheap half of the check: it rejects an empty bundle, an
-    unrelated statement and a statement about some other digest before a
-    verifier process is started. It never establishes authenticity on its own;
-    `_require_verified_signature` does that, and it alone decides
-    `provenance_verified`.
-    """
-    statement = _attestation_statement(directory)
-    if statement.get("_type") not in _STATEMENT_TYPES:
-        msg = "attestation statement is not an in-toto statement"
-        raise ProverToolError(msg)
-    if statement.get("predicateType") != ATTESTATION_PREDICATE:
-        msg = "attestation statement is not build provenance"
-        raise ProverToolError(msg)
-    subjects = [
-        require_mapping(subject, "attestation subject")
-        for subject in require_sequence(statement.get("subject"), "attestation subject")
-    ]
-    if not any(
-        _subject_names_manifest(subject, manifest_sha256) for subject in subjects
-    ):
-        msg = "attestation does not cover the published manifest"
-        raise ProverToolError(msg)
-
-
 def _require_bound_identity(
     parsed: ParsedManifest,
     *,
@@ -259,36 +198,6 @@ def _require_bound_identity(
         raise ProverToolError(msg)
 
 
-def _require_verified_signature(directory: Path, parsed: ParsedManifest) -> None:
-    """Require the bundle to authenticate under the consumer's own policy.
-
-    The policy is the one a consumer installs with: this repository's signing
-    workflow, the trusted source ref, and the manifest's builder commit as both
-    source and signer digest. The verifier also has to name this manifest's run
-    and attempt, so an attestation for another run cannot authenticate these
-    bytes. Anything short of that raises, and the caller reports the release as
-    unverified rather than trusting the structural checks alone.
-    """
-    # The verifier raises unless it returns at least one authenticated
-    # statement for this run, so its return value carries no further decision.
-    verify_attestation(
-        AttestationRequest(
-            policy=AttestationPolicy(
-                repository=parsed.manifest.repository,
-                signer_workflow=(
-                    f"{parsed.manifest.repository}/{SIGNER_WORKFLOW_PATH}"
-                ),
-                source_digest=parsed.manifest.builder_commit,
-                signer_digest=parsed.manifest.builder_commit,
-            ),
-            artifact=directory / MANIFEST_NAME,
-            bundle=directory / ATTESTATION_NAME,
-            workflow=parsed.manifest.workflow,
-        ),
-        timeout_seconds=_ATTESTATION_TIMEOUT_SECONDS,
-    )
-
-
 def _verify_release(directory: Path, tag: str, body: str | None) -> None:
     """Require a published release's bytes, evidence and identity to agree."""
     parsed = parse_manifest((directory / MANIFEST_NAME).read_bytes())
@@ -300,8 +209,8 @@ def _verify_release(directory: Path, tag: str, body: str | None) -> None:
     )
     for asset in parsed.manifest.assets:
         verify_asset(directory / asset.name, asset)
-    _require_attestation(directory, parsed.sha256)
-    _require_verified_signature(directory, parsed)
+    require_attestation(directory, parsed.sha256)
+    require_verified_signature(directory, parsed)
 
 
 def verify_publication(
@@ -310,48 +219,62 @@ def verify_publication(
     *,
     tag: str,
     body: str | None,
-) -> bool:
-    """Return whether a published release authenticates its own publication.
+) -> str | None:
+    """Return why a release does not authenticate its own publication.
 
-    The published manifest is the authority for the published bytes: its
-    checksums must describe it and each payload it names, every evidence asset
-    must be present, its attestation must name its digest under the consumer's
-    own policy and this run, and its recorded identities must reproduce the
+    The served manifest is the authority for the served bytes: its checksums
+    must describe it and each payload it names, every evidence asset must be
+    present, its attestation must name its digest under the consumer's own
+    policy and this run, and its recorded identities must reproduce the
     build-input fingerprint the release body advertises. A verification failure
-    is reported as an unverified observation rather than raised, because the
-    policy owns what an unverifiable publication means.
+    is reported as a reason rather than raised, because the policy owns what an
+    unverifiable release means — but the reason travels with it, so a refusal
+    can name the actual disagreement instead of only that verification failed.
 
     Parameters
     ----------
     directory : Path
-        Downloaded assets of the published release.
+        Downloaded assets of the release.
     names : collections.abc.Sequence of str
         Asset names the release serves.
     tag : str
-        Immutable tag the observation was made for.
+        Immutable tag the verification was made for.
     body : str | None
         Release body, which records the build-input fingerprint.
 
     Returns
     -------
-    bool
-        Whether every check passed.
+    str | None
+        `None` when every check passed, otherwise a bounded description of the
+        first disagreement.
+
+    Raises
+    ------
+    ReleaseTransientError
+        Raised when the attestation verifier itself exceeds its budget. A
+        timed-out verifier may succeed on a fresh observation, so it must not
+        be reported as an unverified release.
     """
-    if not set(EVIDENCE_NAMES) <= set(names):
-        return False
+    missing = sorted(set(EVIDENCE_NAMES) - set(names))
+    if missing:
+        return f"release does not serve its evidence assets: {', '.join(missing)}"
     try:
         _verify_release(directory, tag, body)
-    except ProverToolError:
+    except ReleaseTransientError:
+        # Checked before the base class: a retryable transport failure is not
+        # the same answer as a release whose evidence does not verify.
+        raise
+    except ProverToolError as exc:
         # A release whose evidence does not verify is simply not verified; the
         # caller decides whether that is a conflict or a retry.
-        return False
-    except OSError:
+        return str(exc)
+    except OSError as exc:
         # An unreadable release is equally unverified. The clauses stay
         # separate because the project's pylint runs under Python 3.12, which
         # cannot parse the parenthesised-pair shorthand the formatter prefers.
-        return False
-    except ValueError:
+        return f"release bytes could not be read: {exc}"
+    except ValueError as exc:
         # Malformed JSON or base64 in an external document is unverified too.
         # `json.JSONDecodeError` and `binascii.Error` are both `ValueError`.
-        return False
-    return True
+        return f"release document is malformed: {exc}"
+    return None

@@ -229,6 +229,36 @@ def test_a_receipt_repeating_an_asset_is_refused() -> None:
         )
 
 
+def test_a_receipt_repeating_a_check_is_refused() -> None:
+    """A repeated label would inflate the evidence the verdict rests on."""
+    with pytest.raises(ProverToolError, match="must not repeat"):
+        ValidationReceipt(
+            schema_version=RECEIPT_SCHEMA_VERSION,
+            run_id=1,
+            run_attempt=1,
+            tag=fixtures.TAG,
+            manifest_sha256="c" * 64,
+            assets=("backend.tar.gz",),
+            verification_passed=True,
+            checks=("manifest-digest", "manifest-digest"),
+        )
+
+
+def test_a_receipt_check_must_be_non_blank() -> None:
+    """A blank label cannot name a check the validation performed."""
+    with pytest.raises(ProverToolError, match="validation check"):
+        ValidationReceipt(
+            schema_version=RECEIPT_SCHEMA_VERSION,
+            run_id=1,
+            run_attempt=1,
+            tag=fixtures.TAG,
+            manifest_sha256="c" * 64,
+            assets=("backend.tar.gz",),
+            verification_passed=True,
+            checks=("",),
+        )
+
+
 @pytest.mark.parametrize("asset", ["../escape.tar.gz", "nested/payload.tar.gz", "."])
 def test_a_receipt_asset_must_be_a_plain_basename(asset: str) -> None:
     """A path in an asset name could escape the payload directory."""

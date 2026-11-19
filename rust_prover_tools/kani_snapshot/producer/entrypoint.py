@@ -18,6 +18,7 @@ import sys
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.gh_release_api import GhReleaseApi
 from rust_prover_tools.kani_snapshot.producer.lifecycle import ResolutionRoute
 from rust_prover_tools.kani_snapshot.producer.operations import (
     TRUSTED_EVENTS,
@@ -41,6 +42,16 @@ def _add_workflow_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-attempt", type=int, required=True)
     parser.add_argument("--event", choices=TRUSTED_EVENTS, required=True)
     parser.add_argument("--run-url", default=None)
+
+
+def _publish_with_github(namespace: argparse.Namespace) -> int:
+    """Publish through the real GitHub adapter.
+
+    This is the composition root. Every other operation composes its effect
+    from documents and local files; publication is the one that needs a live
+    release API, so the adapter is chosen here and nowhere else.
+    """
+    return publish(namespace, GhReleaseApi())
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -108,9 +119,6 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workflow_arguments(validate_parser)
     validate_parser.add_argument("--manifest", required=True)
     validate_parser.add_argument("--payloads", required=True)
-    validate_parser.add_argument(
-        "--checks", default="manifest-digest,payload-digest,checksums,attestation"
-    )
     validate_parser.add_argument("--output", required=True)
     validate_parser.set_defaults(handler=validate)
 
@@ -121,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--manifest", required=True)
     publish_parser.add_argument("--receipt", required=True)
     publish_parser.add_argument("--payloads", required=True)
-    publish_parser.set_defaults(handler=publish)
+    publish_parser.set_defaults(handler=_publish_with_github)
     return parser
 
 

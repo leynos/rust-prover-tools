@@ -15,6 +15,7 @@ the `gh` adapter's argument vectors are checked in `test_kani_gh_release_api`.
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 import typing as typ
 
 import pytest
@@ -24,8 +25,12 @@ from rust_prover_tools.kani_snapshot.publish import (
     PublicationRequest,
     publish_release,
 )
-from rust_prover_tools.kani_snapshot.release_policy import ReleaseAction
+from rust_prover_tools.kani_snapshot.release_policy import (
+    ObservedRelease,
+    ReleaseAction,
+)
 from tests import kani_publish_fixtures as fixtures
+from tests.kani_release_api_fixtures import FakeReleaseApi
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -51,7 +56,7 @@ def test_an_unchanged_input_set_is_a_no_op_for_the_published_release(
     different digest, and that must not turn an unchanged input set into a
     conflict or a second publication.
     """
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     api.place_published()
     api.stored = {name: data + b"\nrebuilt" for name, data in fixtures.PAYLOADS.items()}
     decision = publish_release(_request(tmp_path), api)
@@ -64,7 +69,7 @@ def test_a_draft_from_another_attempt_is_refused_before_any_write(
     tmp_path: pathlib.Path,
 ) -> None:
     """Draft recovery is bound to the run and attempt that created it."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     api.place_draft()
     api.body_text = fixtures.body(run_attempt=2)
     with pytest.raises(ProverToolError, match="another workflow run or attempt"):
@@ -75,13 +80,39 @@ def test_a_draft_from_another_attempt_is_refused_before_any_write(
 
 def test_publication_uploads_then_publishes_in_order(tmp_path: pathlib.Path) -> None:
     """The full transition is observe, create, upload, publish, observe."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
     assert api.is_draft is False
     assert api.stored == fixtures.PAYLOADS
     assert api.uploads == sorted(fixtures.PAYLOADS)
     assert api.calls.count("publish") == 1
+
+
+def test_a_placeholder_left_by_an_interrupted_upload_is_replaced(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A draft with an empty record for one asset still reaches publication.
+
+    The record is what a failed upload leaves behind: it reserves the name but
+    holds no bytes. Publication deletes it, uploads the missing file and then
+    publishes, instead of ending the run in a conflict it could have repaired.
+    """
+    request = _request(tmp_path)
+    api = FakeReleaseApi()
+    api.place_draft()
+    for name in ("launcher.tar.gz", "notices.tar.gz", "inventory.json"):
+        api.place_asset(name, request.asset_paths[name])
+    api.place_placeholder("backend.tar.gz")
+
+    decision = publish_release(request, api)
+
+    assert decision.action is ReleaseAction.NOOP, (
+        "the interrupted draft did not recover"
+    )
+    assert api.discards == ["backend.tar.gz"], "the empty record was not deleted"
+    assert api.uploads == ["backend.tar.gz"], "only the missing asset was uploaded"
+    assert api.stored == fixtures.PAYLOADS
 
 
 @pytest.mark.parametrize("digests_visible", [True, False], ids=["hashed", "unhashed"])
@@ -95,7 +126,7 @@ def test_a_transient_failure_never_duplicates_publication(
     digests_visible: bool,
 ) -> None:
     """Every operation is recoverable by re-observing rather than repeating."""
-    api = fixtures.FakeReleaseApi(digests_visible=digests_visible)
+    api = FakeReleaseApi(digests_visible=digests_visible)
     api.fail_next(operation, after=after)
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
@@ -113,18 +144,60 @@ def test_a_transient_verification_failure_is_retried(
     tmp_path: pathlib.Path, *, after: bool
 ) -> None:
     """Verification is the one step safe to repeat, and must be repeated."""
-    api = fixtures.FakeReleaseApi(digests_visible=False)
-    api.fail_next("verify_assets", after=after)
+    api = FakeReleaseApi(digests_visible=False)
+    api.fail_next("verify", after=after)
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
-    assert api.calls.count("verify_assets") >= 2
+    assert api.calls.count("verify") >= 2
+
+
+class _VanishingAssetApi(FakeReleaseApi):
+    """A release whose asset disappears after the observation that verified it.
+
+    The removal happens after a complete draft has been observed, so the
+    observation that authorises publication still reports the asset. Only a
+    fresh observation immediately before the write can notice it is gone.
+    """
+
+    def __init__(self) -> None:
+        """Create the fake with the removal still pending."""
+        super().__init__()
+        self._removed = False
+
+    def observe(self, tag: str) -> ObservedRelease:
+        """Observe the release, removing one asset once a draft is complete."""
+        observed = super().observe(tag)
+        if not self._removed and set(self.stored) == set(fixtures.PAYLOADS):
+            self._removed = True
+            del self.stored["backend.tar.gz"]
+        return observed
+
+
+def test_state_changing_after_verification_is_rechecked_before_publishing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The PATCH never publishes a draft the latest observation no longer authorises.
+
+    A maintainer can remove an asset between the download that verified it and
+    the write that makes the release public. The publisher must act on the
+    fresh observation — here by uploading the asset again — rather than
+    publishing a release that is missing it.
+    """
+    api = _VanishingAssetApi()
+    decision = publish_release(_request(tmp_path), api)
+    assert decision.action is ReleaseAction.NOOP
+    assert api.stored == fixtures.PAYLOADS
+    assert api.uploads.count("backend.tar.gz") == 2, (
+        "the asset removed after verification was not uploaded again"
+    )
+    assert api.calls.count("publish") == 1, "publication was attempted twice"
 
 
 def test_a_lost_publish_response_is_recognised_as_a_no_op(
     tmp_path: pathlib.Path,
 ) -> None:
     """A timed-out publish that succeeded must not be retried blindly."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     api.fail_next("publish", after=True)
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
@@ -135,10 +208,10 @@ def test_publication_verifies_unhashed_assets_before_publishing(
     tmp_path: pathlib.Path,
 ) -> None:
     """With no API digests, publication downloads and hashes every asset."""
-    api = fixtures.FakeReleaseApi(digests_visible=False)
+    api = FakeReleaseApi(digests_visible=False)
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
-    assert api.calls.count("verify_assets") >= 1
+    assert api.calls.count("verify") >= 1
     assert api.is_draft is False
 
 
@@ -148,7 +221,7 @@ def test_a_local_asset_mismatch_stops_before_any_api_call(
     """A tampered local payload never reaches the release API."""
     request = _request(tmp_path)
     request.asset_paths["backend.tar.gz"].write_bytes(b"tampered")
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     with pytest.raises(ProverToolError, match="does not match its manifest"):
         publish_release(request, api)
     assert not api.calls
@@ -158,7 +231,7 @@ def test_a_cross_run_receipt_stops_before_any_effect(
     tmp_path: pathlib.Path,
 ) -> None:
     """Accepting another attempt's receipt would publish unvalidated bytes."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     stale = dc.replace(fixtures.validation(), run_attempt=2)
     with pytest.raises(ProverToolError, match="publication conflict"):
         publish_release(_request(tmp_path, stale), api)
@@ -171,7 +244,7 @@ def test_publication_refuses_a_published_release_with_other_bytes(
     tmp_path: pathlib.Path,
 ) -> None:
     """A conflicting published release raises rather than replacing assets."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     api.exists = True
     api.is_draft = False
     api.stored = dict.fromkeys(fixtures.PAYLOADS, b"other")
@@ -185,8 +258,84 @@ def test_a_persistently_failing_observation_never_converges(
     tmp_path: pathlib.Path,
 ) -> None:
     """An API that never answers is refused rather than treated as success."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     for _ in range(4):
         api.fail_next("observe")
     with pytest.raises(ProverToolError, match="did not converge"):
         publish_release(_request(tmp_path), api, max_steps=4)
+
+
+_LOGGER_NAME: typ.Final[str] = "rust_prover_tools.kani_snapshot.publish"
+
+
+def _events(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    """Return the structured publication events captured by `caplog`."""
+    return [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+
+
+def test_a_publication_reports_each_decision_and_its_outcome(
+    tmp_path: pathlib.Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The log is a bounded trace of the state machine, not of its payloads."""
+    api = FakeReleaseApi()
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        publish_release(_request(tmp_path), api)
+
+    events = _events(caplog)
+    decisions = [
+        event for event in events if event["event"] == "kani.snapshot.publish.decision"
+    ]
+    assert [(event["step"], event["action"]) for event in decisions] == [
+        (1, "create-draft"),
+        (2, "upload-assets"),
+        (3, "verify-assets"),
+        (4, "publish"),
+        (5, "verify-assets"),
+        (6, "noop"),
+    ]
+    assert all(set(event) == {"event", "step", "action"} for event in decisions)
+    assert events[-1]["event"] == "kani.snapshot.publish.complete"
+    assert events[-1]["outcome"] == "noop"
+
+
+def test_a_transient_effect_is_reported_by_the_action_it_retries(
+    tmp_path: pathlib.Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A retryable write is visible as such, without its error text."""
+    api = FakeReleaseApi()
+    api.fail_next("publish")
+    with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
+        publish_release(_request(tmp_path), api)
+
+    transient = [
+        event
+        for event in _events(caplog)
+        if event["event"] == "kani.snapshot.publish.transient"
+    ]
+    assert transient == [
+        {"event": "kani.snapshot.publish.transient", "action": "publish"}
+    ]
+
+
+def test_a_conflict_closes_the_span_with_the_error_class(
+    tmp_path: pathlib.Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure is recorded by class name; its message may embed paths."""
+    api = FakeReleaseApi()
+    api.place_published(fingerprint=fixtures.OTHER_FINGERPRINT)
+    with (
+        caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME),
+        pytest.raises(ProverToolError, match="publication conflict"),
+    ):
+        publish_release(_request(tmp_path), api)
+
+    failed = _events(caplog)[-1]
+    assert failed["event"] == "kani.snapshot.publish.failed"
+    assert failed["reason"] == "ProverToolError"

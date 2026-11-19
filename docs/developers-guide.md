@@ -874,8 +874,8 @@ anything is written.
 | `resolve`  | `--route scheduled --candidates` or `--route manual --commit`, plus `--output` and the run identity flags | Writes the resolved upstream commit.               |
 | `identity` | `--resolution`, `--builder-commit`, and either `--month --releases` or `--publication-id`                 | Writes the immutable publication identity.         |
 | `build`    | `--resolution`, `--identity`, `--builder-commit`                                                          | Writes the pinned build plan.                      |
-| `assemble` | `--input` assembly input, `--payloads`, `--output`                                                        | Writes `manifest.json` and `SHA256SUMS`.           |
-| `validate` | `--manifest`, `--payloads`, `--checks`                                                                    | Writes the validation receipt.                     |
+| `assemble` | `--input` assembly input, `--identity` the resolve job's `identity.json`, `--payloads` and `--output`     | Writes `manifest.json` and `SHA256SUMS`.           |
+| `validate` | `--manifest`, `--payloads`                                                                                | Writes the receipt naming the checks it performed. |
 | `publish`  | `--manifest`, `--receipt`, `--payloads`                                                                   | Drives the release to a published, verified state. |
 
 Every subcommand also takes `--run-id`, `--run-attempt`, `--event` and
@@ -891,11 +891,32 @@ into a document the next job consumes belongs in a tested module:
 that starts deciding what an API response means is the point to move that
 decision back into Python.
 
-`validate` records the checks it was asked for, but the `attestation` check is
-a presence and non-empty check of `manifest.sigstore.jsonl`. The signature
-policy — `gh attestation verify` with explicit repository, workflow, ref,
-source and signer digests, correlated with the manifest's run and attempt — is
-the consumer's, and EP-M5 exercises it on a clean runner. Do not describe the
+Fetching and shaping are separate modules as well. `collect_candidates`
+performs the upstream `gh` reads; `upstream_evidence` decides what a response
+may contribute and renders the document deterministically. Both collectors take
+a `GhRunner`, so a test asserts the exact argument vector each job sends
+without starting a process, and a transport failure keeps its transient or
+permanent classification through the added context.
+
+Publication follows the same rule from the other side: `publish` depends only
+on the `ReleaseApi` port, `GhReleaseApi` is its one adapter, and
+`producer.entrypoint` is the composition root that chooses it. `observe` is a
+query that downloads nothing; `verify` is the only command that downloads,
+hashes and authenticates the served bytes, and the policy asks for it
+explicitly. A digest listed by the API is therefore a claim until a
+verification has computed the same value locally.
+
+Scheduled runs collect the existing release list in their own `collect` job,
+which holds `contents: write` because GitHub lists draft releases only to a
+token with push access. `resolve` stays read-only and downloads that document
+as a same-run artefact; a manual dispatch skips the job and collects nothing.
+
+`validate` records the checks `verify_release` performs, so a caller cannot
+label work that never ran; the `attestation` check is a presence and non-empty
+check of `manifest.sigstore.jsonl`. The signature policy —
+`gh attestation verify` with explicit repository, workflow, ref, source and
+signer digests, correlated with the manifest's run and attempt — is the
+consumer's, and EP-M5 exercises it on a clean runner. Do not describe the
 receipt as proof that a signature was verified.
 
 The publisher's own release observation does run that policy. When a published
@@ -954,6 +975,17 @@ make workflow-check
 lints `.github/workflows/*.yml` only; it cannot lint a composite action, so
 `tests/test_python_release_contract.py` reads
 `.github/actions/pure-python-wheel/action.yml` directly.
+
+### Documented examples
+
+A user-facing example carries a `<!-- tested-example: <identifier> -->` marker
+directly above its fence. `tests/documentation_examples.py` is the shared
+loader: it reads the published document and refuses a marker with no fence, an
+unterminated fence, or a duplicate identifier.
+`tests/test_documented_examples.py` registers the users' guide's smoke
+dispatch. That example cannot be executed in a test because it submits a hosted
+workflow run, so the test holds the boundary it does share with the code: the
+documented command and the Makefile recipe must name the same target and inputs.
 
 The workflow gates also need `jq` on `PATH`. The build job's run summary is a
 `jq` filter, and `tests/test_kani_workflow_build_contract.py` runs that filter

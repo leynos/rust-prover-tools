@@ -26,6 +26,7 @@ from tests.workflow_contracts.strict_workflow import (
     as_sequence,
     dependency_names,
     job,
+    named_scripts,
     read_workflow,
     run_scripts,
     steps,
@@ -36,6 +37,7 @@ from tests.workflow_contracts.strict_workflow import (
 
 #: Job deadlines from D5, in minutes.
 BUDGETS: typ.Final[dict[str, int]] = {
+    "collect": 10,
     "resolve": 10,
     "build": 180,
     "assemble": 15,
@@ -46,6 +48,7 @@ BUDGETS: typ.Final[dict[str, int]] = {
 #: The exact permissions each job may hold. `None` means no `permissions` key.
 PERMISSIONS: typ.Final[dict[str, dict[str, str] | None]] = {
     "guard": {},
+    "collect": {"contents": "write"},
     "resolve": {"actions": "read", "contents": "read"},
     "build": {"actions": "read", "contents": "read"},
     "assemble": {
@@ -117,7 +120,7 @@ def test_every_trusted_job_repeats_the_guard(
     workflow: dict[str, object],
 ) -> None:
     """A job that skipped the guard would run from an untrusted ref."""
-    for name in ("resolve", "build", "assemble", "validate", "publish"):
+    for name in ("collect", "resolve", "build", "assemble", "validate", "publish"):
         declaration = job(workflow, name)
         assert dependency_names(declaration)[0] == "guard", name
         assert "needs.guard.outputs.trusted == 'true'" in typ.cast(
@@ -177,6 +180,75 @@ def test_each_job_holds_only_its_own_permissions(
 ) -> None:
     """A widened grant is a contract change, not a convenience."""
     assert job(workflow, name).get("permissions") == PERMISSIONS[name]
+
+
+def test_the_release_collection_job_is_schedule_only_and_write_capable(
+    workflow: dict[str, object],
+) -> None:
+    """Drafts are listed only to a push-capable token, so the writer is a job.
+
+    Keeping `contents: write` out of `resolve` and the build means the job that
+    sees drafts cannot run the plan or assemble a release.
+    """
+    declaration = job(workflow, "collect")
+    assert dependency_names(declaration) == ["guard"]
+    assert declaration["permissions"] == {"contents": "write"}
+    condition = typ.cast("str", declaration["if"])
+    assert "needs.guard.outputs.trusted == 'true'" in condition
+    assert "github.event_name == 'schedule'" in condition
+    assert "workflow_dispatch" not in condition
+
+
+def test_collect_hands_the_release_list_to_resolve_as_an_artefact(
+    workflow: dict[str, object],
+) -> None:
+    """The writer's only output is a document the read-only allocator reads."""
+    collection = named_scripts(job(workflow, "collect"))["Collect existing releases"]
+    assert "--output producer/releases.json" in collection
+
+    uploads = [
+        as_mapping(step["with"], "upload inputs")
+        for step in steps(job(workflow, "collect"))
+        if "actions/upload-artifact@" in typ.cast("str", step.get("uses", ""))
+    ]
+    assert len(uploads) == 1
+    name = "kani-snapshot-releases-${{ github.run_id }}-${{ github.run_attempt }}"
+    assert uploads[0] == {
+        "name": name,
+        "path": "producer/",
+        "if-no-files-found": "error",
+        "retention-days": 7,
+    }
+
+
+def test_resolve_downloads_the_drafts_and_stays_read_only(
+    workflow: dict[str, object],
+) -> None:
+    """The allocator observes the writer's artefact without holding the writer.
+
+    A schedule collects first; a dispatch has nothing to collect. Either way a
+    failed collection stops resolution instead of allocating blind.
+    """
+    declaration = job(workflow, "resolve")
+    assert declaration["permissions"] == {"actions": "read", "contents": "read"}
+    assert "collect_releases" not in " ".join(run_scripts(declaration))
+
+    assert "collect" in dependency_names(declaration)
+    condition = typ.cast("str", declaration["if"])
+    assert "needs.collect.result == 'success'" in condition
+    assert "needs.collect.result == 'skipped'" in condition
+
+    downloads = [
+        step
+        for step in steps(declaration)
+        if "actions/download-artifact@" in typ.cast("str", step.get("uses", ""))
+    ]
+    assert len(downloads) == 1
+    assert downloads[0]["if"] == "github.event_name == 'schedule'"
+    name = "kani-snapshot-releases-${{ github.run_id }}-${{ github.run_attempt }}"
+    assert as_mapping(downloads[0]["with"], "download inputs")["name"] == name
+    identity = named_scripts(declaration)["Allocate the publication identity"]
+    assert "--releases producer/releases.json" in identity
 
 
 def test_only_the_attestation_job_may_sign(

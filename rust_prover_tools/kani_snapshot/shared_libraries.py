@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import os
 import typing as typ
-from pathlib import Path
 
 from rust_prover_tools.errors import ProverToolError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 __all__ = ("LIBRARY_DIRECTORY", "is_shared_library", "shared_libraries")
 
@@ -71,6 +71,15 @@ def _entries(directory: Path) -> list[os.DirEntry[str]]:
         raise ProverToolError(msg) from exc
 
 
+def _is_directory(path: Path) -> bool:
+    """Return whether `path` is a directory, reporting an inspection failure."""
+    try:
+        return path.is_dir()
+    except OSError as exc:
+        msg = f"failed to inspect toolchain library directory '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
 class _LibraryWalk:
     """Collect the shared objects below one resolved toolchain root.
 
@@ -93,37 +102,57 @@ class _LibraryWalk:
         self.found: set[str] = set()
 
     def walk(self, directory: Path) -> None:
-        """Collect the shared objects below one directory into `found`."""
+        """Collect the shared objects below one directory into `found`.
+
+        The walk descends into the resolved directory, never the spelling it
+        was reached by. An aliased directory reached before its real name would
+        otherwise record every file inside it twice, once under each spelling,
+        and the recorded set would depend on the order the filesystem happens
+        to return. Resolving the directory keeps the file names below it, which
+        is what makes a library alias part of the recorded identity.
+        """
         self._tick()
-        if not directory.is_dir():
-            return
         resolved = self._resolve_inside(directory, "library directory")
+        if not _is_directory(resolved):
+            return
         if resolved in self._visited:
             # A link cycle is harmless once its real directory has been walked.
             return
         self._visited.add(resolved)
-        for child in _entries(directory):
+        for child in _entries(resolved):
             self._tick()
-            self._visit(Path(child.path), child)
+            self._visit(resolved / child.name, child)
 
     def _visit(self, path: Path, child: os.DirEntry[str]) -> None:
-        """Descend into a directory, or record one shared object."""
-        if child.is_dir(follow_symlinks=True):
+        """Descend into a directory, or record one shared object.
+
+        `DirEntry.is_dir` and `is_file` can raise `OSError` for an entry whose
+        link target cannot be inspected, such as a link to itself. Reporting it
+        with the path keeps the module's error contract intact.
+        """
+        try:
+            is_directory = child.is_dir(follow_symlinks=True)
+            is_file = child.is_file(follow_symlinks=True)
+        except OSError as exc:
+            msg = f"failed to inspect toolchain entry '{path}': {exc}"
+            raise ProverToolError(msg) from exc
+        if is_directory:
             self.walk(path)
-        elif child.is_file(follow_symlinks=True) and is_shared_library(child.name):
+        elif is_file and is_shared_library(child.name):
             self._record(path)
 
     def _record(self, path: Path) -> None:
-        """Record one shared object by its canonical path inside the toolchain.
+        """Record one shared object by the path the toolchain exposes it under.
 
-        Recording where the entry was met rather than where it really lives
-        would make the recorded set depend on the directory order: an aliased
-        directory reached first would spell the same file differently. The
-        consumer resolves and checks the same canonical path, so it can only
-        agree with a producer that records it this way.
+        The path is relative to the resolved toolchain and its directory
+        spelling is canonical, because `walk` only descends into resolved
+        directories. The entry's own name is kept even when it is a link, so a
+        library alias is part of the recorded identity: retargeting or
+        removing `lib/libdriver.so` then changes what the manifest records and
+        the consumer refuses the altered toolchain.
         """
-        resolved = self._resolve_inside(path, "library")
-        self.found.add(resolved.relative_to(self._resolved_root).as_posix())
+        self._resolve_inside(path, "library")
+        self.found.add(path.relative_to(self._resolved_root).as_posix())
 
     def _resolve_inside(self, path: Path, description: str) -> Path:
         """Resolve `path`, refusing one that leaves the toolchain."""

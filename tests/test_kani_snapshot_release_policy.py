@@ -1,7 +1,8 @@
 """The release policy alone decides what a publication state means.
 
 These witnesses hold the lemma the policy exists for: `PUBLISH` is never chosen
-while an expected asset is absent, the wrong size, or unhashed; `NOOP` is never
+while an expected asset is absent, the wrong size, unhashed, or while the
+draft's own served evidence does not authenticate its manifest; `NOOP` is never
 chosen for a published release whose recorded inputs differ or whose own bytes
 were not re-verified; and no decision ever deletes, replaces or moves a
 published asset. A published release is compared by the input fingerprint in its
@@ -103,6 +104,25 @@ def test_a_draft_with_unhashed_assets_is_verified_before_publishing() -> None:
     assert decision.verifications == tuple(sorted(fixtures.PAYLOADS))
 
 
+def test_a_placeholder_left_by_an_interrupted_upload_is_discarded() -> None:
+    """An empty record is a name reservation, not an asset with wrong bytes.
+
+    GitHub refuses an upload under a name it already lists, so the empty
+    record has to be deleted before the file can be sent. Reporting its size
+    as a mismatch would turn a recoverable upload into a permanent conflict.
+    """
+    name = "backend.tar.gz"
+    assets = tuple(
+        fixtures.placeholder(name) if asset.name == name else asset
+        for asset in fixtures.verified_assets()
+    )
+    decision = decide(
+        fixtures.expected(), fixtures.draft(assets), fixtures.validation()
+    )
+    assert decision.action is ReleaseAction.DISCARD_PLACEHOLDER
+    assert [asset.name for asset in decision.discards] == [name]
+
+
 def test_a_complete_verified_draft_is_published() -> None:
     """Only a complete, hashed draft may become public."""
     decision = decide(
@@ -111,6 +131,36 @@ def test_a_complete_verified_draft_is_published() -> None:
         fixtures.validation(),
     )
     assert decision.action is ReleaseAction.PUBLISH
+
+
+def test_a_complete_draft_whose_evidence_does_not_verify_conflicts() -> None:
+    """The draft's own evidence authorises publication, before it is public.
+
+    A bundle whose manifest, checksums or attestation do not agree can still be
+    repaired while the release is a draft. Publishing first and discovering the
+    disagreement afterwards would leave a public release nobody can change.
+    """
+    observed = fixtures.draft(
+        fixtures.verified_assets(),
+        provenance_verified=False,
+        provenance_reason="attestation is not signed by the release workflow",
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "did not authenticate its manifest" in decision.reason
+    assert "not signed by the release workflow" in decision.reason
+
+
+def test_a_complete_draft_not_yet_verified_asks_for_verification() -> None:
+    """An observation that has not downloaded bytes cannot authorise a publish.
+
+    Metadata that happens to carry digests is still a claim, so the next step
+    is verification rather than publication or a conflict.
+    """
+    observed = fixtures.draft(fixtures.verified_assets(), provenance_verified=False)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.VERIFY_ASSETS
+    assert decision.verifications == tuple(sorted(fixtures.PAYLOADS))
 
 
 def test_a_draft_with_a_foreign_asset_conflicts() -> None:
@@ -181,13 +231,27 @@ def test_a_published_release_matching_exactly_is_a_no_op() -> None:
 
 def test_a_published_release_with_unverified_provenance_conflicts() -> None:
     """A published release whose bytes did not re-verify is never a no-op."""
-    unhashed = tuple(
-        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
+    observed = fixtures.published(
+        fixtures.verified_assets(),
+        provenance_verified=False,
+        provenance_reason="attestation does not cover the published manifest",
     )
-    observed = fixtures.published(unhashed, provenance_verified=False)
     decision = decide(fixtures.expected(), observed, fixtures.validation())
     assert decision.action is ReleaseAction.CONFLICT
     assert "did not authenticate its own publication" in decision.reason
+    assert "does not cover the published manifest" in decision.reason
+
+
+def test_a_published_release_not_yet_verified_asks_for_verification() -> None:
+    """A metadata-only observation must be verified before it is a no-op.
+
+    Otherwise "already published" would be a claim read from the API rather
+    than evidence computed from the bytes the release serves.
+    """
+    observed = fixtures.published(fixtures.verified_assets(), provenance_verified=False)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.VERIFY_ASSETS
+    assert decision.verifications == tuple(sorted(fixtures.PAYLOADS))
 
 
 def test_a_published_release_with_a_different_asset_set_conflicts() -> None:

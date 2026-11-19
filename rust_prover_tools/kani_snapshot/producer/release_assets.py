@@ -29,6 +29,7 @@ __all__ = (
     "ATTESTATION_NAME",
     "CHECKSUMS_NAME",
     "EVIDENCE_NAMES",
+    "PERFORMED_CHECKS",
     "release_asset_names",
     "release_assets",
     "verify_payloads",
@@ -48,9 +49,36 @@ EVIDENCE_NAMES: typ.Final[tuple[str, str, str]] = (
     ATTESTATION_NAME,
 )
 
+#: The checks `verify_release` performs, in the order a receipt records them.
+#:
+#: The validate operation records this tuple instead of a label list supplied
+#: on the command line, so a receipt can only name checks the code actually
+#: performed. The names are part of the receipt document's vocabulary.
+PERFORMED_CHECKS: typ.Final[tuple[str, ...]] = (
+    "manifest-digest",
+    "payload-digest",
+    "checksums",
+    "attestation",
+)
+
 
 def release_asset_names(manifest: SnapshotManifest) -> tuple[str, ...]:
-    """Return every asset name a release of `manifest` must serve."""
+    """Return every asset name a release of `manifest` must serve.
+
+    Parameters
+    ----------
+    manifest : SnapshotManifest
+        Validated manifest whose payload assets were measured by assembly.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Payload asset names in manifest order, followed by the fixed evidence
+        assets in `EVIDENCE_NAMES` order (`manifest.json`, `SHA256SUMS`, then
+        the attestation). Uploads, checksum rows and receipt asset sets all
+        derive from this ordering, so callers must preserve it rather than
+        treating the result as an unordered set.
+    """
     return tuple(asset.name for asset in manifest.assets) + EVIDENCE_NAMES
 
 
@@ -198,7 +226,23 @@ def _require_nonempty_evidence(name: str, directory: Path) -> None:
 
 
 def verify_checksums(parsed: ParsedManifest, directory: Path) -> None:
-    """Require the checksum document to describe exactly this release."""
+    """Require the checksum document to describe exactly this release.
+
+    Parameters
+    ----------
+    parsed : ParsedManifest
+        Parsed manifest whose payload digests and exact bytes the checksum
+        document must reproduce.
+    directory : Path
+        Directory holding `SHA256SUMS`, the payloads and `manifest.json`.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when `SHA256SUMS` is missing or is not a regular file, is not
+        ASCII, has a malformed or repeated row, or names a set of assets or
+        digests other than exactly the manifest's payloads and manifest.
+    """
     checksums = directory / CHECKSUMS_NAME
     _require_regular_file(CHECKSUMS_NAME, checksums, what="release evidence")
     rows = _checksum_rows(checksums.read_bytes())
@@ -209,7 +253,7 @@ def verify_checksums(parsed: ParsedManifest, directory: Path) -> None:
         raise ProverToolError(msg)
 
 
-def verify_release(parsed: ParsedManifest, directory: Path) -> None:
+def verify_release(parsed: ParsedManifest, directory: Path) -> tuple[str, ...]:
     """Require the complete release set to match the manifest bytes.
 
     The attestation's signature is a consumer's concern; this check records
@@ -223,6 +267,13 @@ def verify_release(parsed: ParsedManifest, directory: Path) -> None:
     directory : Path
         Directory holding the payloads, manifest, checksums and attestation.
 
+    Returns
+    -------
+    tuple[str, ...]
+        The checks this call performed, in the order a receipt records them.
+        `PERFORMED_CHECKS` is the same tuple, exposed so callers such as the
+        validate operation can name the work without repeating the labels.
+
     Raises
     ------
     ProverToolError
@@ -232,3 +283,4 @@ def verify_release(parsed: ParsedManifest, directory: Path) -> None:
     _require_manifest_bytes(parsed, directory)
     verify_checksums(parsed, directory)
     _require_nonempty_evidence(ATTESTATION_NAME, directory)
+    return PERFORMED_CHECKS

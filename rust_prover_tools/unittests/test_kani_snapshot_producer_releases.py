@@ -16,6 +16,8 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.gh_transport import gh
+from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.producer.collect_releases import (
     PAGE_SIZE,
     RELEASE_PAGE_LIMIT,
@@ -31,7 +33,10 @@ from rust_prover_tools.kani_snapshot.producer.publication_identity import (
     parse_publications,
 )
 from rust_prover_tools.kani_snapshot.producer.recipe import pinned_recipe
-from rust_prover_tools.kani_snapshot.release_model import release_body
+from rust_prover_tools.kani_snapshot.release_model import (
+    ReleaseTransientError,
+    release_body,
+)
 from rust_prover_tools.unittests import kani_producer_fixtures as fixtures
 
 if typ.TYPE_CHECKING:
@@ -43,6 +48,9 @@ if typ.TYPE_CHECKING:
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
 _PAGE_ARGUMENT: typ.Final[re.Pattern[str]] = re.compile(r"[?&]page=(?P<page>\d+)")
+
+#: A failure message an unreachable server would produce.
+_SERVER_UNAVAILABLE: typ.Final[str] = "HTTP 503: Service Unavailable"
 
 
 def _serve(
@@ -88,7 +96,7 @@ def test_the_collector_projects_only_the_identity_fields(
         _serve({1: [_release(fixtures.TAG, name="notes to ignore")]})
     )
 
-    document = json.loads(collect_releases())
+    document = json.loads(collect_releases(run=gh))
 
     assert document == [
         {
@@ -109,7 +117,7 @@ def test_a_full_page_is_followed_by_the_next(cmd_mox: CmdMox) -> None:
     second = [_release(fixtures.TAG)]
     cmd_mox.stub("gh").runs(_serve({1: first, 2: second}))
 
-    document = json.loads(collect_releases())
+    document = json.loads(collect_releases(run=gh))
 
     assert [record["tag"] for record in document][-1] == fixtures.TAG
     assert len(document) == PAGE_SIZE + 1
@@ -125,7 +133,7 @@ def test_an_exhausted_release_list_is_refused(cmd_mox: CmdMox) -> None:
     cmd_mox.stub("gh").runs(_serve(pages))
 
     with pytest.raises(ProverToolError, match="bound"):
-        collect_releases()
+        collect_releases(run=gh)
 
 
 def test_a_release_without_a_tag_is_refused(cmd_mox: CmdMox) -> None:
@@ -133,7 +141,7 @@ def test_a_release_without_a_tag_is_refused(cmd_mox: CmdMox) -> None:
     cmd_mox.stub("gh").runs(_serve({1: [_release("")]}))
 
     with pytest.raises(ProverToolError, match="tag"):
-        collect_releases()
+        collect_releases(run=gh)
 
 
 def test_a_failed_call_is_refused(cmd_mox: CmdMox) -> None:
@@ -146,7 +154,49 @@ def test_a_failed_call_is_refused(cmd_mox: CmdMox) -> None:
     cmd_mox.stub("gh").runs(fail)
 
     with pytest.raises(ProverToolError, match="gh failed"):
-        collect_releases()
+        collect_releases(run=gh)
+
+
+def test_the_collector_asks_for_each_page_by_its_exact_arguments() -> None:
+    """The request is asserted without starting a process.
+
+    Injecting the runner makes the command itself the unit under test: a page
+    number or projection that drifted would otherwise only be caught by a live
+    or mocked process boundary.
+    """
+    calls: list[tuple[str, ...]] = []
+
+    def record(
+        argv: cabc.Sequence[str], *, timeout_seconds: float | None = None
+    ) -> str:
+        """Record the request and answer with one short page."""
+        calls.append(tuple(argv))
+        return json.dumps([_release(fixtures.TAG)])
+
+    collect_releases(run=record)
+
+    (call,) = calls
+    assert call[:4] == (
+        "gh",
+        "api",
+        f"repos/{REPOSITORY}/releases?per_page={PAGE_SIZE}&page=1",
+        "--jq",
+    )
+    assert ".tag_name" in call[4]
+    assert ".body" in call[4]
+
+
+def test_a_transient_transport_failure_stays_transient() -> None:
+    """Bounding the message must not hide that the read may still succeed."""
+
+    def unavailable(
+        argv: cabc.Sequence[str], *, timeout_seconds: float | None = None
+    ) -> str:
+        """Fail the way an unreachable server does."""
+        raise ReleaseTransientError(_SERVER_UNAVAILABLE)
+
+    with pytest.raises(ReleaseTransientError, match="release page 1"):
+        collect_releases(run=unavailable)
 
 
 def test_the_command_writes_the_release_document(

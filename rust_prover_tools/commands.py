@@ -49,6 +49,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "CommandResult",
     "CommandSpec",
+    "CommandTimeoutError",
     "TailCapture",
     "command_line",
     "run_checked",
@@ -135,6 +136,16 @@ class TailCapture:
         if not lines:
             return ""
         return "\n".join(text for _, text in lines) + "\n"
+
+
+class CommandTimeoutError(ProverToolError):
+    """Raised when a command exceeds its wall-clock budget.
+
+    A timed-out command's whole process group has already been terminated
+    before this is raised. Callers that may retry a timeout, such as the
+    release publication loop, catch this type rather than the broader base
+    class so a genuine command failure is never mistaken for one.
+    """
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -254,9 +265,11 @@ def run_command(spec: CommandSpec) -> CommandResult:
     Raises
     ------
     ProverToolError
-        Raised when `spec.argv` is empty or the command exceeds its timeout.
-        A timed-out command's whole process group is terminated first, so a
-        setup tool cannot outlive the caller's budget by leaving descendants.
+        Raised when `spec.argv` is empty.
+    CommandTimeoutError
+        Raised when the command exceeds its timeout. The whole process group
+        is terminated first, so a setup tool cannot outlive the caller's
+        budget by leaving descendants.
     """
     if not spec.argv:
         msg = "command is empty"
@@ -311,7 +324,7 @@ def run_command(spec: CommandSpec) -> CommandResult:
             f"command timed out after {exc.timeout:g} seconds: "
             f"{command_line(spec.argv)}"
         )
-        raise ProverToolError(msg) from exc
+        raise CommandTimeoutError(msg) from exc
     return CommandResult(
         stdout=result.stdout or "",
         stderr=result.stderr or "",

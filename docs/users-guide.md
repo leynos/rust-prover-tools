@@ -303,10 +303,13 @@ therefore still exercises signing and validation without making anything
 public. Published snapshot assets are immutable: correcting a published
 snapshot means choosing a new publication identity, never replacing or moving
 existing bytes. An interrupted draft is resumed by the same run and attempt; a
-different attempt, changed inputs or conflicting bytes require a new identity.
+record left by a failed upload that holds no bytes is removed and the file is
+uploaded again. A different attempt, changed inputs or conflicting bytes
+require a new identity.
 
 To dispatch a non-publishing run from a checkout:
 
+<!-- tested-example: kani-snapshot-smoke -->
 ```sh
 make kani-snapshot-smoke \
   KANI_SNAPSHOT_UPSTREAM_COMMIT=<full upstream commit> \
@@ -317,10 +320,12 @@ The target is opt-in and never part of `all`, because it builds on a hosted
 runner and creates an attestation.
 
 Ordinary Python releases are unaffected by the snapshot schedule. Pushing a
-`v*.*.*` tag now creates a draft release, uploads the wheel, verifies the
+`v*.*.*` tag creates a draft release, uploads the wheel, verifies that the
 release serves exactly the expected bytes, and publishes the release only
-afterwards. A rerun resumes an existing draft; a release that is already
-published is refused, because its assets can no longer be changed.
+afterwards. A rerun resumes an existing draft. A rerun against a published
+release is a no-op when the served assets match the expected wheel set and
+bytes. A published release whose assets differ is refused as a collision
+because its assets can no longer be changed.
 
 ### Verus commands
 

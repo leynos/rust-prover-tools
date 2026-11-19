@@ -16,6 +16,7 @@ consumer can read without a second schema.
 from __future__ import annotations
 
 import argparse
+import dataclasses as dc
 import json
 import os
 import pathlib
@@ -34,6 +35,7 @@ from rust_prover_tools.kani_snapshot.inventory_model import (
     InventoryEntry,
     SnapshotInventory,
 )
+from rust_prover_tools.kani_snapshot.inventory_parse import normalize_inventory_path
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION
 from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
 
@@ -45,6 +47,22 @@ __all__ = ("build_inventory", "inventory_to_json", "main")
 
 #: Ceiling on members, matching the consumer's default inventory limit.
 _MAX_ENTRIES: typ.Final[int] = 100_000
+
+
+@dc.dataclass(slots=True)
+class _Walk:
+    """State shared by every step of one inventory walk.
+
+    Attributes
+    ----------
+    root : pathlib.Path
+        Resolved inventory root; a link destination must stay beneath it.
+    hardlinks : dict[tuple[int, int], str]
+        First recorded path for each inode that is linked more than once.
+    """
+
+    root: pathlib.Path
+    hardlinks: dict[tuple[int, int], str]
 
 
 def _relative(prefix: str, name: str) -> str:
@@ -75,21 +93,55 @@ def _link_target(relative: str, target: str) -> str:
     return target
 
 
+def _require_contained_link(
+    relative: str,
+    target: str,
+    link_path: pathlib.Path,
+    root: pathlib.Path,
+) -> None:
+    """Require a link's resolved destination to stay inside the tree.
+
+    Link text alone is not enough: `..` components and chains through other
+    links can leave the root while every individual target looks relative.
+    Resolving follows the chain, so the check covers both cases.
+    """
+    try:
+        destination = (link_path.parent / target).resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        msg = f"tree member {relative!r} has an unresolvable link: {target!r}"
+        raise ProverToolError(msg) from exc
+    if not destination.is_relative_to(root):
+        msg = f"tree member {relative!r} links outside the tree: {target!r}"
+        raise ProverToolError(msg)
+
+
+def _member_path(relative: str) -> str:
+    """Require a recorded path the inventory consumer can parse."""
+    try:
+        return normalize_inventory_path(relative)
+    except ProverToolError as exc:
+        msg = f"tree member {relative!r} has a name the inventory cannot express: {exc}"
+        raise ProverToolError(msg) from exc
+
+
 def _member(
     entry: os.DirEntry[str],
     relative: str,
     status: os.stat_result,
-    hardlinks: dict[tuple[int, int], str],
+    walk: _Walk,
 ) -> InventoryEntry | None:
     """Record one member, or return None after recursing into a directory."""
+    relative = _member_path(relative)
     mode = _mode(relative, status)
     if entry.is_symlink():
-        target = str(pathlib.Path(entry.path).readlink())
+        path = pathlib.Path(entry.path)
+        target = _link_target(relative, str(path.readlink()))
+        _require_contained_link(relative, target, path, walk.root)
         return InventoryEntry(
             path=relative,
             kind=KIND_SYMLINK,
             mode=mode,
-            link_target=_link_target(relative, target),
+            link_target=target,
         )
     if entry.is_dir(follow_symlinks=False):
         return InventoryEntry(path=relative, kind=KIND_DIRECTORY, mode=mode)
@@ -97,15 +149,15 @@ def _member(
         msg = f"tree member {relative!r} is not a file, directory or link"
         raise ProverToolError(msg)
     identity = (status.st_dev, status.st_ino)
-    if status.st_nlink > 1 and identity in hardlinks:
+    if status.st_nlink > 1 and identity in walk.hardlinks:
         return InventoryEntry(
             path=relative,
             kind=KIND_HARDLINK,
             mode=mode,
-            link_target=hardlinks[identity],
+            link_target=_member_path(walk.hardlinks[identity]),
         )
     if status.st_nlink > 1:
-        hardlinks[identity] = relative
+        walk.hardlinks[identity] = relative
     path = pathlib.Path(entry.path)
     return InventoryEntry(
         path=relative,
@@ -120,7 +172,7 @@ def _scan(
     directory: Path,
     prefix: str,
     entries: list[InventoryEntry],
-    hardlinks: dict[tuple[int, int], str],
+    walk: _Walk,
 ) -> None:
     """Record every member beneath `directory` in sorted order."""
     with os.scandir(directory) as listing:
@@ -128,7 +180,7 @@ def _scan(
     for entry in members:
         relative = _relative(prefix, entry.name)
         status = entry.stat(follow_symlinks=False)
-        recorded = _member(entry, relative, status, hardlinks)
+        recorded = _member(entry, relative, status, walk)
         if recorded is None:
             continue
         entries.append(recorded)
@@ -136,7 +188,7 @@ def _scan(
             msg = f"tree has more than {_MAX_ENTRIES} members"
             raise ProverToolError(msg)
         if recorded.kind == KIND_DIRECTORY:
-            _scan(pathlib.Path(entry.path), f"{relative}/", entries, hardlinks)
+            _scan(pathlib.Path(entry.path), f"{relative}/", entries, walk)
 
 
 def build_inventory(root: Path) -> SnapshotInventory:
@@ -163,7 +215,7 @@ def build_inventory(root: Path) -> SnapshotInventory:
         msg = f"inventory tree {root} is not a directory"
         raise ProverToolError(msg)
     entries: list[InventoryEntry] = []
-    _scan(root, "", entries, {})
+    _scan(root, "", entries, _Walk(root.resolve(), {}))
     return SnapshotInventory(schema_version=SCHEMA_VERSION, entries=tuple(entries))
 
 

@@ -239,6 +239,27 @@ def test_a_manual_tag_outside_the_grammar_has_no_month() -> None:
         publication_month("kani-snapshot-2026-13-aaaaaaaaaaaa-r1")
 
 
+def test_a_unicode_digit_revision_is_not_allocated() -> None:
+    """A Unicode digit must not be read as an ASCII revision.
+
+    Python's `int()` accepts Unicode decimal digits, so a `-r1٢` sibling used
+    to allocate revision 12 while `validate_tag` then refused the same tag.
+    """
+    releases = (_ref(f"{PREFIX}-r1٢"),)
+
+    with pytest.raises(ProverToolError, match="without a revision suffix"):
+        _allocate(*releases)
+
+
+def test_a_unicode_digit_year_is_not_a_calendar_month() -> None:
+    """A year spelled with Unicode digits is outside the ASCII grammar."""
+    with pytest.raises(ProverToolError, match="immutable grammar"):
+        publication_month("kani-snapshot-٢٠٢٦-09-aaaaaaaaaaaa-r1")
+
+    with pytest.raises(ProverToolError, match="YYYY-MM"):
+        publication_prefix(UPSTREAM_COMMIT, "٢٠٢٦-11")
+
+
 def _identity(tag: str = f"{PREFIX}-r2") -> PublicationIdentity:
     """Return one valid identity for the pinned commit and builder."""
     return PublicationIdentity(
@@ -275,4 +296,13 @@ def test_an_identity_tag_must_name_its_upstream_commit() -> None:
     document["tag"] = "kani-snapshot-2026-11-ffffffffffff-r1"
 
     with pytest.raises(ProverToolError, match="prefix"):
+        parse_publication_identity(json.dumps(document).encode("utf-8"))
+
+
+def test_an_identity_month_must_match_its_tag() -> None:
+    """A recorded month that disagrees with the tag names two identities."""
+    document = json.loads(publication_identity_to_json(_identity()))
+    document["month"] = "2026-10"
+
+    with pytest.raises(ProverToolError, match="does not match tag"):
         parse_publication_identity(json.dumps(document).encode("utf-8"))

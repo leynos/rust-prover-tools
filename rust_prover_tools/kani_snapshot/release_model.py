@@ -11,10 +11,13 @@ from __future__ import annotations
 
 import dataclasses as dc
 import enum
-import re
-import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.release_markers import (
+    parse_input_marker,
+    parse_run_marker,
+    release_body,
+)
 from rust_prover_tools.kani_snapshot.tags import TAG_PATTERN
 from rust_prover_tools.kani_snapshot.validation import (
     require_non_negative_int,
@@ -32,59 +35,11 @@ __all__ = (
     "ReleaseDecision",
     "ReleaseTransientError",
     "ValidationBinding",
+    "VerifiedAssets",
     "parse_input_marker",
     "parse_run_marker",
     "release_body",
 )
-
-#: Machine-readable record of the run that created a draft.
-_RUN_MARKER: typ.Final[re.Pattern[str]] = re.compile(
-    r"<!-- kani-snapshot-run: (?P<run_id>[1-9]\d*)/(?P<run_attempt>[1-9]\d*) -->"
-)
-
-#: Machine-readable record of the build inputs a release was created from.
-_INPUT_MARKER: typ.Final[re.Pattern[str]] = re.compile(
-    r"<!-- kani-snapshot-input: (?P<fingerprint>[0-9a-f]{64}) -->"
-)
-
-
-def release_body(
-    tag: str,
-    fingerprint: str,
-    *,
-    run_id: int,
-    run_attempt: int,
-) -> str:
-    """Return the release body that records a release's origin.
-
-    A draft may be resumed only by the run and attempt that created it, and may
-    be published as a no-op only by a run with the same build inputs. Both
-    facts are written into the body so an observer can read them back without
-    downloading assets, and so they survive publication unchanged.
-    """
-    return (
-        f"Immutable Kani snapshot {tag}\n\n"
-        f"<!-- kani-snapshot-input: {fingerprint} -->\n"
-        f"<!-- kani-snapshot-run: {run_id}/{run_attempt} -->\n"
-    )
-
-
-def parse_run_marker(body: str | None) -> tuple[int, int] | None:
-    """Return the run and attempt a release body records, when it does."""
-    if body is None:
-        return None
-    match = _RUN_MARKER.search(body)
-    if match is None:
-        return None
-    return int(match.group("run_id")), int(match.group("run_attempt"))
-
-
-def parse_input_marker(body: str | None) -> str | None:
-    """Return the build-input fingerprint a release body records, when it does."""
-    if body is None:
-        return None
-    match = _INPUT_MARKER.search(body)
-    return None if match is None else match.group("fingerprint")
 
 
 class ReleaseTransientError(ProverToolError):
@@ -105,6 +60,9 @@ class ReleaseAction(enum.Enum):
         Create the draft release at the recorded builder commit.
     UPLOAD_ASSETS : str
         Upload the named missing assets to an existing draft.
+    DISCARD_PLACEHOLDER : str
+        Delete an asset record that holds no uploaded bytes, so the next pass
+        can upload the real file under that name.
     VERIFY_ASSETS : str
         Download and hash assets whose bytes have not been observed yet.
     PUBLISH : str
@@ -117,6 +75,7 @@ class ReleaseAction(enum.Enum):
 
     CREATE_DRAFT = "create-draft"
     UPLOAD_ASSETS = "upload-assets"
+    DISCARD_PLACEHOLDER = "discard-placeholder"
     VERIFY_ASSETS = "verify-assets"
     PUBLISH = "publish"
     NOOP = "noop"
@@ -163,9 +122,11 @@ class ExpectedRelease:
     manifest_sha256 : str
         Digest of the exact manifest bytes the validation receipt names.
     input_fingerprint : str
-        Digest of the declared build inputs. Two runs with the same value
-        would rebuild the same bytes, so an existing publication may answer
-        with a verified no-op.
+        Digest of the declared build inputs. Equal fingerprints establish
+        equal declared inputs, not equal output bytes: a new run produces a
+        new manifest even when its inputs are unchanged. The value is what
+        decides whether an existing publication may answer with a verified
+        no-op.
     run_id : int
         Trusted workflow run that produced the artefacts.
     run_attempt : int
@@ -212,11 +173,68 @@ class ObservedAsset:
     sha256 : str | None
         Digest computed by re-downloading the bytes, or `None` when the bytes
         have not been observed yet.
+    asset_id : int | None
+        Server identifier of the record, used to delete a placeholder left by
+        an interrupted upload. `None` when the record was not read from the
+        API, as with a synthesised observation in a test.
     """
 
     name: str
     size: int
     sha256: str | None = None
+    asset_id: int | None = None
+
+    @property
+    def is_placeholder(self) -> bool:
+        """Whether the record holds no uploaded bytes.
+
+        A failed upload can leave the asset record behind with nothing in it.
+        The record is still listed, but it contains neither bytes nor a digest,
+        so it is a name reservation rather than an asset; only a real upload can
+        satisfy the expected identity.
+        """
+        return self.size == 0 and self.sha256 is None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class VerifiedAssets:
+    """The outcome of downloading and authenticating a release's served bytes.
+
+    A state query reports what the API says a release holds. This record is the
+    separate answer to "what does it actually serve", produced by the explicit
+    verification command so that a download never hides inside a query and a
+    caller can see whether any download happened at all.
+
+    Attributes
+    ----------
+    digests : tuple[tuple[str, str], ...]
+        `(name, sha256)` for every downloaded asset, computed from the bytes.
+    provenance_verified : bool
+        Whether the downloaded evidence authenticated its own manifest: the
+        checksums describe it and its payloads, the attestation names its
+        digest under the consumer's policy, and its identities reproduce the
+        build-input fingerprint the release body records.
+    reason : str | None
+        Why authentication failed. It is required exactly when the evidence did
+        not authenticate, so a refusal can always name its cause.
+    """
+
+    digests: tuple[tuple[str, str], ...]
+    provenance_verified: bool
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject a verification result that cannot explain itself."""
+        if self.provenance_verified and self.reason is not None:
+            msg = "a verified release cannot report a verification failure"
+            raise ProverToolError(msg)
+        if not self.provenance_verified and self.reason is None:
+            msg = "an unverified release must report why its evidence failed"
+            raise ProverToolError(msg)
+
+    def digest_map(self) -> dict[str, str]:
+        """Return the downloaded digests indexed by asset name."""
+        return dict(self.digests)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -247,8 +265,19 @@ class ObservedRelease:
         manifest, checksums and payload digests were re-verified from the
         downloaded bytes, its attestation names that manifest, and its
         recorded identities reproduce the build-input fingerprint in the
-        release body. `False` for a draft, which has no complete set to verify
-        yet. Signature validity under a trusted root remains a consumer check.
+        release body. The GitHub adapter also verifies the attestation
+        signature through the consumer's `gh attestation verify` policy —
+        a trusted root, the pinned signer workflow, the manifest's builder
+        commit and the recorded run and attempt — and only then sets this
+        flag. Publication requires it for a draft as well as a published
+        release: refusing an unauthenticated bundle while the release is
+        still a draft keeps the failure repairable, where a published release
+        can no longer be changed. It is `False` until a verification command
+        has been run for this observation.
+    provenance_reason : str | None
+        Why the served evidence failed to authenticate, when it did. A
+        decision can then refuse a release for the actual cause rather than
+        reporting only that verification failed.
     """
 
     exists: bool
@@ -259,14 +288,18 @@ class ObservedRelease:
     release_id: int | None = None
     body: str | None = None
     provenance_verified: bool = False
+    provenance_reason: str | None = None
 
     def __post_init__(self) -> None:
         """Reject an impossible observation shape."""
         if not self.exists and any((self.is_draft, bool(self.assets))):
             msg = "an absent release cannot be a draft or carry assets"
             raise ProverToolError(msg)
-        if self.is_draft and self.provenance_verified:
-            msg = "a draft has no complete publication to verify"
+        if not self.exists and self.provenance_verified:
+            msg = "an absent release cannot verify a publication"
+            raise ProverToolError(msg)
+        if self.provenance_verified and self.provenance_reason is not None:
+            msg = "a verified release cannot report a verification failure"
             raise ProverToolError(msg)
 
 
@@ -307,6 +340,8 @@ class ReleaseDecision:
         Human-readable justification, stable enough to assert in tests.
     uploads : tuple[ReleaseAsset, ...]
         Assets an upload action must send.
+    discards : tuple[ObservedAsset, ...]
+        Placeholder records a discard action must delete.
     verifications : tuple[str, ...]
         Asset names a verification action must download and hash.
     """
@@ -314,4 +349,5 @@ class ReleaseDecision:
     action: ReleaseAction
     reason: str
     uploads: tuple[ReleaseAsset, ...] = ()
+    discards: tuple[ObservedAsset, ...] = ()
     verifications: tuple[str, ...] = ()

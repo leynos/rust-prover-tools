@@ -60,8 +60,8 @@ __all__ = (
     "BoundedAsset",
     "DownloadLimits",
     "PinnedAsset",
-    "download_bounded",
     "download_pinned",
+    "download_unverified",
     "sha256_file",
 )
 
@@ -155,18 +155,22 @@ def download_pinned(
     return destination
 
 
-def download_bounded(
+def download_unverified(
     asset: BoundedAsset,
     destination: Path,
     limits: DownloadLimits = DEFAULT_DOWNLOAD_LIMITS,
     *,
     url_policy: UrlPolicy | None = None,
 ) -> str:
-    """Download one bounded asset and return its SHA-256 digest.
+    """Download one bounded asset and report the SHA-256 digest it served.
 
-    The caller must verify the returned bytes by their own contract, such as a
-    checksum list that must agree with a pinned manifest. An existing
-    destination is reused only when it already fits the size ceiling.
+    The digest is an observation, not a verification: this function never
+    compares it with a pinned value, so the returned bytes are untrusted until
+    the caller authenticates them against its own evidence, such as a checksum
+    list that must agree with a pinned manifest. Use `download_asset` when the
+    expected digest is known up front. An existing destination is reused only
+    when it already fits the size ceiling, so its digest describes whatever
+    that file contains.
     """
     _ensure_parent_directory(destination)
     if _is_regular_file(destination) and _fits(destination, asset.max_bytes):
@@ -185,7 +189,7 @@ def download_bounded(
         )
         digest = sha256_file(pending)
         _publish_verified(asset.name, pending, destination)
-    log_event(_LOGGER, "download.bounded")
+    log_event(_LOGGER, "download.unverified")
     return digest
 
 

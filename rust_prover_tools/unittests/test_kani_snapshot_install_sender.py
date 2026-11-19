@@ -99,7 +99,7 @@ def downloads(monkeypatch: pytest.MonkeyPatch) -> RecordingDownloads:
     """Replace the network with a recorder for the release transport."""
     recorder = RecordingDownloads()
     monkeypatch.setattr(install_sender, "download_asset", recorder.asset)
-    monkeypatch.setattr(install_sender, "download_bounded", recorder.bounded)
+    monkeypatch.setattr(install_sender, "download_unverified", recorder.bounded)
     return recorder
 
 
@@ -187,7 +187,7 @@ def test_a_transient_failure_is_retried_then_succeeds(
             raise TransientDownloadError(msg)
         return CHECKSUM
 
-    monkeypatch.setattr(install_sender, "download_bounded", flaky)
+    monkeypatch.setattr(install_sender, "download_unverified", flaky)
     settings = DownloadSettings(sleep=lambda _delay: None)
 
     ReleaseSender(pin=PIN, settings=settings).fixed("SHA256SUMS", 1024, tmp_path)

@@ -61,7 +61,7 @@ PYLINT = $(UV_GATE) tool --managed-python --python $(PYLINT_PYTHON) --from 'pyli
 
 .PHONY: prepare help all clean build build-release lint lint-python interrogate fmt check-fmt \
         markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS) test-workflow-contracts \
-        workflow-check kani-snapshot-smoke
+        workflow-check actionlint kani-snapshot-smoke
 
 prepare: ## Install the locked development environment, offline first
 	$(UV_GATE) prepare --group dev
@@ -80,34 +80,51 @@ WORKFLOW_CONTRACT_TESTS ?= \
 	tests/test_kani_workflow_build_contract.py \
 	tests/test_python_release_contract.py \
 	tests/test_python_release_lifecycle.py \
-	tests/test_workflow_contract.py
+	tests/test_workflow_contract.py \
+	tests/test_workflow_makefile_contract.py
 
-workflow-check: build ## Lint workflows and check their contracts
+# `all` runs the full test suite, so the contract modules are not repeated in
+# its prerequisite list.
+actionlint: ## Lint GitHub Actions workflows
 	$(call ensure_tool,$(ACTIONLINT))
-	$(UV_GATE) run -- pytest -q $(WORKFLOW_CONTRACT_TESTS)
 	$(ACTIONLINT) .github/workflows/*.yml
+
+workflow-check: build actionlint ## Lint workflows and check their contracts
+	$(UV_GATE) run -- pytest -q $(WORKFLOW_CONTRACT_TESTS)
 
 # Opt-in: dispatches a real, non-publishing snapshot run. It builds on a hosted
 # runner and creates an attestation, so it is never part of `all`.
 KANI_SNAPSHOT_UPSTREAM_COMMIT ?=
 KANI_SNAPSHOT_PUBLICATION_ID ?=
+# Exported, never interpolated: each value is data for the recipe's shell,
+# not source the shell parses.
+export KANI_SNAPSHOT_UPSTREAM_COMMIT KANI_SNAPSHOT_PUBLICATION_ID
 
 kani-snapshot-smoke: ## Dispatch a non-publishing snapshot run (opt-in)
 	$(call ensure_tool,gh)
-	@test -n "$(KANI_SNAPSHOT_UPSTREAM_COMMIT)" || { \
+	@test -n "$$KANI_SNAPSHOT_UPSTREAM_COMMIT" || { \
 	  printf 'Error: set KANI_SNAPSHOT_UPSTREAM_COMMIT to a full upstream commit\n' >&2; \
 	  exit 1; \
 	}
-	@test -n "$(KANI_SNAPSHOT_PUBLICATION_ID)" || { \
+	@test -n "$$KANI_SNAPSHOT_PUBLICATION_ID" || { \
 	  printf 'Error: set KANI_SNAPSHOT_PUBLICATION_ID to an unused snapshot tag\n' >&2; \
 	  exit 1; \
 	}
+	@printf '%s\n' "$$KANI_SNAPSHOT_UPSTREAM_COMMIT" | grep -Eqx '[0-9a-f]{40}' || { \
+	  printf 'Error: KANI_SNAPSHOT_UPSTREAM_COMMIT must be a full 40-hex commit\n' >&2; \
+	  exit 1; \
+	}
+	@printf '%s\n' "$$KANI_SNAPSHOT_PUBLICATION_ID" | \
+	  grep -Eqx 'kani-snapshot-[0-9]{4}-(0[1-9]|1[0-2])-[0-9a-f]{12}-r[1-9][0-9]*' || { \
+	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must match kani-snapshot-YYYY-MM-<12 hex>-rN\n' >&2; \
+	  exit 1; \
+	}
 	gh workflow run kani-monthly.yml --ref main \
-	  -f upstream_commit=$(KANI_SNAPSHOT_UPSTREAM_COMMIT) \
-	  -f publication_id=$(KANI_SNAPSHOT_PUBLICATION_ID) \
+	  -f upstream_commit="$$KANI_SNAPSHOT_UPSTREAM_COMMIT" \
+	  -f publication_id="$$KANI_SNAPSHOT_PUBLICATION_ID" \
 	  -f publish=false
 
-all: build check-fmt lint typecheck test spelling test-workflow-contracts workflow-check
+all: build check-fmt lint typecheck test spelling test-workflow-contracts actionlint
 
 define ensure_uv
 	@command -v $(UV) >/dev/null 2>&1 || { \

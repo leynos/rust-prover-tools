@@ -44,6 +44,12 @@ WHEEL = "rust_prover_tools-0.2.0-py3-none-any.whl"
 #: Bytes the local build and the served release must agree on.
 WHEEL_BYTES = b"PK\x03\x04 pretend wheel"
 
+#: A second wheel whose build tag sorts before the first.
+OTHER_WHEEL = "rust_prover_tools-0.2.0-1-py3-none-any.whl"
+
+#: Bytes the second local wheel and the served release must agree on.
+OTHER_WHEEL_BYTES = b"PK\x03\x04 pretend second wheel"
+
 #: Steps the release job runs, in the order the runner would run them.
 STEPS = (
     "Require a non-empty wheel inventory",
@@ -204,11 +210,13 @@ def _lifecycle(
     *,
     served: dict[str, bytes] | None,
     draft: bool = False,
+    local: dict[str, bytes] | None = None,
 ) -> _Lifecycle:
     """Create a workspace and a release serving `served`, when not None."""
     workspace = tmp_path / "workspace"
     (workspace / "dist").mkdir(parents=True)
-    (workspace / "dist" / WHEEL).write_bytes(WHEEL_BYTES)
+    for name, data in (local or {WHEEL: WHEEL_BYTES}).items():
+        (workspace / "dist" / name).write_bytes(data)
 
     state = tmp_path / "state"
     (state / "assets").mkdir(parents=True)
@@ -273,6 +281,28 @@ def test_an_interrupted_draft_uploads_only_what_is_missing(
     assert f"release upload {TAG} dist/{WHEEL}" in lifecycle.writes()
     assert lifecycle.writes()[-1] == f"release edit {TAG} --draft=false"
     assert "release create" not in " ".join(lifecycle.writes())
+
+
+def test_a_partially_populated_draft_uploads_only_the_missing_wheel(
+    tmp_path: pathlib.Path,
+    scripts: dict[str, str],
+) -> None:
+    """A resumed draft that already serves one wheel uploads only the other."""
+    lifecycle = _lifecycle(
+        tmp_path,
+        served={WHEEL: WHEEL_BYTES},
+        draft=True,
+        local={WHEEL: WHEEL_BYTES, OTHER_WHEEL: OTHER_WHEEL_BYTES},
+    )
+
+    results = lifecycle.run_all(scripts)
+
+    assert [result.returncode for result in results] == [0] * len(STEPS)
+    assert f"already uploaded: {WHEEL}" in results[2].stdout
+    assert lifecycle.writes() == [
+        f"release upload {TAG} dist/{OTHER_WHEEL}",
+        f"release edit {TAG} --draft=false",
+    ]
 
 
 def test_a_matching_published_release_is_a_no_op(

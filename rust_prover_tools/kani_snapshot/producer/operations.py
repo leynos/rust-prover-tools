@@ -64,8 +64,8 @@ from rust_prover_tools.kani_snapshot.producer.validation_receipt import (
     verify_receipt,
 )
 from rust_prover_tools.kani_snapshot.publish import (
-    GhReleaseApi,
     PublicationRequest,
+    ReleaseApi,
     publish_release,
 )
 from rust_prover_tools.kani_snapshot.release_policy import (
@@ -223,8 +223,7 @@ def validate(namespace: argparse.Namespace) -> int:
     if not same_run(parsed.manifest.workflow, workflow):
         msg = "manifest belongs to another workflow run or attempt"
         raise ProverToolError(msg)
-    verify_release(parsed, pathlib.Path(namespace.payloads))
-    checks = tuple(item.strip() for item in namespace.checks.split(",") if item.strip())
+    checks = verify_release(parsed, pathlib.Path(namespace.payloads))
     receipt = build_receipt(
         workflow,
         parsed,
@@ -261,8 +260,13 @@ def _expected_release(
     )
 
 
-def publish(namespace: argparse.Namespace) -> int:
-    """Drive the immutable release to a published, verified state."""
+def publish(namespace: argparse.Namespace, api: ReleaseApi) -> int:
+    """Drive the immutable release to a published, verified state.
+
+    The release adapter is supplied by the caller for the same reason the
+    orchestration takes a port: the operation stays testable without a live
+    GitHub, and only the command entrypoint chooses the real adapter.
+    """
     workflow = workflow_identity(namespace)
     payloads = pathlib.Path(namespace.payloads)
     parsed = parse_manifest(pathlib.Path(namespace.manifest).read_bytes())
@@ -276,7 +280,7 @@ def publish(namespace: argparse.Namespace) -> int:
         validation=receipt.binding(),
         asset_paths={asset.name: payloads / asset.name for asset in expected.assets},
     )
-    decision = publish_release(request, GhReleaseApi())
+    decision = publish_release(request, api)
     if decision.action is not ReleaseAction.NOOP:
         msg = f"publication ended without a no-op observation: {decision.reason}"
         raise ProverToolError(msg)

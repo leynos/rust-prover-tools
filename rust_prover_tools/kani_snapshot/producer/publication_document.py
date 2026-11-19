@@ -17,7 +17,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.manifest_groups import parse_workflow
 from rust_prover_tools.kani_snapshot.policy import reject_unknown_keys
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
-from rust_prover_tools.kani_snapshot.tags import validate_tag
+from rust_prover_tools.kani_snapshot.tags import TAG_PATTERN, validate_tag
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
     require_int,
@@ -111,6 +111,32 @@ def publication_identity_to_json(identity: PublicationIdentity) -> bytes:
     return (text + "\n").encode("ascii")
 
 
+def _tag_month(tag: str) -> str:
+    """Return the `YYYY-MM` month a validated tag records.
+
+    Parameters
+    ----------
+    tag : str
+        Tag already accepted by `validate_tag`.
+
+    Returns
+    -------
+    str
+        The calendar month embedded in the tag.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the tag is not in the immutable grammar. Callers pass an
+        already validated tag, so this is a defensive check.
+    """
+    match = TAG_PATTERN.fullmatch(tag)
+    if match is None:  # pragma: no cover - callers pass a validated tag
+        msg = f"publication tag {tag!r} is not in the immutable grammar"
+        raise ProverToolError(msg)
+    return f"{match.group('year')}-{match.group('month')}"
+
+
 def parse_publication_identity(data: bytes) -> PublicationIdentity:
     """Parse exact identity bytes into a validated record.
 
@@ -128,7 +154,8 @@ def parse_publication_identity(data: bytes) -> PublicationIdentity:
     ------
     ProverToolError
         Raised for invalid JSON, unknown or missing keys, an unsupported
-        schema version, or an identity that is not in the tag grammar.
+        schema version, an identity that is not in the tag grammar, or a
+        recorded month that disagrees with the tag.
     """
     document = require_mapping(
         strict_json_loads(data, "publication identity"), "publication identity"
@@ -150,10 +177,15 @@ def parse_publication_identity(data: bytes) -> PublicationIdentity:
     upstream_commit = require_full_sha(
         document["upstream_commit"], "publication identity upstream_commit"
     )
+    tag = validate_tag(document["tag"], upstream_commit)
+    month = require_truthy_text(document["month"], "publication identity month")
+    if _tag_month(tag) != month:
+        msg = f"publication identity month {month!r} does not match tag {tag!r}"
+        raise ProverToolError(msg)
     return PublicationIdentity(
         schema_version=version,
-        tag=validate_tag(document["tag"], upstream_commit),
-        month=require_truthy_text(document["month"], "publication identity month"),
+        tag=tag,
+        month=month,
         upstream_commit=upstream_commit,
         builder_commit=require_full_sha(
             document["builder_commit"], "publication identity builder_commit"

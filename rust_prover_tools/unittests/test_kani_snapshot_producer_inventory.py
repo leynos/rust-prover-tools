@@ -49,18 +49,24 @@ def _tree(root: pathlib.Path) -> None:
     (root / "lib" / "libkani.so.1").symlink_to("libkani.so")
 
 
+@pytest.fixture
+def inventory_root(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Return a populated tree root for the positive inventory tests."""
+    root = tmp_path / "tree"
+    _tree(root)
+    return root
+
+
 def _by_path(inventory: SnapshotInventory) -> dict[str, InventoryEntry]:
     """Return the inventory's entries keyed by path."""
     return {entry.path: entry for entry in inventory.entries}
 
 
 def test_the_inventory_records_every_member_in_path_order(
-    tmp_path: pathlib.Path,
+    inventory_root: pathlib.Path,
 ) -> None:
     """A deterministic walk is the only record the consumer can compare."""
-    _tree(tmp_path)
-
-    inventory = build_inventory(tmp_path)
+    inventory = build_inventory(inventory_root)
 
     assert [entry.path for entry in inventory.entries] == [
         "bin",
@@ -69,51 +75,63 @@ def test_the_inventory_records_every_member_in_path_order(
         "lib",
         "lib/libkani.so",
         "lib/libkani.so.1",
-    ]
+    ], "entries must be recorded in path order"
     entries = _by_path(inventory)
-    assert entries["bin"].kind == KIND_DIRECTORY
-    assert entries["bin/cargo-kani"].kind == KIND_FILE
-    assert entries["bin/kani"].kind == KIND_HARDLINK
-    assert entries["lib/libkani.so.1"].kind == KIND_SYMLINK
-    assert entries["lib/libkani.so.1"].link_target == "libkani.so"
-    assert entries["bin/cargo-kani"].mode == 0o755
+    assert entries["bin"].kind == KIND_DIRECTORY, "bin must be a directory"
+    assert entries["bin/cargo-kani"].kind == KIND_FILE, (
+        "the first inode path must record the bytes"
+    )
+    assert entries["bin/kani"].kind == KIND_HARDLINK, (
+        "the second inode path must be a hard link"
+    )
+    assert entries["lib/libkani.so.1"].kind == KIND_SYMLINK, (
+        "a symbolic link must keep its kind"
+    )
+    assert entries["lib/libkani.so.1"].link_target == "libkani.so", (
+        "the symbolic link must record its relative target"
+    )
+    assert entries["bin/cargo-kani"].mode == 0o755, (
+        "the file entry must record the member's mode"
+    )
 
 
 def test_a_hard_link_names_the_first_path_with_the_shared_inode(
-    tmp_path: pathlib.Path,
+    inventory_root: pathlib.Path,
 ) -> None:
     """Two paths to one inode are recorded once as bytes and once as a link."""
-    _tree(tmp_path)
-
-    entries = _by_path(build_inventory(tmp_path))
+    entries = _by_path(build_inventory(inventory_root))
 
     file_entry = entries["bin/cargo-kani"]
     link_entry = entries["bin/kani"]
-    assert file_entry.kind == KIND_FILE
-    assert link_entry.kind == KIND_HARDLINK
-    assert link_entry.link_target == "bin/cargo-kani"
+    assert file_entry.kind == KIND_FILE, "the first path must record the bytes"
+    assert link_entry.kind == KIND_HARDLINK, "the second path must be a hard link"
+    assert link_entry.link_target == "bin/cargo-kani", (
+        "the hard link must name the first path with the shared inode"
+    )
 
 
-def test_the_recorded_digest_is_the_file_digest(tmp_path: pathlib.Path) -> None:
+def test_the_recorded_digest_is_the_file_digest(
+    inventory_root: pathlib.Path,
+) -> None:
     """The consumer compares bytes, so the record must name those bytes."""
     import hashlib
 
-    _tree(tmp_path)
+    entries = _by_path(build_inventory(inventory_root))
 
-    entries = _by_path(build_inventory(tmp_path))
-
-    assert entries["lib/libkani.so"].sha256 == hashlib.sha256(b"library").hexdigest()
+    assert entries["lib/libkani.so"].sha256 == hashlib.sha256(b"library").hexdigest(), (
+        "the digest must be the sha256 of the file's bytes"
+    )
 
 
 def test_the_record_round_trips_through_the_consumer_parser(
-    tmp_path: pathlib.Path,
+    inventory_root: pathlib.Path,
 ) -> None:
     """The producer cannot emit a document its own consumer would refuse."""
-    _tree(tmp_path)
+    inventory = build_inventory(inventory_root)
 
-    inventory = build_inventory(tmp_path)
-
-    assert parse_inventory(inventory_to_json(inventory)) == inventory
+    assert parse_inventory(inventory_to_json(inventory)) == inventory, (
+        "the rendered document must parse back to the same inventory"
+    )
 
 
 def test_a_symlink_outside_the_tree_is_refused(tmp_path: pathlib.Path) -> None:
@@ -121,6 +139,64 @@ def test_a_symlink_outside_the_tree_is_refused(tmp_path: pathlib.Path) -> None:
     (tmp_path / "escape").symlink_to("/etc/passwd")
 
     with pytest.raises(ProverToolError, match="links outside the tree"):
+        build_inventory(tmp_path)
+
+
+def test_a_relative_symlink_that_escapes_the_tree_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Relative text can still traverse above the root, so resolve it."""
+    root = tmp_path / "tree"
+    (root / "lib").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"secret")
+    (root / "lib" / "escape").symlink_to("../../outside/secret")
+
+    with pytest.raises(ProverToolError, match=r"lib/escape.*links outside the tree"):
+        build_inventory(root)
+
+
+def test_a_chained_symlink_that_escapes_the_tree_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An internal-looking target may reach outside only by following links."""
+    root = tmp_path / "tree"
+    (root / "lib").mkdir(parents=True)
+    (root / "share").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret").write_bytes(b"secret")
+    (root / "share" / "escape").symlink_to("../../outside/secret")
+    (root / "lib" / "outer").symlink_to("../share/escape")
+
+    with pytest.raises(ProverToolError, match=r"lib/outer.*links outside the tree"):
+        build_inventory(root)
+
+
+def test_a_relative_symlink_that_stays_inside_is_accepted(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A link may traverse within the tree; only leaving it is refused."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "tool").write_bytes(b"tool")
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "link").symlink_to("../bin/tool")
+
+    entries = _by_path(build_inventory(tmp_path))
+
+    assert entries["lib/link"].link_target == "../bin/tool", (
+        "an internal relative target must be recorded unchanged"
+    )
+
+
+def test_a_member_name_the_consumer_cannot_parse_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The producer must not write a path the consumer's grammar rejects."""
+    (tmp_path / "a\\file").write_bytes(b"data")
+
+    with pytest.raises(ProverToolError, match=r"cannot express"):
         build_inventory(tmp_path)
 
 

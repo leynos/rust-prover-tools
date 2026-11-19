@@ -19,10 +19,11 @@ import pathlib
 import sys
 import typing as typ
 
-from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.gh_transport import GhRunner, gh
 from rust_prover_tools.kani_snapshot.models import REPOSITORY
 from rust_prover_tools.kani_snapshot.producer.lifecycle import write_document
+from rust_prover_tools.kani_snapshot.release_model import ReleaseTransientError
 from rust_prover_tools.kani_snapshot.strict_json import strict_json_loads
 from rust_prover_tools.kani_snapshot.validation import (
     require_mapping,
@@ -50,19 +51,34 @@ _RELEASE_QUERY: typ.Final[str] = (
 )
 
 
-def _gh_json(arguments: cabc.Sequence[str], what: str) -> object:
+def _gh_read(run: GhRunner, arguments: cabc.Sequence[str], what: str) -> str:
+    """Run one `gh` read, naming the evidence it was meant to produce.
+
+    The failure kind is preserved: a transient transport failure must stay
+    distinguishable from a permanent refusal, because only the former may be
+    reconciled by reading the state again.
+    """
+    try:
+        return run(("gh", *arguments))
+    except ReleaseTransientError as exc:
+        msg = f"gh failed for {what}: {exc}"
+        raise ReleaseTransientError(msg) from exc
+    except ProverToolError as exc:
+        msg = f"gh failed for {what}: {exc}"
+        raise ProverToolError(msg) from exc
+
+
+def _gh_json(run: GhRunner, arguments: cabc.Sequence[str], what: str) -> object:
     """Run one `gh` read and parse its output strictly."""
-    result = run_command(CommandSpec(("gh", *arguments)))
-    if result.exit_code != 0:
-        msg = f"gh failed for {what}: {result.stderr.strip()}"
-        raise ProverToolError(msg)
-    return strict_json_loads(result.stdout.encode("utf-8"), what)
+    output = _gh_read(run, arguments, what)
+    return strict_json_loads(output.encode("utf-8"), what)
 
 
-def _page(number: int) -> list[dict[str, object]]:
+def _page(run: GhRunner, number: int) -> list[dict[str, object]]:
     """Read one page of releases in the allocator's shape."""
     items = require_sequence(
         _gh_json(
+            run,
             [
                 "api",
                 f"repos/{REPOSITORY}/releases?per_page={PAGE_SIZE}&page={number}",
@@ -96,8 +112,14 @@ def _page(number: int) -> list[dict[str, object]]:
     return releases
 
 
-def collect_releases() -> bytes:
+def collect_releases(*, run: GhRunner) -> bytes:
     """Collect the release list identity allocation consumes.
+
+    Parameters
+    ----------
+    run : GhRunner
+        Transport that performs one `gh` invocation. The command entrypoint
+        supplies the real one; a test supplies a recorder.
 
     Returns
     -------
@@ -113,7 +135,7 @@ def collect_releases() -> bytes:
     """
     releases: list[dict[str, object]] = []
     for number in range(1, RELEASE_PAGE_LIMIT + 1):
-        page = _page(number)
+        page = _page(run, number)
         releases.extend(page)
         if len(page) < PAGE_SIZE:
             break
@@ -141,7 +163,7 @@ def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Write the release list for one resolve job."""
     namespace = build_parser().parse_args(argv)
     try:
-        write_document(pathlib.Path(namespace.output), collect_releases())
+        write_document(pathlib.Path(namespace.output), collect_releases(run=gh))
     except (ProverToolError, OSError) as exc:
         print(f"kani-snapshot-releases: {exc}", file=sys.stderr)
         return 1

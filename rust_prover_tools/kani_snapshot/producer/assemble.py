@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import operator
+import stat
 import typing as typ
 
 from rust_prover_tools.downloads import sha256_file
@@ -142,9 +143,23 @@ def _require_no_extras(present: set[str], wanted: set[str]) -> None:
 
 
 def _require_regular_payloads(payloads: Path, names: cabc.Iterable[str]) -> None:
-    """Require every payload entry to be a regular file, not a link or directory."""
+    """Require every payload entry to be a regular file, following no links.
+
+    `Path.is_file()` follows a symbolic link, so a link to a regular file
+    outside the payload directory would otherwise be admitted and measured.
+    Inspecting the entry itself records only files the build job created.
+    """
     for name in names:
-        if not (payloads / name).is_file():
+        path = payloads / name
+        try:
+            status = path.lstat()
+        except OSError as exc:
+            msg = f"failed to inspect payload {name!r}: {exc}"
+            raise ProverToolError(msg) from exc
+        if stat.S_ISLNK(status.st_mode):
+            msg = f"payload {name!r} is a symbolic link, which is not admitted"
+            raise ProverToolError(msg)
+        if not stat.S_ISREG(status.st_mode):
             msg = f"payload {name!r} must be a regular file"
             raise ProverToolError(msg)
 

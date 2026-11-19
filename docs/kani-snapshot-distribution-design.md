@@ -415,8 +415,10 @@ transports selected by `sender_for`: the public release the reviewed pin names
 is the default, and a local `--asset-dir` remains available for offline
 transfers. The manifest is pinned to the reviewed digest, payloads are pinned
 to the manifest's records, and the two self-authenticating evidence files are
-bounded by size alone; `install_sender` never decides trust, only bounds and
-verifies bytes.
+fetched through `download_unverified`, whose name states the contract: it
+bounds the size and reports the digest it observed, and it never compares that
+digest with a pinned value. `install_sender` never decides trust; it bounds the
+transfer and verifies the bytes against the manifest and attestation.
 
 Structural agreement is checked before setup. The manifest pins the backend
 archive's bytes, and the separately hashed `inventory.json` is compared with
@@ -748,8 +750,12 @@ high-water mark, asset sizes and failures in run summaries. The build job
 writes those observations to the run summary with `always()`, so a failed run
 still reports them, and uploads whatever it observed under a distinct
 failure-path artefact name that no consumer reads as a publishable build.
-Guarded jobs name their prerequisite's result explicitly, because a job-level
-`if` replaces the implicit `success()` check. Cache keys bind trust class, OS,
+Guarded jobs name their prerequisite's result explicitly as an additional
+guard. A job-level `if` overrides the implicit `success()` check only when its
+condition contains a status-check function such as `always()`, `failure()` or
+`cancelled()`; an ordinary comparison retains that check, so a failed
+prerequisite already prevents the job from running and the explicit result
+documents which outcomes the job accepts. Cache keys bind trust class, OS,
 target, upstream SHA, recursive submodules, toolchain, locks and recipe;
 privileged jobs do not restore writable source-build caches. Ordinary PR caches
 cannot feed signing or publication.
@@ -784,6 +790,16 @@ attempt can resume; a GitHub rerun increments the attempt and therefore
 requires a new revision unless reconciliation finds the exact already-published
 release from the previous attempt. A publication timeout is resolved by reading
 state and validating it, not blindly repeating writes.
+
+An upload interrupted after GitHub created its asset record leaves a name
+reserved by a record of zero bytes and no digest. GitHub refuses a second
+upload under a listed name, so that record must be removed before the real file
+can be sent. The policy classifies such a record as a placeholder only when the
+expected asset is non-empty and the record reports neither bytes nor digest; a
+present asset with other non-empty bytes remains a conflict. The publisher then
+deletes the placeholder by its numeric asset identifier and uploads the file
+again, so recovery still never clobbers verified bytes, and an observation that
+does not carry an identifier is refused rather than guessed at.
 
 Repository-wide immutable releases are proposed for operational bootstrap, not
 enabled by implementation or this planning task. First adjust

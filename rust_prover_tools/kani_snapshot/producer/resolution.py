@@ -201,13 +201,19 @@ def parse_commit_checks(data: bytes) -> str:
     Parameters
     ----------
     data : bytes
-        Exact document bytes: `{"commit": <40-hex>, "checks": [...]}`.
+        Exact document bytes:
+        `{"commit": <40-hex>, "total_count": <int>, "checks": [...]}`.
+        `total_count` is mandatory and must equal the number of observed
+        check runs: without it a truncated observation could look complete
+        and prove a commit qualified when a required check never ran.
 
     Returns
     -------
     str
         The full commit the evidence is about, once every required check has
-        passed.
+        passed. The evidence document itself is produced by
+        `collect_candidates.collect_commit_checks`, which records the API's
+        `total_count` beside the projected runs for the same reason.
 
     Raises
     ------

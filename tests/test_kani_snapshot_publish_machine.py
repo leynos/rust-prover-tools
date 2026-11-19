@@ -35,6 +35,7 @@ from rust_prover_tools.kani_snapshot.release_policy import (
     ReleaseTransientError,
 )
 from tests import kani_publish_fixtures as fixtures
+from tests.kani_release_api_fixtures import FakeReleaseApi
 
 if typ.TYPE_CHECKING:
     import pathlib
@@ -50,6 +51,23 @@ _MACHINE_SETTINGS = settings(
 )
 
 
+def _require_retryable_failure(error: ProverToolError, pending_failures: int) -> None:
+    """Require a refused valid state to be an exhausted transient failure.
+
+    A valid, non-conflicting state may still refuse to converge when a
+    scheduled transient failure keeps interrupting every attempt, but that is
+    the only excuse it has. The verdict lives outside the `except` block so the
+    failure is reported as a test assertion rather than re-raising.
+    """
+    assert pending_failures, (
+        f"publication raised {error!r} for a valid state with no scheduled "
+        "transient failure"
+    )
+    assert str(error).startswith("publication did not converge"), (
+        f"a valid, non-conflicting state raised {error!r}"
+    )
+
+
 class PublicationMachine(RuleBasedStateMachine):
     """Generated absent, draft, complete, published and conflict transitions."""
 
@@ -57,7 +75,7 @@ class PublicationMachine(RuleBasedStateMachine):
         """Create one isolated request and its fake API."""
         super().__init__()
         self.request = fixtures.request(root)
-        self.api = fixtures.FakeReleaseApi(digests_visible=True)
+        self.api = FakeReleaseApi(digests_visible=True)
         self.conflicted = False
         self.completed = False
 
@@ -93,16 +111,44 @@ class PublicationMachine(RuleBasedStateMachine):
         operation, when = failure.split(":")
         self.api.fail_next(operation, after=when == "after")
 
+    def _pending_failures(self) -> int:
+        """Return how many scheduled transient failures remain unconsumed."""
+        return sum(self.api.failures.values())
+
+    def _state_requires_conflict(self) -> bool:
+        """Return whether the state the machine built is one the policy refuses.
+
+        The predicate is derived from the stored bytes rather than from what the
+        publisher did, so a validation or non-convergence error cannot stand in
+        for the conflict a generated example was supposed to exercise. The
+        machine only ever stores expected names, but an unexpected name is
+        checked too because it is another conflict the policy names.
+        """
+        if not set(self.api.stored) <= set(fixtures.PAYLOADS):
+            return True
+        return any(
+            stored != fixtures.PAYLOADS[name]
+            for name, stored in self.api.stored.items()
+        )
+
     @rule()
     def drive_publication(self) -> None:
-        """Run the real orchestration and record its verdict."""
+        """Run the real orchestration and check its verdict against the state."""
+        expected_conflict = self._state_requires_conflict()
+        pending_failures = self._pending_failures()
         try:
             decision = publish_release(self.request, self.api)
         except ReleaseTransientError:
             raise
-        except ProverToolError:
-            self.conflicted = True
+        except ProverToolError as exc:
+            if expected_conflict:
+                self.conflicted = True
+                return
+            _require_retryable_failure(exc, pending_failures)
             return
+        assert not expected_conflict, (
+            "publication converged despite a state the policy must refuse"
+        )
         assert decision.action is ReleaseAction.NOOP, (
             f"publication stopped at {decision.action}"
         )
@@ -155,7 +201,7 @@ def test_witness_absent_becomes_a_published_exact_release(
     tmp_path: pathlib.Path,
 ) -> None:
     """Named witness: absent, draft, complete, published, no-op."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
     assert api.exists
@@ -164,7 +210,7 @@ def test_witness_absent_becomes_a_published_exact_release(
 
 def test_witness_a_foreign_draft_asset_conflicts(tmp_path: pathlib.Path) -> None:
     """Named witness: a draft carrying an unknown asset is refused."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     api.create_draft(fixtures.expected())
     api.stored["surprise.bin"] = b"unexpected"
     with pytest.raises(ProverToolError, match="outside the expected set"):
@@ -175,7 +221,7 @@ def test_witness_a_published_release_is_not_republished(
     tmp_path: pathlib.Path,
 ) -> None:
     """Named witness: a matching published release is a no-op."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     api.place_published()
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
@@ -184,7 +230,7 @@ def test_witness_a_published_release_is_not_republished(
 
 def test_witness_a_cross_run_receipt_is_refused(tmp_path: pathlib.Path) -> None:
     """Named witness: a receipt from another attempt is a conflict."""
-    api = fixtures.FakeReleaseApi()
+    api = FakeReleaseApi()
     stale = dc.replace(fixtures.validation(), run_id=fixtures.RUN_ID + 1)
     with pytest.raises(ProverToolError, match="publication conflict"):
         publish_release(_request(tmp_path, stale), api)

@@ -27,6 +27,9 @@ from rust_prover_tools.kani_snapshot.models import (
     SolverRecord,
     SubmoduleRecord,
 )
+from rust_prover_tools.kani_snapshot.producer.assemble_input import (
+    resources_document,
+)
 from rust_prover_tools.kani_snapshot.producer.build_evidence import (
     EVIDENCE_SCHEMA_VERSION,
     BuildEvidence,
@@ -40,8 +43,6 @@ from rust_prover_tools.kani_snapshot.toolchain_model import (
 )
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
-    require_non_negative_int,
-    require_number,
     require_sha256,
     require_truthy_text,
 )
@@ -162,6 +163,13 @@ def measure(namespace: argparse.Namespace) -> BuildEvidence:
         Raised when a named file is missing, a command fails, or a recorded
         identity is malformed.
     """
+    # Validate the measured resources with the evidence model's own parser
+    # before the expensive probes: a duration the parser would reject must not
+    # reach a written document.
+    wall_seconds, disk_high_water_bytes = resources_document({
+        "wall_seconds": namespace.wall_seconds,
+        "disk_high_water_bytes": namespace.disk_high_water_bytes,
+    })
     sysroot = pathlib.Path(namespace.sysroot)
     rustc = _require_file(sysroot / "bin" / "rustc", "rustc")
     rustc_vv = _run([str(rustc), "-vV"], "rustc -vV")
@@ -203,10 +211,8 @@ def measure(namespace: argparse.Namespace) -> BuildEvidence:
             outcome=require_truthy_text(namespace.cache_outcome, "cache outcome"),
             key=namespace.cache_key,
         ),
-        wall_seconds=require_number(namespace.wall_seconds, "wall_seconds"),
-        disk_high_water_bytes=require_non_negative_int(
-            namespace.disk_high_water_bytes, "disk_high_water_bytes"
-        ),
+        wall_seconds=wall_seconds,
+        disk_high_water_bytes=disk_high_water_bytes,
     )
 
 

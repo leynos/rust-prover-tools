@@ -2,9 +2,9 @@
 
 The evidence document is the seam between the build job and assembly. These
 tests hold the two properties that seam needs: the document the build job
-writes is exactly the document assembly reads, and a plan from one run cannot
-be combined with measurements from another. A refusal is tested for each
-identity the manifest would otherwise record wrongly.
+writes is exactly the document assembly reads, and the plan must match the
+workflow identity it is given. A refusal is tested for each identity the
+manifest would otherwise record wrongly.
 """
 
 from __future__ import annotations
@@ -19,6 +19,9 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.producer.assemble import (
     AssemblyRequest,
     assemble,
+)
+from rust_prover_tools.kani_snapshot.producer.assemble_input import (
+    parse_assembly_input,
 )
 from rust_prover_tools.kani_snapshot.producer.build_evidence import (
     assembly_input_from_evidence,
@@ -36,7 +39,7 @@ if typ.TYPE_CHECKING:
 def _document(**overrides: object) -> bytes:
     """Return the fixture evidence document with top-level overrides applied."""
     document = json.loads(evidence_to_json(fixtures.evidence()))
-    assert isinstance(document, dict)
+    assert isinstance(document, dict), "evidence document must be a JSON object"
     document.update(overrides)
     return json.dumps(document).encode()
 
@@ -44,7 +47,9 @@ def _document(**overrides: object) -> bytes:
 def test_evidence_round_trips_through_its_canonical_document() -> None:
     """The build job's document is exactly what assembly reads back."""
     measured = fixtures.evidence()
-    assert parse_build_evidence(evidence_to_json(measured)) == measured
+    assert parse_build_evidence(evidence_to_json(measured)) == measured, (
+        "parsed evidence differs from the measured record"
+    )
 
 
 def test_unknown_evidence_keys_are_refused() -> None:
@@ -76,14 +81,26 @@ def test_the_derived_input_carries_recipe_owned_fields() -> None:
         evidence=measured,
     )
 
-    assert assembly_input.tag == fixtures.TAG
-    assert assembly_input.upstream_commit == fixtures.UPSTREAM_COMMIT
-    assert assembly_input.builder_commit == fixtures.BUILDER_COMMIT
-    assert assembly_input.runtime == fixtures.PINNED.runtime
-    assert assembly_input.prerequisites == fixtures.PINNED.prerequisites
-    assert assembly_input.build.submodules == fixtures.PINNED.submodules
-    assert assembly_input.build.recipe_digest == fixtures.build_plan().recipe_digest
-    assert assembly_input.wall_seconds == measured.wall_seconds
+    assert assembly_input.tag == fixtures.TAG, "assembly input tag"
+    assert assembly_input.upstream_commit == fixtures.UPSTREAM_COMMIT, (
+        "assembly input upstream commit"
+    )
+    assert assembly_input.builder_commit == fixtures.BUILDER_COMMIT, (
+        "assembly input builder commit"
+    )
+    assert assembly_input.runtime == fixtures.PINNED.runtime, "assembly input runtime"
+    assert assembly_input.prerequisites == fixtures.PINNED.prerequisites, (
+        "assembly input prerequisites"
+    )
+    assert assembly_input.build.submodules == fixtures.PINNED.submodules, (
+        "assembly input submodules"
+    )
+    assert assembly_input.build.recipe_digest == fixtures.build_plan().recipe_digest, (
+        "assembly input recipe digest"
+    )
+    assert assembly_input.wall_seconds == measured.wall_seconds, (
+        "assembly input wall seconds"
+    )
 
 
 def test_the_derived_input_assembles_the_exact_payloads(tmp_path: pathlib.Path) -> None:
@@ -104,12 +121,12 @@ def test_the_derived_input_assembles_the_exact_payloads(tmp_path: pathlib.Path) 
         )
     )
 
-    assert assembly.manifest.tag == fixtures.TAG
-    assert assembly.manifest.workflow == fixtures.workflow()
+    assert assembly.manifest.tag == fixtures.TAG, "manifest tag"
+    assert assembly.manifest.workflow == fixtures.workflow(), "manifest workflow"
 
 
 def test_a_plan_from_another_attempt_is_refused() -> None:
-    """Measurements from one attempt cannot assemble another attempt's plan."""
+    """The plan must match the workflow identity it is given."""
     other = fixtures.workflow(run_attempt=2)
     with pytest.raises(ProverToolError, match="another workflow run"):
         assembly_input_from_evidence(
@@ -170,8 +187,20 @@ def test_the_command_writes_the_assembly_input(tmp_path: pathlib.Path) -> None:
         str(output),
     ])
 
-    assert status == 0
-    assert output.read_bytes().startswith(b"{\n")
+    assert status == 0, "assembly input command must report success"
+
+    emitted = parse_assembly_input(output.read_bytes())
+    assert emitted.tag == fixtures.TAG, "emitted assembly input tag"
+    assert emitted.workflow == dc.replace(fixtures.workflow(), run_url=None), (
+        "emitted assembly input workflow"
+    )
+    measured = fixtures.evidence()
+    assert emitted.wall_seconds == measured.wall_seconds, (
+        "emitted assembly input wall seconds"
+    )
+    assert emitted.disk_high_water_bytes == measured.disk_high_water_bytes, (
+        "emitted assembly input disk high-water bytes"
+    )
 
 
 def test_the_command_reports_a_missing_document(tmp_path: pathlib.Path) -> None:
@@ -191,7 +220,7 @@ def test_the_command_reports_a_missing_document(tmp_path: pathlib.Path) -> None:
         str(tmp_path / "out.json"),
     ])
 
-    assert status == 1
+    assert status == 1, "missing document must be reported as a failure"
 
 
 def test_evidence_records_a_lockfile_path_once() -> None:

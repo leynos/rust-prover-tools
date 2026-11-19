@@ -9,6 +9,7 @@ well-formedness alone is shown to refuse the release instead.
 
 from __future__ import annotations
 
+import base64
 import dataclasses as dc
 import json
 import pathlib
@@ -16,7 +17,9 @@ import typing as typ
 
 import pytest
 
+from rust_prover_tools.commands import CommandTimeoutError
 from rust_prover_tools.kani_snapshot.attestation import (
+    ATTESTATION_PREDICATE,
     SIGNER_WORKFLOW_PATH,
     AttestationPolicy,
 )
@@ -31,7 +34,11 @@ from rust_prover_tools.kani_snapshot.producer.release_assets import (
     ATTESTATION_NAME,
     CHECKSUMS_NAME,
 )
-from rust_prover_tools.kani_snapshot.release_model import release_body
+from rust_prover_tools.kani_snapshot.release_model import (
+    ReleaseTransientError,
+    VerifiedAssets,
+    release_body,
+)
 from rust_prover_tools.unittests import kani_producer_fixtures as producer
 from tests import kani_publish_fixtures as fixtures
 from tests.kani_snapshot_attestation_fixtures import bundle_verifier
@@ -46,6 +53,11 @@ pytest_plugins = ("cmd_mox.pytest_plugin",)
 
 #: A commit the immutable tag addresses, distinct from release metadata.
 TAG_COMMIT: typ.Final[str] = "a" * 40
+
+#: The failure `run_checked` reports when the verifier outlives its budget.
+_VERIFIER_TIMEOUT_MESSAGE: typ.Final[str] = (
+    "command timed out after 300 seconds: gh attestation verify"
+)
 
 
 def _object(kind: str, sha: str) -> str:
@@ -175,15 +187,26 @@ def _served_release(
     return _ServedRelease(directory, body_text, claimed=signed.claimed, run=signed.run)
 
 
-def test_observe_verifies_a_published_release_from_its_own_bytes(
+def _verify_served(api: GhReleaseApi, tag: str) -> VerifiedAssets:
+    """Observe a served release and verify every asset it reports."""
+    observed = api.observe(tag)
+    names = [asset.name for asset in observed.assets]
+    return api.verify(tag, observed, names)
+
+
+def test_verify_authenticates_a_published_release_from_its_own_bytes(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,
 ) -> None:
     """A release whose evidence, identity and attestation agree is verified."""
     cmd_mox.stub("gh").runs(_served_release(tmp_path).handle)
-    observed = GhReleaseApi().observe(producer.TAG)
-    assert observed.provenance_verified
+    api = GhReleaseApi()
+    observed = api.observe(producer.TAG)
     assert observed.target_commitish == TAG_COMMIT
+    assert not observed.provenance_verified, "a state query authenticated a release"
+    verified = _verify_served(api, producer.TAG)
+    assert verified.provenance_verified
+    assert verified.reason is None
 
 
 @pytest.mark.parametrize(
@@ -198,52 +221,129 @@ def test_observe_verifies_a_published_release_from_its_own_bytes(
         ),
     ],
 )
-def test_observe_reports_an_unrelated_attestation_as_unverified(
+def test_verify_reports_an_unrelated_attestation_as_unverified(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,
     attestation: bytes,
 ) -> None:
     """An attestation that does not name this manifest is not provenance."""
     cmd_mox.stub("gh").runs(_served_release(tmp_path, attestation=attestation).handle)
-    assert not GhReleaseApi().observe(producer.TAG).provenance_verified
+    verified = _verify_served(GhReleaseApi(), producer.TAG)
+    assert not verified.provenance_verified
+    assert verified.reason is not None
 
 
-def test_observe_reports_a_foreign_signature_as_unverified(
+@pytest.mark.parametrize(
+    "field",
+    [
+        pytest.param("source_digest", id="foreign-source-digest"),
+        pytest.param("signer_digest", id="foreign-signer-digest"),
+    ],
+)
+def test_verify_reports_a_foreign_signature_as_unverified(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,
+    field: str,
 ) -> None:
     """A bundle the pinned certificate policy rejects does not authenticate.
 
     Structural well-formedness is not provenance: the verifier compares the
     bundle's claimed workflow, ref and digests with the policy flags, so a
-    bundle signed by anything else must leave the release unverified.
+    bundle signed by anything else must leave the release unverified. Only the
+    named digest differs from the trusted policy, so removing either restriction
+    alone would let a rejected bundle through and fail this test.
     """
-    claimed = AttestationPolicy(
-        repository=REPOSITORY,
-        signer_workflow=f"{REPOSITORY}/{SIGNER_WORKFLOW_PATH}",
-        source_digest="f" * 40,
-        signer_digest="f" * 40,
-    )
+    claimed = dc.replace(_trusted_policy(), **{field: "f" * 40})
     signed = _Signature(claimed=claimed)
     cmd_mox.stub("gh").runs(_served_release(tmp_path, signature=signed).handle)
-    assert not GhReleaseApi().observe(producer.TAG).provenance_verified
+    assert not _verify_served(GhReleaseApi(), producer.TAG).provenance_verified
 
 
-def test_observe_reports_a_signature_from_another_run_as_unverified(
+def test_verify_reports_a_signature_from_another_run_as_unverified(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,
 ) -> None:
     """A verified bundle for a different attempt authenticates another run."""
     signed = _Signature(run=producer.workflow(run_attempt=2))
     cmd_mox.stub("gh").runs(_served_release(tmp_path, signature=signed).handle)
-    assert not GhReleaseApi().observe(producer.TAG).provenance_verified
+    assert not _verify_served(GhReleaseApi(), producer.TAG).provenance_verified
 
 
-def test_observe_reports_a_body_that_does_not_bind_as_unverified(
+def test_verify_reports_a_body_that_does_not_bind_as_unverified(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,
 ) -> None:
     """A body recording other build inputs does not authenticate the release."""
     served = _served_release(tmp_path, fingerprint=fixtures.OTHER_FINGERPRINT)
     cmd_mox.stub("gh").runs(served.handle)
-    assert not GhReleaseApi().observe(producer.TAG).provenance_verified
+    verified = _verify_served(GhReleaseApi(), producer.TAG)
+    assert not verified.provenance_verified
+    assert verified.reason == (
+        "published manifest does not match the release's recorded build inputs"
+    )
+
+
+def _statement_bundle(statement: dict[str, object]) -> bytes:
+    """Return a Sigstore bundle whose payload is `statement`.
+
+    The signature is present but unchecked here because the structural check
+    runs before any verifier process, which is what lets a malformed statement
+    be shown to leave the release unverified rather than raise.
+    """
+    payload = base64.b64encode(json.dumps(statement).encode("utf-8")).decode("ascii")
+    return json.dumps({
+        "mediaType": "application/vnd.dev.sigstore.bundle+json;version=0.3",
+        "dsseEnvelope": {
+            "payload": payload,
+            "payloadType": "application/vnd.in-toto+json",
+            "signatures": [{"sig": "c2ln"}],
+        },
+    }).encode("ascii")
+
+
+def test_verify_reports_a_non_string_statement_type_as_unverified(
+    tmp_path: pathlib.Path,
+    cmd_mox: CmdMox,
+) -> None:
+    """A `_type` array must be refused, not raise an unhashable-type error."""
+    statement: dict[str, object] = {
+        "_type": [],
+        "subject": [],
+        "predicateType": ATTESTATION_PREDICATE,
+        "predicate": {"buildDefinition": {}},
+    }
+    served = _served_release(
+        tmp_path,
+        attestation=_statement_bundle(statement),
+    )
+    cmd_mox.stub("gh").runs(served.handle)
+    assert not _verify_served(GhReleaseApi(), producer.TAG).provenance_verified
+
+
+def test_verify_propagates_a_verifier_timeout_as_transient(
+    tmp_path: pathlib.Path,
+    cmd_mox: CmdMox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A timed-out verifier is retryable, unlike a rejected signature.
+
+    The verifier is an external process whose own budget can expire. That says
+    nothing about the release, so the verification is transient rather than
+    unverified; a genuinely invalid signature still reports a reason, which the
+    neighbouring foreign-signature test pins.
+    """
+    cmd_mox.stub("gh").runs(_served_release(tmp_path).handle)
+
+    def _timed_out(*args: object, **kwargs: object) -> None:
+        """Fail as `run_checked` does when the verifier outlives its budget."""
+        raise CommandTimeoutError(_VERIFIER_TIMEOUT_MESSAGE)
+
+    # The attestation step re-imports the verifier by name, so the patch must
+    # replace the binding in the module that calls it, not its origin.
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_snapshot.gh_release_attestation.verify_attestation",
+        _timed_out,
+    )
+
+    with pytest.raises(ReleaseTransientError, match="attestation verification"):
+        _verify_served(GhReleaseApi(), producer.TAG)

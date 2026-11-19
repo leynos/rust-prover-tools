@@ -23,7 +23,7 @@ import typing as typ
 from rust_prover_tools.downloads import (
     BoundedAsset,
     PinnedAsset,
-    download_bounded,
+    download_unverified,
 )
 from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 from rust_prover_tools.kani_snapshot.download import (
@@ -197,11 +197,16 @@ class ReleaseSender:
         staging: Path,
         checkpoint: Progress | None = None,
     ) -> Path:
-        """Download one self-authenticating evidence file under its ceiling."""
+        """Download one evidence file under its ceiling, unverified.
+
+        The transport bounds the size but compares the bytes with no pinned
+        digest, so authentication stays the caller's job: the install checks
+        this file against the manifest and attestation before using it.
+        """
         del checkpoint  # the download is bounded by its own retry policy
         policy = self._policy(name)
         destination = staging / name
-        _download_bounded(
+        _download_with_retry(
             BoundedAsset(name=name, url=policy.asset_url(), max_bytes=max_bytes),
             destination,
             policy,
@@ -227,7 +232,7 @@ class ReleaseSender:
         return download_asset(pinned, staging / asset.name, policy, self.settings)
 
 
-def _download_bounded(
+def _download_with_retry(
     asset: BoundedAsset,
     destination: Path,
     policy: ReleaseUrlPolicy,
@@ -236,7 +241,7 @@ def _download_bounded(
     """Download a bounded asset, retrying only transient transport failures."""
     for attempt in range(1, settings.retry.attempts + 1):
         try:
-            return download_bounded(
+            return download_unverified(
                 asset,
                 destination,
                 settings.limits,

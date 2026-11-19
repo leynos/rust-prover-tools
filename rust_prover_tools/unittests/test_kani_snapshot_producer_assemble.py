@@ -271,6 +271,34 @@ def test_assembly_refuses_a_payload_that_is_not_a_file(
         )
 
 
+def test_assembly_refuses_a_linked_payload(tmp_path: pathlib.Path) -> None:
+    """A link could name bytes outside the measured payload set.
+
+    `Path.is_file()` follows symbolic links, so admission must inspect the
+    entry itself; otherwise a link to a regular file outside the directory
+    would be measured and signed as though the build job had produced it.
+    """
+    payloads = tmp_path / "payloads"
+    fixtures.write_payloads(payloads)
+    external = tmp_path / "external.bin"
+    external.write_bytes(b"bytes the build job did not produce")
+    name = fixtures.names()["inventory"]
+    (payloads / name).unlink()
+    (payloads / name).symlink_to(external)
+    with pytest.raises(
+        ProverToolError,
+        match=rf"{name}.*symbolic link.*not admitted",
+    ):
+        assemble(
+            AssemblyRequest(
+                payloads=payloads,
+                inputs=fixtures.assembly_input(),
+                identity=fixtures.publication_identity(),
+                workflow=fixtures.workflow(),
+            )
+        )
+
+
 def test_assembly_refuses_a_missing_payload_directory(
     tmp_path: pathlib.Path,
 ) -> None:

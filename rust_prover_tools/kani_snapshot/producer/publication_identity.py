@@ -63,14 +63,22 @@ __all__ = (
 )
 
 #: Publication month shape, `YYYY-MM`, as the immutable tag grammar records it.
-_MONTH: typ.Final[re.Pattern[str]] = re.compile(r"\d{4}-(?:0[1-9]|1[0-2])")
+#:
+#: `[0-9]` rather than `\d`: Python's `\d` also matches Unicode decimal digits,
+#: which the ASCII-only tag grammar rejects.
+_MONTH: typ.Final[re.Pattern[str]] = re.compile(r"[0-9]{4}-(?:0[1-9]|1[0-2])")
 
 #: Revision suffix of an existing tag for the same month and upstream prefix.
-_REVISION: typ.Final[re.Pattern[str]] = re.compile(r"-r(?P<revision>[1-9]\d*)")
+#:
+#: `[0-9]` here is load-bearing: `int()` accepts Unicode decimal digits, so a
+#: `-r1٢` sibling would otherwise be allocated as revision 12 while
+#: `validate_tag` refused the same tag.
+_REVISION: typ.Final[re.Pattern[str]] = re.compile(r"-r(?P<revision>[1-9][0-9]*)")
 
 #: Tag shape, repeated here only to recover the month of a manual identity.
 _TAG_MONTH: typ.Final[re.Pattern[str]] = re.compile(
-    r"kani-snapshot-(?P<month>\d{4}-(?:0[1-9]|1[0-2]))-[0-9a-f]{12}-r[1-9]\d*"
+    r"kani-snapshot-(?P<month>[0-9]{4}-(?:0[1-9]|1[0-2]))-[0-9a-f]{12}"
+    r"-r[1-9][0-9]*"
 )
 
 _RELEASE_KEYS: typ.Final[frozenset[str]] = frozenset({
