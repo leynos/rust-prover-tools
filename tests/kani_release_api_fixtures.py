@@ -57,6 +57,7 @@ class FakeReleaseApi:
         self.calls: list[str] = []
         self.uploads: list[str] = []
         self.discards: list[str] = []
+        self.hashes: list[str] = []
         self.failures: dict[str, int] = {}
 
     def fail_next(self, operation: str, *, after: bool = False) -> None:
@@ -168,6 +169,28 @@ class FakeReleaseApi:
         self.stored[asset.name] = path.read_bytes()
         self.uploads.append(asset.name)
         self._leave("upload")
+
+    def hash_assets(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+        names: cabc.Sequence[str],
+    ) -> tuple[tuple[str, str], ...]:
+        """Download only the named assets and report their computed digests.
+
+        This is the byte check a draft edit is gated on, not a provenance
+        verdict: nothing here claims the release's evidence authenticated the
+        manifest.
+        """
+        self._enter("hash_assets")
+        missing = [name for name in names if name not in self.stored]
+        if missing:
+            msg = f"release asset {missing[0]!r} is no longer downloadable"
+            raise ReleaseTransientError(msg)
+        digests = tuple((name, digest(self.stored[name])) for name in names)
+        self.hashes.extend(names)
+        self._leave("hash_assets")
+        return digests
 
     def verify(
         self,

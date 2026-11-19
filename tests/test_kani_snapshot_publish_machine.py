@@ -71,11 +71,13 @@ def _require_retryable_failure(error: ProverToolError, pending_failures: int) ->
 class PublicationMachine(RuleBasedStateMachine):
     """Generated absent, draft, complete, published and conflict transitions."""
 
-    def __init__(self, root: pathlib.Path) -> None:
+    def __init__(self, root: pathlib.Path, *, digests_visible: bool = True) -> None:
         """Create one isolated request and its fake API."""
         super().__init__()
         self.request = fixtures.request(root)
-        self.api = FakeReleaseApi(digests_visible=True)
+        # Without volunteered digests every stored asset is a claim, so the
+        # generated histories also cross the pre-edit hashing step.
+        self.api = FakeReleaseApi(digests_visible=digests_visible)
         self.conflicted = False
         self.completed = False
 
@@ -175,7 +177,11 @@ class PublicationMachine(RuleBasedStateMachine):
         assert set(self.api.stored) <= set(fixtures.PAYLOADS)
 
 
-def _machine_factory(root: pathlib.Path) -> type[RuleBasedStateMachine]:
+def _machine_factory(
+    root: pathlib.Path,
+    *,
+    digests_visible: bool = True,
+) -> type[RuleBasedStateMachine]:
     """Return a zero-argument factory for a machine rooted under `root`.
 
     Hypothesis documents that the factory may be any callable taking no
@@ -185,16 +191,28 @@ def _machine_factory(root: pathlib.Path) -> type[RuleBasedStateMachine]:
 
     def build() -> PublicationMachine:
         """Create the machine with its own payload directory."""
-        return PublicationMachine(root)
+        return PublicationMachine(root, digests_visible=digests_visible)
 
     return typ.cast("type[RuleBasedStateMachine]", build)
 
 
+@pytest.mark.parametrize("digests_visible", [True, False], ids=["hashed", "unhashed"])
 def test_publication_converges_or_conflicts_over_generated_transitions(
     tmp_path: pathlib.Path,
+    *,
+    digests_visible: bool,
 ) -> None:
-    """Thirty generated operations never publish unverified or replace bytes."""
-    run_state_machine_as_test(_machine_factory(tmp_path), settings=_MACHINE_SETTINGS)
+    """Thirty generated operations never publish unverified or replace bytes.
+
+    The unhashed variant crosses the pre-edit byte check: every asset the API
+    does not digest must be downloaded and compared before the draft can be
+    repaired, so a generated history cannot edit a draft that turns out to
+    conflict.
+    """
+    run_state_machine_as_test(
+        _machine_factory(tmp_path, digests_visible=digests_visible),
+        settings=_MACHINE_SETTINGS,
+    )
 
 
 def test_witness_absent_becomes_a_published_exact_release(

@@ -45,7 +45,7 @@ from .document import (
     decoded,
     parse_release,
 )
-from .download import verify_assets
+from .download import hash_assets, verify_assets
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -264,6 +264,20 @@ class GhReleaseApi:
         can only authenticate each other as a complete set.
         """
         return verify_assets(self._repository, tag, observed, names)
+
+    def hash_assets(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+        names: cabc.Sequence[str],
+    ) -> tuple[tuple[str, str], ...]:
+        """Download the named assets and report the digests of their bytes.
+
+        Only the named assets are fetched: this is the byte check that gates
+        editing a draft, not a provenance verdict, so it costs strictly less
+        than `verify` and never claims the release authenticated.
+        """
+        return hash_assets(self._repository, tag, observed, names)
 
     def create_draft(self, expected: ExpectedRelease) -> None:
         """Create a draft pre-release that records its run and build inputs."""

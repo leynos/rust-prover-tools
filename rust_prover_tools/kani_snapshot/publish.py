@@ -182,10 +182,10 @@ def _apply(
     decision: ReleaseDecision,
     observed: ObservedRelease,
 ) -> ObservedRelease | None:
-    """Perform one effectful step other than publication.
+    """Perform one step other than publication.
 
-    Returns the observation a verification completed, or `None` when the step
-    changed server state and the caller must observe again.
+    Returns the observation a hash or verification completed, or `None` when
+    the step changed server state and the caller must observe again.
     """
     if decision.action is ReleaseAction.CREATE_DRAFT:
         api.create_draft(request.expected)
@@ -196,10 +196,34 @@ def _apply(
     if decision.action is ReleaseAction.UPLOAD_ASSETS:
         _upload(api, request, decision.uploads)
         return None
+    if decision.action is ReleaseAction.HASH_ASSETS:
+        # A byte check before an edit, not a provenance verdict: only the
+        # named digests are learned, and the draft is not yet authenticated.
+        digests = api.hash_assets(
+            request.expected.tag, observed, decision.verifications
+        )
+        return dc.replace(observed, assets=_with_digests(observed.assets, digests))
     if decision.action is ReleaseAction.VERIFY_ASSETS:
         verified = api.verify(request.expected.tag, observed, decision.verifications)
         return _with_verification(observed, verified)
     return None
+
+
+def _with_digests(
+    assets: cabc.Iterable[ObservedAsset],
+    digests: cabc.Iterable[tuple[str, str]],
+) -> tuple[ObservedAsset, ...]:
+    """Return the assets with the digests computed for their bytes.
+
+    An asset whose bytes were not hashed keeps whatever digest it already
+    reported, so a partial hash narrows the unknown set and never invents
+    evidence for a file nobody downloaded.
+    """
+    computed = dict(digests)
+    return tuple(
+        dc.replace(asset, sha256=computed.get(asset.name, asset.sha256))
+        for asset in assets
+    )
 
 
 def _with_verification(

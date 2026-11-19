@@ -239,6 +239,25 @@ Terms used here:
   accepts a skipped prerequisite, so every condition is an ordinary comparison
   and the implicit `success()` check is what stops a job after a failed
   prerequisite.
+- 19 November 2026: remediated the eighth completeness assessment (A8,
+  `EP258-2026-11-19-A8`). Its one blocking finding was a remaining ordering
+  hazard in draft recovery: a present asset whose digest the API did not report
+  was classified as unverified, but the policy deleted a placeholder or
+  uploaded a missing file before anything downloaded and hashed it. A same-size
+  asset with different bytes was therefore discovered only after the draft had
+  been edited, which is the failure mode the policy's own ordering rule
+  forbids. The policy now hashes every present asset with no observed digest
+  before an edit, through a new `HASH_ASSETS` step and a `hash_assets` port
+  method that downloads only the named assets and claims no provenance. A
+  conflicting draft is refused with no discard, upload or publish, and a draft
+  whose bytes match still recovers. A draft that needs no edit skips the extra
+  download and is verified whole instead, because that verification already
+  hashes every asset. The generated state machine now runs a second history
+  with no volunteered digests, so the pre-edit byte check is exercised over
+  generated transitions. The developers guide and D5 record the split between a
+  byte check and a provenance verdict, and the developers guide now names
+  `download_unverified` as the one bounded exception to the `download_pinned`
+  rule instead of implying that no download path may use anything else.
 
 ## Surprises & discoveries
 
@@ -385,6 +404,14 @@ Terms used here:
   reproduce the body's build-input fingerprint, and — since A3 — a signature
   the consumer's own policy accepts for this run and attempt. The structural
   checks run first as a cheap refusal; the verifier alone decides the flag.
+- *A draft is hashed before it is edited, and verified only when it needs no
+  edit.* An absent API digest means nobody has hashed the bytes, not that the
+  bytes are sound. The policy therefore downloads and hashes every present
+  asset with no observed digest before it deletes a placeholder or uploads a
+  missing file, through `hash_assets`, which downloads only those names and
+  claims no provenance. A draft that needs no edit is verified whole instead,
+  because that download already hashes every asset; paying for both would
+  double the transfer for no extra evidence.
 
 ## Outcomes & retrospective
 

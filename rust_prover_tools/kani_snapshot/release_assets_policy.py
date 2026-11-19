@@ -7,7 +7,9 @@ effect that a conflicting state did not authorise. In particular, a wrong
 existing asset is detected before a missing one is uploaded, and a record that
 reserves a name without holding bytes is discarded rather than reported as a
 conflict a retry could have repaired — but only when nothing else in the draft
-already disagrees, so a refusal never edits the draft it refused.
+already disagrees, so a refusal never edits the draft it refused, and only
+after any asset whose bytes were never hashed has been downloaded and shown to
+match.
 
 Nothing here performs an effect or reads the API: the functions are total over
 an observation and return the next `ReleaseDecision`.
@@ -112,6 +114,22 @@ def _extra_asset_decision(
     )
 
 
+def _placeholder_pairs(
+    wanted: dict[str, ReleaseAsset | ObservedAsset],
+    seen: dict[str, ReleaseAsset | ObservedAsset],
+) -> tuple[ObservedAsset, ...]:
+    """Return the records that reserve an expected name but hold no bytes."""
+    return tuple(
+        typ.cast("ObservedAsset", seen[name])
+        for name, expected_asset in sorted(wanted.items())
+        if name in seen
+        and _is_placeholder_pair(
+            typ.cast("ObservedAsset", seen[name]),
+            typ.cast("ReleaseAsset", expected_asset),
+        )
+    )
+
+
 def _placeholder_decision(
     wanted: dict[str, ReleaseAsset | ObservedAsset],
     seen: dict[str, ReleaseAsset | ObservedAsset],
@@ -126,21 +144,62 @@ def _placeholder_decision(
     the name absent and uploads it, or still sees the placeholder and discards
     it again.
     """
-    placeholders = tuple(
-        typ.cast("ObservedAsset", seen[name])
-        for name, expected_asset in sorted(wanted.items())
-        if name in seen
-        and _is_placeholder_pair(
-            typ.cast("ObservedAsset", seen[name]),
-            typ.cast("ReleaseAsset", expected_asset),
-        )
-    )
+    placeholders = _placeholder_pairs(wanted, seen)
     if not placeholders:
         return None
     return ReleaseDecision(
         ReleaseAction.DISCARD_PLACEHOLDER,
         "draft lists asset records that hold no uploaded bytes",
         discards=placeholders,
+    )
+
+
+def _draft_needs_edit(
+    wanted: dict[str, ReleaseAsset | ObservedAsset],
+    seen: dict[str, ReleaseAsset | ObservedAsset],
+) -> bool:
+    """Return whether repairing the draft would delete or upload anything."""
+    return bool(_placeholder_pairs(wanted, seen)) or any(
+        name not in seen for name in wanted
+    )
+
+
+def _present_unverified(
+    wanted: dict[str, ReleaseAsset | ObservedAsset],
+    seen: dict[str, ReleaseAsset | ObservedAsset],
+) -> tuple[str, ...]:
+    """Return the present, non-placeholder assets whose bytes are unknown."""
+    return tuple(_problem_names(wanted, seen, "unverified"))
+
+
+def _hash_before_edit_decision(
+    wanted: dict[str, ReleaseAsset | ObservedAsset],
+    seen: dict[str, ReleaseAsset | ObservedAsset],
+) -> ReleaseDecision | None:
+    """Download the unknown bytes before a draft that needs an edit is edited.
+
+    A listed size is a claim, and an absent digest only means nobody has
+    hashed the bytes yet. Deleting a placeholder or uploading a missing file
+    on that basis would edit a draft that may turn out to hold different
+    bytes of the same size, so the refusal would be reported after effects its
+    state did not authorise. When the draft needs an edit and some present asset
+    has no observed digest, those assets are downloaded and hashed first;
+    the next pass then either refuses the draft as a conflict or performs the
+    edit on bytes it knows match the manifest.
+
+    Only a draft that needs no edit reaches the later full verification
+    instead: its complete asset set is downloaded as one authenticated bundle,
+    and that download already hashes every asset.
+    """
+    if not _draft_needs_edit(wanted, seen):
+        return None
+    unverified = _present_unverified(wanted, seen)
+    if not unverified:
+        return None
+    return ReleaseDecision(
+        ReleaseAction.HASH_ASSETS,
+        "draft assets must be hashed before the draft is edited",
+        verifications=unverified,
     )
 
 
@@ -183,7 +242,7 @@ def _unverified_asset_decision(
     seen: dict[str, ReleaseAsset | ObservedAsset],
 ) -> ReleaseDecision | None:
     """Ask for a download while the draft's own bytes are not yet evidence."""
-    unverified = _problem_names(wanted, seen, "unverified")
+    unverified = _present_unverified(wanted, seen)
     if not unverified:
         return None
     return ReleaseDecision(
@@ -207,6 +266,13 @@ def classify_assets(
     the run found it, so the bytes someone can inspect are the bytes that
     caused the refusal.
 
+    An asset whose bytes have not been hashed is not yet known to be sound,
+    so a draft that needs an edit is edited only after those bytes are
+    downloaded and hashed: a size that happens to match is not evidence that
+    the bytes do. The edit itself (deleting a placeholder, uploading a missing
+    file) follows the hash, and the next observation sees the asset as
+    verified against the bytes that were actually served.
+
     Publication additionally requires the draft's own served evidence to have
     authenticated its manifest. Verifying only at the next observation would
     report an invalid bundle after the draft had already become public, when
@@ -218,6 +284,7 @@ def classify_assets(
     classifiers = (
         _extra_asset_decision,
         _asset_mismatch_decision,
+        _hash_before_edit_decision,
         _placeholder_decision,
         _missing_asset_decision,
         _unverified_asset_decision,

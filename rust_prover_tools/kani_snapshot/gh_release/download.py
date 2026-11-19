@@ -11,6 +11,12 @@ expected to take a transfer budget. A release whose bytes cannot be fetched
 raises `ReleaseTransientError` rather than reporting an unverifiable
 publication: a retry may succeed, and treating it as a conflict would refuse a
 release that is in fact intact.
+
+`hash_assets` is the narrower companion: it downloads only the named assets and
+reports their digests, without authenticating the release. The policy uses it
+to learn whether a draft it is about to edit holds the bytes the manifest
+expects, where a full verification would be both slow and a claim it does not
+need.
 """
 
 from __future__ import annotations
@@ -38,9 +44,52 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-__all__ = ("verify_assets",)
+__all__ = ("hash_assets", "verify_assets")
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _require_reported(
+    observed: ObservedRelease,
+    names: cabc.Sequence[str],
+) -> tuple[str, ...]:
+    """Return the requested names in order, refusing any the release omits."""
+    requested = tuple(names)
+    if not requested:
+        msg = "verification must name at least one asset"
+        raise ProverToolError(msg)
+    available = {asset.name for asset in observed.assets}
+    unknown = sorted(set(requested) - available)
+    if unknown:
+        msg = f"cannot verify assets the release does not report: {', '.join(unknown)}"
+        raise ProverToolError(msg)
+    return requested
+
+
+def hash_assets(
+    repository: str,
+    tag: str,
+    observed: ObservedRelease,
+    names: cabc.Sequence[str],
+) -> tuple[tuple[str, str], ...]:
+    """Download the named assets and return `(name, sha256)` for each.
+
+    Only the named assets are fetched: this is a byte check on the files a
+    draft edit will rely on, not an authentication of the whole release. The
+    result is therefore evidence about these bytes alone, and a caller that
+    needs a provenance verdict must ask for `verify_assets`.
+    """
+    requested = _require_reported(observed, names)
+    with tempfile.TemporaryDirectory(prefix="kani-publish-") as name:
+        directory = pathlib.Path(name)
+        _download(repository, tag, requested, directory)
+        digests = tuple((asset, sha256_file(directory / asset)) for asset in requested)
+    log_event(
+        _LOGGER,
+        "kani.snapshot.hash.complete",
+        assets=len(digests),
+    )
+    return digests
 
 
 def verify_assets(
@@ -62,15 +111,7 @@ def verify_assets(
     publication: a retry may succeed, and treating it as a conflict would
     refuse a release that is in fact intact.
     """
-    requested = tuple(names)
-    if not requested:
-        msg = "verification must name at least one asset"
-        raise ProverToolError(msg)
-    available = {asset.name for asset in observed.assets}
-    unknown = sorted(set(requested) - available)
-    if unknown:
-        msg = f"cannot verify assets the release does not report: {', '.join(unknown)}"
-        raise ProverToolError(msg)
+    _require_reported(observed, names)
     downloaded = tuple(asset.name for asset in observed.assets)
     with tempfile.TemporaryDirectory(prefix="kani-publish-") as name:
         directory = pathlib.Path(name)

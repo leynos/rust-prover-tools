@@ -123,6 +123,30 @@ def test_a_placeholder_left_by_an_interrupted_upload_is_discarded() -> None:
     assert [asset.name for asset in decision.discards] == [name]
 
 
+def test_unhashed_assets_are_hashed_before_a_placeholder_is_discarded() -> None:
+    """An unknown digest is not permission to edit the draft.
+
+    A same-size asset whose digest the API did not volunteer may still be the
+    wrong bytes. Deleting the placeholder first would edit a draft that may
+    turn out to be in conflict, so the present assets are downloaded and
+    hashed before any record is deleted or any file uploaded.
+    """
+    reserved = "backend.tar.gz"
+    assets = tuple(
+        fixtures.placeholder(reserved)
+        if asset.name == reserved
+        else fixtures.observed_asset(asset.name, sha256=None)
+        for asset in fixtures.verified_assets()
+    )
+    decision = decide(
+        fixtures.expected(), fixtures.draft(assets), fixtures.validation()
+    )
+    assert decision.action is ReleaseAction.HASH_ASSETS
+    assert decision.verifications == tuple(sorted(set(fixtures.PAYLOADS) - {reserved}))
+    assert decision.discards == ()
+    assert decision.uploads == ()
+
+
 def test_a_placeholder_beside_a_mismatched_asset_is_a_conflict() -> None:
     """A conflicting draft is refused before any of its records are deleted.
 

@@ -162,7 +162,11 @@ a filesystem path.
 When adding a pinned asset, update `binary_assets` with the exact URL, digest,
 byte ceiling, and archive member, and add a test that builds a local archive of
 the expected shape. Never let a download path skip `download_pinned`, and do
-not extract archive members that are not named in the manifest.
+not extract archive members that are not named in the manifest. The one bounded
+exception is the installer's evidence fetch: `download_unverified` transfers
+the two self-authenticating evidence files whose digests the manifest does not
+supply yet, and it keeps the size bound and reported digest while deciding
+nothing about trust.
 
 `UrlPolicy` receives two separate checks per download: `check_initial` sees the
 first URL and `check_redirect` sees every redirect target before it is opened,
@@ -908,16 +912,20 @@ the added context.
 Publication follows the same rule from the other side: `publish` depends only
 on the `ReleaseApi` port in `release_port`, `gh_release.api` is its one
 adapter, and `orchestrator.entrypoint` is the composition root that chooses it.
-`observe` is a query that downloads nothing; `verify` is the only command that
-downloads, hashes and authenticates the served bytes, and the policy asks for
-it explicitly. A digest listed by the API is therefore a claim until a
-verification has computed the same value locally. Each side of that boundary
-has one module: `release_assets_policy` classifies an observed asset set,
-`release_markers` reads and writes the release-body markers, and the adapter's
-steps are `gh_release.document` for the served documents,
-`gh_release.attestation` for signature policy and `gh_release.download` for the
-download, digest and verification sequence. A change to one seam therefore
-cannot silently reach across into another.
+`observe` is a query that downloads nothing; `hash_assets` downloads only the
+assets a draft edit depends on and reports the digests of their bytes; `verify`
+downloads, hashes and authenticates the served bytes as a whole. The policy
+asks for each explicitly, so a digest listed by the API is a claim until a hash
+or a verification has computed the same value locally. A draft that needs an
+edit — a placeholder to delete or a missing asset to upload — is hashed first,
+so a same-size asset whose bytes differ is refused before the draft is changed;
+a draft that needs no edit is verified whole instead, and that download hashes
+it. Each side of that boundary has one module: `release_assets_policy`
+classifies an observed asset set, `release_markers` reads and writes the
+release-body markers, and the adapter's steps are `gh_release.document` for the
+served documents, `gh_release.attestation` for signature policy and
+`gh_release.download` for the download, digest and verification sequence. A
+change to one seam therefore cannot silently reach across into another.
 
 Scheduled runs collect the existing release list inside the read-only `resolve`
 job, because identity allocation is a decision about the tags that already

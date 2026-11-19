@@ -9,7 +9,8 @@ The port separates reading state from verifying bytes: `observe` performs
 queries only, and `verify` is the one command that downloads and authenticates.
 A caller can therefore tell whether an observation cost a download, and the
 policy can ask for verification explicitly rather than receiving hashes that
-may or may not have been computed.
+may or may not have been computed. `hash_assets` is the narrower read: it hashes
+the assets a draft edit is about to rely on, without claiming provenance.
 """
 
 from __future__ import annotations
@@ -101,6 +102,45 @@ class ReleaseApi(typ.Protocol):
             Raised when the bytes could not be fetched or a verifier timed
             out. The caller must observe again rather than treat the release
             as invalid.
+        ProverToolError
+            Raised for an unknown asset name or a permanent failure.
+        """
+        ...
+
+    def hash_assets(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+        names: cabc.Sequence[str],
+    ) -> tuple[tuple[str, str], ...]:
+        """Download the named assets and report the digests of their bytes.
+
+        This is the byte check that gates editing a draft, not a provenance
+        verdict: it answers only whether the served bytes match what the
+        manifest expects, and never claims the release's evidence
+        authenticated. Asking about fewer assets than the release serves costs
+        fewer transfers, which is why it is separate from `verify`.
+
+        Parameters
+        ----------
+        tag : str
+            Release to read.
+        observed : ObservedRelease
+            Observation the result is bound to. The adapter refuses a name the
+            observation does not report.
+        names : collections.abc.Sequence[str]
+            Asset names whose bytes the caller needs hashed.
+
+        Returns
+        -------
+        tuple[tuple[str, str], ...]
+            `(name, sha256)` for each named asset, computed from its bytes.
+
+        Raises
+        ------
+        ReleaseTransientError
+            Raised when the bytes could not be fetched; the caller must
+            observe again rather than treat the release as invalid.
         ProverToolError
             Raised for an unknown asset name or a permanent failure.
         """

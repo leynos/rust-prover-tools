@@ -63,6 +63,10 @@ class ReleaseAction(enum.Enum):
     DISCARD_PLACEHOLDER : str
         Delete an asset record that holds no uploaded bytes, so the next pass
         can upload the real file under that name.
+    HASH_ASSETS : str
+        Download and hash only the named assets, to learn whether a draft
+        that needs an edit may be edited at all. Unlike `VERIFY_ASSETS` this
+        makes no provenance claim.
     VERIFY_ASSETS : str
         Download and hash assets whose bytes have not been observed yet.
     PUBLISH : str
@@ -76,6 +80,7 @@ class ReleaseAction(enum.Enum):
     CREATE_DRAFT = "create-draft"
     UPLOAD_ASSETS = "upload-assets"
     DISCARD_PLACEHOLDER = "discard-placeholder"
+    HASH_ASSETS = "hash-assets"
     VERIFY_ASSETS = "verify-assets"
     PUBLISH = "publish"
     NOOP = "noop"

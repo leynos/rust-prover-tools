@@ -801,6 +801,15 @@ deletes the placeholder by its numeric asset identifier and uploads the file
 again, so recovery still never clobbers verified bytes, and an observation that
 does not carry an identifier is refused rather than guessed at.
 
+Before either edit, any present asset whose digest the API did not volunteer is
+downloaded and hashed, because a reported size that matches the manifest is not
+evidence that the bytes do. A draft is therefore repaired only once the bytes
+already present are known to match, and a same-size asset with different bytes
+is refused without deleting or uploading anything. This byte check is separate
+from the full verification that authenticates a release's own evidence: it
+downloads only the assets the edit depends on and claims no provenance, while a
+draft that needs no edit is verified whole before publication.
+
 Repository-wide immutable releases are proposed for operational bootstrap, not
 enabled by implementation or this planning task. First adjust
 `.github/workflows/release.yml` to assemble all wheels, create a draft, upload
