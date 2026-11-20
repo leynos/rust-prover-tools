@@ -164,14 +164,17 @@ def _observations(
                 "does not declare"
             )
             raise ValueError(msg)
-        owned = block.owned(block.name)
         observed[block.name] = Observed(
             name=block.name,
             succeeded=block.succeeded,
-            properties=owned,
+            properties=block.owned(block.name),
             # Covers stay here too: CBMC may print one without an owner, and
-            # the block it appears in is still the harness it describes.
-            unattributed=tuple(item for item in block.properties if item not in owned),
+            # the block it appears in is still the harness it describes.  The
+            # owner test is the complement of ``owned`` without a quadratic
+            # scan of that tuple.
+            unattributed=tuple(
+                item for item in block.properties if item.owner != block.name
+            ),
             failure_messages=tuple(item.message for item in block.failures),
             timed_out=block.timed_out,
             panics_as_expected=block.panics_as_expected,
