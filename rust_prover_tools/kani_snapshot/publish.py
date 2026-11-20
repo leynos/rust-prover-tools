@@ -274,7 +274,6 @@ def _converge(
 ) -> ReleaseDecision:
     """Apply policy to successive observations until publication converges."""
     observed: ObservedRelease | None = None
-    outcome = StepOutcome()
     publish_attempted = False
     for step in range(1, max_steps + 1):
         observed = observe_or_keep(api, request.expected.tag, observed)
