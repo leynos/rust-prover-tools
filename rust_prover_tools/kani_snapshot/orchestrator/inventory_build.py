@@ -38,6 +38,11 @@ from rust_prover_tools.kani_snapshot.inventory_model import (
 from rust_prover_tools.kani_snapshot.inventory_parse import normalize_inventory_path
 from rust_prover_tools.kani_snapshot.models import SCHEMA_VERSION
 from rust_prover_tools.kani_snapshot.orchestrator.documents import write_document
+from rust_prover_tools.kani_snapshot.orchestrator.inventory_carriers import (
+    archive_carriers,
+    require_carriers_recorded,
+    require_shared_inode,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -58,11 +63,20 @@ class _Walk:
     root : pathlib.Path
         Resolved inventory root; a link destination must stay beneath it.
     hardlinks : dict[tuple[int, int], str]
-        First recorded path for each inode that is linked more than once.
+        First recorded path for each inode that is linked more than once. Only
+        used when the archive that produced the tree is not supplied.
+    carriers : collections.abc.Mapping of str to str or None
+        The archive's own record of which path carries the bytes for each hard
+        link. An extracted tree cannot recover that distinction: every name in
+        a hard-link group is the same inode, so the walk order alone decides
+        which name it calls the file. The archive headers do record it, and the
+        consumer compares member kinds exactly, so when they are available they
+        decide. `None` keeps the walk-order designation.
     """
 
     root: pathlib.Path
     hardlinks: dict[tuple[int, int], str]
+    carriers: cabc.Mapping[str, str] | None = None
 
 
 def _relative(prefix: str, name: str) -> str:
@@ -115,6 +129,32 @@ def _require_contained_link(
         raise ProverToolError(msg)
 
 
+def _hardlink_target(
+    relative: str,
+    status: os.stat_result,
+    walk: _Walk,
+) -> str | None:
+    """Return the path that carries this member's bytes, when it is a link.
+
+    With the archive supplied, its headers decide: a path the archive records
+    as a hard link is one, whatever order the walk visits the group in, and a
+    path it records as a file stays a file even when the walk meets it second.
+    Without it, the first path of each multiply-linked inode carries the bytes.
+    """
+    if walk.carriers is not None:
+        carrier = walk.carriers.get(relative)
+        if carrier is None:
+            return None
+        require_shared_inode(relative, carrier, status, walk.root)
+        return _member_path(carrier)
+    identity = (status.st_dev, status.st_ino)
+    if status.st_nlink > 1 and identity in walk.hardlinks:
+        return _member_path(walk.hardlinks[identity])
+    if status.st_nlink > 1:
+        walk.hardlinks[identity] = relative
+    return None
+
+
 def _member_path(relative: str) -> str:
     """Require a recorded path the inventory consumer can parse."""
     try:
@@ -135,7 +175,13 @@ def _member(
     mode = _mode(relative, status)
     if entry.is_symlink():
         path = pathlib.Path(entry.path)
-        target = _link_target(relative, str(path.readlink()))
+        # `Path.readlink` normalizes the text it returns, dropping a leading
+        # "./" that the consumer compares exactly against the archive header.
+        target = _link_target(
+            relative,
+            # `Path` drops the leading "./" this comparison depends on.
+            os.readlink(entry.path),  # ruff: ignore[os-readlink]
+        )
         _require_contained_link(relative, target, path, walk.root)
         return InventoryEntry(
             path=relative,
@@ -148,16 +194,14 @@ def _member(
     if not entry.is_file(follow_symlinks=False):
         msg = f"tree member {relative!r} is not a file, directory or link"
         raise ProverToolError(msg)
-    identity = (status.st_dev, status.st_ino)
-    if status.st_nlink > 1 and identity in walk.hardlinks:
+    carrier = _hardlink_target(relative, status, walk)
+    if carrier is not None:
         return InventoryEntry(
             path=relative,
             kind=KIND_HARDLINK,
             mode=mode,
-            link_target=_member_path(walk.hardlinks[identity]),
+            link_target=carrier,
         )
-    if status.st_nlink > 1:
-        walk.hardlinks[identity] = relative
     path = pathlib.Path(entry.path)
     return InventoryEntry(
         path=relative,
@@ -191,13 +235,24 @@ def _scan(
             _scan(pathlib.Path(entry.path), f"{relative}/", entries, walk)
 
 
-def build_inventory(root: Path) -> SnapshotInventory:
+def build_inventory(
+    root: Path,
+    *,
+    carriers: cabc.Mapping[str, str] | None = None,
+) -> SnapshotInventory:
     """Walk `root` and return the version 1 inventory of its members.
 
     Parameters
     ----------
     root : Path
         Distributable tree to describe. The root itself is not recorded.
+    carriers : collections.abc.Mapping of str to str or None
+        For a tree extracted from an archive, the archive's record of which
+        path carries the bytes for each hard link. The consumer compares
+        member kinds and link targets exactly, and an extracted hard-link
+        group looks identical from every name, so walk order alone can name a
+        different carrier than the archive did. `None` uses walk order, which
+        is the only designation a bare tree offers.
 
     Returns
     -------
@@ -208,14 +263,16 @@ def build_inventory(root: Path) -> SnapshotInventory:
     ------
     ProverToolError
         Raised when the root is not a directory, a member cannot be hashed, a
-        special file or privileged mode appears, or a symbolic link escapes
-        the tree.
+        special file or privileged mode appears, a symbolic link escapes the
+        tree, or a recorded hard link disagrees with the tree it describes.
     """
     if not root.is_dir():
         msg = f"inventory tree {root} is not a directory"
         raise ProverToolError(msg)
     entries: list[InventoryEntry] = []
-    _scan(root, "", entries, _Walk(root.resolve(), {}))
+    _scan(root, "", entries, _Walk(root.resolve(), {}, carriers))
+    if carriers is not None:
+        require_carriers_recorded(entries, carriers)
     return SnapshotInventory(schema_version=SCHEMA_VERSION, entries=tuple(entries))
 
 
@@ -252,14 +309,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--tree", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--archive",
+        help=(
+            "Tarball the tree was extracted from. Its headers decide which "
+            "name carries a hard link's bytes, because the extracted inode "
+            "cannot."
+        ),
+    )
+    parser.add_argument(
+        "--archive-root",
+        help=(
+            "Single root directory the archive's members share, stripped from "
+            "each path. Requires --archive."
+        ),
+    )
     return parser
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Write the inventory of one tree."""
-    namespace = build_parser().parse_args(argv)
+    parser = build_parser()
+    namespace = parser.parse_args(argv)
+    if (namespace.archive is None) != (namespace.archive_root is None):
+        parser.error("--archive and --archive-root must be given together")
     try:
-        inventory = build_inventory(pathlib.Path(namespace.tree))
+        carriers = (
+            None
+            if namespace.archive is None
+            else archive_carriers(
+                pathlib.Path(namespace.archive), namespace.archive_root
+            )
+        )
+        inventory = build_inventory(pathlib.Path(namespace.tree), carriers=carriers)
         write_document(pathlib.Path(namespace.output), inventory_to_json(inventory))
     except (ProverToolError, OSError) as exc:
         print(f"kani-snapshot-inventory: {exc}", file=sys.stderr)

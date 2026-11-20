@@ -818,10 +818,18 @@ from that listing would make a release public that the policy never approved
 and report the change only afterwards. Publication therefore reads the draft
 again once verification completes and does not act on a verified set that the
 newer reading no longer matches: the asset that disappeared is uploaded again,
-and a changed tag, target or body is refused. The window between that reading
-and the PATCH cannot be closed, because GitHub's release update has no
-conditional form; the observation that follows the write is what reports a
-divergence there.
+and a changed tag, target or body is refused.
+
+The confirming read is not limited to the write that publishes. Every download
+whose verdict authorizes a later step is followed by it: the byte check that
+precedes an edit, the whole-release verification a draft needs before it may
+become public, and the verification of a published release that would otherwise
+be reported up to date. A verdict reached across a change is discarded, and the
+newer reading is classified again, so an edit is never made from bytes whose
+listing moved and a published release is never reported current from a body
+that has since been rewritten. The window between the confirming read and the
+next write cannot be closed, because GitHub's release update has no conditional
+form; the observation that follows the write is what reports a divergence there.
 
 Repository-wide immutable releases are proposed for operational bootstrap, not
 enabled by implementation or this planning task. First adjust

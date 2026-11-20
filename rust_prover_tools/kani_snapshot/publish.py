@@ -17,17 +17,18 @@ import dataclasses as dc
 import logging
 import typing as typ
 
-from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.publish_request import (
+    PublicationRequest,
+    require_local_assets,
+)
 from rust_prover_tools.kani_snapshot.release_policy import (
-    ExpectedRelease,
     ObservedAsset,
     ObservedRelease,
     ReleaseAction,
     ReleaseAsset,
     ReleaseDecision,
     ReleaseTransientError,
-    ValidationBinding,
     VerifiedAssets,
     decide,
 )
@@ -36,7 +37,6 @@ from rust_prover_tools.observability import OperationSpan, log_event, operation_
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
 __all__ = (
     "PublicationRequest",
@@ -49,51 +49,6 @@ _LOGGER = logging.getLogger(__name__)
 #: A publication converges in a handful of observations. A larger bound would
 #: only hide a state the policy cannot reconcile.
 _MAX_STEPS: typ.Final[int] = 16
-
-
-@dc.dataclass(frozen=True, slots=True)
-class PublicationRequest:
-    """Everything one publication attempt needs.
-
-    Attributes
-    ----------
-    expected : ExpectedRelease
-        Immutable identity to publish.
-    validation : ValidationBinding
-        Same-run clean-validation evidence.
-    asset_paths : collections.abc.Mapping of str to Path
-        Local file for each expected asset name.
-    """
-
-    expected: ExpectedRelease
-    validation: ValidationBinding
-    asset_paths: cabc.Mapping[str, Path]
-
-
-def _require_local_asset(asset: ReleaseAsset, path: Path | None) -> None:
-    """Require one local file to hold exactly the bytes the manifest records."""
-    if path is None:
-        msg = f"publication is missing local asset {asset.name!r}"
-        raise ProverToolError(msg)
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        msg = f"failed to stat release asset '{path}': {exc}"
-        raise ProverToolError(msg) from exc
-    if size != asset.size or sha256_file(path) != asset.sha256:
-        msg = f"local release asset {asset.name!r} does not match its manifest"
-        raise ProverToolError(msg)
-
-
-def _check_local_assets(request: PublicationRequest) -> None:
-    """Require every local upload to match the expected bytes before any call."""
-    names = {asset.name for asset in request.expected.assets}
-    extra = sorted(set(request.asset_paths) - names)
-    if extra:
-        msg = f"publication names local assets outside the expected set: {extra}"
-        raise ProverToolError(msg)
-    for asset in request.expected.assets:
-        _require_local_asset(asset, request.asset_paths.get(asset.name))
 
 
 def _upload(
@@ -141,6 +96,29 @@ def _state_key(observed: ObservedRelease) -> tuple[object, ...]:
     )
 
 
+def _settle(
+    api: ReleaseApi,
+    tag: str,
+    observed: ObservedRelease,
+    completed: ObservedRelease,
+) -> ObservedRelease:
+    """Return the reading a completed download may be decided from.
+
+    A download takes time, and its listing may have gone out of date by the
+    time it finishes: an asset can be removed after its own bytes were read, a
+    draft retargeted, a release's notes rewritten. The completed reading only
+    describes the release the policy saw if the release still matches it, so
+    the state is read once more and the completed reading is discarded when it
+    does not. The newer reading then carries no verification verdict, and the
+    next decision asks for the download it needs rather than trusting one taken
+    across a change.
+    """
+    confirmed = api.observe(tag)
+    if _state_key(confirmed) != _state_key(observed):
+        return confirmed
+    return completed
+
+
 def _recheck(
     api: ReleaseApi,
     request: PublicationRequest,
@@ -182,10 +160,8 @@ def _recheck(
         observed,
         api.verify(request.expected.tag, observed, names),
     )
-    confirmed = api.observe(request.expected.tag)
-    if _state_key(confirmed) != _state_key(observed):
-        return confirmed, decide(request.expected, confirmed, request.validation)
-    return verified, decide(request.expected, verified, request.validation)
+    settled = _settle(api, request.expected.tag, observed, verified)
+    return settled, decide(request.expected, settled, request.validation)
 
 
 def _publish(
@@ -243,10 +219,18 @@ def _apply(
         digests = api.hash_assets(
             request.expected.tag, observed, decision.verifications
         )
-        return dc.replace(observed, assets=_with_digests(observed.assets, digests))
+        hashed = dc.replace(observed, assets=_with_digests(observed.assets, digests))
+        # The hashes describe the bytes named by this listing. An edit made
+        # from them would be authorised by a state that may have moved while
+        # they were being read, so the state is confirmed first.
+        return _settle(api, request.expected.tag, observed, hashed)
     if decision.action is ReleaseAction.VERIFY_ASSETS:
         verified = api.verify(request.expected.tag, observed, decision.verifications)
-        return _with_verification(observed, verified)
+        settled = _with_verification(observed, verified)
+        # A published release's notes stay editable, and its assets can be
+        # replaced by same-named ones; a verdict reached against the old
+        # reading must not outlive it.
+        return _settle(api, request.expected.tag, observed, settled)
     return None
 
 
@@ -387,5 +371,5 @@ def publish_release(
         state that does not converge within `max_steps`.
     """
     with operation_span(_LOGGER, "kani.snapshot.publish") as span:
-        _check_local_assets(request)
+        require_local_assets(request)
         return _converge(request, api, max_steps, span)

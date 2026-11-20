@@ -161,19 +161,17 @@ def _classify_published(
     The expected asset names are compared because they are derived from the
     same inputs, but their bytes are not: this run assembled a new manifest,
     so only the published release's own evidence can authenticate its bytes.
-    An observation that has not yet been verified asks for verification rather
+
+    The recorded inputs and the asset names are decided from the observation
+    itself, so they are checked before any download is requested. A release
+    that records other inputs is already refused; asking first for a download
+    whose transfer could fail would report a transport error in place of the
+    conflict the release notes already establish. Only a release whose
+    metadata still matches is asked for the bytes that authenticate it. An
+    observation that has not yet been verified asks for verification rather
     than reporting a conflict; only a completed verification that failed is a
     conflict.
     """
-    unverified = tuple(
-        sorted(asset.name for asset in observed.assets if asset.sha256 is None)
-    )
-    if unverified:
-        return ReleaseDecision(
-            ReleaseAction.VERIFY_ASSETS,
-            "published assets have not been re-downloaded and hashed",
-            verifications=unverified,
-        )
     fingerprint = parse_input_marker(observed.body)
     conflict = first_reason((
         (
@@ -192,6 +190,15 @@ def _classify_published(
     ))
     if conflict is not None:
         return ReleaseDecision(ReleaseAction.CONFLICT, conflict)
+    unverified = tuple(
+        sorted(asset.name for asset in observed.assets if asset.sha256 is None)
+    )
+    if unverified:
+        return ReleaseDecision(
+            ReleaseAction.VERIFY_ASSETS,
+            "published assets have not been re-downloaded and hashed",
+            verifications=unverified,
+        )
     if observed.provenance_verified:
         return ReleaseDecision(
             ReleaseAction.NOOP,

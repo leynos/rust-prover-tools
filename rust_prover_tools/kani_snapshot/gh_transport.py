@@ -73,6 +73,12 @@ _TRANSIENT_MARKERS: typ.Final[tuple[str, ...]] = (
     "TLS handshake timeout",
     "unexpected EOF",
     "i/o timeout",
+    # `gh release download --pattern NAME` reports this when the release no
+    # longer carries the asset the caller observed. That is not a refused
+    # identity: a fresh observation reconciles a release whose assets changed
+    # while the download was starting, so the caller can decide again instead
+    # of aborting. A test pins this wording.
+    "no assets match the file pattern",
 )
 
 

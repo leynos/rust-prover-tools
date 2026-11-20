@@ -441,7 +441,10 @@ jobs:
           # from the extracted bundle rather than from the archive bytes. Its
           # paths are relative to the `kani-<version>/` root, because the
           # consumer strips that root before comparing the inventory with the
-          # installed tree.
+          # installed tree. The archive is passed too: extraction makes every
+          # name in a hard-link group the same inode, so only the headers can
+          # say which name carries the bytes, and the consumer compares that
+          # designation with the archive exactly.
           mkdir -p "$RUNNER_TEMP/bundle-tree"
           tar -xzf "payloads/$bundle_asset" -C "$RUNNER_TEMP/bundle-tree"
           test -d "$RUNNER_TEMP/bundle-tree/$bundle_root" || {
@@ -451,6 +454,8 @@ jobs:
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.orchestrator.inventory_build \
             --tree "$RUNNER_TEMP/bundle-tree/$bundle_root" \
+            --archive "payloads/$bundle_asset" \
+            --archive-root "$bundle_root" \
             --output "$GITHUB_WORKSPACE/payloads/inventory.json"
       - name: Measure the build evidence
         env:

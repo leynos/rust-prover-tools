@@ -81,6 +81,21 @@ def test_an_auth_refusal_stays_permanent_when_its_text_mentions_timeout() -> Non
     assert not isinstance(error, ReleaseTransientError)
 
 
+def test_a_download_pattern_that_matches_nothing_is_transient() -> None:
+    """A listing that no longer matches the pattern is a moved release.
+
+    `gh release download --pattern NAME` fails with this exact wording when
+    the named asset is not in the listing it just read. The read is a race with
+    a concurrent writer, not a verdict about the release, so it must be
+    re-observed rather than reported as a permanent failure. Pinned to the
+    real message so a future `gh` release that rewords it fails here.
+    """
+    assert isinstance(
+        failed(1, 'no assets match the file pattern "launcher.tar.gz"'),
+        ReleaseTransientError,
+    )
+
+
 def test_is_not_found_requires_a_confirmed_404() -> None:
     """Only a 404 is absence; a 503 that says "not found" is a failure."""
     assert is_not_found("gh: HTTP 404: Not Found")

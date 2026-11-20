@@ -54,6 +54,12 @@ class FakeReleaseApi:
         self.target_commitish = BUILDER
         self.provenance_verified = False
         self.stored: dict[str, bytes] = {}
+        #: Asset records GitHub created for an upload or a replacement. A
+        #: replacement is a delete and a re-upload, so it carries a new id even
+        #: when the name and size are unchanged; that id is what lets an
+        #: observation tell the two readings apart.
+        self.asset_ids: dict[str, int] = {}
+        self._next_asset_id = 1000
         self.placeholders: dict[str, int] = {}
         self.calls: list[str] = []
         self.uploads: list[str] = []
@@ -106,6 +112,7 @@ class FakeReleaseApi:
                 name=name,
                 size=len(data),
                 sha256=digest(data) if self.digests_visible else None,
+                asset_id=self.asset_ids.get(name),
             )
             for name, data in sorted(self.stored.items())
         ) + tuple(
@@ -152,6 +159,23 @@ class FakeReleaseApi:
         """Leave the record an upload interrupted after creating it produces."""
         self.placeholders[name] = asset_id
 
+    def _record_asset(self, name: str) -> None:
+        """Give a newly stored asset the id a fresh GitHub asset record gets."""
+        self.asset_ids[name] = self._next_asset_id
+        self._next_asset_id += 1
+
+    def replace_asset(self, name: str, data: bytes) -> None:
+        """Replace an asset's bytes the way a concurrent writer would.
+
+        GitHub deletes and re-creates the asset record, so the replacement has
+        a new id even when the name and size are unchanged. A reading taken
+        before the replacement and a reading taken after it therefore differ
+        in the asset identity, which is exactly the change a digest comparison
+        of same-length bytes would miss.
+        """
+        self.stored[name] = data
+        self._record_asset(name)
+
     def discard(self, tag: str, asset: ObservedAsset) -> None:
         """Delete one placeholder record, as the API requires before re-upload."""
         self._enter("discard")
@@ -168,6 +192,7 @@ class FakeReleaseApi:
             msg = f"upload of {asset.name!r} preceded its placeholder delete"
             raise FakeReleaseApiError(msg)
         self.stored[asset.name] = path.read_bytes()
+        self._record_asset(asset.name)
         self.uploads.append(asset.name)
         self._leave("upload")
 

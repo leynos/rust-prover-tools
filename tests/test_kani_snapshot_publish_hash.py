@@ -22,17 +22,50 @@ from rust_prover_tools.kani_snapshot.publish import (
     PublicationRequest,
     publish_release,
 )
-from rust_prover_tools.kani_snapshot.release_policy import ReleaseAction
+from rust_prover_tools.kani_snapshot.release_policy import (
+    ObservedRelease,
+    ReleaseAction,
+)
 from tests import kani_publish_fixtures as fixtures
 from tests.kani_release_api_fixtures import FakeReleaseApi
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib
 
 
 def _request(tmp_path: pathlib.Path) -> PublicationRequest:
     """Return a publication request whose local assets are exact."""
     return fixtures.request(tmp_path)
+
+
+class _AssetReplacedDuringHashApi(FakeReleaseApi):
+    """Replace one asset's record while its bytes are being downloaded.
+
+    A concurrent writer deletes and re-creates the asset, so the replacement
+    carries a new id. The size is unchanged, which is what makes the stale
+    digests look current: only the asset identity says the reading moved.
+    """
+
+    def __init__(self, *, name: str, data: bytes) -> None:
+        """Create the fake, arming it with a replacement for `name`."""
+        super().__init__(digests_visible=False)
+        self.replaced_name = name
+        self.replacement = data
+        self.replaced = False
+
+    def hash_assets(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+        names: cabc.Sequence[str],
+    ) -> tuple[tuple[str, str], ...]:
+        """Hash the old bytes, then swap the asset before returning them."""
+        digests = super().hash_assets(tag, observed, names)
+        if not self.replaced:
+            self.replaced = True
+            self.replace_asset(self.replaced_name, self.replacement)
+        return digests
 
 
 def test_a_placeholder_is_not_discarded_before_unhashed_bytes_are_checked(
@@ -87,6 +120,41 @@ def test_an_unhashed_placeholder_draft_still_recovers(
     assert api.discards == ["backend.tar.gz"]
     assert api.uploads == ["backend.tar.gz"]
     assert api.stored == fixtures.PAYLOADS
+
+
+def test_hashes_of_replaced_bytes_do_not_authorise_the_edit(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A hash taken across a replacement must not authorise changing the draft.
+
+    The placeholder makes the draft repairable, so the orchestration first
+    hashes the assets already present. While they download, a concurrent writer
+    replaces `launcher.tar.gz` with different bytes of the same length. The
+    digests just computed say the draft is sound, but they describe bytes that
+    are no longer there; acting on them would delete the placeholder and upload
+    into a draft nobody has checked. The confirming read must see the new asset
+    record, discard the verdict, and refuse once the fresh bytes are hashed.
+    """
+    request = _request(tmp_path)
+    launched = fixtures.PAYLOADS["launcher.tar.gz"]
+    api = _AssetReplacedDuringHashApi(
+        name="launcher.tar.gz",
+        data=b"y" * len(launched),
+    )
+    api.place_draft()
+    for name in ("launcher.tar.gz", "notices.tar.gz", "inventory.json"):
+        api.place_asset(name, request.asset_paths[name])
+    api.place_placeholder("backend.tar.gz")
+
+    with pytest.raises(ProverToolError, match="publication conflict"):
+        publish_release(request, api)
+
+    assert api.replaced, "the replacement never happened, so nothing was tested"
+    assert not api.discards, "a draft whose bytes moved was edited"
+    assert not api.uploads, "a draft whose bytes moved was uploaded into"
+    assert api.calls.count("hash_assets") >= 2, (
+        "the replaced asset was never hashed again"
+    )
 
 
 def test_a_transient_hash_failure_is_retried(tmp_path: pathlib.Path) -> None:

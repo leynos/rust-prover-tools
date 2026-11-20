@@ -35,11 +35,16 @@ if typ.TYPE_CHECKING:
 __all__ = ("classify_assets", "first_reason", "unverified_message")
 
 
-def _asset_map(
-    assets: cabc.Iterable[ReleaseAsset] | cabc.Iterable[ObservedAsset],
-) -> dict[str, ReleaseAsset | ObservedAsset]:
-    """Index assets by name, refusing a repeated name."""
-    indexed: dict[str, ReleaseAsset | ObservedAsset] = {}
+def _asset_map[AssetT: ReleaseAsset | ObservedAsset](
+    assets: cabc.Iterable[AssetT],
+) -> dict[str, AssetT]:
+    """Index assets by name, refusing a repeated name.
+
+    Either side of a comparison may be indexed, but never both under one
+    mapping: the two carry different fields, and only an observed asset
+    reports a placeholder or a digest.
+    """
+    indexed: dict[str, AssetT] = {}
     for asset in assets:
         if asset.name in indexed:
             msg = f"release state repeats asset {asset.name!r}"
@@ -49,12 +54,39 @@ def _asset_map(
 
 
 def first_reason(checks: cabc.Iterable[tuple[bool, str]]) -> str | None:
-    """Return the reason of the first failed check, or `None` when all pass."""
+    """Return the reason of the first failed check, or `None` when all pass.
+
+    Parameters
+    ----------
+    checks : collections.abc.Iterable of tuple[bool, str]
+        Checks in priority order, each pairing a failed condition with the
+        refusal that condition earns.
+
+    Returns
+    -------
+    str | None
+        The reason of the first check whose condition holds, or `None` when
+        every check passes.
+    """
     return next((reason for failed, reason in checks if failed), None)
 
 
 def unverified_message(subject: str, reason: str | None) -> str:
-    """Return a refusal naming why verification failed, when the cause is known."""
+    """Return a refusal naming why verification failed, when the cause is known.
+
+    Parameters
+    ----------
+    subject : str
+        The refusal to report.
+    reason : str | None
+        The cause the verification reported, or `None` when it reported none.
+
+    Returns
+    -------
+    str
+        `subject` alone for a `None` reason, otherwise `subject` with the
+        reason appended after a colon.
+    """
     return subject if reason is None else f"{subject}: {reason}"
 
 
@@ -83,26 +115,21 @@ def _asset_problem(seen: ObservedAsset, wanted: ReleaseAsset) -> str | None:
 
 
 def _problem_names(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
     problem: str,
 ) -> list[str]:
     """Return the sorted names of present assets with `problem`."""
     return sorted(
         name
         for name, expected_asset in wanted.items()
-        if name in seen
-        and _asset_problem(
-            typ.cast("ObservedAsset", seen[name]),
-            typ.cast("ReleaseAsset", expected_asset),
-        )
-        == problem
+        if name in seen and _asset_problem(seen[name], expected_asset) == problem
     )
 
 
 def _extra_asset_decision(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> ReleaseDecision | None:
     """Refuse a draft carrying an asset the manifest does not name."""
     extra = sorted(set(seen) - set(wanted))
@@ -115,24 +142,20 @@ def _extra_asset_decision(
 
 
 def _placeholder_pairs(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> tuple[ObservedAsset, ...]:
     """Return the records that reserve an expected name but hold no bytes."""
     return tuple(
-        typ.cast("ObservedAsset", seen[name])
+        seen[name]
         for name, expected_asset in sorted(wanted.items())
-        if name in seen
-        and _is_placeholder_pair(
-            typ.cast("ObservedAsset", seen[name]),
-            typ.cast("ReleaseAsset", expected_asset),
-        )
+        if name in seen and _is_placeholder_pair(seen[name], expected_asset)
     )
 
 
 def _placeholder_decision(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> ReleaseDecision | None:
     """Delete a record that reserves an expected name but holds no bytes.
 
@@ -155,8 +178,8 @@ def _placeholder_decision(
 
 
 def _draft_needs_edit(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> bool:
     """Return whether repairing the draft would delete or upload anything."""
     return bool(_placeholder_pairs(wanted, seen)) or any(
@@ -165,16 +188,16 @@ def _draft_needs_edit(
 
 
 def _present_unverified(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> tuple[str, ...]:
     """Return the present, non-placeholder assets whose bytes are unknown."""
     return tuple(_problem_names(wanted, seen, "unverified"))
 
 
 def _hash_before_edit_decision(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> ReleaseDecision | None:
     """Download the unknown bytes before a draft that needs an edit is edited.
 
@@ -204,8 +227,8 @@ def _hash_before_edit_decision(
 
 
 def _missing_asset_decision(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> ReleaseDecision | None:
     """Ask for an upload while a manifest asset is absent from the draft."""
     missing = [asset for name, asset in wanted.items() if name not in seen]
@@ -214,16 +237,13 @@ def _missing_asset_decision(
     return ReleaseDecision(
         ReleaseAction.UPLOAD_ASSETS,
         "draft is missing expected assets",
-        uploads=tuple(
-            typ.cast("ReleaseAsset", asset)
-            for asset in sorted(missing, key=lambda item: item.name)
-        ),
+        uploads=tuple(sorted(missing, key=lambda item: item.name)),
     )
 
 
 def _asset_mismatch_decision(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> ReleaseDecision | None:
     """Refuse assets whose size or observed digest differs from the manifest."""
     mismatched = sorted(
@@ -238,8 +258,8 @@ def _asset_mismatch_decision(
 
 
 def _unverified_asset_decision(
-    wanted: dict[str, ReleaseAsset | ObservedAsset],
-    seen: dict[str, ReleaseAsset | ObservedAsset],
+    wanted: cabc.Mapping[str, ReleaseAsset],
+    seen: cabc.Mapping[str, ObservedAsset],
 ) -> ReleaseDecision | None:
     """Ask for a download while the draft's own bytes are not yet evidence."""
     unverified = _present_unverified(wanted, seen)
@@ -257,6 +277,9 @@ def classify_assets(
     observed: ObservedRelease,
 ) -> ReleaseDecision:
     """Decide what a draft's current asset set requires next.
+
+    The caller passes an existing draft whose identity, target and origin it
+    has already checked; this function judges only the assets.
 
     Classifiers run from "does this draft belong to us at all" to "what must
     happen next", so a conflict is never reported after an effect that a
@@ -277,6 +300,18 @@ def classify_assets(
     authenticated its manifest. Verifying only at the next observation would
     report an invalid bundle after the draft had already become public, when
     its assets can no longer be replaced.
+
+    Parameters
+    ----------
+    expected : ExpectedRelease
+        Identity and bytes the draft must carry.
+    observed : ObservedRelease
+        Existing draft, including the assets and digests it reports.
+
+    Returns
+    -------
+    ReleaseDecision
+        The next action for this draft and the reason for it.
     """
     assets = observed.assets
     wanted = _asset_map(expected.assets)

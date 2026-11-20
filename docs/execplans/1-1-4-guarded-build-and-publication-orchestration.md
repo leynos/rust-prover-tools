@@ -289,6 +289,48 @@ Terms used here:
   publish on the previous code. D5, the developers guide and the users guide
   say the confirming reading covers identity as well as assets.
 
+- 20 November 2026: remediated CodeRabbit's review of `b5cbf34` (18 inline
+  findings). The confirming read A9 introduced for publication now covers every
+  download whose verdict authorizes a later step. `publish._settle` reads the
+  release once more after a `HASH_ASSETS` or verification download and discards
+  the completed reading when the state moved, so an asset replaced mid-hash no
+  longer authorizes an edit and a published release re-bodied during
+  verification is no longer reported up to date. A published release whose
+  recorded inputs or asset names already refuse it is decided from the
+  metadata, before a download is requested, so a transport failure cannot
+  displace the conflict. The three repairs have named tests in
+  `test_kani_snapshot_publish_hash`, `test_kani_snapshot_publish` and
+  `test_kani_snapshot_release_policy`. Three external-data boundaries were
+  tightened: `gh release download --pattern` reporting that nothing matched is
+  now a transient failure (pinned by message), a check run that omits
+  `started_at` is refused instead of being projected as a queued run, and the
+  run marker's digit count is capped so an absurd body is refused rather than
+  raising from `int()`. Inventory building accepts the archive's own hard-link
+  carriers through `--archive`/`--archive-root`, verifies the claimed carrier
+  shares the member's inode, and reads link text with `os.readlink` so a leading
+  `./` survives to match the tarball header; the workflow passes both flags.
+  `write_document` puts directory creation and the temporary file inside its
+  error boundary and removes a half-created temporary file. The
+  documentation-example loader now refuses an unmarked fence, a marker with no
+  identifier and a relative-package import, the producer-purity check records
+  `from pkg import submodule` by its dotted name, the migration guide's
+  snapshot commands are registered and executed against the CLI, and the
+  Makefile contract tests sandbox `HOME` so a competing `gh` cannot be reached.
+
+- 20 November 2026: closed the two pre-merge rows that review left open, and
+  kept both edited modules inside pylint's size limit. A direct test of
+  `download_unverified` now covers reuse of a file that fits the ceiling
+  without a network request, replacement of an oversized file, and a first
+  download; the developers' guide names every new internal boundary — the
+  producer's job documents, identity, fingerprint, evidence and receipt
+  modules, the publication modules including `publish_request`, `release_model`
+  and `gh_transport`, and the orchestrator's `operations`, `resolve_operations`,
+  `release_evidence` and `inventory_carriers`. The request precondition moved
+  to `publish_request` and the archive-carrier checks to `inventory_carriers`,
+  leaving `publish` and `inventory_build` below the 400-line convention message
+  without changing behaviour; the existing publication and inventory tests pass
+  unchanged.
+
 ## Surprises & discoveries
 
 - PyYAML parses `on:` as the boolean `true` under YAML 1.1, so a contract test

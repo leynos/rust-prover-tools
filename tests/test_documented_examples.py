@@ -15,16 +15,29 @@ import pathlib
 import pytest
 
 from tests.documentation_examples import (
+    DocumentedExample,
     DocumentedExampleError,
     load_examples,
 )
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 _USERS_GUIDE = _REPO_ROOT / "docs" / "users-guide.md"
+_MIGRATION_GUIDE = _REPO_ROOT / "docs" / "rust-prover-tools-v0-2-0-migration-guide.md"
 _MAKEFILE = _REPO_ROOT / "Makefile"
 
 #: The identifier the guide gives its smoke-dispatch example.
 _SMOKE_EXAMPLE = "kani-snapshot-smoke"
+
+#: The identifier the migration guide gives its snapshot consumer example.
+_SNAPSHOT_EXAMPLE = "migration-snapshot-consumer"
+
+#: The documents whose examples this project registers and tests.
+_DOCUMENTS = (_USERS_GUIDE, _MIGRATION_GUIDE)
+
+
+def _examples(document: pathlib.Path) -> dict[str, DocumentedExample]:
+    """Return every registered example in one shipped document."""
+    return load_examples(document.read_text(encoding="utf-8"), source=str(document))
 
 
 def _target_recipe(target: str) -> str:
@@ -60,6 +73,26 @@ def test_the_loader_returns_the_fence_under_its_marker() -> None:
     assert example.body == "make run", "the fence's body was not extracted"
 
 
+def test_the_loader_refuses_an_unmarked_fence() -> None:
+    """A fence no marker introduces is documentation no test can hold.
+
+    Skipping it would let an example be added, edited or broken without any
+    test noticing, which is the drift the convention exists to prevent.
+    """
+    text = "\n".join(["# Guide", "", "```sh", "make run", "```"])
+
+    with pytest.raises(DocumentedExampleError, match="has no"):
+        load_examples(text, source="guide.md")
+
+
+def test_the_loader_refuses_a_marker_without_an_identifier() -> None:
+    """A marker with no identifier registers nothing, so it is refused."""
+    text = "\n".join(["<!-- tested-example: -->", "```sh", "make run", "```"])
+
+    with pytest.raises(DocumentedExampleError, match="carries no identifier"):
+        load_examples(text, source="guide.md")
+
+
 def test_the_loader_refuses_a_marker_without_a_fence() -> None:
     """A marker that names no fence is a broken document, not an empty example."""
     text = "\n".join(["<!-- tested-example: run-it -->", "", "```sh", "```"])
@@ -93,20 +126,31 @@ def test_the_loader_refuses_a_duplicate_identifier() -> None:
         load_examples(text, source="guide.md")
 
 
+@pytest.mark.parametrize("document", _DOCUMENTS, ids=lambda path: path.name)
+def test_every_fence_in_a_shipped_guide_is_registered(
+    document: pathlib.Path,
+) -> None:
+    """Every fence carries a marker, so no example escapes the contract.
+
+    The loader raises on the first unmarked fence. Loading each document in
+    full is therefore a check on the document, not only on the examples a test
+    happens to look up.
+    """
+    examples = _examples(document)
+
+    assert examples, "the document registered no examples at all"
+
+
 def test_the_smoke_example_is_registered_in_the_published_guide() -> None:
     """The shipped guide carries the example under its stable identifier."""
-    examples = load_examples(
-        _USERS_GUIDE.read_text(encoding="utf-8"), source=str(_USERS_GUIDE)
+    assert _SMOKE_EXAMPLE in _examples(_USERS_GUIDE), (
+        "the smoke dispatch example is not registered"
     )
-
-    assert _SMOKE_EXAMPLE in examples, "the smoke dispatch example is not registered"
 
 
 def test_the_smoke_example_names_the_target_and_its_inputs() -> None:
     """The documented command is the Makefile target with both inputs."""
-    example = load_examples(
-        _USERS_GUIDE.read_text(encoding="utf-8"), source=str(_USERS_GUIDE)
-    )[_SMOKE_EXAMPLE]
+    example = _examples(_USERS_GUIDE)[_SMOKE_EXAMPLE]
 
     assert example.language == "sh", "the smoke examples must be shell"
     assert "make kani-snapshot-smoke" in example.body, (
@@ -117,6 +161,31 @@ def test_the_smoke_example_names_the_target_and_its_inputs() -> None:
     )
     assert "KANI_SNAPSHOT_PUBLICATION_ID=" in example.body, (
         "the example omits the publication identity the target requires"
+    )
+
+
+def test_the_migration_guide_registers_the_snapshot_consumer_commands() -> None:
+    """The migration guide's snapshot example is registered and complete.
+
+    A migration guide is the one document a reader follows verbatim, so the
+    commands it shows must be the ones the guide describes: install, check and
+    run, in that order, with `install` using the default release transport
+    rather than the offline `--asset-dir` alternative.
+    """
+    example = _examples(_MIGRATION_GUIDE)[_SNAPSHOT_EXAMPLE]
+
+    assert example.language == "bash", "the snapshot example must be shell"
+    commands = [line for line in example.body.splitlines() if line.strip()]
+    assert commands == [
+        "prover-tools kani snapshot install",
+        "prover-tools kani snapshot check",
+        (
+            "prover-tools kani run --snapshot-pin tools/kani/snapshot.toml "
+            "-- --harness bounded_push"
+        ),
+    ], "the guide no longer shows the documented install, check and run sequence"
+    assert "--asset-dir" not in example.body, (
+        "the documented default is the release transport, not a local directory"
     )
 
 

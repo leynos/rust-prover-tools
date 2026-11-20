@@ -17,9 +17,16 @@ import typing as typ
 __all__ = ("parse_input_marker", "parse_run_marker", "release_body")
 
 
+#: Digits allowed in one marker number. A 64-bit workflow identifier is at
+#: most 20 digits, and a shorter cap keeps `int` well inside the interpreter's
+#: integer-string conversion limit, so an absurd marker is refused by the
+#: pattern instead of raising from the conversion.
+_MAX_MARKER_DIGITS: typ.Final[int] = 20
+
 #: Machine-readable record of the run that created a draft.
 _RUN_MARKER: typ.Final[re.Pattern[str]] = re.compile(
-    r"<!-- kani-snapshot-run: (?P<run_id>[1-9]\d*)/(?P<run_attempt>[1-9]\d*) -->"
+    rf"<!-- kani-snapshot-run: (?P<run_id>[1-9]\d{{0,{_MAX_MARKER_DIGITS - 1}}})"
+    rf"/(?P<run_attempt>[1-9]\d{{0,{_MAX_MARKER_DIGITS - 1}}}) -->"
 )
 
 #: Machine-readable record of the build inputs a release was created from.

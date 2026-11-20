@@ -17,6 +17,7 @@ import json
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.producer.candidate_api import parse_check_run
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
     require_mapping,
@@ -80,8 +81,16 @@ def project_check_run(commit: str, run: object, index: int) -> dict[str, object]
     about another commit is not evidence about this release. The URLs are
     retained so a recorded candidate can be inspected without re-querying
     GitHub.
+
+    The run is validated with the parser that reads this document back before
+    any field is copied. Projecting with `dict.get` would insert a key the API
+    omitted, turning malformed evidence into a well-formed record: a run
+    missing `started_at` would become a queued one, which resolution ranks as
+    newer than the dated failure it should have been superseded by. An absent
+    timestamp is therefore refused here, while an explicit `null` is kept.
     """
     check = require_mapping(run, f"upstream check run {index}")
+    parsed = parse_check_run(check)
     head = require_full_sha(
         check.get("head_sha"), f"upstream check run {index} head_sha"
     )
@@ -92,11 +101,11 @@ def project_check_run(commit: str, run: object, index: int) -> dict[str, object]
         )
         raise ProverToolError(msg)
     return {
-        "id": check.get("id"),
-        "name": check.get("name"),
-        "status": check.get("status"),
-        "conclusion": check.get("conclusion"),
-        "started_at": check.get("started_at"),
+        "id": parsed.run_id,
+        "name": parsed.name,
+        "status": parsed.status,
+        "conclusion": parsed.conclusion,
+        "started_at": parsed.started_at,
         "head_sha": head,
         "html_url": require_truthy_text(
             check.get("html_url"), f"upstream check run {index} html_url"

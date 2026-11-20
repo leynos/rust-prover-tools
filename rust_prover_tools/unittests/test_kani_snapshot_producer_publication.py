@@ -16,6 +16,8 @@ import json
 import pathlib
 import typing as typ
 
+import pytest
+
 from rust_prover_tools.kani_snapshot.manifest import parse_manifest
 from rust_prover_tools.kani_snapshot.models import REPOSITORY, SUPPORTED_TARGET
 from rust_prover_tools.kani_snapshot.orchestrator.entrypoint import main
@@ -39,7 +41,6 @@ from rust_prover_tools.unittests.test_kani_snapshot_producer_entrypoint import (
 )
 
 if typ.TYPE_CHECKING:
-    import pytest
     from cmd_mox import CmdMox, Invocation
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
@@ -265,8 +266,19 @@ def test_publish_refuses_a_receipt_from_another_run_before_any_call(
     cmd_mox: CmdMox,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A cross-run receipt is refused before the release API is touched."""
+    """A cross-run receipt is refused before the release API is touched.
+
+    The command line names the same run the manifest does; only the receipt
+    was written by another run. Changing the command's flags as well would let
+    a publisher pass this test by comparing the flags with the manifest alone,
+    never reading the receipt's own run binding — so the receipt is the single
+    thing that differs here.
+    """
     _prepare(tmp_path)
+    receipt_path = tmp_path / "receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["run_id"] = 999
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     calls: list[list[str]] = []
 
     def record(invocation: Invocation) -> tuple[str, str, int]:
@@ -280,10 +292,10 @@ def test_publish_refuses_a_receipt_from_another_run_before_any_call(
         "--manifest",
         str(tmp_path / "release" / "manifest.json"),
         "--receipt",
-        str(tmp_path / "receipt.json"),
+        str(receipt_path),
         "--payloads",
         str(tmp_path / "release"),
-        *_run_flags(run_id=999),
+        *_run_flags(),
     ])
     assert code == 1, "publish must refuse a receipt from another run"
     assert "another workflow run or attempt" in capsys.readouterr().err, (
@@ -292,6 +304,10 @@ def test_publish_refuses_a_receipt_from_another_run_before_any_call(
     assert not calls, "a refused receipt must not touch the release API"
 
 
+# This drives the real adapter, so every `gh` call is a fresh shim process:
+# about a dozen interpreter start-ups that the 30 s default cannot absorb when
+# the host is building. The budget covers start-up, not a slower assertion.
+@pytest.mark.timeout(120)
 def test_publish_drives_the_release_through_the_real_adapter(
     tmp_path: pathlib.Path,
     cmd_mox: CmdMox,

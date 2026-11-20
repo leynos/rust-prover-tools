@@ -324,6 +324,27 @@ def test_a_published_release_recording_other_inputs_conflicts() -> None:
     assert "different build inputs" in decision.reason
 
 
+def test_published_metadata_is_refused_before_any_download_is_requested() -> None:
+    """A release the notes already refuse is never asked for its bytes.
+
+    The assets carry no digest, so the download that would authenticate them
+    is the expensive step. When the recorded inputs differ, that download
+    cannot change the verdict, and asking for it would let a transport failure
+    be reported in place of the conflict the metadata already establishes.
+    """
+    unverified = tuple(
+        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
+    )
+    observed = fixtures.published(
+        unverified,
+        body_text=fixtures.body(fingerprint=fixtures.OTHER_FINGERPRINT),
+    )
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "different build inputs" in decision.reason
+    assert decision.verifications == (), "a refused release was still downloaded"
+
+
 def test_a_published_release_without_recorded_inputs_conflicts() -> None:
     """A release that cannot name its inputs is not assumed to match."""
     observed = fixtures.published(fixtures.verified_assets(), body_text=None)

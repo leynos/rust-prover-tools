@@ -28,11 +28,13 @@ from rust_prover_tools.kani_snapshot.publish import (
 from rust_prover_tools.kani_snapshot.release_policy import (
     ObservedRelease,
     ReleaseAction,
+    VerifiedAssets,
 )
 from tests import kani_publish_fixtures as fixtures
 from tests.kani_release_api_fixtures import FakeReleaseApi
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib
 
     from rust_prover_tools.kani_snapshot.release_policy import ValidationBinding
@@ -63,6 +65,48 @@ def test_an_unchanged_input_set_is_a_no_op_for_the_published_release(
     assert decision.action is ReleaseAction.NOOP
     assert api.calls.count("publish") == 0
     assert not api.uploads, "an unchanged input set uploaded assets again"
+
+
+class _NotesRewrittenDuringVerifyApi(FakeReleaseApi):
+    """Rewrite a published release's notes while its bytes are downloaded.
+
+    Release notes stay editable after publication, so the input fingerprint
+    they carry can be removed during a verification that started before the
+    edit. The verdict describes the release as it was, not as it is.
+    """
+
+    def verify(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+        names: cabc.Sequence[str],
+    ) -> VerifiedAssets:
+        """Verify the release, then remove the inputs its notes recorded."""
+        verified = super().verify(tag, observed, names)
+        self.body_text = "notes rewritten while the release was being read"
+        return verified
+
+
+def test_rewriting_published_notes_during_verification_is_not_a_no_op(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A verification must not outlive the notes it authenticated.
+
+    The release matches the expected inputs, so verification is requested
+    before "already published" is reported. During the download the notes lose
+    their input marker: the release is no longer the one this run built, and a
+    no-op would hide that. The confirming read must discard the verdict and
+    report the conflict instead.
+    """
+    api = _NotesRewrittenDuringVerifyApi()
+    api.place_published()
+    api.provenance_verified = False
+
+    with pytest.raises(ProverToolError, match="does not record its build inputs"):
+        publish_release(_request(tmp_path), api)
+
+    assert "verify" in api.calls, "the release was never verified, so nothing tested"
+    assert api.calls.count("publish") == 0
 
 
 def test_a_draft_from_another_attempt_is_refused_before_any_write(
@@ -154,9 +198,9 @@ def test_a_transient_verification_failure_is_retried(
 class _VanishingAssetApi(FakeReleaseApi):
     """A release whose asset disappears after the observation that verified it.
 
-    The removal happens after a complete draft has been observed, so the
-    observation that authorises publication still reports the asset. Only a
-    fresh observation immediately before the write can notice it is gone.
+    The removal happens during the verification of a complete draft, so the
+    verified reading still describes the asset it downloaded. Only a fresh
+    observation after the download can notice it is gone.
     """
 
     def __init__(self) -> None:
@@ -173,15 +217,16 @@ class _VanishingAssetApi(FakeReleaseApi):
         return observed
 
 
-def test_state_changing_after_verification_is_rechecked_before_publishing(
+def test_an_asset_removed_after_verification_is_uploaded_again(
     tmp_path: pathlib.Path,
 ) -> None:
-    """The PATCH never publishes a draft the latest observation no longer authorises.
+    """A verified reading must not outlive the asset it downloaded.
 
-    A maintainer can remove an asset between the download that verified it and
-    the write that makes the release public. The publisher must act on the
-    fresh observation — here by uploading the asset again — rather than
-    publishing a release that is missing it.
+    A maintainer can remove an asset during the download that verified it. The
+    completed verification still reports the asset, so a publisher that trusted
+    it would make public a release that is missing a file. The confirming read
+    discards that verdict and the draft is completed again before it is
+    published.
     """
     api = _VanishingAssetApi()
     decision = publish_release(_request(tmp_path), api)

@@ -110,6 +110,74 @@ def test_a_hard_link_names_the_first_path_with_the_shared_inode(
     )
 
 
+def test_archive_headers_decide_which_path_carries_a_hard_link(
+    inventory_root: pathlib.Path,
+) -> None:
+    """The extracted inode cannot say which name the archive called a link.
+
+    Both names look identical on disk, so a walk that meets `cargo-kani` first
+    records it as the file. The archive says the opposite, and the consumer
+    compares member kinds exactly against the archive's headers, so the
+    archive's designation must win.
+    """
+    entries = _by_path(
+        build_inventory(inventory_root, carriers={"bin/cargo-kani": "bin/kani"})
+    )
+
+    assert entries["bin/kani"].kind == KIND_FILE, (
+        "the archive's carrier must record the bytes"
+    )
+    assert entries["bin/cargo-kani"].kind == KIND_HARDLINK, (
+        "the archive's link must stay a hard link"
+    )
+    assert entries["bin/cargo-kani"].link_target == "bin/kani", (
+        "the hard link must name the archive's carrier"
+    )
+
+
+def test_a_claimed_carrier_that_is_not_the_same_inode_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An archive's claim is checked against the tree, never recorded blindly."""
+    (tmp_path / "a").write_bytes(b"a")
+    (tmp_path / "b").write_bytes(b"b")
+
+    with pytest.raises(ProverToolError, match="does not share an inode"):
+        build_inventory(tmp_path, carriers={"a": "b"})
+
+
+def test_a_claimed_carrier_that_is_not_a_file_is_refused(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Only a regular file can carry another member's bytes."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "kani").write_bytes(b"launcher")
+
+    with pytest.raises(ProverToolError, match="non-file carrier"):
+        build_inventory(tmp_path, carriers={"bin/kani": "bin"})
+
+
+def test_a_symlink_target_keeps_its_leading_current_directory_component(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Link text is compared exactly against the archive header.
+
+    `Path.readlink` normalizes the text it returns, so a target written as
+    `./libkani.so` comes back as `libkani.so`. The consumer compares the
+    recorded text with the header's, which kept the prefix, so the producer
+    must read the link with `os.readlink` instead.
+    """
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "libkani.so").write_bytes(b"library")
+    (tmp_path / "lib" / "libkani.so.1").symlink_to("./libkani.so")
+
+    entries = _by_path(build_inventory(tmp_path))
+
+    assert entries["lib/libkani.so.1"].link_target == "./libkani.so", (
+        "the recorded target must be the text the link stores"
+    )
+
+
 def test_the_recorded_digest_is_the_file_digest(
     inventory_root: pathlib.Path,
 ) -> None:
@@ -227,6 +295,31 @@ def test_the_root_must_be_a_directory(tmp_path: pathlib.Path) -> None:
 
     with pytest.raises(ProverToolError, match="not a directory"):
         build_inventory(target)
+
+
+def test_the_command_requires_the_archive_and_its_root_together(
+    tmp_path: pathlib.Path,
+) -> None:
+    """An archive without the root it was extracted under cannot be read.
+
+    The pair is one description of the extraction. Accepting either alone
+    would silently fall back to walk order, which is the designation the
+    archive was supplied to correct.
+    """
+    tree = tmp_path / "tree"
+    tree.mkdir()
+
+    with pytest.raises(SystemExit) as raised:
+        main([
+            "--tree",
+            str(tree),
+            "--archive",
+            str(tmp_path / "bundle.tar.gz"),
+            "--output",
+            str(tmp_path / "inventory.json"),
+        ])
+
+    assert raised.value.code == 2, "an incomplete archive description was accepted"
 
 
 def test_the_command_writes_the_inventory(tmp_path: pathlib.Path) -> None:

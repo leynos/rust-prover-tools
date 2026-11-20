@@ -26,6 +26,10 @@ NEEDS_MAKE = pytest.mark.skipif(MAKE is None, reason="GNU make is required")
 _SHA = "a" * 40
 _TAG = "kani-snapshot-2026-12-0123456789ab-r1"
 _GH_STUB = '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$GH_ARGS_FILE"\n'
+#: A `gh` the sandboxed home provides. It must never run: the Makefile
+#: prepends `$(HOME)/.local/bin` to PATH, so a real `gh` there would shadow the
+#: stub and dispatch a hosted workflow.
+_GH_DECOY = '#!/bin/sh\n: > "$GH_DECOY_FILE"\nexit 1\n'
 _USERS_GUIDE = REPO_ROOT / "docs" / "users-guide.md"
 #: The identifier the guide gives its smoke-dispatch example.
 _SMOKE_EXAMPLE = "kani-snapshot-smoke"
@@ -36,9 +40,24 @@ _SUBSTITUTIONS = {"<full upstream commit>": _SHA, "<12 hex>": "0123456789ab"}
 def _make(
     *arguments: str, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    """Run this repository's Makefile and capture what it prints or runs."""
+    """Run this repository's Makefile and capture what it prints or runs.
+
+    When the caller supplies an environment, its PATH is passed as a make
+    command-line variable as well. The Makefile prepends `$(HOME)/.local/bin`
+    to PATH, which would otherwise put a `gh` from the sandboxed home ahead of
+    the stub the caller placed first; a command-line variable takes precedence
+    over the Makefile's own assignment and is still exported to the recipe.
+    """
+    overrides = [f"PATH={env['PATH']}"] if env is not None and "PATH" in env else []
     return subprocess.run(
-        [MAKE or "make", "--no-print-directory", "-f", "Makefile", *arguments],
+        [
+            MAKE or "make",
+            "--no-print-directory",
+            "-f",
+            "Makefile",
+            *overrides,
+            *arguments,
+        ],
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
@@ -50,16 +69,38 @@ def _make(
     )
 
 
-def _gh_stub(tmp_path: Path) -> tuple[dict[str, str], Path]:
-    """Return an environment whose ``gh`` records the arguments it receives."""
+def _gh_stub(
+    tmp_path: Path, *, reader_home: bool = False
+) -> tuple[dict[str, str], Path, Path]:
+    """Return an environment whose ``gh`` stub alone can be reached.
+
+    The stub records the arguments it receives. The sandboxed home always
+    holds a `gh` under `.local/bin`, which is where the Makefile's PATH
+    prepend looks first. By default it is a decoy that fails and records
+    itself, so a make test that lost its PATH override is visible as a
+    failure. A command run as a reader would run it — the documented example
+    types `make` without overrides — so `reader_home` places the recording
+    stub there instead, modelling the `gh` that reader has installed.
+    """
     binary = tmp_path / "bin" / "gh"
     binary.parent.mkdir()
     binary.write_text(_GH_STUB, encoding="utf-8")
     binary.chmod(0o755)
+    home = tmp_path / "home"
+    home_gh = home / ".local" / "bin" / "gh"
+    home_gh.parent.mkdir(parents=True)
+    home_gh.write_text(_GH_STUB if reader_home else _GH_DECOY, encoding="utf-8")
+    home_gh.chmod(0o755)
     log = tmp_path / "gh-args"
-    environment = {**os.environ, "GH_ARGS_FILE": str(log)}
+    decoy_log = tmp_path / "gh-decoy"
+    environment = {
+        **os.environ,
+        "GH_ARGS_FILE": str(log),
+        "GH_DECOY_FILE": str(decoy_log),
+        "HOME": str(home),
+    }
     environment["PATH"] = f"{binary.parent}{os.pathsep}{environment['PATH']}"
-    return environment, log
+    return environment, log, decoy_log
 
 
 @NEEDS_MAKE
@@ -79,7 +120,7 @@ def test_the_smoke_target_validates_its_inputs_and_dispatches_as_data(
     tmp_path: Path,
 ) -> None:
     """Malformed inputs stop before ``gh``; a valid one reaches it as data."""
-    environment, log = _gh_stub(tmp_path)
+    environment, log, decoy_log = _gh_stub(tmp_path)
     for commit, tag, message in [
         ("abc123", _TAG, "full 40-hex"),
         (_SHA, "kani-snapshot-2026-13-0123456789ab-r1", "kani-snapshot-YYYY-MM"),
@@ -108,6 +149,9 @@ def test_the_smoke_target_validates_its_inputs_and_dispatches_as_data(
         env=environment,
     )
     assert done.returncode == 0, done.stderr
+    assert not decoy_log.exists(), (
+        "the recipe reached the home directory's gh instead of the stub"
+    )
     assert log.read_text(encoding="utf-8") == (
         "workflow\nrun\nkani-monthly.yml\n--ref\nmain\n-f\n"
         f"upstream_commit={_SHA}\n-f\npublication_id={_TAG}\n-f\npublish=false\n"
@@ -134,7 +178,7 @@ def test_the_documented_smoke_example_dispatches_without_publishing(
             f"the example no longer shows the placeholder {placeholder!r}"
         )
         command = command.replace(placeholder, value)
-    environment, log = _gh_stub(tmp_path)
+    environment, log, _ = _gh_stub(tmp_path, reader_home=True)
     shell = shutil.which("sh")
     assert shell is not None, "a POSIX shell is required to run the example"
 

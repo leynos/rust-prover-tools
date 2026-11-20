@@ -612,8 +612,13 @@ Ordering is part of the contract. The manifest digest and pin binding are
 checked before checksums, checksums before attestation and payload copies, and
 payload digests before archive structure. `validate_archive_inventory` then
 requires two-way path equality and equal kind, mode, size and link target.
-Setup runs only after those checks, and the active pointer moves only after the
-receipt is fsynced and the probes match the manifest. Immediately after setup,
+Because that comparison includes the member kind, the producer builds the
+inventory with the archive's headers beside the extracted tree: extraction
+makes every name in a hard-link group the same inode, so only a header can say
+which name carries the bytes, and a walk order that disagreed with it would
+describe the same tree under a designation the consumer refuses. Setup runs
+only after those checks, and the active pointer moves only after the receipt is
+fsynced and the probes match the manifest. Immediately after setup,
 `python_root.record_python_root` writes `pyroot.json` beside the receipt, and
 `validate_installed_tree` requires the tree to match it exactly; that closes
 the inventory's open-ended `pyroot` exemption, because execution puts the tree
@@ -813,6 +818,53 @@ from version control at any depth, and the code indexer skips it too.
 - `compiler_floor` owns the supported floor and the transcript checks that
   demonstrate it.
 
+The documents and decisions handed between the guarded jobs have their own
+modules, each owning one boundary rather than one file format:
+
+- `lifecycle_model` holds the records a job writes and the next job strictly
+  parses; `lifecycle` renders and parses that canonical JSON and derives the
+  build plan, so one key set serves both directions. A resolution or plan is
+  bound to the run and attempt that produced it, and a stale artefact cannot
+  authorize a later effect.
+- `publication_identity` allocates or reuses the revision,
+  `publication_document` owns the identity document the resolve job hands to
+  the build job, and `input_fingerprint` projects the declared build inputs
+  into one canonical document so identity reuse is decided by the inputs rather
+  than by upstream HEAD alone.
+- `candidate_api` turns the GitHub release and check-run objects into validated
+  shapes; `upstream_evidence` decides what a response may contribute to the
+  evidence document, keeping fetching and shaping separate.
+- `evidence_model` holds the build evidence the build job measured, and
+  `assemble_input` the metadata it hands to assembly. Neither carries payload
+  digests: assembly re-reads and hashes every payload itself, so a build job
+  cannot smuggle a claim into the manifest.
+- `asset_names` derives the release's asset names from validated records, so
+  assembly, publication and the receipt share one ordering.
+  `validation_receipt` records the clean validation that releases the publish
+  job and refuses a receipt from another run, a different manifest digest or an
+  incomplete asset set.
+
+The publication boundary is split the same way. `release_model` holds the
+port-facing records, `release_policy` decides what an observed state means,
+`release_assets_policy` classifies one observed asset set and `release_markers`
+reads and writes the release-body markers; `release_port` declares the
+`ReleaseApi` port and `publish` is the orchestration over it. `publish_request`
+holds the local bytes a run is asked to publish and the precondition that
+refuses a missing or tampered local asset before any release API call.
+`gh_transport` is the one place a `gh` failure is classified, with the read and
+transfer budgets beside it. On the consumer side, `install_sender` performs the
+release transport behind `kani snapshot install`, and `shared_libraries` owns
+the dynamic-library search the installed tools use.
+
+The orchestrator's own helpers are named in the workflow section below:
+`documents` writes job documents atomically, `inventory_build` walks a payload
+tree and `inventory_carriers` decides from the archive headers which path
+carries a hard link's bytes. `operations` holds the effect of each producer job
+as one callable, leaving `entrypoint` a dispatch table; `resolve_operations`
+owns the resolve job and the workflow identity it first binds to a document; and
+`release_evidence` derives the complete asset set one publication must serve,
+including the checksums and attestation the manifest does not name.
+
 The package boundary is defined by effects, not by the shape of the data it
 reads. `resolution` converts GitHub API payloads, `upstream_metadata` converts
 upstream files and `commands` derives argument vectors; all three are pure
@@ -925,12 +977,18 @@ after that download: the first listing cannot show an asset removed while its
 bytes were being hashed, nor a draft retargeted or re-bodied mid-download, so
 publication reads the draft again, restores anything that disappeared and
 refuses an identity the policy no longer approves before anything becomes
-public. Each side of that boundary has one module: `release_assets_policy`
-classifies an observed asset set, `release_markers` reads and writes the
-release-body markers, and the adapter's steps are `gh_release.document` for the
-served documents, `gh_release.attestation` for signature policy and
-`gh_release.download` for the download, digest and verification sequence. A
-change to one seam therefore cannot silently reach across into another.
+public. The confirming read follows every download whose verdict authorizes a
+later step — the byte check before an edit and the verification behind a
+published no-op as well as the draft's own verification — and a verdict reached
+across a change is discarded rather than reused. The gap between that read and
+the write remains, because GitHub's release update has no conditional form; the
+observation after the write reports a divergence there. Each side of that
+boundary has one module: `release_assets_policy` classifies an observed asset
+set, `release_markers` reads and writes the release-body markers, and the
+adapter's steps are `gh_release.document` for the served documents,
+`gh_release.attestation` for signature policy and `gh_release.download` for the
+download, digest and verification sequence. A change to one seam therefore
+cannot silently reach across into another.
 
 Scheduled runs collect the existing release list inside the read-only `resolve`
 job, because identity allocation is a decision about the tags that already

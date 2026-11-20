@@ -7,8 +7,10 @@ exercise is the text a reader sees and cannot drift away from it.
 
 This module is the single reader of that convention. It parses a document into
 examples keyed by identifier and refuses a document a reader could not trust: a
-marker with no fence beneath it, an unterminated fence, or two examples that
-claim the same identifier.
+marker with no fence beneath it, a marker carrying no identifier, a fence no
+marker introduces, an unterminated fence, or two examples that claim the same
+identifier. A skipped fence would be documentation no test could ever hold, so
+it is an error rather than something to walk past.
 """
 
 from __future__ import annotations
@@ -20,6 +22,11 @@ import re
 _MARKER = re.compile(
     r"^\s*<!--\s*tested-example:\s*(?P<identifier>\S(?:.*\S)?)\s*-->\s*$"
 )
+
+#: Any line that means to be a marker, well formed or not. It is checked after
+#: `_MARKER` so a marker that carries no identifier is refused rather than
+#: skipped: silently ignoring it would leave its fence unregistered.
+_MARKER_INTENT = re.compile(r"^\s*<!--\s*tested-example\b")
 
 #: The opening fence of an example block.
 _FENCE = re.compile(
@@ -114,33 +121,46 @@ def load_examples(
     Raises
     ------
     DocumentedExampleError
-        If a marker is not immediately followed by a fence, a fence is not
-        closed, or an identifier appears more than once.
+        If a marker carries no identifier, a marker is not immediately followed
+        by a fence, a fence has no marker above it, a fence is not closed, or an
+        identifier appears more than once.
     """
     lines = text.splitlines()
     examples: dict[str, DocumentedExample] = {}
     index = 0
     while index < len(lines):
         marker = _MARKER.match(lines[index])
-        if marker is None:
-            index += 1
+        if marker is not None:
+            identifier = marker.group("identifier")
+            if identifier in examples:
+                msg = f"{source}: example identifier {identifier!r} is used twice"
+                raise DocumentedExampleError(msg)
+            opening = _FENCE.match(lines[index + 1]) if index + 1 < len(lines) else None
+            if opening is None:
+                msg = (
+                    f"{source}: marker for {identifier!r} at line {index + 1} "
+                    "is not immediately followed by a fence"
+                )
+                raise DocumentedExampleError(msg)
+            example, index = _read_body(
+                lines,
+                index + 2,
+                opening.group("fence"),
+                label=(identifier, source),
+            )
+            examples[identifier] = example
             continue
-        identifier = marker.group("identifier")
-        if identifier in examples:
-            msg = f"{source}: example identifier {identifier!r} is used twice"
-            raise DocumentedExampleError(msg)
-        opening = _FENCE.match(lines[index + 1]) if index + 1 < len(lines) else None
-        if opening is None:
+        if _MARKER_INTENT.match(lines[index]) is not None:
             msg = (
-                f"{source}: marker for {identifier!r} at line {index + 1} "
-                "is not immediately followed by a fence"
+                f"{source}: marker at line {index + 1} carries no identifier, "
+                "so its example cannot be registered"
             )
             raise DocumentedExampleError(msg)
-        example, index = _read_body(
-            lines,
-            index + 2,
-            opening.group("fence"),
-            label=(identifier, source),
-        )
-        examples[identifier] = example
+        if _FENCE.match(lines[index]) is not None:
+            msg = (
+                f"{source}: fence at line {index + 1} has no "
+                "`<!-- tested-example: IDENTIFIER -->` marker above it"
+            )
+            raise DocumentedExampleError(msg)
+        index += 1
     return examples

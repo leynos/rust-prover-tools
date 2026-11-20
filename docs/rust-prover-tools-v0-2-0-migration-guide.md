@@ -19,6 +19,7 @@ In 0.2.0, `kani exec` classifies the key by its position. A string
 `profile.<name>.codegen-backend` selection is accepted, then pinned to LLVM in
 the child environment only:
 
+<!-- tested-example: migration-codegen-backend-override -->
 ```plaintext
 CARGO_PROFILE_<NAME>_CODEGEN_BACKEND=llvm
 ```
@@ -36,6 +37,7 @@ unlocks the profile option and selects no profile, so it needs no override.
 A repository that selects a development backend in `.cargo/config.toml` is
 accepted as written:
 
+<!-- tested-example: migration-accepted-cargo-config -->
 ```toml
 [unstable]
 codegen-backend = true
@@ -68,6 +70,7 @@ before execution with a message naming the file and the key.
 Run the repository's proof once through the public command, from the proof
 package rather than through `--manifest-path`:
 
+<!-- tested-example: migration-verify-kani-exec -->
 ```bash
 prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
   --cwd "$PWD" --extra-arg=list
@@ -108,6 +111,7 @@ defaults of any existing command, so existing Kani users need not migrate.
 Adopt it only when a repository wants a reviewed, immutable Kani build rather
 than the pinned legacy release:
 
+<!-- tested-example: migration-snapshot-consumer -->
 ```bash
 prover-tools kani snapshot install
 prover-tools kani snapshot check

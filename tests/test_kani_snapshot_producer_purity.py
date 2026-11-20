@@ -77,10 +77,22 @@ def _producer_modules() -> list[Path]:
 
 
 def _module_names(node: ast.AST) -> list[str]:
-    """Return the dotted names one import node refers to."""
+    """Return the dotted names one import node refers to.
+
+    A `from X import Y` names both `X` and `X.Y`. The imported attribute may
+    itself be a module — `from pkg import orchestrator` is a way of reaching
+    a submodule without writing its dotted path — so reading only
+    `node.module` would let that spelling through the boundary. A relative
+    import is recorded by the member name alone, which is all the syntax
+    carries.
+    """
     if isinstance(node, ast.Import):
         return [alias.name for alias in node.names]
-    return [typ.cast("ast.ImportFrom", node).module or ""]
+    source = typ.cast("ast.ImportFrom", node)
+    module = source.module or ""
+    if not module:
+        return [alias.name for alias in source.names]
+    return [module, *(f"{module}.{alias.name}" for alias in source.names)]
 
 
 def _imported_names(tree: ast.Module) -> list[str]:
@@ -105,6 +117,24 @@ def _called_names(tree: ast.Module) -> list[str]:
         elif isinstance(node.func, ast.Attribute):
             names.append(typ.cast("ast.Attribute", function).attr)
     return names
+
+
+def test_a_submodule_imported_from_its_package_is_seen() -> None:
+    """`from pkg import orchestrator` reaches the same module as a dotted path.
+
+    Reading only `node.module` would record `pkg` and let the member name,
+    which is the module actually imported, pass the orchestrator check.
+    """
+    tree = ast.parse("from rust_prover_tools.kani_snapshot import orchestrator")
+
+    assert "rust_prover_tools.kani_snapshot.orchestrator" in _imported_names(tree)
+
+
+def test_a_relative_submodule_import_is_seen() -> None:
+    """A relative import carries only the member name, which must be recorded."""
+    tree = ast.parse("from .. import orchestrator")
+
+    assert "orchestrator" in _imported_names(tree)
 
 
 def test_the_producer_package_has_modules_to_check() -> None:
