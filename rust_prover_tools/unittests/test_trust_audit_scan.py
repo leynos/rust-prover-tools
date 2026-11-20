@@ -55,6 +55,24 @@ def test_a_member_rename_does_not_bind_the_crate() -> None:
     assert items(source) == [("assume", 1)]
 
 
+def test_a_member_rename_reports_the_bare_call_under_the_item_name() -> None:
+    """Report ``a(true)`` as the Kani item the import renamed."""
+    source = "use kani::{assume as a};\nfn f() { a(true); }"
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
+def test_a_chained_crate_alias_makes_a_qualified_path_trust() -> None:
+    """Follow a rename of a rename to the crate both names reach."""
+    source = "use kani as k;\nuse k as kk;\nfn f() { kk::assume(true); }"
+    assert items(source) == [("assume", 3)]
+
+
+def test_a_member_rename_before_a_path_is_not_a_call() -> None:
+    """Leave the qualifier of ``a::assume(..)`` alone: it names no item."""
+    source = "use kani::{assume as a};\nfn f() { a::assume(true); }"
+    assert [item for item in items(source) if item[1] == 2] == []
+
+
 def test_a_method_call_is_not_a_bare_use() -> None:
     """Leave a field or method of the same name alone."""
     source = "use kani;\nfn f(s: S) { s.assume(true); }"
@@ -73,6 +91,18 @@ def test_a_verus_body_does_not_report_a_kani_only_word() -> None:
     assert items(source) == []
 
 
+def test_a_verus_body_in_parentheses_reports_its_vocabulary() -> None:
+    """Read ``verus!( … )`` as a body: the macro accepts any delimiter pair."""
+    source = "verus!(proof fn p() { admit(); });"
+    assert items(source) == [("admit", 1)]
+
+
+def test_a_verus_body_in_brackets_reports_its_vocabulary() -> None:
+    """Read ``verus![ … ]`` as a body too."""
+    source = "verus![proof fn p() { admit(); }];"
+    assert items(source) == [("admit", 1)]
+
+
 def test_a_verus_attribute_reports_its_arguments() -> None:
     """Report a Verus word inside a bare ``external`` attribute."""
     source = "#[verifier(external_body)]\nfn f() {}"
@@ -88,6 +118,12 @@ def test_a_cfg_attr_carrying_a_verus_attribute_reports_its_arguments() -> None:
 def test_a_cfg_attr_without_a_verus_attribute_reports_nothing() -> None:
     """Leave a ``cfg_attr`` that carries no Verus attribute alone."""
     source = "#[cfg_attr(test, should_panic)]\nfn f() {}"
+    assert items(source) == []
+
+
+def test_a_cfg_attr_predicate_is_not_read_as_a_verus_attribute() -> None:
+    """Read only the payload: ``verifier`` in the predicate is a condition."""
+    source = "#[cfg_attr(all(verifier, external), inline)]\nfn f() {}"
     assert items(source) == []
 
 
@@ -134,6 +170,25 @@ def test_a_literal_scan_keeps_two_occurrences_apart() -> None:
     source = '"admit(); admit();"'
     columns = [item.column for item in scan(source, procedural_macro=True).items]
     assert columns == [2, 11]
+
+
+def test_a_literal_scan_reports_in_source_order() -> None:
+    """Report a bare match before a qualified one that follows it."""
+    source = '"assume(x); kani::assume(y);"'
+    columns = [item.column for item in scan(source, procedural_macro=True).items]
+    assert columns == [2, 19]
+
+
+def test_an_unterminated_character_literal_is_refused() -> None:
+    """Refuse a quote that can start neither a character nor a lifetime."""
+    with pytest.raises(TrustAuditError, match="unterminated character literal"):
+        scan("fn f() { let c = '💡; }")
+
+
+def test_a_unicode_module_name_is_one_identifier() -> None:
+    """Keep a non-ASCII name whole, as Rust does."""
+    names = [token.text for token in tokenize("mod café;") if token.kind == "ident"]
+    assert names == ["mod", "café"]
 
 
 def test_an_escaped_quote_ends_the_literal_at_the_right_place() -> None:

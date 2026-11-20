@@ -29,20 +29,17 @@ never sees.
 from __future__ import annotations
 
 import re
-import typing as typ
 
+from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.literals import literal_body
 from rust_prover_tools.trust_audit.model import ScanResult, TrustItem
 from rust_prover_tools.trust_audit.modules import module_references
-from rust_prover_tools.trust_audit.structure import attribute_spans, matching
-from rust_prover_tools.trust_audit.syntax import (
-    Kind,
-    Token,
-    TrustAuditError,
-    literal_body,
-    tokenize,
-)
+from rust_prover_tools.trust_audit.regions import verus_regions
+from rust_prover_tools.trust_audit.structure import texts
+from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
 from rust_prover_tools.trust_audit.use_tree import (
     alias_bindings,
+    member_bindings,
     statement_end,
     use_roots,
 )
@@ -51,18 +48,12 @@ from rust_prover_tools.trust_audit.vocabulary import (
     KANI_VOCABULARY,
     OPAQUE_MACROS,
     TRUST_ROOTS,
-    VERUS_ATTRIBUTE_HEADS,
     VERUS_VOCABULARY,
     VOCABULARY,
 )
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
 __all__ = ("scan",)
 
-# ``verus``, ``!``, ``{``: the head of a ``verus! { … }`` body.
-_VERUS_MACRO_HEAD = ("verus", "!", "{")
 # The ``::`` and the qualifier in front of a path's last segment.
 _QUALIFIED_SEGMENTS = 2
 # ``extern crate``: the two words that open a crate declaration.
@@ -137,8 +128,16 @@ class _Context:
         # makes ``k::assume`` the same call as ``kani::assume``, and a scan that
         # matched only the literal root would report nothing for the file.
         self.kani_names = alias_bindings(tokens, KANI_ROOT)
-        self.verus_regions = _verus_regions(tokens)
+        # A renamed member is the same request for trust under another name:
+        # after ``use kani::{assume as a};`` a bare ``a(..)`` is Kani's call.
+        self.member_names = {
+            alias: member
+            for member, alias in member_bindings(tokens, TRUST_ROOTS)
+            if member in VOCABULARY
+        }
+        self.verus_regions = verus_regions(tokens)
         self.items: list[TrustItem] = []
+        self._reported: set[TrustItem] = set()
         self._procedural_macro = procedural_macro
 
     def run(self) -> tuple[TrustItem, ...]:
@@ -169,13 +168,23 @@ class _Context:
             self._report_if_imported(index, token)
 
     def _report_if_imported(self, index: int, token: Token) -> None:
-        """Apply rule 3: a bare word in a file that imports from a trust root."""
+        """Apply rule 3: a bare word in a file that imports from a trust root.
+
+        A renamed import is reported under the item it names, at the position
+        where it is used: after ``use kani::{assume as a};`` the call ``a(x)``
+        is Kani's ``assume``, and reporting the local spelling would leave the
+        audit unable to say which prover surface it reached.
+        """
         if not self.imported_roots:
             return
         if not _is_bare_use(self.tokens, index):
             return
         if token.text in VOCABULARY:
             self._report(token.text, token)
+            return
+        item = self.member_names.get(token.text)
+        if item is not None and _is_member_use(self.tokens, index):
+            self._report(item, token)
 
     def _is_kani_path(self, index: int) -> bool:
         """Report whether this token ends a path rooted at Kani.
@@ -206,9 +215,15 @@ class _Context:
         self._record(TrustItem(item, token.line, token.column))
 
     def _record(self, item: TrustItem) -> None:
-        """Append the item unless the same word at the same place is recorded."""
-        if item not in self.items:
-            self.items.append(item)
+        """Append the item unless the same word at the same place is recorded.
+
+        The set answers "already reported" in constant time; the list keeps the
+        source order the audit promises, which is what a report is read in.
+        """
+        if item in self._reported:
+            return
+        self._reported.add(item)
+        self.items.append(item)
 
     def _scan_literal(self, token: Token) -> None:
         r"""Report vocabulary inside a proc-macro crate's string literal.
@@ -217,14 +232,24 @@ class _Context:
         rather than a newline. Translating it would make the offset arithmetic
         disagree with what the author sees in an editor, so the body is scanned
         as written and positions count characters.
+
+        The qualified and bare searches overlap, and one may reach a later
+        position before the other reaches an earlier one, so both are collected
+        and then reported in source order.
         """
         offset, body = literal_body(token.text)
-        for match in _QUALIFIED_KANI.finditer(body):
-            if match[1] in KANI_VOCABULARY:
-                self._record(_literal_item(match[1], token, offset + match.start(1)))
-        for match in _WORD.finditer(body):
-            if match[0] in VOCABULARY:
-                self._record(_literal_item(match[0], token, offset + match.start()))
+        found = [
+            (match.start(1), match[1])
+            for match in _QUALIFIED_KANI.finditer(body)
+            if match[1] in KANI_VOCABULARY
+        ]
+        found.extend(
+            (match.start(), match[0])
+            for match in _WORD.finditer(body)
+            if match[0] in VOCABULARY
+        )
+        for start, item in sorted(found):
+            self._record(_literal_item(item, token, offset + start))
 
 
 def _literal_item(item: str, token: Token, offset: int) -> TrustItem:
@@ -251,6 +276,18 @@ def _is_bare_use(tokens: tuple[Token, ...], index: int) -> bool:
     if not index:
         return True
     return tokens[index - 1].text not in {"::", "."}
+
+
+def _is_member_use(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether a renamed import is used as the item it renames.
+
+    Only the bare call counts. The name at its own definition follows ``as``,
+    and a name in front of ``::`` qualifies a path rather than calling the
+    item, so neither is a request for trust under another spelling.
+    """
+    if index and tokens[index - 1].text == "as":
+        return False
+    return index + 1 >= len(tokens) or tokens[index + 1].text != "::"
 
 
 def _imported_roots(tokens: tuple[Token, ...]) -> frozenset[str]:
@@ -284,62 +321,10 @@ def _extern_crate_root(
     index: int,
 ) -> str | None:
     """Return the crate an ``extern crate`` declaration at ``index`` names."""
-    if _texts(tokens, index, len(_EXTERN_CRATE)) != _EXTERN_CRATE:
+    if texts(tokens, index, len(_EXTERN_CRATE)) != _EXTERN_CRATE:
         return None
     name_index = index + len(_EXTERN_CRATE)
     if name_index >= len(tokens):
         return None
     name = tokens[name_index]
     return name.text if name.kind is Kind.IDENT else None
-
-
-def _texts(tokens: tuple[Token, ...], start: int, count: int) -> tuple[str, ...]:
-    """Return up to ``count`` token texts from ``start``, clipped at the end."""
-    return tuple(token.text for token in tokens[start : start + count])
-
-
-def _verus_regions(tokens: tuple[Token, ...]) -> tuple[tuple[int, int], ...]:
-    """Return the token ranges whose identifiers carry Verus' own vocabulary.
-
-    Two forms create a region: a ``verus!`` body, and a Verus attribute anywhere
-    in an attribute list, including one nested in a ``cfg_attr``.
-    """
-    regions = list(_verus_bodies(tokens))
-    for open_index, close_index in attribute_spans(tokens):
-        regions.extend(_verus_attribute_regions(tokens, open_index, close_index))
-    return tuple(regions)
-
-
-def _verus_bodies(tokens: tuple[Token, ...]) -> cabc.Iterator[tuple[int, int]]:
-    """Locate each ``verus! { … }`` body, tolerating nesting."""
-    for index in range(len(tokens)):
-        if _texts(tokens, index, len(_VERUS_MACRO_HEAD)) != _VERUS_MACRO_HEAD:
-            continue
-        opening = index + len(_VERUS_MACRO_HEAD) - 1
-        yield opening + 1, matching(tokens, opening, "{", "}")
-
-
-def _verus_attribute_regions(
-    tokens: tuple[Token, ...],
-    open_index: int,
-    close_index: int,
-) -> tuple[tuple[int, int], ...]:
-    """Return the range of an attribute whose identifiers are Verus vocabulary."""
-    head_index = open_index + 1
-    if head_index >= close_index:
-        return ()
-    if tokens[head_index].text in VERUS_ATTRIBUTE_HEADS:
-        return ((head_index, close_index - 1),)
-    if tokens[head_index].text != "cfg_attr":
-        return ()
-    if _carries_verus(tokens, head_index + 1, close_index):
-        return ((head_index, close_index - 1),)
-    return ()
-
-
-def _carries_verus(tokens: tuple[Token, ...], start: int, end: int) -> bool:
-    """Report whether a ``cfg_attr`` carries a Verus attribute after its predicate."""
-    return any(
-        token.kind is Kind.IDENT and token.text in VERUS_ATTRIBUTE_HEADS
-        for token in tokens[start:end]
-    )

@@ -676,7 +676,12 @@ it were part of the proof; conversely every compiled file must be read, so a
 declaration that resolves to no file is refused rather than skipped. `#[path]`
 targets, inline modules and the mod-rs directory rules are all honoured, and a
 target outside the root is refused for what it is before its existence is asked
-about.
+about. Every file directly under `tests/` is a crate root in its own right, so
+an integration test's declarations resolve beside it rather than in a directory
+named after it. A `mod` written as a `macro_rules!` pattern is a template for
+source the macro is given, not source the crate compiles, so it names no file. A
+`#[path]` that a `cfg_attr` can select is refused: the configuration decides
+which file compiles, so no single answer would be true.
 
 The vocabulary is the full set both current releases document, not the subset
 the ticket names. Under-reporting is a soundness failure in an audit, so

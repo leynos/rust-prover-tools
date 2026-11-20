@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import typing as typ
 
+from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
 from rust_prover_tools.trust_audit.structure import (
     attribute_spans,
+    conditional_path,
     matching,
     opening_bracket,
     path_value,
     previous_closer,
     skip_visibility,
+    texts,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
@@ -36,15 +39,28 @@ __all__ = ("module_references",)
 _DECLARATION_TOKENS = 3
 _INLINE = "{"
 _EXTERNAL = ";"
+# ``macro_rules``, ``!``, the macro's name and its body.
+_MACRO_HEAD = ("macro_rules", "!")
+_RULE_ARROW = "=>"
+_DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 
 
 def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
-    """Collect the module files this source compiles, in source order."""
+    """Collect the module files this source compiles, in source order.
+
+    A ``macro_rules!`` pattern is source syntax rather than a declaration: a
+    matcher may spell ``mod sample;`` as the input it matches without ever
+    compiling that file. Those tokens are skipped so the walk does not demand a
+    file the crate never loads.
+    """
     references = []
     spans = dict(attribute_spans(tokens))
-    inline = _InlineModules(tokens)
+    patterns = _macro_pattern_tokens(tokens)
+    inline = _InlineModules(tokens, patterns)
     for index, token in enumerate(tokens):
         head = tokens[index + 1 : index + _DECLARATION_TOKENS]
+        if index in patterns:
+            continue
         if not _names_module(token, head) or head[1].text != _EXTERNAL:
             continue
         name = head[0]
@@ -58,6 +74,59 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
             ),
         )
     return tuple(references)
+
+
+def _macro_pattern_tokens(tokens: tuple[Token, ...]) -> frozenset[int]:
+    """Return the indices of the macro-pattern tokens in every ``macro_rules!``.
+
+    A rule is a pattern followed by ``=>`` and a body, so the group before each
+    arrow is the pattern and the group after it is the expansion. Only the
+    pattern is skipped: an expansion that emits ``mod x;`` is code the crate
+    compiles, even though Rust resolves its file from the macro's own position.
+    """
+    ignored: set[int] = set()
+    for index in range(len(tokens) - len(_MACRO_HEAD)):
+        if texts(tokens, index, len(_MACRO_HEAD)) != _MACRO_HEAD:
+            continue
+        opening = index + len(_MACRO_HEAD) + 1
+        if opening >= len(tokens) or tokens[opening].text != _INLINE:
+            continue
+        closing = matching(tokens, opening, _INLINE, "}")
+        ignored.update(_pattern_spans(tokens, opening, closing))
+    return frozenset(ignored)
+
+
+def _pattern_spans(
+    tokens: tuple[Token, ...],
+    opening: int,
+    closing: int,
+) -> set[int]:
+    """Return the indices of each top-level group in a macro body that has a rule.
+
+    A group is a pattern when the token after it is ``=>``; the expansion that
+    follows the arrow is left for module discovery.
+    """
+    spans: set[int] = set()
+    index = opening + 1
+    while index < closing:
+        group = _group_end(tokens, index, closing)
+        if group is None:
+            index += 1
+            continue
+        if group + 1 < closing and tokens[group + 1].text == _RULE_ARROW:
+            spans.update(range(index, group + 1))
+        index = group + 1
+    return spans
+
+
+def _group_end(tokens: tuple[Token, ...], index: int, limit: int) -> int | None:
+    """Return the close index of the group opening at ``index``, if it opens one."""
+    if index >= limit:
+        return None
+    closer = _DELIMITER_PAIRS.get(tokens[index].text)
+    if closer is None:
+        return None
+    return matching(tokens, index, tokens[index].text, closer)
 
 
 def _names_module(token: Token, head: tuple[Token, ...]) -> bool:
@@ -88,7 +157,11 @@ class _InlineModules:
     token stream for every ``mod`` declaration.
     """
 
-    def __init__(self, tokens: tuple[Token, ...]) -> None:
+    def __init__(
+        self,
+        tokens: tuple[Token, ...],
+        patterns: cabc.Container[int] = frozenset(),
+    ) -> None:
         """Pair every inline module's braces and record each token's chain."""
         self._chains: list[tuple[InlineModule, ...]] = [()] * len(tokens)
         stack: list[tuple[InlineModule, int]] = []
@@ -99,7 +172,7 @@ class _InlineModules:
             if stack and index == stack[-1][1]:
                 stack.pop()
             self._chains[index] = tuple(module for module, _ in stack)
-            if _opens_inline_module(tokens, index):
+            if index not in patterns and _opens_inline_module(tokens, index):
                 module = InlineModule(
                     tokens[index + 1].text,
                     _path_attribute(tokens, spans, index),
@@ -129,6 +202,10 @@ def _path_attribute(
     refusal a caller can notice: the module then falls back to Rust's bare
     ``mod x;`` search, which reads a different file from the one the crate
     compiles and can report a clean audit of code that is not in the proof.
+
+    A ``cfg_attr`` that carries a ``path`` is refused rather than searched for:
+    whether the attribute applies depends on the configuration the crate is
+    built with, and the audit reads one tree.
     """
     index = skip_visibility(tokens, mod_index - 1)
     while index >= 0:
@@ -140,5 +217,18 @@ def _path_attribute(
         value = path_value(tokens, opener, index)
         if value is not None:
             return value
+        if conditional_path(tokens, opener, index):
+            _refuse_conditional_path(tokens, mod_index)
         index = previous_closer(tokens, opener)
     return None
+
+
+def _refuse_conditional_path(tokens: tuple[Token, ...], mod_index: int) -> None:
+    """Fail closed on a module whose file a configuration decides."""
+    name = tokens[mod_index + 1]
+    msg = (
+        f"the module {name.text!r} at line {name.line}, column {name.column} "
+        "carries a conditional #[path], so which file it compiles depends on "
+        "the configuration"
+    )
+    raise TrustAuditError(msg)

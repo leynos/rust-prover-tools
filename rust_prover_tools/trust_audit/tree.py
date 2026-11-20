@@ -23,13 +23,13 @@ from __future__ import annotations
 import pathlib
 import typing as typ
 
+from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.matcher import scan
 from rust_prover_tools.trust_audit.model import (
     AuditedFile,
     InlineModule,
     ModuleReference,
 )
-from rust_prover_tools.trust_audit.syntax import TrustAuditError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -85,6 +85,10 @@ def audit_tree(
     than listing the directory.
     """
     scanned = {}
+    # Every driver is a crate root by definition: the caller names `lib.rs`,
+    # `main.rs` and each integration-test file, and Cargo compiles the last of
+    # those as a crate root even though its stem is neither of the other two.
+    crate_roots = frozenset(_normalise(driver) for driver in drivers)
     # A declaration may name a file that declares further modules or is named
     # twice through two paths, so the queue is deduplicated and the walk may
     # revisit a file it has already scanned.
@@ -95,7 +99,14 @@ def audit_tree(
             continue
         result = scan(_read_source(root, relative), procedural_macro=procedural_macro)
         scanned[relative] = result.items
-        pending.extend(_module_targets(root, relative, result.modules))
+        pending.extend(
+            _module_targets(
+                root,
+                relative,
+                result.modules,
+                crate_root=relative in crate_roots,
+            ),
+        )
     return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
 
 
@@ -138,8 +149,14 @@ def resolve_repository_path(root: pathlib.Path, relative: str) -> pathlib.Path:
 
 
 def _normalise(relative: str) -> str:
-    """Return one repository-relative path in POSIX form."""
-    return pathlib.PurePosixPath(relative.replace("\\", "/")).as_posix()
+    r"""Return one repository-relative path in POSIX form.
+
+    A backslash is an ordinary filename character, so it is preserved:
+    replacing it with a separator would read ``src/proof/case.rs`` when the
+    caller named ``src/proof\\case.rs``, and a clean file at the rewritten path
+    would hide the trusted items in the file that was actually asked for.
+    """
+    return pathlib.PurePosixPath(relative).as_posix()
 
 
 def _read_source(root: pathlib.Path, relative: str) -> str:
@@ -156,6 +173,8 @@ def _module_targets(
     root: pathlib.Path,
     relative: str,
     modules: cabc.Iterable[ModuleReference],
+    *,
+    crate_root: bool,
 ) -> tuple[str, ...]:
     """Resolve every module declaration a file makes to a repository path.
 
@@ -165,19 +184,24 @@ def _module_targets(
     crate would not compile, and the audit would report a clean scan of code it
     never read.
     """
-    return tuple(_module_target(root, relative, module) for module in modules)
+    return tuple(
+        _module_target(root, relative, module, crate_root=crate_root)
+        for module in modules
+    )
 
 
 def _module_target(
     root: pathlib.Path,
     relative: str,
     module: ModuleReference,
+    *,
+    crate_root: bool,
 ) -> str:
     """Resolve one module declaration, refusing a target outside the root."""
     if module.path:
-        candidates = _path_candidates(relative, module)
+        candidates = _path_candidates(relative, module, crate_root=crate_root)
     else:
-        candidates = _search_candidates(relative, module)
+        candidates = _search_candidates(relative, module, crate_root=crate_root)
     # Containment is checked before existence so an escaping `#[path]` is
     # refused for what it is. Reporting only that the file is absent would
     # invite someone to create it outside the repository and call the audit
@@ -211,7 +235,12 @@ def _is_inside(root: pathlib.Path, relative: str) -> bool:
     return True
 
 
-def _path_candidates(relative: str, module: ModuleReference) -> tuple[str, ...]:
+def _path_candidates(
+    relative: str,
+    module: ModuleReference,
+    *,
+    crate_root: bool,
+) -> tuple[str, ...]:
     """Return the single path a ``#[path]`` attribute names.
 
     At file scope the target is relative to the declaring file's own directory —
@@ -231,11 +260,20 @@ def _path_candidates(relative: str, module: ModuleReference) -> tuple[str, ...]:
     if not module.enclosing:
         parent = pathlib.PurePosixPath(relative).parent
         return ((parent / str(module.path)).as_posix(),)
-    directory = _enclosing_directory(relative, module.enclosing)
+    directory = _enclosing_directory(
+        relative,
+        module.enclosing,
+        crate_root=crate_root,
+    )
     return ((directory / str(module.path)).as_posix(),)
 
 
-def _search_candidates(relative: str, module: ModuleReference) -> tuple[str, ...]:
+def _search_candidates(
+    relative: str,
+    module: ModuleReference,
+    *,
+    crate_root: bool,
+) -> tuple[str, ...]:
     """Return the paths Rust searches for a bare ``mod name;``.
 
     The directory is not simply the declaring file's own. Rust puts a child of a
@@ -251,7 +289,11 @@ def _search_candidates(relative: str, module: ModuleReference) -> tuple[str, ...
     inline module carrying ``#[path = "…"]`` contributes that value instead of
     its name, because the attribute replaces the directory component.
     """
-    directory = _enclosing_directory(relative, module.enclosing).as_posix()
+    directory = _enclosing_directory(
+        relative,
+        module.enclosing,
+        crate_root=crate_root,
+    ).as_posix()
     return tuple(
         template.format(directory=directory, name=module.name, suffix=RUST_SUFFIX)
         for template in _MODULE_FILE_CANDIDATES
@@ -261,6 +303,8 @@ def _search_candidates(relative: str, module: ModuleReference) -> tuple[str, ...
 def _enclosing_directory(
     relative: str,
     enclosing: cabc.Iterable[InlineModule],
+    *,
+    crate_root: bool,
 ) -> pathlib.PurePosixPath:
     """Return the directory an inline chain contributes beneath the declaring file.
 
@@ -272,7 +316,7 @@ def _enclosing_directory(
     ``thread_files/x.rs``. A ``#[path]`` with more than one component is applied
     as written, matching Rust, which treats the value as a relative path.
     """
-    components: list[str] = [_module_directory(relative)]
+    components: list[str] = [_module_directory(relative, crate_root=crate_root)]
     for inline in enclosing:
         if inline.path is not None:
             components.extend(pathlib.PurePosixPath(inline.path).parts)
@@ -281,15 +325,20 @@ def _enclosing_directory(
     return pathlib.PurePosixPath(*components)
 
 
-def _module_directory(relative: str) -> str:
+def _module_directory(relative: str, *, crate_root: bool) -> str:
     """Return the directory Rust searches for a module declared in ``relative``.
 
-    A crate root (``lib.rs``, ``main.rs``, and an ``mod.rs``) owns its
-    directory's children directly. Any other file is a module whose children
-    live in a directory named after it, so ``src/foo.rs`` contributes
-    ``src/foo`` and ``src/foo/bar.rs`` contributes ``src/foo/bar``.
+    A crate root owns its directory's children directly. That is normally
+    visible from the stem — ``lib.rs``, ``main.rs`` and an ``mod.rs`` — but an
+    integration test is a crate root whatever Cargo chose to call it, so the
+    caller passes that fact in: ``tests/proof.rs`` declaring ``mod helper;``
+    compiles ``tests/helper.rs`` and not ``tests/proof/helper.rs``.
+
+    Any other file is a module whose children live in a directory named after
+    it, so ``src/foo.rs`` contributes ``src/foo`` and ``src/foo/bar.rs``
+    contributes ``src/foo/bar``.
     """
     path = pathlib.PurePosixPath(relative)
-    if path.stem in _ROOT_MODULE_STEMS:
+    if crate_root or path.stem in _ROOT_MODULE_STEMS:
         return path.parent.as_posix()
     return (path.parent / path.stem).as_posix()

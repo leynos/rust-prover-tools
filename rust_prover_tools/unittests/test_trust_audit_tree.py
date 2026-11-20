@@ -76,6 +76,48 @@ def test_a_nested_declaration_carries_its_inline_chain() -> None:
     assert references(source) == [("x", None, ("outer", "inner"))]
 
 
+def test_a_macro_pattern_is_not_a_module_declaration() -> None:
+    """Ignore ``mod sample;`` written as the input a macro matches.
+
+    The pattern is a template for source the macro is given, not source the
+    crate compiles, so the declaration beside it is the only one reported.
+    """
+    source = "macro_rules! m { (mod sample;) => {} }\nmod real;"
+    assert references(source) == [("real", None, ())]
+
+
+def test_a_unicode_module_name_names_its_path_file() -> None:
+    """Keep the whole name so a ``#[path]`` module is not silently skipped."""
+    source = '#[path = "coffee.rs"]\nmod café;'
+    assert references(source) == [("café", "coffee.rs", ())]
+
+
+def test_a_cooked_path_escape_is_read_as_rust_reads_it() -> None:
+    r"""Decode ``\x63`` to ``c`` rather than looking for the escape itself."""
+    source = '#[path = "\\x63hild.rs"]\nmod child;'
+    assert references(source) == [("child", "child.rs", ())]
+
+
+def test_a_braced_path_escape_is_read_as_rust_reads_it() -> None:
+    r"""Decode ``\u{63}`` to ``c`` rather than looking for the escape itself."""
+    source = '#[path = "\\u{63}hild.rs"]\nmod child;'
+    assert references(source) == [("child", "child.rs", ())]
+
+
+def test_a_surrogate_path_escape_is_refused() -> None:
+    r"""Refuse a ``\u{…}`` escape naming a code point Rust does not allow."""
+    source = '#[path = "\\u{d800}.rs"]\nmod x;'
+    with pytest.raises(TrustAuditError, match="not a Unicode scalar value"):
+        references(source)
+
+
+def test_a_conditional_path_is_refused() -> None:
+    """Refuse a declaration whose file a configuration decides."""
+    source = '#[cfg_attr(unix, path = "unix_impl.rs")]\nmod platform;'
+    with pytest.raises(TrustAuditError, match="conditional #\\[path\\]"):
+        references(source)
+
+
 def test_a_declaration_after_an_inline_module_is_at_file_scope() -> None:
     """Leave the chain empty once the inline module's brace has closed."""
     source = "mod outer { mod x; }\nmod y;"
@@ -112,6 +154,45 @@ def test_the_walk_follows_a_nested_module_directory(tmp_path: Path) -> None:
     assert audited(tmp_path, "src/lib.rs") == {
         "src/foo.rs": [],
         "src/foo/bar.rs": ["assume"],
+        "src/lib.rs": [],
+    }
+
+
+def test_an_integration_test_is_a_crate_root(tmp_path: Path) -> None:
+    """Search beside ``tests/proof.rs`` rather than in ``tests/proof/``.
+
+    Every file directly under ``tests/`` is compiled as its own crate root, so
+    its bare declarations resolve beside it even though its name is neither
+    ``lib.rs`` nor ``main.rs``. A decoy in ``tests/proof/`` would otherwise be
+    audited in place of the file the crate actually compiles.
+    """
+    write(
+        tmp_path,
+        {
+            "tests/proof.rs": "mod helper;\nfn f() { kani::assume(true); }",
+            "tests/helper.rs": "fn g() { kani::assume(true); }",
+            "tests/proof/helper.rs": "fn decoy() {}",
+        },
+    )
+
+    assert audited(tmp_path, "tests/proof.rs") == {
+        "tests/helper.rs": ["assume"],
+        "tests/proof.rs": ["assume"],
+    }
+
+
+def test_a_backslash_in_a_path_attribute_names_one_file(tmp_path: Path) -> None:
+    r"""Read ``r"a\b.rs"`` as one filename rather than as a directory chain."""
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": '#[path = r"a\\b.rs"]\nmod x;',
+            "src/a\\b.rs": "fn g() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/a\\b.rs": ["assume"],
         "src/lib.rs": [],
     }
 

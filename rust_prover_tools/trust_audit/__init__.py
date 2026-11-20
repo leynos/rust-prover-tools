@@ -6,9 +6,12 @@ one per request, so a reviewer can read each against a justification:
 
 - :mod:`.vocabulary` names the words each prover documents for such a request.
 - :mod:`.syntax` lexes Rust far enough that a word inside a comment, string or
-  character literal is never read as code.
+  character literal is never read as code; :mod:`.cursor` and :mod:`.literals`
+  hold the position arithmetic and the literal forms it shares with the
+  decoder.
 - :mod:`.structure`, :mod:`.use_tree` and :mod:`.modules` locate the
-  brackets, imports and module declarations the rules depend on.
+  brackets, imports and module declarations the rules depend on, and
+  :mod:`.regions` locates the ``verus!`` bodies and attributes.
 - :mod:`.matcher` decides which occurrences of the vocabulary are trust.
 - :mod:`.tree` follows ``mod`` declarations from a set of entry points, so the
   audit covers compiled code and not stray files.
@@ -24,6 +27,7 @@ Examples
 
 from __future__ import annotations
 
+from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.matcher import scan
 from rust_prover_tools.trust_audit.model import (
     AuditedFile,
@@ -32,7 +36,6 @@ from rust_prover_tools.trust_audit.model import (
     ScanResult,
     TrustItem,
 )
-from rust_prover_tools.trust_audit.syntax import TrustAuditError
 from rust_prover_tools.trust_audit.tree import RUST_SUFFIX, audit_tree
 
 __all__ = (

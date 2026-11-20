@@ -748,9 +748,10 @@ different from "never read".
 The audit follows `mod` declarations from the files it is given rather than
 listing directories, so dead files nobody compiles are not reported and every
 file the crate compiles is. A declaration may use `#[path]`, inline modules, or
-nested module directories; each target is resolved as Rust resolves it, and a
-declaration that resolves to no file, or to a file outside the repository root,
-is refused.
+nested module directories; each target is resolved as Rust resolves it. A
+declaration that resolves to no file, to a file outside the repository root, or
+to whichever file a `cfg_attr` selects, is refused: a configuration decides the
+last of those, so no single answer describes what the crate compiles.
 
 A word counts as trust only in a context that gives it meaning:
 

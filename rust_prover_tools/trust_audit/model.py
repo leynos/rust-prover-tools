@@ -23,9 +23,14 @@ class TrustItem:
     """One trusted item, located by line and column in its file.
 
     The location is the item's own token, not its enclosing statement, so two
-    uses on one line stay distinguishable. ``item`` is the word as written, so
-    a qualified ``kani::assume`` and a bare ``assume`` reached through an import
-    stay distinguishable too.
+    uses on one line stay distinguishable.
+
+    ``item`` is the normalized identifier the item is reported under, and it
+    does not retain the qualification. A qualified ``kani::assume`` and a bare
+    ``assume`` reached through an import both yield ``"assume"``, and a raw
+    ``r#assume`` loses its prefix. What separates them is ``line`` and
+    ``column``: they locate the original occurrence, so a consumer that needs
+    the qualifier reads the source at that position.
     """
 
     item: str

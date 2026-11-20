@@ -11,25 +11,26 @@ caller can drift from the other.
 
 from __future__ import annotations
 
-from rust_prover_tools.trust_audit.syntax import (
-    Kind,
-    Token,
-    TrustAuditError,
-    literal_body,
-)
+from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.literals import decoded_literal_body
+from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 __all__ = (
     "attribute_spans",
+    "conditional_path",
     "matching",
     "opening_bracket",
     "opening_paren",
     "path_value",
     "previous_closer",
     "skip_visibility",
+    "texts",
 )
 
 # The tokens between ``#[`` and a path attribute's value.
 _PATH_HEAD = ("path", "=")
+# The attribute that applies another attribute under a configuration predicate.
+_CFG_ATTR = "cfg_attr"
 
 
 def matching(
@@ -63,6 +64,11 @@ def matching(
         f"column {tokens[open_index].column}"
     )
     raise TrustAuditError(msg)
+
+
+def texts(tokens: tuple[Token, ...], start: int, count: int) -> tuple[str, ...]:
+    """Return up to ``count`` token texts from ``start``, clipped at the end."""
+    return tuple(token.text for token in tokens[start : start + count])
 
 
 def attribute_spans(tokens: tuple[Token, ...]) -> tuple[tuple[int, int], ...]:
@@ -145,7 +151,12 @@ def opening_bracket(tokens: tuple[Token, ...], close_index: int) -> int | None:
 def path_value(
     tokens: tuple[Token, ...], open_index: int, close_index: int
 ) -> str | None:
-    """Return the value of a ``#[path = "…"]`` span, if it is one."""
+    r"""Return the value of a ``#[path = "…"]`` span, if it is one.
+
+    The value is Rust's reading of the literal, not its source spelling, so an
+    escape such as ``"\\x63hild.rs"`` names ``child.rs`` exactly as the
+    compiler resolves it.
+    """
     value_index = open_index + 1 + len(_PATH_HEAD)
     if value_index >= close_index:
         return None
@@ -153,4 +164,26 @@ def path_value(
     if head != _PATH_HEAD:
         return None
     literal = tokens[value_index]
-    return literal_body(literal.text)[1] if literal.kind is Kind.LITERAL else None
+    if literal.kind is not Kind.LITERAL:
+        return None
+    return decoded_literal_body(literal.text)[1]
+
+
+def conditional_path(
+    tokens: tuple[Token, ...], open_index: int, close_index: int
+) -> bool:
+    """Report whether a ``cfg_attr`` span can select a ``#[path]`` target.
+
+    ``#[cfg_attr(unix, path = "unix_impl.rs")] mod platform;`` compiles one of
+    two different files depending on the configuration. The audit reads the
+    repository rather than one configuration, so a declaration like this is
+    refused instead of being resolved to whichever file happens to exist.
+    """
+    head_index = open_index + 1
+    if head_index >= close_index or tokens[head_index].text != _CFG_ATTR:
+        return False
+    return any(
+        tuple(token.text for token in tokens[index : index + len(_PATH_HEAD)])
+        == _PATH_HEAD
+        for index in range(head_index + 1, close_index)
+    )
