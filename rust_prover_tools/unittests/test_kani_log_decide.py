@@ -181,6 +181,28 @@ def test_a_cover_is_matched_to_the_claim_that_declares_it() -> None:
     assert decision.outcome == KaniOutcome.SKIPPED
 
 
+def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
+    """Count a cover CBMC left unattributed as its own block's witness."""
+    name = "h::c"
+    block = HarnessBlock(
+        name=name,
+        properties=(PropertyResult("cover.1", "SATISFIED", "the witness"),),
+        failed_count=0,
+        total_count=0,
+        covered_satisfied=1,
+        covered_total=1,
+        verdict="SUCCESSFUL",
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+        seen_verification_time=True,
+        has_results=True,
+    )
+    log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
+    manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
+    decision = analyse_kani_log(log, manifest)
+    assert decision.witness_statuses == ("satisfied",)
+    assert decision.outcome is KaniOutcome.VERIFIED
+
+
 def test_each_control_reports_its_disposition() -> None:
     """Require one disposition per control, drawn from the admitted set."""
     disagreeing = [

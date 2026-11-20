@@ -14,11 +14,18 @@ from __future__ import annotations
 
 import dataclasses as dc
 
-from rust_prover_tools.kani_log.syntax import UNSUPPORTED_KIND, PropertyResult
+from rust_prover_tools.kani_log.syntax import (
+    COVER_KIND,
+    UNSUPPORTED_KIND,
+    UNWINDING_KIND,
+    PropertyResult,
+)
 
 __all__ = ("Observed",)
 
 INDETERMINATE_STATUSES = frozenset({"UNDETERMINED", "UNREACHABLE"})
+#: Check kinds whose failure limits or annotates a run rather than denying it.
+_NON_DENYING_KINDS = frozenset({COVER_KIND, UNWINDING_KIND, UNSUPPORTED_KIND})
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -53,9 +60,7 @@ class Observed:
         unsupported run into a counterexample.
         """
         return tuple(
-            item
-            for item in self.failures
-            if not item.is_unwinding and item.kind != UNSUPPORTED_KIND
+            item for item in self.failures if item.kind not in _NON_DENYING_KINDS
         )
 
     @property
@@ -78,9 +83,7 @@ class Observed:
         return tuple(
             item
             for item in self.unattributed
-            if item.status == "FAILURE"
-            and not item.is_unwinding
-            and item.kind != UNSUPPORTED_KIND
+            if item.status == "FAILURE" and item.kind not in _NON_DENYING_KINDS
         )
 
     @property

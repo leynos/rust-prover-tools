@@ -187,7 +187,10 @@ def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:
     -------
     bool | None
         ``False`` when the echoed command disables the assertions, ``True``
-        otherwise, and ``None`` when no solver command was echoed.
+        otherwise, and ``None`` when no solver command was echoed or its
+        arguments cannot be read.  An unreadable command may still carry the
+        disabling flag, so it must not be read as evidence that the checks
+        were generated.
 
     Notes
     -----
@@ -200,21 +203,29 @@ def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:
     """
     if block.solver_command is None:
         return None
-    return NO_UNWINDING_ASSERTIONS_FLAG not in _solver_arguments(block.solver_command)
+    arguments = _solver_arguments(block.solver_command)
+    if arguments is None:
+        return None
+    return NO_UNWINDING_ASSERTIONS_FLAG not in arguments
 
 
-def _solver_arguments(command: str) -> frozenset[str]:
+def _solver_arguments(command: str) -> frozenset[str] | None:
     """Split the echoed ``cbmc`` command into its arguments and their options.
 
     Kani quotes a path holding spaces as one argument, so ``--unwind`` there is
     part of a path, not an option.  Each argument contributes itself and, when
     written ``--option=value``, the option alone; the flags read here are
     written as separate words, so matching whole arguments is enough.
+
+    Returns
+    -------
+    frozenset[str] | None
+        The arguments and their option names, or ``None`` when the command
+        cannot be split, because an unbalanced quote leaves no argument
+        boundary to trust.
     """
     try:
         words = shlex.split(command)
     except ValueError:
-        # An unbalanced quote cannot be split into arguments, so nothing in the
-        # line is known to be an option at a boundary.
-        return frozenset()
+        return None
     return frozenset(word for item in words for word in (item, item.partition("=")[0]))

@@ -344,6 +344,15 @@ def test_a_completed_result_beside_a_timeout_marker_is_refused() -> None:
     assert "timeout alongside a completed result" in refused(text)
 
 
+def test_a_repeated_cover_status_is_refused() -> None:
+    """Refuse a cover line that counts the same status twice."""
+    text = log_text("verified").replace(
+        " ** 1 of 1 cover properties satisfied",
+        " ** 0 of 1 cover properties satisfied (1 unreachable, 1 unreachable)",
+    )
+    assert "names 'unreachable' twice" in refused(text)
+
+
 def test_a_block_without_results_is_refused() -> None:
     """Require the ``RESULTS:`` section even when a block has no checks."""
     lines = log_text("verified").splitlines()
@@ -394,6 +403,15 @@ def test_a_flag_inside_a_path_does_not_disable_unwinding_checks() -> None:
     )
     assert unwinding_checks_enabled(inside_a_path) is True
     assert unwinding_checks_enabled(separate) is False
+
+
+def test_an_unreadable_solver_command_leaves_unwinding_checks_unknown() -> None:
+    """Report an unknown command rather than reading it as enabled checks."""
+    unreadable = HarnessBlock(
+        name="h::x",
+        solver_command="[Kani] Running: `cbmc --no-unwinding-assertions 'open`",
+    )
+    assert unwinding_checks_enabled(unreadable) is None
 
 
 def test_an_unknown_line_inside_a_block_is_refused() -> None:

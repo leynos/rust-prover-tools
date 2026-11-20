@@ -169,7 +169,9 @@ def _observations(
             name=block.name,
             succeeded=block.succeeded,
             properties=owned,
-            unattributed=tuple(item for item in block.checks if item not in owned),
+            # Covers stay here too: CBMC may print one without an owner, and
+            # the block it appears in is still the harness it describes.
+            unattributed=tuple(item for item in block.properties if item not in owned),
             failure_messages=tuple(item.message for item in block.failures),
             timed_out=block.timed_out,
             panics_as_expected=block.panics_as_expected,
@@ -185,14 +187,15 @@ def _witness_statuses(
 
     Two harnesses may describe their witnesses with the same words, so a
     global lookup would let one claim's satisfied cover stand in for another
-    claim's unreachable one.
+    claim's unreachable one.  A cover CBMC printed without an owner is read
+    from the block it appears in, which is the harness it was checked for.
     """
     statuses: list[str] = []
     for claim in manifest.claims:
         seen = observed.get(claim.name)
         reported = {
             item.description: item.status
-            for item in (seen.properties if seen else ())
+            for item in (() if seen is None else (*seen.properties, *seen.unattributed))
             if item.is_cover
         }
         statuses.extend(

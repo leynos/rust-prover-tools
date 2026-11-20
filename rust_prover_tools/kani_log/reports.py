@@ -221,6 +221,11 @@ def _cover_counts(reader: Reader, rendered: str | None) -> dict[str, int]:
         if word not in COVER_STATUSES:
             msg = f"{reader.where()}: a cover count names the unknown status {word!r}"
             raise KaniLogError(msg)
+        if word in counts:
+            # One status printed twice means the two counts contradict each
+            # other; keeping the later one would hide the earlier number.
+            msg = f"{reader.where()}: a cover count names {word!r} twice"
+            raise KaniLogError(msg)
         counts[word] = _report_int(reader, number)
     return counts
 

@@ -267,8 +267,9 @@ manifest's harnesses and unwinding checks are enabled in every block. Kani
 disables those checks with `--no-unwinding-assertions` and otherwise relies on
 CBMC's default, so a block whose echoed solver command lacks that flag counts
 as enabled. A block that echoed no solver command is `focused`, because the log
-cannot show what it was asked for. Anything short of that is `focused`, because
-something could have been left out.
+cannot show what it was asked for; so is a block whose echoed command cannot be
+split into arguments, since an unreadable command may still carry the flag.
+Anything short of that is `focused`, because something could have been left out.
 
 A run passes only when the outcome is `verified`, every declared cover is
 `satisfied`, and every control is `rejected-as-intended`. The text form prints
