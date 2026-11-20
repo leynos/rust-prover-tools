@@ -55,7 +55,8 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     """
     references = []
     spans = dict(attribute_spans(tokens))
-    patterns = _macro_pattern_tokens(tokens)
+    patterns, expansions = _macro_spans(tokens)
+    _refuse_metavariable_modules(tokens, expansions)
     inline = _InlineModules(tokens, patterns)
     for index, token in enumerate(tokens):
         head = tokens[index + 1 : index + _DECLARATION_TOKENS]
@@ -76,15 +77,20 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     return tuple(references)
 
 
-def _macro_pattern_tokens(tokens: tuple[Token, ...]) -> frozenset[int]:
-    """Return the indices of the macro-pattern tokens in every ``macro_rules!``.
+def _macro_spans(
+    tokens: tuple[Token, ...],
+) -> tuple[frozenset[int], frozenset[int]]:
+    """Return the pattern and expansion tokens of every ``macro_rules!``.
 
     A rule is a pattern followed by ``=>`` and a body, so the group before each
     arrow is the pattern and the group after it is the expansion. Only the
     pattern is skipped: an expansion that emits ``mod x;`` is code the crate
     compiles, even though Rust resolves its file from the macro's own position.
+    The expansion is returned separately so a declaration whose name is a
+    metavariable can be refused rather than silently missed.
     """
-    ignored: set[int] = set()
+    patterns: set[int] = set()
+    expansions: set[int] = set()
     for index in range(len(tokens) - len(_MACRO_HEAD)):
         if texts(tokens, index, len(_MACRO_HEAD)) != _MACRO_HEAD:
             continue
@@ -92,21 +98,25 @@ def _macro_pattern_tokens(tokens: tuple[Token, ...]) -> frozenset[int]:
         closing = _group_end(tokens, opening, len(tokens))
         if closing is None:
             continue
-        ignored.update(_pattern_spans(tokens, opening, closing))
-    return frozenset(ignored)
+        body_patterns, body_expansions = _rule_spans(tokens, opening, closing)
+        patterns.update(body_patterns)
+        expansions.update(body_expansions)
+    return frozenset(patterns), frozenset(expansions)
 
 
-def _pattern_spans(
+def _rule_spans(
     tokens: tuple[Token, ...],
     opening: int,
     closing: int,
-) -> set[int]:
-    """Return the indices of each top-level group in a macro body that has a rule.
+) -> tuple[set[int], set[int]]:
+    """Return the pattern and expansion indices of each rule in a macro body.
 
-    A group is a pattern when the token after it is ``=>``; the expansion that
-    follows the arrow is left for module discovery.
+    A group is a pattern when the token after it is ``=>``, and the group after
+    the arrow is that rule's expansion. A rule whose arrow ends the body has no
+    expansion to read.
     """
-    spans: set[int] = set()
+    patterns: set[int] = set()
+    expansions: set[int] = set()
     index = opening + 1
     while index < closing:
         group = _group_end(tokens, index, closing)
@@ -114,9 +124,40 @@ def _pattern_spans(
             index += 1
             continue
         if group + 1 < closing and tokens[group + 1].text == _RULE_ARROW:
-            spans.update(range(index, group + 1))
+            patterns.update(range(index, group + 1))
+            expansion = _group_end(tokens, group + 2, closing)
+            if expansion is not None:
+                expansions.update(range(group + 2, expansion + 1))
         index = group + 1
-    return spans
+    return patterns, expansions
+
+
+def _refuse_metavariable_modules(
+    tokens: tuple[Token, ...],
+    expansions: cabc.Iterable[int],
+) -> None:
+    """Fail closed on a ``mod $name;`` a macro expansion emits.
+
+    The declaration's file is chosen by the macro's invocation, which the
+    lexical scan never sees, so the audit cannot tell which file the crate
+    compiles; reporting a clean scan would leave that file unread.  A literal
+    ``mod name;`` in an expansion is left alone: the expansion spells the file
+    itself, and module discovery already records it.  Only the expansion after
+    ``=>`` is examined, so a matcher that spells ``mod $name;`` as the input it
+    matches is not a declaration.
+    """
+    for index in sorted(expansions):
+        token = tokens[index]
+        next_index = index + 1
+        if token.kind is not Kind.IDENT or token.text != "mod":
+            continue
+        if next_index < len(tokens) and tokens[next_index].text == "$":
+            msg = (
+                f"the macro_rules! expansion at line {token.line}, column "
+                f"{token.column} declares a module named by a metavariable, "
+                "so the audit cannot tell which file it compiles"
+            )
+            raise TrustAuditError(msg)
 
 
 def _group_end(tokens: tuple[Token, ...], index: int, limit: int) -> int | None:
@@ -208,6 +249,10 @@ def _path_attribute(
     ``path`` is refused rather than searched for: whether the attribute applies
     depends on the configuration the crate is built with, and the audit reads
     one tree.
+
+    When the declaration carries more than one direct ``#[path]``, the first in
+    source order decides, which is the attribute ``rustc`` compiles; the walk
+    runs backwards, so each find overwrites the previous one.
     """
     index = skip_visibility(tokens, mod_index - 1)
     value: str | None = None
@@ -217,8 +262,9 @@ def _path_attribute(
         opener = opening_bracket(tokens, index)
         if opener is None or opener not in spans:
             return None
-        if value is None:
-            value = path_value(tokens, opener, index)
+        found = path_value(tokens, opener, index)
+        if found is not None:
+            value = found
         if conditional_path(tokens, opener, index):
             _refuse_conditional_path(tokens, mod_index)
         index = previous_closer(tokens, opener)

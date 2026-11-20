@@ -87,8 +87,16 @@ def scan(text: str, *, procedural_macro: bool = False) -> ScanResult:
     no code token.
     """
     tokens = tokenize(text)
-    _refuse_opaque_macros(tokens, procedural_macro=procedural_macro)
-    context = _Context(tokens, procedural_macro=procedural_macro)
+    try:
+        _refuse_opaque_macros(tokens, procedural_macro=procedural_macro)
+        context = _Context(tokens, procedural_macro=procedural_macro)
+    except RecursionError as error:
+        # A grouped ``use`` nests, so a deeply nested one recurses through the
+        # use-tree parser.  The audit's callers report a `TrustAuditError` as
+        # `AUDIT_FAILED`; letting the interpreter's error escape would abort
+        # them with a traceback instead.
+        msg = "the file's use statements nest too deeply for the trust audit to read"
+        raise TrustAuditError(msg) from error
     return ScanResult(context.run(), module_references(tokens))
 
 
@@ -189,7 +197,7 @@ class _Context:
         if self._is_kani_path(index):
             self._report(token.text, token)
             return
-        if self._is_verus_context(index) and token.text in VERUS_VOCABULARY:
+        if token.text in VERUS_VOCABULARY and self._is_verus_context(index):
             self._report(token.text, token)
         self._report_if_imported(index, token)
 

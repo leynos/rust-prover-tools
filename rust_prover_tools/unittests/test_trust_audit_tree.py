@@ -99,6 +99,35 @@ def test_a_macro_pattern_in_any_delimiter_is_not_a_declaration(
     assert references(source) == [("real", None, ())]
 
 
+def test_a_module_named_by_a_macro_metavariable_is_refused() -> None:
+    """Refuse ``mod $name;`` in an expansion the scan cannot expand.
+
+    The invocation chooses the file, so the audit cannot tell which source the
+    crate compiles.  Missing the declaration would report a clean scan of code
+    it never read.
+    """
+    source = "macro_rules! decl { ($n:ident) => { mod $n; }; }"
+    with pytest.raises(TrustAuditError, match="named by a metavariable"):
+        references(source)
+
+
+def test_a_literal_module_declaration_in_an_expansion_is_reported() -> None:
+    """Keep a declaration an expansion spells, whose file is already known."""
+    source = "macro_rules! decl { () => { mod proofs; }; }"
+    assert references(source) == [("proofs", None, ())]
+
+
+def test_the_first_of_two_path_attributes_is_the_file_compiled() -> None:
+    """Follow the attribute ``rustc`` compiles when a declaration carries two.
+
+    ``rustc`` takes the first ``#[path]`` in source order and warns that later
+    ones are unused, so reading the attribute nearest the declaration would
+    audit a file the crate does not compile.
+    """
+    source = '#[path = "first.rs"]\n#[path = "second.rs"]\nmod x;'
+    assert references(source) == [("x", "first.rs", ())]
+
+
 def test_a_unicode_module_name_names_its_path_file() -> None:
     """Keep the whole name so a ``#[path]`` module is not silently skipped."""
     source = '#[path = "coffee.rs"]\nmod café;'

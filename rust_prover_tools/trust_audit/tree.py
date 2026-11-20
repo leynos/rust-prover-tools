@@ -106,7 +106,7 @@ def audit_tree(
     # a crate root, so its declarations are searched for beside it rather than
     # in a subdirectory named after it — however Cargo chose to name the file.
     pending = [
-        _Module(_normalise(driver), _parent_directory(driver)) for driver in drivers
+        _Module(_normalize(driver), _parent_directory(driver)) for driver in drivers
     ]
     scanned: dict[str, tuple[TrustItem, ...]] = {}
     owners: dict[str, str] = {}
@@ -166,7 +166,7 @@ def resolve_repository_path(root: pathlib.Path, relative: str) -> pathlib.Path:
     return resolved
 
 
-def _normalise(relative: str) -> str:
+def _normalize(relative: str) -> str:
     r"""Return one repository-relative path in POSIX form.
 
     A backslash is an ordinary filename character, so it is preserved:

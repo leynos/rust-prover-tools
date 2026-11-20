@@ -368,6 +368,19 @@ def test_a_character_literal_holding_a_quote_does_not_reopen() -> None:
     ]
 
 
+def test_a_deeply_nested_use_statement_is_refused_as_a_trust_error() -> None:
+    """Report a use tree past the recursion limit as an audit failure.
+
+    The audit's callers turn a ``TrustAuditError`` into ``AUDIT_FAILED``; a
+    ``RecursionError`` escaping as a traceback would abort the report they
+    promise instead.
+    """
+    nesting = 5000
+    source = f"use {'{' * nesting}kani{'}' * nesting};"
+    with pytest.raises(TrustAuditError, match="nest too deeply"):
+        scan(source)
+
+
 def test_tokenize_refuses_a_nested_comment_that_never_closes() -> None:
     """Honour comment nesting when deciding a comment has ended."""
     with pytest.raises(TrustAuditError, match="unterminated block comment"):

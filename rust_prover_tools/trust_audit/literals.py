@@ -257,7 +257,7 @@ def _decode_escape(
         # A line continuation skips the newline and the indentation after it.
         return _skip_continuation(body, index + 2)
     if escape == "\r" and body.startswith("\n", index + 2):
-        # Rust normalises CRLF to LF while reading source, so a continuation
+        # Rust normalizes CRLF to LF while reading source, so a continuation
         # written on a CRLF file is the same escape with two characters.
         return _skip_continuation(body, index + 3)
     if escape == "x":

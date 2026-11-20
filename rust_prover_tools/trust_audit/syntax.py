@@ -114,7 +114,7 @@ def tokenize(text: str) -> tuple[Token, ...]:
         length = _identifier_length(cursor.text, cursor.index)
         if length:
             # The bare name is what the vocabulary matches, and Rust compares
-            # identifiers by their NFC forms, so the text is normalised once
+            # identifiers by their NFC forms, so the text is normalized once
             # here rather than at every comparison. The column stays at the
             # prefix so a location names the token the author wrote.
             line, column = cursor.line, cursor.column
