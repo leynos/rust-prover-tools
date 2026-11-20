@@ -158,6 +158,45 @@ def test_the_smoke_target_validates_its_inputs_and_dispatches_as_data(
     )
 
 
+def _documented_command() -> str:
+    """Return the guide's smoke example with its placeholders filled in."""
+    example = load_examples(
+        _USERS_GUIDE.read_text(encoding="utf-8"), source=str(_USERS_GUIDE)
+    )[_SMOKE_EXAMPLE]
+    command = example.body
+    for placeholder, value in _SUBSTITUTIONS.items():
+        assert placeholder in command, (
+            f"the example no longer shows the placeholder {placeholder!r}"
+        )
+        command = command.replace(placeholder, value)
+    return command
+
+
+def _run_example(
+    command: str, environment: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run the guide's command the way a reader would, with ``gh`` isolated.
+
+    ``UV`` is pinned to the bare name in the child environment. When it is an
+    absolute path the Makefile puts its directory first on ``PATH`` so the
+    helper finds that uv, and a ``gh`` sitting beside it would then run ahead
+    of the reader's own — dispatching the hosted workflow with the caller's
+    credentials. Pinning the variable isolates that edge without adding an
+    override to the documented command.
+    """
+    shell = shutil.which("sh")
+    assert shell is not None, "a POSIX shell is required to run the example"
+    return subprocess.run(
+        [shell, "-eu", "-c", command],
+        cwd=REPO_ROOT,
+        env={**environment, "UV": "uv"},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+
 @NEEDS_MAKE
 def test_the_documented_smoke_example_dispatches_without_publishing(
     tmp_path: Path,
@@ -169,31 +208,46 @@ def test_the_documented_smoke_example_dispatches_without_publishing(
     other: an edit to either one that breaks the reader's command fails this
     test, without dispatching a hosted run.
     """
-    example = load_examples(
-        _USERS_GUIDE.read_text(encoding="utf-8"), source=str(_USERS_GUIDE)
-    )[_SMOKE_EXAMPLE]
-    command = example.body
-    for placeholder, value in _SUBSTITUTIONS.items():
-        assert placeholder in command, (
-            f"the example no longer shows the placeholder {placeholder!r}"
-        )
-        command = command.replace(placeholder, value)
     environment, log, _ = _gh_stub(tmp_path, reader_home=True)
-    shell = shutil.which("sh")
-    assert shell is not None, "a POSIX shell is required to run the example"
 
-    completed = subprocess.run(
-        [shell, "-eu", "-c", command],
-        cwd=REPO_ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
+    completed = _run_example(_documented_command(), environment)
 
     assert completed.returncode == 0, completed.stderr
     assert log.read_text(encoding="utf-8") == (
         "workflow\nrun\nkani-monthly.yml\n--ref\nmain\n-f\n"
         f"upstream_commit={_SHA}\n-f\npublication_id={_TAG}\n-f\npublish=false\n"
     ), "the documented command did not dispatch a non-publishing run"
+
+
+@NEEDS_MAKE
+def test_a_gh_beside_an_inherited_uv_cannot_shadow_the_reader_s_own(
+    tmp_path: Path,
+) -> None:
+    """An inherited absolute ``UV`` must not put a ``gh`` of its own first.
+
+    ``UV`` reaches the Makefile from the caller's environment, and its
+    directory is prepended to ``PATH``. A checkout whose uv shares a directory
+    with a ``gh`` would then dispatch the hosted workflow with the caller's
+    credentials, so the example runner pins ``UV`` to the bare name: the decoy
+    beside the uv must never run, and the reader's own stub must answer.
+    """
+    real_uv = shutil.which("uv")
+    assert real_uv is not None, "the suite needs uv on the PATH"
+    uv_directory = tmp_path / "uvbin"
+    uv_directory.mkdir()
+    (uv_directory / "uv").symlink_to(real_uv)
+    decoy = uv_directory / "gh"
+    decoy.write_text(_GH_DECOY, encoding="utf-8")
+    decoy.chmod(0o755)
+    environment, log, decoy_log = _gh_stub(tmp_path, reader_home=True)
+    environment["UV"] = str(uv_directory / "uv")
+
+    completed = _run_example(_documented_command(), environment)
+
+    assert completed.returncode == 0, completed.stderr
+    assert not decoy_log.exists(), (
+        "a gh beside the inherited uv dispatched the hosted run"
+    )
+    assert log.read_text(encoding="utf-8").startswith("workflow\nrun\n"), (
+        "the reader's own gh stub did not receive the dispatch"
+    )

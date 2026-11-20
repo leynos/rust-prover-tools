@@ -28,9 +28,11 @@ _MARKER = re.compile(
 #: skipped: silently ignoring it would leave its fence unregistered.
 _MARKER_INTENT = re.compile(r"^\s*<!--\s*tested-example\b")
 
-#: The opening fence of an example block.
+#: The opening fence of an example block. Markdown allows either fence
+#: character, and an unregistered `~~~` block would be exactly the undocumented
+#: example the marker convention exists to prevent.
 _FENCE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<fence>`{3,})(?P<language>[A-Za-z0-9_+-]*)\s*$"
+    r"^(?P<indent>[ \t]*)(?P<fence>`{3,}|~{3,})(?P<language>[A-Za-z0-9_+-]*)\s*$"
 )
 
 
@@ -58,11 +60,15 @@ class DocumentedExample:
 
 
 def _closing_fence(line: str, fence: str) -> bool:
-    """Say whether `line` closes a fence opened by `fence`."""
+    """Say whether `line` closes a fence opened by `fence`.
+
+    A closing fence repeats the opening character, so a `~~~` block is not
+    closed by backticks and a longer fence is never closed by a shorter one.
+    """
     stripped = line.strip()
     return (
         stripped.startswith(fence)
-        and set(stripped) == {"`"}
+        and set(stripped) == {fence[0]}
         and len(stripped) >= len(fence)
     )
 

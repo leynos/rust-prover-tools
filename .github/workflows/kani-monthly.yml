@@ -451,10 +451,13 @@ jobs:
             echo "the bundle does not carry the $bundle_root root" >&2
             exit 1
           }
+          # `--directory` runs the child from `builder`, while the archive was
+          # written under the workspace, so the path passed to it must be
+          # workspace-absolute as well.
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.orchestrator.inventory_build \
             --tree "$RUNNER_TEMP/bundle-tree/$bundle_root" \
-            --archive "payloads/$bundle_asset" \
+            --archive "$GITHUB_WORKSPACE/payloads/$bundle_asset" \
             --archive-root "$bundle_root" \
             --output "$GITHUB_WORKSPACE/payloads/inventory.json"
       - name: Measure the build evidence

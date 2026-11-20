@@ -85,6 +85,48 @@ def test_the_loader_refuses_an_unmarked_fence() -> None:
         load_examples(text, source="guide.md")
 
 
+def test_the_loader_refuses_an_unmarked_tilde_fence() -> None:
+    """A `~~~` block is a fence too, so it needs a marker like any other.
+
+    Markdown accepts either fence character, so a loader that recognised only
+    backticks would leave the tilde form unregistered: documentation no test
+    could ever hold, which is what the marker convention exists to prevent.
+    """
+    text = "\n".join(["# Guide", "", "~~~sh", "make run", "~~~"])
+
+    with pytest.raises(DocumentedExampleError, match="has no"):
+        load_examples(text, source="guide.md")
+
+
+def test_the_loader_reads_a_marked_tilde_fence() -> None:
+    """A marked `~~~` example is registered with its body and language."""
+    text = "\n".join([
+        "<!-- tested-example: run-it -->",
+        "~~~~sh",
+        "make run",
+        "~~~~",
+    ])
+
+    examples = load_examples(text)
+
+    assert set(examples) == {"run-it"}, "the marked tilde example was not registered"
+    assert examples["run-it"].language == "sh"
+    assert examples["run-it"].body == "make run"
+
+
+def test_a_backtick_fence_does_not_close_a_tilde_fence() -> None:
+    """Closing fences repeat the opening character, so the body stays open."""
+    text = "\n".join([
+        "<!-- tested-example: run-it -->",
+        "~~~sh",
+        "make run",
+        "```",
+    ])
+
+    with pytest.raises(DocumentedExampleError, match="has no closing fence"):
+        load_examples(text, source="guide.md")
+
+
 def test_the_loader_refuses_a_marker_without_an_identifier() -> None:
     """A marker with no identifier registers nothing, so it is refused."""
     text = "\n".join(["<!-- tested-example: -->", "```sh", "make run", "```"])

@@ -39,6 +39,16 @@ def _request(tmp_path: pathlib.Path) -> PublicationRequest:
     return fixtures.request(tmp_path)
 
 
+def _asset_id(api: FakeReleaseApi, name: str) -> int | None:
+    """Return the asset identity the release reports for `name`.
+
+    Reading it through `observe` keeps the test on the same surface the
+    orchestration compares, rather than on the fake's private records.
+    """
+    observed = api.observe(fixtures.TAG)
+    return next(asset.asset_id for asset in observed.assets if asset.name == name)
+
+
 class _AssetReplacedDuringHashApi(FakeReleaseApi):
     """Replace one asset's record while its bytes are being downloaded.
 
@@ -145,11 +155,19 @@ def test_hashes_of_replaced_bytes_do_not_authorise_the_edit(
     for name in ("launcher.tar.gz", "notices.tar.gz", "inventory.json"):
         api.place_asset(name, request.asset_paths[name])
     api.place_placeholder("backend.tar.gz")
+    before = _asset_id(api, "launcher.tar.gz")
+    assert before is not None, (
+        "a placed asset must carry the identity GitHub gives it, otherwise the"
+        " conflict below could come from an id appearing rather than changing"
+    )
 
     with pytest.raises(ProverToolError, match="publication conflict"):
         publish_release(request, api)
 
     assert api.replaced, "the replacement never happened, so nothing was tested"
+    assert _asset_id(api, "launcher.tar.gz") != before, (
+        "the replacement must be visible as a new asset identity"
+    )
     assert not api.discards, "a draft whose bytes moved was edited"
     assert not api.uploads, "a draft whose bytes moved was uploaded into"
     assert api.calls.count("hash_assets") >= 2, (

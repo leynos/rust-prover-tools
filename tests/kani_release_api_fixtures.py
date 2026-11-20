@@ -149,11 +149,14 @@ class FakeReleaseApi:
         self.is_draft = False
         self.body_text = body(fingerprint=fingerprint)
         self.stored = dict(PAYLOADS)
+        for name in self.stored:
+            self._record_asset(name)
         self.provenance_verified = True
 
     def place_asset(self, name: str, path: pathlib.Path) -> None:
         """Store one asset directly, as a previous attempt would have."""
         self.stored[name] = path.read_bytes()
+        self._record_asset(name)
 
     def place_placeholder(self, name: str, *, asset_id: int = 7) -> None:
         """Leave the record an upload interrupted after creating it produces."""

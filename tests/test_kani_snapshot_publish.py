@@ -195,12 +195,14 @@ def test_a_transient_verification_failure_is_retried(
     assert api.calls.count("verify") >= 2
 
 
-class _VanishingAssetApi(FakeReleaseApi):
-    """A release whose asset disappears after the observation that verified it.
+class _AssetMissingBeforeVerificationApi(FakeReleaseApi):
+    """A release whose asset disappears before the download that would verify it.
 
-    The removal happens during the verification of a complete draft, so the
-    verified reading still describes the asset it downloaded. Only a fresh
-    observation after the download can notice it is gone.
+    The removal happens after the fake captures a complete-draft observation
+    but before `verify` downloads those bytes, so the observation still lists
+    the asset while the download finds it gone. `verify` reports that as the
+    transport failure it is, and the publisher re-observes and uploads the
+    missing file rather than trusting a reading it could not complete.
     """
 
     def __init__(self) -> None:
@@ -217,23 +219,25 @@ class _VanishingAssetApi(FakeReleaseApi):
         return observed
 
 
-def test_an_asset_removed_after_verification_is_uploaded_again(
+def test_an_asset_missing_before_its_download_is_uploaded_again(
     tmp_path: pathlib.Path,
 ) -> None:
-    """A verified reading must not outlive the asset it downloaded.
+    """A missing download is a transport failure, and the draft is repaired.
 
-    A maintainer can remove an asset during the download that verified it. The
-    completed verification still reports the asset, so a publisher that trusted
-    it would make public a release that is missing a file. The confirming read
-    discards that verdict and the draft is completed again before it is
-    published.
+    A maintainer can remove an asset between the observation that listed a
+    complete draft and the download that would have verified it. The download
+    cannot complete, which the adapter reports as the transient failure it is,
+    so the publisher observes again, finds the asset gone, and uploads it
+    rather than publishing a release that is missing a file. Removal *during*
+    the publication recheck is covered separately in
+    `tests/test_kani_snapshot_publish_race.py`.
     """
-    api = _VanishingAssetApi()
+    api = _AssetMissingBeforeVerificationApi()
     decision = publish_release(_request(tmp_path), api)
     assert decision.action is ReleaseAction.NOOP
     assert api.stored == fixtures.PAYLOADS
     assert api.uploads.count("backend.tar.gz") == 2, (
-        "the asset removed after verification was not uploaded again"
+        "the asset missing before its download was not uploaded again"
     )
     assert api.calls.count("publish") == 1, "publication was attempted twice"
 

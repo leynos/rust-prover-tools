@@ -331,6 +331,28 @@ Terms used here:
   without changing behaviour; the existing publication and inventory tests pass
   unchanged.
 
+- 20 November 2026: remediated the second review round on `a2840bf`, which
+  returned two inline findings and four follow-ups to answers it had given
+  earlier. The inventory build now receives a workspace-absolute `--archive`:
+  `uv --directory` runs the child from `builder`, while the bundle is copied to
+  `$GITHUB_WORKSPACE/payloads`, so the relative form named a file that never
+  existed and the job failed before writing `inventory.json`. The release
+  double records an asset identity when it places bytes, so the replacement
+  test now proves a changed identity instead of an id merely appearing. The
+  documentation-example loader recognizes `~~~` fences and closes each fence
+  only with its own character, closing the last way an unregistered example
+  could hide. The documented-example runner pins `UV=uv`, because an inherited
+  absolute `UV` puts its directory first on `PATH` and a `gh` beside it would
+  dispatch the hosted workflow with the caller's credentials. The
+  missing-download witness is renamed for what it does — the asset is gone
+  before the download, which the adapter reports as a transient failure — and
+  the test says so. A new round-trip test,
+  `test_kani_snapshot_inventory_archive`, builds an archive whose carrier sorts
+  after the link that names it, generates the inventory through `--archive` and
+  `--archive-root`, and passes it to `validate_archive_inventory`; a walk alone
+  records the opposite carrier, so the test binds the archive parsing rather
+  than a supplied carrier map.
+
 ## Surprises & discoveries
 
 - PyYAML parses `on:` as the boolean `true` under YAML 1.1, so a contract test
