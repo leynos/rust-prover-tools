@@ -66,7 +66,7 @@ def test_errors_are_reported_with_every_failure() -> None:
     analysis = analyse_verus_log(FAILED)
 
     assert analysis.outcome is VerusOutcome.ERRORS
-    assert analysis.reason == "the log reports 1 failing functions"
+    assert analysis.reason == "the log reports 1 failing function"
     assert analysis.failures == FAILED.failures
     assert analysis.passed is False
 

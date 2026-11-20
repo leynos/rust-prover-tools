@@ -131,7 +131,11 @@ def analyse_verus_log(
         return _tool_error(log)
     run_mode = PARTIAL_RUN if summary.is_partial else FULL_RUN
     if summary.errors > 0:
-        reason = f"the log reports {summary.errors} failing functions"
+        # The reason is printed on the text report and carried in the JSON
+        # payload, so one failure has to read as one function rather than as
+        # the count followed by a fixed plural.
+        noun = "function" if summary.errors == 1 else "functions"
+        reason = f"the log reports {summary.errors} failing {noun}"
         return VerusAnalysis(
             VerusOutcome.ERRORS,
             run_mode,
