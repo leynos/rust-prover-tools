@@ -163,10 +163,12 @@ When adding a pinned asset, update `binary_assets` with the exact URL, digest,
 byte ceiling, and archive member, and add a test that builds a local archive of
 the expected shape. Never let a download path skip `download_pinned`, and do
 not extract archive members that are not named in the manifest. The one bounded
-exception is the installer's evidence fetch: `download_unverified` transfers
-the two self-authenticating evidence files whose digests the manifest does not
-supply yet, and it keeps the size bound and reported digest while deciding
-nothing about trust.
+exception is the installer's evidence fetch: `downloads.BoundedAsset` names a
+release file with a size ceiling and no pre-known digest, and
+`downloads.download_unverified` transfers the two self-authenticating evidence
+files that fit it. The digest it returns is an observation, not a pinned check:
+the call decides nothing about trust, and it does not replace `download_pinned`
+for anything the manifest pins.
 
 `UrlPolicy` receives two separate checks per download: `check_initial` sees the
 first URL and `check_redirect` sees every redirect target before it is opened,
@@ -845,16 +847,31 @@ modules, each owning one boundary rather than one file format:
   incomplete asset set.
 
 The publication boundary is split the same way. `release_model` holds the
-port-facing records, `release_policy` decides what an observed state means,
-`release_assets_policy` classifies one observed asset set and `release_markers`
-reads and writes the release-body markers; `release_port` declares the
-`ReleaseApi` port and `publish` is the orchestration over it. `publish_request`
-holds the local bytes a run is asked to publish and the precondition that
-refuses a missing or tampered local asset before any release API call.
-`gh_transport` is the one place a `gh` failure is classified, with the read and
-transfer budgets beside it. On the consumer side, `install_sender` performs the
-release transport behind `kani snapshot install`, and `shared_libraries` owns
-the dynamic-library search the installed tools use.
+port-facing records as frozen dataclasses, and `release_policy.decide` maps one
+observation to the next action without performing any effect, so the decision
+rules are testable without a release. `release_assets_policy.classify_assets`
+classifies the assets a draft serves, `release_markers` reads and writes the
+release-body markers, and `release_port` declares the `ReleaseApi` port.
+`publish` owns that port and is the only caller of `publish_release`: it
+observes, decides, acts and observes again, re-observes and re-decides before
+the single irreversible publish call, and stops after a bounded number of steps
+(`max_steps`, 16 by default) instead of assuming a state it cannot reconcile.
+`publish_request` holds the local bytes a run is asked to publish and the
+precondition that refuses a missing or tampered local asset before any release
+API call. The policy these steps carry is D5 in the distribution design
+(`docs/kani-snapshot-distribution-design.md#d5-workflow-and-immutable-publication`);
+this guide names the code rather than restating the rules.
+
+`gh_transport` is the one place a `gh` failure is classified. It owns the
+`GhRunner` protocol the adapter runs commands through, the read budget (120 s)
+and the transfer budget (300 s), and it treats a timeout, exit code 124 or a
+transient stderr marker as retryable while the permanent authentication and
+permission markers take precedence. `gh_optional` returns `None` only for a
+confirmed HTTP 404, so "not found" and "could not ask" never collapse into one
+answer, and `GhReleaseApi` refuses any repository but `REPOSITORY`. On the
+consumer side, `install_sender` performs the release transport behind
+`kani snapshot install`, and `shared_libraries` owns the dynamic-library search
+the installed tools use.
 
 The orchestrator's own helpers are named in the workflow section below:
 `documents` writes job documents atomically, `inventory_build` walks a payload
