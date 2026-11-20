@@ -1,7 +1,7 @@
 # Verus log corpus for release 0.2026.11.02.8bf68ee
 
 This directory is the oracle for `rust_prover_tools.verus_log`. Every `*.log`
-file is output captured from a real Verus run, not a hand-written sample, and
+file is output captured from a real Verus run, not a handwritten sample, and
 `expected.json` records the facts the parser and the analysis must derive from
 it. A change to the grammar that stops matching a real release therefore shows
 up as a corpus failure.

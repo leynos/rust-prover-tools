@@ -7,7 +7,7 @@ live under ``tests/fixtures/verus_logs/<version>``; only the first supported
 version is read here, because the corpus-wide checks state facts about the
 release under test.
 
-Each log is real output rather than a hand-written sample, which is what makes
+Each log is real output rather than a handwritten sample, which is what makes
 the grammar trustworthy: a change to :mod:`rust_prover_tools.verus_log.syntax`
 that stops matching a real release shows up as a corpus failure.
 """
