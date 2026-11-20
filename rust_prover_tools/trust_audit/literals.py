@@ -26,6 +26,7 @@ __all__ = (
     "consume_escaped_body",
     "consume_quote_literal",
     "decoded_literal_body",
+    "decoded_literal_body_positions",
     "literal_body",
 )
 
@@ -45,6 +46,9 @@ _ESCAPED_CHARACTERS = {
 }
 _HEX_DIGITS = frozenset(string.hexdigits)
 _HEX_ESCAPE_DIGITS = 2
+# Rust allows at most six hexadecimal digits in a `\u{…}` escape, however many
+# separators they are written with.
+_MAX_UNICODE_DIGITS = 6
 # A `\u{…}` escape names a Unicode scalar value; surrogates are code points but
 # not scalars, and Rust rejects them where Python's `chr` would accept one.
 _SURROGATES = range(0xD800, 0xE000)
@@ -171,23 +175,67 @@ def decoded_literal_body(source: str) -> tuple[int, str]:
         If ``source`` is not a string literal, or a cooked literal carries an
         escape Rust would reject.
     """
+    offset, body, _ = decoded_literal_body_positions(source)
+    return offset, body
+
+
+def decoded_literal_body_positions(
+    source: str,
+) -> tuple[int, str, tuple[int, ...]]:
+    r"""Return a literal's decoded value and each character's source offset.
+
+    A caller that reports where a decoded value matched needs the position of
+    the characters it matched, not of the escape that produced them. Each
+    decoded character is therefore paired with the offset, within ``source``,
+    of the escape or literal character it came from. A line continuation
+    produces no character, so it contributes no position.
+
+    Parameters
+    ----------
+    source : str
+        A literal token's text, as returned by `tokenize`.
+
+    Returns
+    -------
+    tuple[int, str, tuple[int, ...]]
+        The content's offset, its decoded value, and one source offset per
+        decoded character. ``decoded_literal_body_positions('"\\x61"')`` is
+        ``(1, 'a', (1,))``.
+
+    Raises
+    ------
+    TrustAuditError
+        If ``source`` is not a string literal, or a cooked literal carries an
+        escape Rust would reject.
+    """
     offset, body = literal_body(source)
     if RAW_START.match(source):
-        return offset, body
-    return offset, _decode_escapes(body, source)
+        return offset, body, tuple(range(offset, offset + len(body)))
+    decoded, positions = _decode_escapes(body, source)
+    return offset, decoded, tuple(offset + position for position in positions)
 
 
-def _decode_escapes(body: str, source: str) -> str:
-    """Read every escape sequence in one cooked string literal's body."""
-    decoded: list[str] = []
+def _decode_escapes(body: str, source: str) -> tuple[str, tuple[int, ...]]:
+    """Read one cooked body, pairing each decoded character with its source.
+
+    The position is where the character was written, so a match report can
+    point at the escape rather than at the decoded text it produced.
+    """
+    characters: list[str] = []
+    positions: list[int] = []
     index = 0
     while index < len(body):
         if body[index] != "\\":
-            decoded.append(body[index])
+            characters.append(body[index])
+            positions.append(index)
             index += 1
             continue
-        index = _decode_escape(body, index, decoded, source)
-    return "".join(decoded)
+        start = index
+        index = _decode_escape(body, index, characters, source)
+        # However many characters an escape produced, all of them were written
+        # as the one escape, so all of them point back at its backslash.
+        positions.extend([start] * (len(characters) - len(positions)))
+    return "".join(characters), tuple(positions)
 
 
 def _decode_escape(
@@ -247,18 +295,38 @@ def _decode_unicode_escape(
     decoded: list[str],
     source: str,
 ) -> int:
-    r"""Decode the ``\u{…}`` escape at ``index`` into one character."""
+    r"""Decode the ``\u{…}`` escape at ``index`` into one character.
+
+    Rust permits underscores between the hexadecimal digits — ``\u{6_3}`` is
+    ``c`` — so the separators are removed before the digit count and the value
+    are checked. The six-digit ceiling is Rust's, not Python's.
+    """
     opening = index + 2
     if opening >= len(body) or body[opening] != "{":
         msg = f"malformed \\u escape in {source!r}"
         raise TrustAuditError(msg)
     closing = body.find("}", opening + 1)
-    digits = body[opening + 1 : closing] if closing >= 0 else ""
-    if not digits or not all(digit in _HEX_DIGITS for digit in digits):
+    written = body[opening + 1 : closing] if closing >= 0 else ""
+    digits = written.replace("_", "")
+    if not _is_unicode_digits(digits):
         msg = f"malformed \\u escape in {source!r}"
         raise TrustAuditError(msg)
     decoded.append(_scalar_character(digits))
     return closing + 1
+
+
+def _is_unicode_digits(digits: str) -> bool:
+    """Report whether ``digits`` is a digit run Rust would accept.
+
+    An empty run names no character at all, and the six-digit ceiling is
+    Rust's own limit on how many digits an escape may carry. Each check is a
+    separate guard so the reason a run was refused stays readable.
+    """
+    if not digits:
+        return False
+    if len(digits) > _MAX_UNICODE_DIGITS:
+        return False
+    return all(digit in _HEX_DIGITS for digit in digits)
 
 
 def _scalar_character(digits: str) -> str:

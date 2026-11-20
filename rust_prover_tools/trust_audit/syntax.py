@@ -21,7 +21,7 @@ import dataclasses as dc
 import enum
 import unicodedata
 
-from rust_prover_tools.trust_audit.cursor import Cursor
+from rust_prover_tools.trust_audit.cursor import RUST_WHITESPACE, Cursor
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.literals import (
     consume_escaped_body,
@@ -113,10 +113,13 @@ def tokenize(text: str) -> tuple[Token, ...]:
             continue
         length = _identifier_length(cursor.text, cursor.index)
         if length:
-            # The bare name is what the vocabulary matches; the column stays at
-            # the prefix so a location names the token the author wrote.
+            # The bare name is what the vocabulary matches, and Rust compares
+            # identifiers by their NFC forms, so the text is normalised once
+            # here rather than at every comparison. The column stays at the
+            # prefix so a location names the token the author wrote.
             line, column = cursor.line, cursor.column
-            name = cursor.take(length).removeprefix("r#")
+            written = cursor.take(length).removeprefix("r#")
+            name = unicodedata.normalize("NFC", written)
             tokens.append(Token(Kind.IDENT, name, line, column))
             continue
         if _skip_character_literal_or_lifetime(cursor):
@@ -134,7 +137,7 @@ def _skip_trivia(cursor: Cursor) -> bool:
     """Consume whitespace and comments; report whether anything was consumed."""
     started = cursor.index
     while not cursor.at_end:
-        if cursor.text[cursor.index] in " \t\r\n":
+        if cursor.text[cursor.index] in RUST_WHITESPACE:
             cursor.take(1)
         elif cursor.starts("//"):
             newline = cursor.text.find("\n", cursor.index)

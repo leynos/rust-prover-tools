@@ -86,6 +86,19 @@ def test_a_macro_pattern_is_not_a_module_declaration() -> None:
     assert references(source) == [("real", None, ())]
 
 
+@pytest.mark.parametrize(
+    ("opening", "closing"),
+    [("(", ")"), ("[", "]"), ("{", "}")],
+)
+def test_a_macro_pattern_in_any_delimiter_is_not_a_declaration(
+    opening: str,
+    closing: str,
+) -> None:
+    """Skip the pattern however the ``macro_rules!`` body is bracketed."""
+    source = f"macro_rules! m {opening}(mod sample;) => {{}}{closing}\nmod real;"
+    assert references(source) == [("real", None, ())]
+
+
 def test_a_unicode_module_name_names_its_path_file() -> None:
     """Keep the whole name so a ``#[path]`` module is not silently skipped."""
     source = '#[path = "coffee.rs"]\nmod café;'
@@ -104,6 +117,19 @@ def test_a_braced_path_escape_is_read_as_rust_reads_it() -> None:
     assert references(source) == [("child", "child.rs", ())]
 
 
+def test_an_underscored_path_escape_is_read_as_rust_reads_it() -> None:
+    r"""Decode ``\u{6_3}``: Rust allows separators between the digits."""
+    source = '#[path = "\\u{6_3}hild.rs"]\nmod child;'
+    assert references(source) == [("child", "child.rs", ())]
+
+
+def test_a_path_escape_with_too_many_digits_is_refused() -> None:
+    r"""Refuse a ``\u{…}`` escape longer than Rust's six-digit limit."""
+    source = '#[path = "\\u{0000063}.rs"]\nmod x;'
+    with pytest.raises(TrustAuditError, match="malformed"):
+        references(source)
+
+
 def test_a_surrogate_path_escape_is_refused() -> None:
     r"""Refuse a ``\u{…}`` escape naming a code point Rust does not allow."""
     source = '#[path = "\\u{d800}.rs"]\nmod x;'
@@ -116,6 +142,21 @@ def test_a_conditional_path_is_refused() -> None:
     source = '#[cfg_attr(unix, path = "unix_impl.rs")]\nmod platform;'
     with pytest.raises(TrustAuditError, match="conditional #\\[path\\]"):
         references(source)
+
+
+def test_a_conditional_path_above_a_direct_path_is_refused() -> None:
+    """Examine the whole attribute run, whichever order the two appear in."""
+    source = (
+        '#[cfg_attr(feature = "alt", path = "alt.rs")]\n#[path = "base.rs"]\nmod child;'
+    )
+    with pytest.raises(TrustAuditError, match="conditional #\\[path\\]"):
+        references(source)
+
+
+def test_a_cfg_attr_predicate_naming_path_is_not_a_path_attribute() -> None:
+    """Read ``path`` in the predicate as a configuration name, not a target."""
+    source = '#[cfg_attr(path = "audit", allow(dead_code))]\nmod x;'
+    assert references(source) == [("x", None, ())]
 
 
 def test_a_declaration_after_an_inline_module_is_at_file_scope() -> None:
@@ -232,6 +273,89 @@ def test_the_walk_finds_a_module_in_its_own_directory(tmp_path: Path) -> None:
         "src/foo/mod.rs": ["assume"],
         "src/lib.rs": [],
     }
+
+
+def test_a_path_loaded_file_owns_its_own_directory(tmp_path: Path) -> None:
+    """Search beside the loaded file, not beneath the module name it replaced.
+
+    ``#[path = "impl.rs"] mod component;`` makes ``src/impl.rs`` the module
+    ``component``, but rustc resolves ``mod trusted;`` inside it from the file's
+    own directory. Searching ``src/component/`` instead would audit a decoy
+    rather than the file the crate compiles.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": '#[path = "impl.rs"]\nmod component;',
+            "src/impl.rs": "mod trusted;",
+            "src/trusted.rs": "fn g() { kani::assume(true); }",
+            "src/component/trusted.rs": "fn decoy() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/impl.rs": [],
+        "src/lib.rs": [],
+        "src/trusted.rs": ["assume"],
+    }
+
+
+def test_a_path_loaded_module_owns_its_own_directory(tmp_path: Path) -> None:
+    """Search beside a path-loaded file declared inside an inline module."""
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": ('mod outer { #[path = "deep/impl.rs"] mod inner; }'),
+            "src/outer/deep/impl.rs": "mod child;",
+            "src/outer/deep/child.rs": "fn g() { kani::assume(true); }",
+            "src/outer/inner/child.rs": "fn decoy() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/lib.rs": [],
+        "src/outer/deep/child.rs": ["assume"],
+        "src/outer/deep/impl.rs": [],
+    }
+
+
+def test_a_main_rs_module_owns_its_directory(tmp_path: Path) -> None:
+    """Give ``main.rs`` crate-root treatment only when it is the entry point.
+
+    ``mod main;`` loads ``src/main.rs`` as an ordinary module, so the file owns
+    ``src/main/`` for its children. Treating the stem as a crate root would
+    audit ``src/child.rs``, which the crate never compiles.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "mod main;",
+            "src/main.rs": "mod child;",
+            "src/main/child.rs": "fn g() { kani::assume(true); }",
+            "src/child.rs": "fn decoy() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/lib.rs": [],
+        "src/main.rs": [],
+        "src/main/child.rs": ["assume"],
+    }
+
+
+def test_a_cyclic_path_is_refused(tmp_path: Path) -> None:
+    """Refuse a ``#[path]`` that reaches a file already being audited.
+
+    The second spelling resolves to the same file, so following it would either
+    walk forever or resolve that file's children under a second owner.
+    """
+    write(
+        tmp_path,
+        {"src/lib.rs": '#[path = "../src/lib.rs"]\nmod again;'},
+    )
+
+    with pytest.raises(TrustAuditError, match="under two spellings"):
+        audit_tree(tmp_path, ["src/lib.rs"])
 
 
 def test_the_walk_honours_a_path_attribute(tmp_path: Path) -> None:

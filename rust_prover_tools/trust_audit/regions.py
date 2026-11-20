@@ -13,6 +13,7 @@ import typing as typ
 from rust_prover_tools.trust_audit.structure import (
     attribute_spans,
     matching,
+    payload_start,
     texts,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token
@@ -27,8 +28,6 @@ __all__ = ("verus_regions",)
 # the same items in any of Rust's three delimiter pairs, so all three are read.
 _VERUS_MACRO_HEAD = ("verus", "!")
 _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
-_OPENERS = frozenset(_DELIMITER_PAIRS)
-_CLOSERS = frozenset(_DELIMITER_PAIRS.values())
 
 
 def verus_regions(tokens: tuple[Token, ...]) -> tuple[tuple[int, int], ...]:
@@ -89,7 +88,7 @@ def _cfg_attr_regions(
     configuration is set, so reading the predicate as an attribute would report
     ``external`` for a word that is only a condition.
     """
-    start = _payload_start(tokens, open_index, close_index)
+    start = payload_start(tokens, open_index, close_index)
     if start is None:
         return ()
     regions = []
@@ -105,29 +104,6 @@ def _cfg_attr_regions(
     return tuple(regions)
 
 
-def _payload_start(
-    tokens: tuple[Token, ...],
-    open_index: int,
-    close_index: int,
-) -> int | None:
-    """Return the index after a ``cfg_attr`` predicate's closing comma.
-
-    The predicate is the first item and may itself contain commas inside a
-    nested call such as ``all(…)``, so only a comma at the attribute's own
-    bracket depth separates it from the payload.
-    """
-    depth = 0
-    for index in range(open_index + 1, close_index):
-        text = tokens[index].text
-        if text in _OPENERS:
-            depth += 1
-        elif text in _CLOSERS:
-            depth -= 1
-        elif text == "," and depth == 0:
-            return index + 1
-    return None
-
-
 def _attribute_end(
     tokens: tuple[Token, ...],
     head_index: int,
@@ -135,9 +111,20 @@ def _attribute_end(
 ) -> int:
     """Return the last token of the attribute starting at ``head_index``.
 
-    An attribute with arguments ends at its own closing bracket, so an
-    unrelated attribute beside it in the payload is not swept into the region.
+    An attribute path may be qualified — ``verifier::external_body`` is the
+    ``external_body`` attribute of the ``verifier`` namespace — and every
+    segment is part of the attribute, so the path is followed before the
+    argument group is looked for. An attribute with arguments ends at its own
+    closing bracket, so an unrelated attribute beside it in the payload is not
+    swept into the region.
     """
-    if head_index + 1 < close_index and tokens[head_index + 1].text == "(":
-        return matching(tokens, head_index + 1, "(", ")")
-    return head_index
+    end = head_index
+    while (
+        end + 2 < close_index
+        and tokens[end + 1].text == "::"
+        and tokens[end + 2].kind is Kind.IDENT
+    ):
+        end += 2
+    if end + 1 < close_index and tokens[end + 1].text == "(":
+        return matching(tokens, end + 1, "(", ")")
+    return end

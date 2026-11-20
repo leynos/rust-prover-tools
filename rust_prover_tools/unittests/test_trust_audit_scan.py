@@ -67,6 +67,18 @@ def test_a_chained_crate_alias_makes_a_qualified_path_trust() -> None:
     assert items(source) == [("assume", 3)]
 
 
+def test_a_member_rename_through_a_crate_alias_is_reported() -> None:
+    """Resolve ``use k::{assume as a}`` once ``use kani as k`` binds the crate."""
+    source = "use kani as k;\nuse k::{assume as a};\nfn f() { a(true); }"
+    assert items(source) == [("assume", 2), ("assume", 3)]
+
+
+def test_a_chained_member_rename_reports_the_original_item() -> None:
+    """Follow ``use a as b`` from a member rename to the item it renames."""
+    source = "use kani::{assume as a};\nuse a as b;\nfn f() { b(true); }"
+    assert items(source) == [("assume", 1), ("assume", 2), ("assume", 3)]
+
+
 def test_a_member_rename_before_a_path_is_not_a_call() -> None:
     """Leave the qualifier of ``a::assume(..)`` alone: it names no item."""
     source = "use kani::{assume as a};\nfn f() { a::assume(true); }"
@@ -103,6 +115,16 @@ def test_a_verus_body_in_brackets_reports_its_vocabulary() -> None:
     assert items(source) == [("admit", 1)]
 
 
+def test_a_renamed_kani_member_inside_a_verus_body_is_reported() -> None:
+    """Apply the imported-root rule inside a ``verus!`` body too.
+
+    The rules are cumulative: a Kani-only word in a Verus body is not Verus
+    vocabulary, but it is still the item a Kani import renamed.
+    """
+    source = "use kani::{assume as a};\nverus! { proof fn f() { a(true); } }"
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
 def test_a_verus_attribute_reports_its_arguments() -> None:
     """Report a Verus word inside a bare ``external`` attribute."""
     source = "#[verifier(external_body)]\nfn f() {}"
@@ -113,6 +135,12 @@ def test_a_cfg_attr_carrying_a_verus_attribute_reports_its_arguments() -> None:
     """Report a Verus word nested inside a ``cfg_attr``."""
     source = "#[cfg_attr(verus_keep_ghost, verus_spec(admit()))]\nfn f() {}"
     assert items(source) == [("admit", 1)]
+
+
+def test_a_cfg_attr_carrying_a_qualified_attribute_reports_it() -> None:
+    """Keep every segment of ``verifier::external_body`` inside the region."""
+    source = "#[cfg_attr(enabled, verifier::external_body)]\nfn f() {}"
+    assert items(source) == [("external_body", 1)]
 
 
 def test_a_cfg_attr_without_a_verus_attribute_reports_nothing() -> None:
@@ -147,6 +175,31 @@ def test_an_opaque_macro_is_refused() -> None:
         scan('include!("generated.rs");')
 
 
+def test_a_renamed_opaque_macro_is_refused() -> None:
+    """Follow a ``use`` rename so ``load!`` is still ``include!``."""
+    source = 'use std::include as load;\nload!("generated.rs");'
+    with pytest.raises(TrustAuditError, match=r"load! at line 2, column 1"):
+        scan(source)
+
+
+def test_a_decomposed_identifier_matches_its_composed_spelling() -> None:
+    """Compare identifiers by NFC, as Rust does.
+
+    The alias is written with a combining accent and the call with the
+    precomposed character; Rust treats the names as equal, so the call is the
+    qualified Kani path the alias already binds.
+    """
+    source = "use kani as cafe\u0301;\nfn f() { caf\u00e9::assume(true); }"
+    assert items(source) == [("assume", 2)]
+
+
+@pytest.mark.parametrize("separator", ["\f", "\v", "\u200e"])
+def test_rust_whitespace_separates_a_verus_macro_head(separator: str) -> None:
+    """Treat every Rust whitespace character as a token separator."""
+    source = f"verus{separator}!{{ proof fn p() {{ admit(); }} }}"
+    assert items(source) == [("admit", 1)]
+
+
 def test_an_unterminated_literal_is_refused() -> None:
     """Refuse source whose literal never ends, rather than resuming mid-string."""
     with pytest.raises(TrustAuditError, match="unterminated string"):
@@ -163,6 +216,19 @@ def test_a_literal_is_not_read_without_the_procedural_macro_toggle() -> None:
     """Keep a string's contents out of the audit for an ordinary crate."""
     source = 'fn f() { let _ = "kani::assume(x);"; }'
     assert items(source) == []
+
+
+def test_a_procedural_macro_scan_decodes_a_literal_escape() -> None:
+    r"""Report what Rust decodes ``\x61`` to, at the escape that wrote it."""
+    source = r'"kani::\x61ssume(x);"'
+    found = scan(source, procedural_macro=True).items
+    assert [(item.item, item.column) for item in found] == [("assume", 8)]
+
+
+def test_a_procedural_macro_scan_refuses_an_undecodable_escape() -> None:
+    """Fail closed rather than report a clean literal it could not read."""
+    with pytest.raises(TrustAuditError, match="not a Unicode scalar value"):
+        scan(r'"\u{d800}assume"', procedural_macro=True)
 
 
 def test_a_literal_scan_keeps_two_occurrences_apart() -> None:

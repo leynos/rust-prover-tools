@@ -89,9 +89,9 @@ def _macro_pattern_tokens(tokens: tuple[Token, ...]) -> frozenset[int]:
         if texts(tokens, index, len(_MACRO_HEAD)) != _MACRO_HEAD:
             continue
         opening = index + len(_MACRO_HEAD) + 1
-        if opening >= len(tokens) or tokens[opening].text != _INLINE:
+        closing = _group_end(tokens, opening, len(tokens))
+        if closing is None:
             continue
-        closing = matching(tokens, opening, _INLINE, "}")
         ignored.update(_pattern_spans(tokens, opening, closing))
     return frozenset(ignored)
 
@@ -203,24 +203,26 @@ def _path_attribute(
     ``mod x;`` search, which reads a different file from the one the crate
     compiles and can report a clean audit of code that is not in the proof.
 
-    A ``cfg_attr`` that carries a ``path`` is refused rather than searched for:
-    whether the attribute applies depends on the configuration the crate is
-    built with, and the audit reads one tree.
+    The whole run is examined even after a direct ``#[path]`` is found, because
+    a ``cfg_attr`` beside it can still carry one. A ``cfg_attr`` that carries a
+    ``path`` is refused rather than searched for: whether the attribute applies
+    depends on the configuration the crate is built with, and the audit reads
+    one tree.
     """
     index = skip_visibility(tokens, mod_index - 1)
+    value: str | None = None
     while index >= 0:
         if tokens[index].text != "]":
             return None
         opener = opening_bracket(tokens, index)
         if opener is None or opener not in spans:
             return None
-        value = path_value(tokens, opener, index)
-        if value is not None:
-            return value
+        if value is None:
+            value = path_value(tokens, opener, index)
         if conditional_path(tokens, opener, index):
             _refuse_conditional_path(tokens, mod_index)
         index = previous_closer(tokens, opener)
-    return None
+    return value
 
 
 def _refuse_conditional_path(tokens: tuple[Token, ...], mod_index: int) -> None:

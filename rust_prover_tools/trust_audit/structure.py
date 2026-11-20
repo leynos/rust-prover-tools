@@ -22,6 +22,7 @@ __all__ = (
     "opening_bracket",
     "opening_paren",
     "path_value",
+    "payload_start",
     "previous_closer",
     "skip_visibility",
     "texts",
@@ -31,6 +32,10 @@ __all__ = (
 _PATH_HEAD = ("path", "=")
 # The attribute that applies another attribute under a configuration predicate.
 _CFG_ATTR = "cfg_attr"
+# The bracket pairs an attribute or use tree may nest.
+_DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
+_OPENERS = frozenset(_DELIMITER_PAIRS)
+_CLOSERS = frozenset(_DELIMITER_PAIRS.values())
 
 
 def matching(
@@ -169,6 +174,30 @@ def path_value(
     return decoded_literal_body(literal.text)[1]
 
 
+def payload_start(
+    tokens: tuple[Token, ...], open_index: int, close_index: int
+) -> int | None:
+    """Return the index after a ``cfg_attr`` predicate's closing comma.
+
+    The predicate is the first item and may itself contain commas inside a
+    nested call such as ``all(…)``, so only a comma at the attribute's own
+    bracket depth separates it from the payload. ``None`` means the attribute
+    carries no payload and so applies no attribute at all.
+    """
+    if open_index >= close_index or tokens[open_index].text != "(":
+        return None
+    depth = 0
+    for index in range(open_index + 1, close_index):
+        text = tokens[index].text
+        if text in _OPENERS:
+            depth += 1
+        elif text in _CLOSERS:
+            depth -= 1
+        elif text == "," and depth == 0:
+            return index + 1
+    return None
+
+
 def conditional_path(
     tokens: tuple[Token, ...], open_index: int, close_index: int
 ) -> bool:
@@ -178,12 +207,19 @@ def conditional_path(
     two different files depending on the configuration. The audit reads the
     repository rather than one configuration, so a declaration like this is
     refused instead of being resolved to whichever file happens to exist.
+
+    Only the payload can select a target. The configuration predicate is the
+    first item, so a predicate that happens to spell ``path = "…"`` — a custom
+    configuration named ``path`` with a value — is not a path attribute.
     """
     head_index = open_index + 1
     if head_index >= close_index or tokens[head_index].text != _CFG_ATTR:
         return False
+    start = payload_start(tokens, head_index + 1, close_index)
+    if start is None:
+        return False
     return any(
         tuple(token.text for token in tokens[index : index + len(_PATH_HEAD)])
         == _PATH_HEAD
-        for index in range(head_index + 1, close_index)
+        for index in range(start, close_index)
     )

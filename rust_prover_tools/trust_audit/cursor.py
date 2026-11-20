@@ -10,7 +10,13 @@ from __future__ import annotations
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 
-__all__ = ("Cursor",)
+__all__ = ("RUST_WHITESPACE", "Cursor")
+
+# Rust's lexical whitespace. `str.isspace` is wider (it also matches U+001C to
+# U+001F, which Rust treats as ordinary characters), so the set is spelled out.
+RUST_WHITESPACE: frozenset[str] = frozenset(
+    "\t\n\v\f\r \x85\u200e\u200f\u2028\u2029",
+)
 
 
 class Cursor:

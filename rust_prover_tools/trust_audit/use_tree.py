@@ -23,6 +23,7 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.trust_audit.syntax import Kind, Token
+from rust_prover_tools.trust_audit.use_alias import crate_alias_indices
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -114,19 +115,60 @@ def member_bindings(
     ``use kani::{self as k};`` — is not a member binding, and ``self`` is not an
     item the vocabulary names. `alias_bindings` reports those instead.
 
+    A member can be renamed again: after ``use kani::{assume as a};``, the
+    statement ``use a as b;`` binds ``b`` to the same item. The search
+    therefore repeats until a pass adds no name, just as `alias_bindings` does
+    for crates; reading the statements once would miss ``b(x)`` and report the
+    file as trusting nothing at that use.
+
     Examples
     --------
     ``use kani::{assume as a};`` reports ``(('assume', 'a'),)``.
     """
-    bindings: set[tuple[str, str]] = set()
+    bindings: dict[str, str] = {}
+    while True:
+        # A round re-reports every binding it can see, so only the names it
+        # newly explains may extend the map.  Extending with the rest would
+        # leave the loop with work to do forever.
+        discovered = {
+            alias: item
+            for alias, item in _binding_round(tokens, roots, bindings).items()
+            if bindings.get(alias) != item
+        }
+        if not discovered:
+            return frozenset((item, alias) for alias, item in bindings.items())
+        bindings.update(discovered)
+
+
+def _binding_round(
+    tokens: tuple[Token, ...],
+    roots: cabc.Container[str],
+    bindings: cabc.Mapping[str, str],
+) -> dict[str, str]:
+    """Return the names one pass binds to an item, keyed by the local name.
+
+    A path rooted at one of ``roots`` names a member of that crate. A path
+    rooted at a name ``bindings`` already maps to an item is a further rename
+    of that same item, which Rust permits as ``use alias as another;``.
+    """
+    discovered: dict[str, str] = {}
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or token.text != "use":
             continue
         end = statement_end(tokens, index + 1)
         for root, start, stop in _rooted_spans(tokens, index + 1, end):
             if root in roots:
-                bindings.update(_member_aliases(tokens, start, stop))
-    return frozenset(bindings)
+                discovered.update(
+                    (alias, member)
+                    for member, alias in _member_aliases(tokens, start, stop)
+                )
+            elif root in bindings:
+                discovered.update(
+                    (alias, bindings[root])
+                    for _root, alias in use_roots(tokens, start, stop)
+                    if alias is not None
+                )
+    return discovered
 
 
 def use_roots(
@@ -199,7 +241,7 @@ def use_aliases(tokens: tuple[Token, ...], start: int, end: int) -> frozenset[st
     crate's.
     """
     return frozenset(
-        tokens[index + 1].text for index in _crate_alias_indices(tokens, start, end)
+        tokens[index + 1].text for index in crate_alias_indices(tokens, start, end)
     )
 
 
@@ -265,7 +307,7 @@ def _member_aliases(
     with an identifier on each side, so ``kani::foo::assume as a`` and
     ``kani::{assume as a, assert as b}`` are read alike.
     """
-    crate_aliases = set(_crate_alias_indices(tokens, start, end))
+    crate_aliases = set(crate_alias_indices(tokens, start, end))
     for index in range(start + 1, end - 1):
         if index in crate_aliases or tokens[index].text != "as":
             continue
@@ -341,57 +383,3 @@ def _top_level_members(
             if member_start is not None:
                 yield member_start, index
             member_start = index + 1
-
-
-def _crate_alias_indices(
-    tokens: tuple[Token, ...],
-    start: int,
-    end: int,
-) -> cabc.Iterator[int]:
-    """Yield the index of each ``as`` that renames the crate in one statement.
-
-    At most one such ``as`` can appear in a statement Rust accepts, but the
-    reader reports every one it finds rather than assuming: a statement it
-    misreads is better reported twice than silently narrowed.
-    """
-    for index in range(start, end - 1):
-        if tokens[index].text != "as":
-            continue
-        if tokens[index + 1].kind is not Kind.IDENT:
-            continue
-        if _renames_crate(tokens, start, index):
-            yield index
-
-
-def _renames_crate(tokens: tuple[Token, ...], start: int, as_index: int) -> bool:
-    """Report whether the ``as`` at ``as_index`` renames the root, not a member.
-
-    Two positions do so: directly after the root (``root as name``) and directly
-    after a ``self`` that is itself the first thing inside a brace
-    (``root::{self as name}``). Every other ``as`` in the statement belongs to a
-    member path.
-
-    A bare ``self`` is the root itself, so ``self as name`` renames the crate
-    wherever it appears. Any other identifier is the root only when it is the
-    first one in the statement: ``root::name as alias`` puts a second identifier
-    in front of the ``as``, and that is a member rename.
-    """
-    target = as_index - 1
-    if target < start or tokens[target].kind is not Kind.IDENT:
-        return False
-    if tokens[target].text == "self":
-        # In a whole statement, bare `self` is invalid at the root and only
-        # appears as `root::{self as name}`. A member span begins *after* its
-        # opening brace, so `self` first there is the grouped-spelling root.
-        return target > start or tokens[start - 1].text == "::"
-    return _is_root_reference(tokens, start, target)
-
-
-def _is_root_reference(tokens: tuple[Token, ...], start: int, index: int) -> bool:
-    """Report whether the identifier at ``index`` is the statement's own root.
-
-    A ``use`` statement reaches its root through a leading ``::`` or directly,
-    and nothing else precedes it but the keyword itself. So the root is the only
-    identifier between ``start`` and ``index``.
-    """
-    return all(tokens[cursor].kind is not Kind.IDENT for cursor in range(start, index))
