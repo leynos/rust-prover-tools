@@ -204,6 +204,7 @@ def test_a_direct_harness_refuses_a_non_string_role() -> None:
         Harness("h::x", typ.cast("str", []))
 
 
+@pytest.mark.usefixtures("default_int_digit_limit")
 def test_a_number_too_long_to_convert_is_a_manifest_error() -> None:
     """Report an over-long JSON integer as a manifest error, not a ValueError."""
     text = json.dumps(document()).replace("1", "9" * 4301, 1)

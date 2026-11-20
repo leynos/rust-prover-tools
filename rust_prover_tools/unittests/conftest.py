@@ -12,6 +12,7 @@ the baseline mutmut runs before it scores any mutant.
 from __future__ import annotations
 
 import os
+import sys
 import typing as typ
 
 import pytest
@@ -63,6 +64,28 @@ SKIP_CHDIR_UNDER_MUTMUT = pytest.mark.skipif(
         "working directory, so a test that chdirs fails inside its sandbox"
     ),
 )
+
+
+#: The interpreter's default limit on converting an ``int`` to or from a
+#: decimal string.
+DEFAULT_INT_DIGIT_LIMIT: typ.Final[int] = 4300
+
+
+@pytest.fixture
+def default_int_digit_limit() -> cabc.Iterator[None]:
+    """Pin the integer string-conversion limit for one test, then restore it.
+
+    Tests that expect a conversion failure otherwise depend on how the
+    interpreter was started: ``PYTHONINTMAXSTRDIGITS=0`` or a larger value
+    lets the conversion succeed and the expected refusal never happens.
+    The limit is process-wide, so the previous value is restored afterwards.
+    """
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(DEFAULT_INT_DIGIT_LIMIT)
+    try:
+        yield
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 @pytest.fixture

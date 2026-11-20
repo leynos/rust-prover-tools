@@ -379,6 +379,7 @@ def test_a_block_without_results_is_refused() -> None:
     assert "has no results section" in refused(text)
 
 
+@pytest.mark.usefixtures("default_int_digit_limit")
 def test_an_unconvertible_report_integer_is_refused() -> None:
     """Turn a digit run too long to convert into a structural error."""
     text = log_text("verified").replace(
