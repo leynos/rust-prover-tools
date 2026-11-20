@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "harnesses": [
+    {
+      "name": "harnesses::verified",
+      "role": "claim",
+      "covers": [
+        "the boundary below saturation is reachable"
+      ]
+    },
+    {
+      "name": "harnesses::counterexample",
+      "role": "claim",
+      "covers": []
+    },
+    {
+      "name": "harnesses::unsatisfied_cover",
+      "role": "claim",
+      "covers": [
+        "this deliberately impossible witness must be rejected"
+      ]
+    },
+    {
+      "name": "harnesses::multiplication_timeout",
+      "role": "claim",
+      "covers": []
+    },
+    {
+      "name": "harnesses::insufficient_unwind",
+      "role": "claim",
+      "covers": []
+    },
+    {
+      "name": "harnesses::vacuous_assumption",
+      "role": "claim",
+      "covers": [
+        "the contradictory assumption makes this unreachable"
+      ]
+    },
+    {
+      "name": "harnesses::unsupported",
+      "role": "claim",
+      "covers": []
+    },
+    {
+      "name": "harnesses::expected_panic",
+      "role": "claim",
+      "covers": [],
+      "should_panic": true
+    },
+    {
+      "name": "harnesses::seeded_wrapping_mutant",
+      "role": "control",
+      "covers": [],
+      "expected_failure": "assertion.1"
+    }
+  ]
+}

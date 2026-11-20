@@ -143,6 +143,146 @@ when selecting that mode.
 This legacy command is separate from the snapshot commands described in
 [Kani snapshot commands](#kani-snapshot-commands).
 
+### Kani log analysis
+
+`prover-tools kani analyse-log` reads a captured Kani 0.67.0 verbose transcript
+and decides what it proves against a harness manifest. The log supplies what
+happened; the manifest supplies what was meant to happen. A printed success
+line is never enough on its own: a harness can report success while proving
+nothing, and a run can leave a declared harness out entirely.
+
+Capture standard output and standard error separately, then concatenate them in
+that order:
+
+```bash
+prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" --cwd "$PWD" \
+  --extra-arg=--verbose --extra-arg=--harness=harnesses::verified \
+  >kani.out 2>kani.err
+cat kani.out kani.err >kani.log
+```
+
+Merging the streams with `2>&1` can interleave build chatter inside a report
+block. The parser then refuses the log as structurally invalid rather than
+guessing where the block ended.
+
+#### Harness manifest
+
+The manifest is a JSON object with exactly `schema_version` and `harnesses`.
+Schema version `1` is the only accepted version. Each harness entry has:
+
+- `name` — the harness name exactly as Kani reports it.
+- `role` — `claim` or `control`.
+- `covers` — the cover descriptions a claim declares; defaults to none.
+- `expected_failure` — for a control, the check it must fail. A control has no
+  default and must name one.
+- `should_panic` — whether a failed claim is the panic Kani was asked to
+  expect; defaults to `false`.
+
+```json
+{
+  "schema_version": 1,
+  "harnesses": [
+    {
+      "name": "harnesses::verified",
+      "role": "claim",
+      "covers": ["the boundary below saturation is reachable"]
+    },
+    {
+      "name": "harnesses::expected_panic",
+      "role": "claim",
+      "should_panic": true
+    },
+    {
+      "name": "harnesses::seeded_wrapping_mutant",
+      "role": "control",
+      "expected_failure": "assertion.1"
+    }
+  ]
+}
+```
+
+Duplicate keys and duplicate harness names are refused, as are `NaN`,
+`Infinity`, unknown keys, an unknown role, an empty harness list, a control
+without `expected_failure`, a `should_panic` control, and a `should_panic`
+claim that also declares covers. A control's expected failure may name a full
+property identifier, the property within the harness, or a check kind.
+
+#### Reading a log
+
+```bash
+prover-tools kani analyse-log --log kani.log --manifest harnesses.json
+```
+
+Useful options are:
+
+- `--log PATH`: complete captured transcript.
+- `--manifest PATH`: harness manifest declaring claims, controls and covers.
+- `--harness NAME`: analyse only the named harnesses from the manifest. This
+  option may be repeated; without it the whole manifest is analysed.
+- `--require-full-profile`: exit with status `2` unless the run covered the
+  whole selected manifest with unwinding checks enabled.
+- `--format text|json`: output form, defaulting to text.
+
+The analysis reports one outcome, taken from the strongest fact the log
+supports. In decreasing precedence:
+
+1. `counterexample` — a claim's own substantive check failed, a called routine
+   failed, or Kani reported a failed verdict with no attributable failure.
+2. `resource-exhausted` — a harness timed out, or an unwinding assertion ran
+   out of bound.
+3. `unsupported` — Kani could not model a construct the harness reached.
+4. `undetermined` — a check was left undecided, or a cover was unreachable.
+5. `skipped` — a declared claim never reported a block.
+6. `verified` — every declared claim ran and nothing disproved it.
+
+An unwinding failure is a bound, not a counterexample. A `should_panic` claim
+is excused only when Kani also reported that the panic matched, and the run is
+still bounded: none of these outcomes proves a property over every execution.
+
+`tool-error` covers a log that cannot be decided from at all: truncated or
+otherwise structurally invalid output, a release other than 0.67.0, `kani list`
+inventory output, or a log that reports a harness the manifest does not
+declare. It completes the analysis with exit status `2`; it is not an input
+error.
+
+Each declared cover is reported as `satisfied` or `unsatisfied`. A cover that
+Kani reported unreachable, or did not report at all, is `unsatisfied`. Each
+control is reported as one of:
+
+- `rejected-as-intended` — failed exactly the expected property.
+- `rejected-otherwise` — failed, but not for the declared reason.
+- `accepted` — passed, so it did not demonstrate the claim's guard.
+- `not-run` — the log reported no block for it.
+
+The run mode is `full-profile` only when the log reports exactly the selected
+manifest's harnesses and unwinding checks are enabled in every block. Otherwise
+it is `focused`, because something could have been left out.
+
+A run passes only when the outcome is `verified`, every declared cover is
+`satisfied`, and every control is `rejected-as-intended`. The text form prints
+`outcome:`, `reason:`, `run mode:`, one `cover` line per declared cover and one
+`control` line per declared control.
+
+With `--format json` the command writes one object with these keys, in order:
+
+- `schema_version` — the analysis schema version, currently `1`.
+- `outcome`, `reason`, `run_mode`, `passed`.
+- `covers` — objects with `harness`, `cover` and `status`.
+- `controls` — objects with `harness` and `status`.
+
+Exit statuses are:
+
+- `0` — the analysis passed and any full-profile requirement holds.
+- `1` — a log or manifest could not be read, is not valid UTF-8, or the
+  manifest is invalid.
+- `2` — the analysis completed but did not pass, including `tool-error`.
+
+Only Kani 0.67.0 transcripts are supported today. Output from `kani run`, its
+retained 64 KiB tail, and Kani 0.68.0 snapshot logs are not valid analysis
+input: `kani run` streams live output and deliberately keeps only the tail, so
+it loses the banner and the start of the report. Capture a fresh run through
+`kani exec` when you need an analysable log.
+
 ### Kani snapshot commands
 
 The snapshot commands install, check and run one immutable, reviewed Kani

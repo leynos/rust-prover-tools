@@ -1,4 +1,26 @@
 # serializer version: 1
+# name: test_kani_analyse_log_help_snapshot
+  '''
+  Usage: prover-tools kani analyse-log --log PATH --manifest PATH [OPTIONS]
+  
+  Analyse a captured Kani log against a harness manifest.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ *  --log PATH                   Complete captured output of one Kani         │
+  │                                 invocation. [required]                       │
+  │ *  --manifest PATH              Harness manifest declaring claims, controls  │
+  │                                 and covers. [required]                       │
+  │    --harness STR...             Harness names to select from the manifest;   │
+  │                                 defaults to all of them.                     │
+  │    --require-full-profile       Whether to fail unless the run covered the   │
+  │      --no-require-full-profile  whole selected manifest with                 │
+  │                                 unwinding checks enabled. [default: False]   │
+  │    --format CHOICE              Output form, defaulting to text. [choices:   │
+  │                                 text, json] [default: text]                  │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
 # name: test_kani_exec_help_snapshot
   '''
   Usage: prover-tools kani exec --installation STR --cwd STR --extra-arg STR...
@@ -14,6 +36,25 @@
   │ *  --extra-arg STR...   Literal verifier arguments, provided with repeated   │
   │      --empty-extra-arg  --extra-arg options. [env var: INPUT_EXTRA_ARG]      │
   │                         [required]                                           │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_kani_help_snapshot
+  '''
+  Usage: prover-tools kani COMMAND
+  
+  Manage Kani verifier installation and version checking
+  
+  ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ analyse-log    Analyse a captured Kani log against a harness manifest.       │
+  │ check-version  Check that the installed Kani version matches the pin.        │
+  │ exec           Execute an already installed, qualified Kani 0.67 Linux       │
+  │                release.                                                      │
+  │ install        Install the pinned Kani verifier.                             │
+  │ run            Run a proof through the exact installed snapshot. Place --    │
+  │                before verifier arguments.                                    │
+  │ snapshot       Install and check one immutable Kani snapshot                 │
   ╰──────────────────────────────────────────────────────────────────────────────╯
   
   '''

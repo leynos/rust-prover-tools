@@ -111,6 +111,9 @@ variables, output printing, and exit-code mapping:
   as a repeatable tuple, keeps `VERUS_PROOF_FILE` and `INPUT_PROOF_FILE` as
   single-file environment bindings, and supplies `env_var_split` so a path
   separator inside one value is not split into several proof files.
+- `rust_prover_tools.kani_log_cli` for `kani analyse-log`. It disables inherited
+  `INPUT_*` configuration and maps unreadable inputs to status `1` and a
+  completed non-passing analysis to status `2`.
 
 Feature modules should own workflow behaviour:
 
@@ -126,6 +129,11 @@ Feature modules should own workflow behaviour:
   checks.
 - `rust_prover_tools.verus.batch` for the ordered, fail-fast proof-file loop,
   its partial-failure reporting, and its bounded telemetry.
+- `rust_prover_tools.kani_log` for Kani transcript parsing and manifest-bound
+  decisions. `syntax`, `model`, `reader`, `reports` and `extract` own the
+  grammar and extraction; `manifest` validates the expected harness set;
+  `observation` reduces one block to the facts a decision reads; and `decide`
+  applies the outcome precedence.
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified
@@ -631,6 +639,45 @@ text. When at least one profile backend is pinned, the override reports a
 `backend_overrides` stage event on the same logger before the enclosing
 validation stage completes, adding the selection, variable and collision
 counts. A repository that selects no backend emits no such event.
+
+## Kani log analysis and corpus
+
+The Kani log grammar is read from real transcripts, not from Kani's
+documentation. Each supported release therefore has its own corpus under
+`tests/fixtures/kani_logs/<kani-version>/`, and every parser and decision fact
+is asserted against that corpus.
+
+- The logs are corpus evidence: recapture them, never hand-edit them.
+- Capture the complete standard output followed by the complete standard
+  error. Merging the streams can split a report block.
+- Add the version-named corpus directory before a release joins
+  `SUPPORTED_KANI_VERSIONS`, and delete it when the release leaves the set.
+- `expected.json` records the facts each log must yield and the decision it
+  must reach. `decision_table.json` holds the precedence table as data, and the
+  manifest files declare the harnesses the corpus run selected.
+- `crate/` holds the corpus crate sources, `Cargo.lock`, `harnesses.json` and
+  the captured `kani-list.json` so a maintainer can recapture the logs.
+  `kani-list.json` is an inventory only and cannot supply roles, covers,
+  expected failures or `should_panic`.
+- The README records the release, Rust toolchain, capture route, every
+  command and exit status, and the origin commit. It carries no digest
+  provenance: the transcripts themselves are the qualified evidence.
+
+`rust_prover_tools/unittests/test_kani_log_parse.py` loads every corpus
+directory whose name is in `SUPPORTED_KANI_VERSIONS`; a supported release
+without a directory fails that test. The decision tests read the same corpus,
+so a parser change and a decision change cannot drift apart while both remain
+green.
+
+The shared test helpers are split by concern so each module stays reviewable:
+
+- `tests/kani_log_corpus.py` reads the committed logs, `expected.json`, the
+  decision table and the manifests.
+- `tests/kani_log_fixtures.py` builds the log and manifest one synthetic fact
+  combination describes.
+- `tests/kani_log_combinations.py` enumerates the combinations the exhaustive
+  checks range over. A variant added there widens every property stated over it.
+- `tests/kani_log_properties.py` states the properties themselves.
 
 ## Kani snapshot installation and execution
 

@@ -45,6 +45,7 @@ from rust_prover_tools.kani import (
     install_kani,
 )
 from rust_prover_tools.kani_exec_cli import kani_exec
+from rust_prover_tools.kani_log_cli import kani_analyse_log
 from rust_prover_tools.kani_snapshot_cli import run_app, snapshot_app
 from rust_prover_tools.verus import (
     DEFAULT_TARGET,
@@ -358,6 +359,7 @@ def install_solver(
 
 
 kani_app.command(kani_exec, name="exec")
+kani_app.command(kani_analyse_log, name="analyse-log", config=())
 kani_app.command(run_app, name="run")
 kani_app.command(snapshot_app, name="snapshot")
 verus_app.command(verus_run, name="run")

@@ -1,0 +1,24 @@
+{
+  "kani-version": "0.67.0",
+  "file-version": "0.1",
+  "standard-harnesses": {
+    "src/harnesses.rs": [
+      "harnesses::counterexample",
+      "harnesses::expected_panic",
+      "harnesses::insufficient_unwind",
+      "harnesses::multiplication_timeout",
+      "harnesses::seeded_wrapping_mutant",
+      "harnesses::unsatisfied_cover",
+      "harnesses::unsupported",
+      "harnesses::vacuous_assumption",
+      "harnesses::verified"
+    ]
+  },
+  "contract-harnesses": {},
+  "contracts": [],
+  "totals": {
+    "standard-harnesses": 9,
+    "contract-harnesses": 0,
+    "functions-under-contract": 0
+  }
+}

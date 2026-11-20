@@ -576,3 +576,113 @@ selects a local directory instead for an offline or pre-publication transfer.
 Both transports run the same verification; only the byte source changes. The
 [execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
 implementation acceptance from a separately authorized first publication.
+
+## Log analysis and trust audit adoption
+
+The Kani log parser, Kani outcome analysis, Rust trust audit and Verus run
+analysis are adopted from combobulate commit
+`9dd6e3c24306ee947ca3bf3bc76339cd67509f1d`. This is a later port into this
+repository, not an upstreaming in combobulate's pull request; combobulate keeps
+its own copy. If that copy changes before a port starts, re-pin the commit and
+record the new commit in each corpus README.
+
+The ticket names the components and requires a neutral result summary. The
+choices below are plan decisions: they meet the ticket without widening it.
+
+### Separate analysis commands
+
+`kani exec`, `kani run` and `verus run` keep their live-stream, fail-fast,
+memory-bound and exit-status contracts. None of them returns a complete
+transcript: `kani run` retains only the last 64 KiB of each stream, `exec_kani`
+returns the child status alone, and `run_verus` does not return the proof
+output. Changing those commands to capture and analyse output inline would
+change contracts callers already rely on.
+
+Analysis therefore reads a log the caller captured by redirection, through
+separate commands:
+
+- `kani analyse-log` with `--log`, `--manifest`, a repeatable `--harness`,
+  `--require-full-profile` and `--format text|json`.
+- `verus analyse-log --log PATH --expect ... [--format text|json]`, added with
+  the Verus phase.
+
+A separate command defines its own input, output and status semantics without
+touching how a verifier runs.
+
+The new code uses one package per feature, following the existing convention:
+`rust_prover_tools/kani_log/`, Verus log modules inside
+`rust_prover_tools/verus/`, and `rust_prover_tools/trust_audit/`. Combobulate
+keeps the equivalent code under `scripts/docs_validation/`.
+
+### Neutral vocabulary
+
+Combobulate's outcome names follow its evidence-gate reason codes, and its
+`bounds` field is always `partial`. This package publishes a neutral `StrEnum`
+instead and keeps the proved precedence unchanged: `counterexample`,
+`resource-exhausted`, `unsupported`, `undetermined`, `skipped`, `verified`. The
+constant `bounds` field is dropped, and `passed` is derived from the outcome,
+covers and controls. Combobulate's VO-11a identifiers and evidence-gate wording
+are removed from docstrings and messages.
+
+The trust audit replaces combobulate's ADR-0009 with prover-defined
+vocabularies: one frozen record per prover, selected by context, with no
+manifest or digest binding.
+
+### Exit statuses
+
+Both analysis commands share one status contract:
+
+- `0` when the analysis passes and any full-profile requirement holds.
+- `1` for unreadable or invalid input, following the ordinary error convention.
+- `2` when the analysis completes with a non-passing result.
+
+A structurally invalid log is a completed analysis with outcome `tool-error`
+and status `2`. CI can therefore distinguish bad input from a proof run that
+did not do what it should without parsing output.
+
+### Corpus location
+
+Each qualified release keeps its own real-output corpus:
+`tests/fixtures/kani_logs/<kani-version>/` and
+`tests/fixtures/verus_logs/<verus-release>/`. A flat corpus that is overwritten
+on recapture was rejected because it keeps no evidence for a still-supported
+release. A release joins `SUPPORTED_KANI_VERSIONS` or
+`SUPPORTED_VERUS_RELEASES` only in the same change that adds its corpus, and
+its directory is deleted when the release leaves the set. The corpora stay
+outside the wheel, following the compiler-floor precedent.
+
+### Deferred `kani list` manifest
+
+The ticket suggests a `kani --list`-driven manifest but does not require one.
+The `kani-0.67.0` source registers `cargo kani list --format json`, not
+`--list`. The command writes `kani-list.json` to the working directory and
+prints only an announcement to the log. The JSON groups harness names by source
+file. It cannot express claim or control roles, expected failures, covers or
+`should_panic`. The captured combobulate `kani-list.json` names match its
+harness manifest exactly.
+
+The options considered were:
+
+1. Generate complete manifests from `kani-list.json`.
+2. Generate a skeleton manifest that marks every harness as a `claim` with no
+   covers, and require the user to edit roles and expectations.
+3. Add a consistency check that compares a user-written manifest with a
+   supplied `kani-list.json` and reports undeclared or unknown harnesses.
+4. Require a user-written manifest now, keep the parser's recognition of
+   inventory logs, commit `kani-list.json` as a fixture, and record options 2
+   and 3 as follow-up candidates.
+
+Option 4 is chosen. Option 1 cannot supply roles or expectations, and options 2
+and 3 are useful but are not needed to meet the ticket. The committed
+`kani-list.json` keeps the evidence for a later skeleton generator or
+consistency check.
+
+### Excluded machinery
+
+The port transfers the pure parsers, decisions, checks and scanner only. It
+does not port the evidence gate, approval, admission levels, the exception
+register, schema-bound records (`spec/proof-evidence.schema.json`, `items_of`,
+`covered_by`), `kani_log/shell.py`, `trust_audit_check.py`,
+`probe_provenance.py`, `verifier_probe_support.py`, `provenance.json` hashes,
+`audit_bound_tree`, `trust_audit/manifest.py`, or the Git tracked-manifest
+listing.
