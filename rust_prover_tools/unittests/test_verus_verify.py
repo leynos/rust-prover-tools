@@ -7,6 +7,7 @@ import pathlib
 import typing as typ
 
 import pytest
+from cuprum.context import EnvMode
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -101,9 +102,9 @@ def test_a_qualified_solver_is_bound_for_every_invocation(
         ),
     )
 
-    assert [spec.env for spec in specs] == [
-        {"VERUS_Z3_PATH": str(solver)},
-        {"VERUS_Z3_PATH": str(solver)},
+    assert [(spec.env, spec.env_mode) for spec in specs] == [
+        ({"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
+        ({"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
     ], "Every invocation in the batch should carry the same solver binding"
 
 
@@ -127,6 +128,9 @@ def test_no_solver_selection_leaves_the_environment_alone(
 
     assert specs[0].env is None, (
         "An unset selection must not replace or clear the child environment"
+    )
+    assert specs[0].env_mode is EnvMode.OVERLAY, (
+        "An unset selection must leave the inherited environment layered in place"
     )
 
 

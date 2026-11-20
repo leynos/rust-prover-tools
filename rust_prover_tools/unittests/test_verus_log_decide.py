@@ -275,6 +275,7 @@ def test_parse_expectation_refuses_an_unusable_region(text: str) -> None:
         (VerusFailure("failed", "proofs/mutant.rs", 8, 13), True),
         (VerusFailure("failed", "./proofs/mutant.rs", 8, 13), True),
         (VerusFailure("failed", "proofs\\mutant.rs", 8, 13), True),
+        (VerusFailure("failed", "proofs/../proofs/mutant.rs", 8, 13), True),
         (VerusFailure("failed", "proofs/mutant.rs", 4, 13), False),
         (VerusFailure("failed", "proofs/mutant.rs", 13, 13), False),
         (VerusFailure("failed", "proofs/other.rs", 8, 13), False),

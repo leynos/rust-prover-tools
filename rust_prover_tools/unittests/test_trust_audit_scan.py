@@ -120,28 +120,20 @@ def test_a_method_call_is_not_a_bare_use() -> None:
     assert items(source) == []
 
 
-def test_a_verus_body_reports_its_verus_vocabulary() -> None:
-    """Report a Verus word inside a ``verus!`` block."""
-    source = "verus! {\n    proof fn p() { admit(); }\n}"
-    assert items(source) == [("admit", 2)]
+@pytest.mark.parametrize(
+    ("opener", "closer"),
+    [("{", "}"), ("(", ")"), ("[", "]")],
+)
+def test_a_verus_body_reports_its_verus_vocabulary(opener: str, closer: str) -> None:
+    """Read a ``verus!`` body under any delimiter pair the macro accepts."""
+    source = f"verus!{opener}proof fn p() {{ admit(); }}{closer};"
+    assert items(source) == [("admit", 1)]
 
 
 def test_a_verus_body_does_not_report_a_kani_only_word() -> None:
     """Use each prover's own vocabulary for its own context."""
     source = "verus! { fn f() { let stub = 1; } }"
     assert items(source) == []
-
-
-def test_a_verus_body_in_parentheses_reports_its_vocabulary() -> None:
-    """Read ``verus!( … )`` as a body: the macro accepts any delimiter pair."""
-    source = "verus!(proof fn p() { admit(); });"
-    assert items(source) == [("admit", 1)]
-
-
-def test_a_verus_body_in_brackets_reports_its_vocabulary() -> None:
-    """Read ``verus![ … ]`` as a body too."""
-    source = "verus![proof fn p() { admit(); }];"
-    assert items(source) == [("admit", 1)]
 
 
 def test_a_renamed_kani_member_inside_a_verus_body_is_reported() -> None:
@@ -298,16 +290,14 @@ def test_a_procedural_macro_scan_refuses_an_undecodable_escape() -> None:
         scan(r'"\u{d800}assume"', procedural_macro=True)
 
 
-def test_a_line_continuation_is_not_part_of_the_literal_value() -> None:
-    """Skip the newline and indentation a backslash continues past."""
-    source = '"kani::assume\\\n    (x);"'
-    found = scan(source, procedural_macro=True).items
-    assert [(item.item, item.column) for item in found] == [("assume", 8)]
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_a_line_continuation_is_not_part_of_the_literal_value(newline: str) -> None:
+    r"""Skip the newline and indentation a backslash continues past.
 
-
-def test_a_crlf_line_continuation_is_not_part_of_the_literal_value() -> None:
-    r"""Read ``\`` + CRLF as Rust does, which normalises CRLF to LF first."""
-    source = '"kani::assume\\\r\n    (x);"'
+    Rust normalizes a CRLF to LF before reading the literal, so the two
+    spellings hide the newline alike.
+    """
+    source = f'"kani::assume\\{newline}    (x);"'
     found = scan(source, procedural_macro=True).items
     assert [(item.item, item.column) for item in found] == [("assume", 8)]
 

@@ -134,35 +134,32 @@ def test_a_unicode_module_name_names_its_path_file() -> None:
     assert references(source) == [("café", "coffee.rs", ())]
 
 
-def test_a_cooked_path_escape_is_read_as_rust_reads_it() -> None:
-    r"""Decode ``\x63`` to ``c`` rather than looking for the escape itself."""
-    source = '#[path = "\\x63hild.rs"]\nmod child;'
+@pytest.mark.parametrize("spelling", [r"\x63", r"\u{63}", r"\u{6_3}"])
+def test_a_path_escape_is_read_as_rust_reads_it(spelling: str) -> None:
+    r"""Decode every spelling of ``c`` rather than reading the escape itself.
+
+    Rust accepts the cooked ``\x63``, the braced ``\u{63}`` and the
+    underscore-separated ``\u{6_3}``, and all three name the same file.
+    """
+    source = f'#[path = "{spelling}hild.rs"]\nmod child;'
     assert references(source) == [("child", "child.rs", ())]
 
 
-def test_a_braced_path_escape_is_read_as_rust_reads_it() -> None:
-    r"""Decode ``\u{63}`` to ``c`` rather than looking for the escape itself."""
-    source = '#[path = "\\u{63}hild.rs"]\nmod child;'
-    assert references(source) == [("child", "child.rs", ())]
+@pytest.mark.parametrize(
+    ("spelling", "pattern"),
+    [
+        (r"\u{0000063}", "malformed"),
+        (r"\u{d800}", "not a Unicode scalar value"),
+    ],
+)
+def test_an_undecodable_path_escape_is_refused(spelling: str, pattern: str) -> None:
+    r"""Refuse a ``\u{…}`` escape Rust rejects rather than guessing a path.
 
-
-def test_an_underscored_path_escape_is_read_as_rust_reads_it() -> None:
-    r"""Decode ``\u{6_3}``: Rust allows separators between the digits."""
-    source = '#[path = "\\u{6_3}hild.rs"]\nmod child;'
-    assert references(source) == [("child", "child.rs", ())]
-
-
-def test_a_path_escape_with_too_many_digits_is_refused() -> None:
-    r"""Refuse a ``\u{…}`` escape longer than Rust's six-digit limit."""
-    source = '#[path = "\\u{0000063}.rs"]\nmod x;'
-    with pytest.raises(TrustAuditError, match="malformed"):
-        references(source)
-
-
-def test_a_surrogate_path_escape_is_refused() -> None:
-    r"""Refuse a ``\u{…}`` escape naming a code point Rust does not allow."""
-    source = '#[path = "\\u{d800}.rs"]\nmod x;'
-    with pytest.raises(TrustAuditError, match="not a Unicode scalar value"):
+    Seven digits exceed Rust's six-digit limit, and a surrogate is not a code
+    point Rust will compile.
+    """
+    source = f'#[path = "{spelling}.rs"]\nmod x;'
+    with pytest.raises(TrustAuditError, match=pattern):
         references(source)
 
 

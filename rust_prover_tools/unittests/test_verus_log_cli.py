@@ -202,12 +202,21 @@ def test_the_json_form_records_the_declared_expectation(
 def test_a_single_line_expectation_reads_as_it_was_written(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A one-line declaration is echoed as ``path:line``, not as a range."""
-    status = run("postcondition", expect_failure="postcondition.rs:8")
-    captured = capsys.readouterr()
+    """A one-line declaration is recorded as ``path:line``, not as a range."""
+    status = run(
+        "postcondition",
+        expect_failure="postcondition.rs:8",
+        output_format="json",
+    )
+    payload = json.loads(capsys.readouterr().out)
 
-    assert status == 0
-    assert "expectation postcondition.rs:8: matched\n" in captured.out
+    assert status == 0, "The failure landed on the declared line"
+    assert payload["expectation"] == {
+        "path": "postcondition.rs",
+        "first_line": 8,
+        "last_line": None,
+        "matched": True,
+    }, "A single line keeps no end, so it is not echoed back as ``8-8``"
 
 
 def test_a_structural_error_completes_as_a_tool_error(
