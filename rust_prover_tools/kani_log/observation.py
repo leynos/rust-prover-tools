@@ -67,6 +67,20 @@ class Observed:
         )
 
     @property
+    def witnessed(self) -> tuple[PropertyResult, ...]:
+        """Every check that may witness this harness's declared covers.
+
+        The harness's own checks count, and so does a cover CBMC printed
+        without an owner: the block it appears in is the harness it was
+        checked for.  A check attributed to a called routine is that routine's
+        result, and two harnesses may describe their witnesses with the same
+        words, so a foreign cover cannot stand in for this harness's declared
+        one.
+        """
+        ownerless = (item for item in self.unattributed if item.owner is None)
+        return (*self.properties, *ownerless)
+
+    @property
     def failed_checks(self) -> tuple[PropertyResult, ...]:
         """Every check the block reports as failed, whoever owns it.
 

@@ -23,6 +23,20 @@ WORD: typ.Final[st.SearchStrategy[str]] = st.sampled_from(sorted(VOCABULARY))
 KANI_WORD: typ.Final[st.SearchStrategy[str]] = st.sampled_from(
     sorted(KANI_VOCABULARY),
 )
+#: Complete escapes a cooked literal may carry.  Each ends where it began, so
+#: joining them never leaves a dangling backslash that would escape the closing
+#: quote and make the failure a refusal rather than a leak.
+COMPLETE_ESCAPE: typ.Final[st.SearchStrategy[str]] = st.sampled_from(
+    ("\\\\", '\\"', "\\n", "\\r", "\\t", "\\0", "\\x41", "\\u{63}"),
+)
+#: One fragment of a literal body: a vocabulary word, a complete escape, or
+#: plain text.  A word may therefore follow an escaped quote, which is the
+#: position where a lexer that stopped short of the escape would resume.
+BODY_FRAGMENT: typ.Final[st.SearchStrategy[str]] = st.one_of(
+    st.sampled_from(sorted(VOCABULARY)),
+    COMPLETE_ESCAPE,
+    st.text(alphabet=st.characters(blacklist_characters='"\\'), max_size=12),
+)
 
 
 def _items(source: str) -> tuple[str, ...]:
@@ -57,9 +71,14 @@ def test_a_word_inside_a_character_literal_is_not_reported(word: str) -> None:
     assert _items(f"fn f() {{ let _ = '{first}'; kani::assume(x); }}") == ("assume",)
 
 
-@given(st.text(alphabet=st.characters(blacklist_characters='"\\'), max_size=20))
+@given(st.lists(BODY_FRAGMENT, max_size=8).map("".join))
 def test_an_ordinary_string_body_yields_no_item(body: str) -> None:
-    """Scan a string body as trivia even when it spells the whole vocabulary."""
+    """Scan a string body as trivia even when it spells the whole vocabulary.
+
+    The body is built from vocabulary words, complete escapes and plain text,
+    so a word can sit directly after an escaped quote — the position where a
+    lexer that mistook the escape for the terminator would resume mid-literal.
+    """
     source = f'fn f() {{ let _ = "{body}"; }}'
     assert not _items(source)
 

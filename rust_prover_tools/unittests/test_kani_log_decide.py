@@ -14,6 +14,7 @@ table edit rather than a test rewrite.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.kani_log import (
@@ -41,6 +42,41 @@ from tests import kani_log_properties as props
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+
+class _BlockFields(typ.TypedDict, total=False):
+    """The per-case fields a test may override on the shared framing."""
+
+    failures: tuple[FailedCheck, ...]
+    failed_count: int | None
+    total_count: int | None
+    covered_satisfied: int | None
+    covered_total: int | None
+    covered_unreachable: int | None
+    verdict: str
+    panics_as_expected: bool
+
+
+def _block(
+    name: str,
+    *checks: PropertyResult,
+    **fields: typ.Unpack[_BlockFields],
+) -> HarnessBlock:
+    """Build a harness block with the framing every fixture here shares.
+
+    The echoed solver command, the capture flags and the successful verdict are
+    the same in every case, so a test passes only the checks and the fields its
+    case is about.
+    """
+    framed = HarnessBlock(
+        name=name,
+        properties=checks,
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+        seen_verification_time=True,
+        has_results=True,
+        verdict="SUCCESSFUL",
+    )
+    return dc.replace(framed, **fields)
 
 
 def test_every_table_row_decides_as_it_declares() -> None:
@@ -181,20 +217,37 @@ def test_a_cover_is_matched_to_the_claim_that_declares_it() -> None:
     assert decision.outcome == KaniOutcome.SKIPPED
 
 
+def test_a_foreign_cover_does_not_satisfy_a_declared_witness() -> None:
+    """Refuse a called routine's cover as this claim's witness.
+
+    Two harnesses may describe their witnesses with the same words, so a cover
+    owned by another routine says that routine's cover was reached, not this
+    claim's.  Only an ownerless cover is read from the block it appears in.
+    """
+    name = "h::c"
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        PropertyResult("other::helper.cover.1", "SATISFIED", "the witness"),
+        failed_count=0,
+        total_count=2,
+    )
+    log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
+    manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
+    decision = analyse_kani_log(log, manifest)
+    assert decision.witness_statuses == ("unsatisfied",)
+
+
 def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
     """Count a cover CBMC left unattributed as its own block's witness."""
     name = "h::c"
-    block = HarnessBlock(
-        name=name,
-        properties=(PropertyResult("cover.1", "SATISFIED", "the witness"),),
+    block = _block(
+        name,
+        PropertyResult("cover.1", "SATISFIED", "the witness"),
         failed_count=0,
         total_count=0,
         covered_satisfied=1,
         covered_total=1,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
@@ -206,21 +259,15 @@ def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
 def test_an_unreachable_ownerless_cover_leaves_the_run_undetermined() -> None:
     """Count an undecided cover from the block even without an owner."""
     name = "h::c"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(f"{name}.cover.1", "SATISFIED", "reachable"),
-            PropertyResult("cover.2", "UNREACHABLE", "other"),
-        ),
+    block = _block(
+        name,
+        PropertyResult(f"{name}.cover.1", "SATISFIED", "reachable"),
+        PropertyResult("cover.2", "UNREACHABLE", "other"),
         failed_count=0,
         total_count=0,
         covered_satisfied=1,
         covered_total=2,
         covered_unreachable=1,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM, covers=("reachable",)),))
@@ -237,18 +284,12 @@ def test_an_unresolved_foreign_check_leaves_the_run_undetermined() -> None:
     own.  Reporting ``verified`` would claim a result the log does not support.
     """
     name = "h::c"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
-            PropertyResult("other.assertion.1", "UNDETERMINED", "foreign"),
-        ),
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        PropertyResult("other.assertion.1", "UNDETERMINED", "foreign"),
         failed_count=0,
         total_count=2,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM),))
@@ -263,18 +304,12 @@ def test_an_unreachable_foreign_check_is_not_this_blocks_evidence() -> None:
     CBMC printed without an owner, shows that nothing was proved here.
     """
     name = "h::c"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
-            PropertyResult("other.cover.1", "UNREACHABLE", "foreign"),
-        ),
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        PropertyResult("other.cover.1", "UNREACHABLE", "foreign"),
         failed_count=0,
         total_count=2,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM),))
@@ -290,19 +325,13 @@ def test_an_expected_panic_excuses_a_foreign_failure() -> None:
     asked for as a counterexample.
     """
     name = "h::p"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
-            PropertyResult("other.assertion.1", "FAILURE", "foreign"),
-        ),
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        PropertyResult("other.assertion.1", "FAILURE", "foreign"),
         failed_count=1,
         total_count=2,
-        verdict="SUCCESSFUL",
         panics_as_expected=True,
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
@@ -312,18 +341,12 @@ def test_an_expected_panic_excuses_a_foreign_failure() -> None:
 def test_a_foreign_failure_without_an_expected_panic_is_a_counterexample() -> None:
     """Refuse to excuse a called failure no manifest entry asked for."""
     name = "h::p"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
-            PropertyResult("other.assertion.1", "FAILURE", "foreign"),
-        ),
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        PropertyResult("other.assertion.1", "FAILURE", "foreign"),
         failed_count=1,
         total_count=2,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM),))
@@ -333,21 +356,15 @@ def test_a_foreign_failure_without_an_expected_panic_is_a_counterexample() -> No
 def test_a_repeated_witness_description_must_all_be_satisfied() -> None:
     """Require every cover sharing a description to be satisfied."""
     name = "h::c"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(f"{name}.cover.1", "UNREACHABLE", "the witness"),
-            PropertyResult("cover.2", "SATISFIED", "the witness"),
-        ),
+    block = _block(
+        name,
+        PropertyResult(f"{name}.cover.1", "UNREACHABLE", "the witness"),
+        PropertyResult("cover.2", "SATISFIED", "the witness"),
         failed_count=0,
         total_count=0,
         covered_satisfied=1,
         covered_total=2,
         covered_unreachable=1,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
@@ -378,16 +395,13 @@ def test_a_control_never_becomes_a_claim() -> None:
 def _control_log(*checks: PropertyResult) -> KaniLog:
     """Build a one-control log whose block reports exactly ``checks``."""
     name = "h::k"
-    block = HarnessBlock(
-        name=name,
-        properties=checks,
+    block = _block(
+        name,
+        *checks,
         failures=tuple(FailedCheck(item.description, None, None) for item in checks),
         failed_count=sum(1 for item in checks if item.status == "FAILURE"),
         total_count=len(checks),
         verdict="FAILED",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     return KaniLog(
         "0.67.0",
@@ -425,21 +439,15 @@ def test_a_control_that_fails_a_called_property_is_rejected_otherwise() -> None:
 def test_a_passing_unsupported_construct_check_is_not_unsupported() -> None:
     """Require the check to have failed before it can deny a claim."""
     name = "h::c"
-    block = HarnessBlock(
-        name=name,
-        properties=(
-            PropertyResult(
-                f"{name}.unsupported_construct.1",
-                "SUCCESS",
-                "the construct was modelled",
-            ),
+    block = _block(
+        name,
+        PropertyResult(
+            f"{name}.unsupported_construct.1",
+            "SUCCESS",
+            "the construct was modelled",
         ),
         failed_count=0,
         total_count=1,
-        verdict="SUCCESSFUL",
-        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-        seen_verification_time=True,
-        has_results=True,
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
     manifest = Manifest((Harness(name, CLAIM),))
@@ -513,17 +521,11 @@ def _log_of(*names: str) -> KaniLog:
         "0.67.0",
         "regular",
         tuple(
-            HarnessBlock(
-                name=name,
-                properties=(
-                    PropertyResult(f"{name}.assertion.1", "SUCCESS", "the claim"),
-                ),
+            _block(
+                name,
+                PropertyResult(f"{name}.assertion.1", "SUCCESS", "the claim"),
                 failed_count=0,
                 total_count=1,
-                verdict="SUCCESSFUL",
-                solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
-                seen_verification_time=True,
-                has_results=True,
             )
             for name in names
         ),
@@ -549,6 +551,26 @@ def test_a_block_for_an_unselected_harness_is_skipped_not_refused() -> None:
     )
     assert decision.outcome is KaniOutcome.VERIFIED
     assert decision.run_mode == FULL_PROFILE
+
+
+def test_a_failed_verdict_outweighs_a_missing_claim() -> None:
+    """Prefer the disproof a failed block shows to the skip the log also shows.
+
+    A block Kani declared failed carries a failure somewhere.  If none of the
+    attributed checks explains it, reporting the run as merely skipped would
+    bury that disproof beneath a harness that never ran.
+    """
+    name = "h::a"
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        failed_count=0,
+        total_count=1,
+        verdict="FAILED",
+    )
+    log = KaniLog("0.67.0", "regular", (block,), ManualSummary(0, 1, 1, (name,)), ())
+    manifest = Manifest((Harness(name, CLAIM), Harness("h::b", CLAIM)))
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
 
 
 def test_a_block_the_declaration_does_not_name_is_still_refused() -> None:

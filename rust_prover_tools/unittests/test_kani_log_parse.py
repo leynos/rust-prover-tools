@@ -140,13 +140,30 @@ def test_every_committed_log_yields_its_recorded_facts(
 
 
 def test_every_supported_version_has_a_corpus() -> None:
-    """Require a version-named corpus with matching logs for each release."""
-    assert tuple(FIXTURES / version for version in SUPPORTED_KANI_VERSIONS) == CORPORA
+    """Require exactly one corpus directory per supported release.
+
+    Comparing the directory names with the supported list catches both a
+    missing release and a stale directory left behind after a bump, which a
+    comparison against a list built the same way could never show.
+    """
+    on_disk = {item.name for item in FIXTURES.iterdir() if item.is_dir()}
+    assert on_disk == set(SUPPORTED_KANI_VERSIONS)
     for version, entries in EXPECTED.items():
         banners = {
             entry["banner"] for entry in entries["logs"].values() if "banner" in entry
         }
         assert banners == {version}
+
+
+def test_every_recorded_log_exists() -> None:
+    """Require each corpus entry to name a log that is on disk."""
+    missing = [
+        f"{version}/{name}.log"
+        for version, entries in EXPECTED.items()
+        for name in entries["logs"]
+        if not (FIXTURES / version / f"{name}.log").is_file()
+    ]
+    assert missing == []
 
 
 def test_the_inventory_log_carries_no_verdicts() -> None:
@@ -202,6 +219,22 @@ def test_a_duplicated_harness_block_is_refused() -> None:
         "Complete - 2 successfully verified harnesses, 0 failures, 2 total.",
     )
     assert "reported twice" in refused(text)
+
+
+def test_a_duplicated_check_identifier_is_refused() -> None:
+    """A block that reports one check identifier twice is structurally invalid.
+
+    The identifier is unique only within its harness, so a repeat in one block
+    would make the same property count twice.  The same identifier in another
+    block stays ordinary, which the committed corpus already exercises.
+    """
+    lines = log_text("verified").splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if line.startswith("Check 2: ")
+    )
+    duplicate = lines[start : start + 4]
+    text = "\n".join(lines[: start + 4] + duplicate + lines[start + 4 :])
+    assert "reports check 'harnesses::verified.cover.1' twice" in refused(text)
 
 
 def test_a_missing_verdict_is_refused() -> None:

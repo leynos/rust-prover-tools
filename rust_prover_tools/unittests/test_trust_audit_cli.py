@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.trust_audit_cli import audit_trust
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     import pytest
 
@@ -101,6 +101,40 @@ def test_a_source_outside_the_root_is_refused(
 
     assert status == 1
     assert "is outside the repository root" in captured.err
+
+
+def test_a_relative_driver_is_read_from_the_repository_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Resolve a relative driver against the root, not the working directory.
+
+    ``--repo-root R src/lib.rs`` names ``R/src/lib.rs`` from any directory, so
+    a decoy beside the working directory must not be audited instead.
+    """
+    write(tmp_path, {"src/lib.rs": "kani::assume(true);"})
+    elsewhere = tmp_path / "elsewhere"
+    write(tmp_path, {"elsewhere/src/lib.rs": "fn decoy() {}"})
+    monkeypatch.chdir(elsewhere)
+
+    status = audit_trust([Path("src/lib.rs")], repo_root=tmp_path)
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert "src/lib.rs:1:7: assume\n" in captured.out
+
+
+def test_a_relative_driver_that_climbs_out_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Refuse a relative driver whose resolution leaves the root."""
+    status = audit_trust([Path("../outside.rs")], repo_root=tmp_path)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "resolves outside the repository" in captured.err
 
 
 def test_a_procedural_macro_scan_reads_string_literals(

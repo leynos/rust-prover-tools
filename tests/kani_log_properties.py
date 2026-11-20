@@ -14,6 +14,7 @@ an outcome claim to such a combination would test only the refusal.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.kani_log import CLAIM, CONTROL
@@ -116,18 +117,7 @@ def degrade(
     """Replace one harness's behaviour with a worse one, keeping its identity."""
     fact = combination[index]
     worse = facts.TIMEOUT if fact.role == CONTROL else facts.FAILURE
-    replaced = facts.HarnessFact(
-        fact.name,
-        fact.role,
-        worse,
-        fact.cover,
-        fact.expected,
-        fact.should_panic,
-        fact.note,
-        fact.unwinding_checks,
-        fact.cover_description,
-        fact.expected_failure,
-    )
+    replaced = dc.replace(fact, status=worse)
     return (*combination[:index], replaced, *combination[index + 1 :])
 
 

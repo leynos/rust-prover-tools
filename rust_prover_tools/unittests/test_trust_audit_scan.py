@@ -61,6 +61,35 @@ def test_a_member_rename_reports_the_bare_call_under_the_item_name() -> None:
     assert items(source) == [("assume", 1), ("assume", 2)]
 
 
+def test_a_self_qualified_member_rename_is_reported() -> None:
+    """Read ``self::a(..)`` as the item the import bound to ``a``.
+
+    A named import binds its item in the module it appears in, so the ``self``
+    qualifier names the same call the bare ``a(..)`` names.
+    """
+    source = "use kani::assume as a;\nfn f() { self::a(false); }"
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
+def test_two_scopes_binding_one_name_report_both_items() -> None:
+    """Report every item a local name may denote when two scopes reuse it.
+
+    The scan is file-scoped, so it cannot tell which module a later use sits
+    in.  Keeping only one binding would hide the other item entirely.
+    """
+    source = (
+        "mod a { use kani::assume as m; }\n"
+        "mod b { use kani::any_where as m; }\n"
+        "fn f() { m(true); }"
+    )
+    assert items(source) == [
+        ("assume", 1),
+        ("any_where", 2),
+        ("any_where", 3),
+        ("assume", 3),
+    ]
+
+
 def test_a_chained_crate_alias_makes_a_qualified_path_trust() -> None:
     """Follow a rename of a rename to the crate both names reach."""
     source = "use kani as k;\nuse k as kk;\nfn f() { kk::assume(true); }"
@@ -182,6 +211,44 @@ def test_a_renamed_opaque_macro_is_refused() -> None:
         scan(source)
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        'fn f() { let _ = include_str!("notes.txt"); }',
+        'use std::include_str as load;\nfn f() { let _ = load!("notes.txt"); }',
+    ],
+)
+def test_include_str_is_not_opaque_for_an_ordinary_crate(source: str) -> None:
+    """Leave the splice alone where a string literal is not read as code."""
+    assert items(source) == []
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            'fn f() { let _ = include_str!("notes.txt"); }',
+            r"include_str! at line 1, column 18",
+        ),
+        (
+            'use std::include_str as load;\nload!("notes.txt");',
+            r"load! at line 2, column 1",
+        ),
+    ],
+)
+def test_a_procedural_macro_scan_refuses_include_str(
+    source: str,
+    pattern: str,
+) -> None:
+    """Refuse a splice a proc-macro crate could expand into code.
+
+    The expansion is a string literal, and a proc-macro crate's literals are
+    read as code, so the spliced file's text would never have been lexed.
+    """
+    with pytest.raises(TrustAuditError, match=pattern):
+        scan(source, procedural_macro=True)
+
+
 def test_a_decomposed_identifier_matches_its_composed_spelling() -> None:
     """Compare identifiers by NFC, as Rust does.
 
@@ -229,6 +296,20 @@ def test_a_procedural_macro_scan_refuses_an_undecodable_escape() -> None:
     """Fail closed rather than report a clean literal it could not read."""
     with pytest.raises(TrustAuditError, match="not a Unicode scalar value"):
         scan(r'"\u{d800}assume"', procedural_macro=True)
+
+
+def test_a_line_continuation_is_not_part_of_the_literal_value() -> None:
+    """Skip the newline and indentation a backslash continues past."""
+    source = '"kani::assume\\\n    (x);"'
+    found = scan(source, procedural_macro=True).items
+    assert [(item.item, item.column) for item in found] == [("assume", 8)]
+
+
+def test_a_crlf_line_continuation_is_not_part_of_the_literal_value() -> None:
+    r"""Read ``\`` + CRLF as Rust does, which normalises CRLF to LF first."""
+    source = '"kani::assume\\\r\n    (x);"'
+    found = scan(source, procedural_macro=True).items
+    assert [(item.item, item.column) for item in found] == [("assume", 8)]
 
 
 def test_a_literal_scan_keeps_two_occurrences_apart() -> None:

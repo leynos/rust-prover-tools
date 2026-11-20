@@ -103,13 +103,25 @@ def resolve_z3(
             raise ProverToolError(msg)
         return executable
     candidate = Path(selection)
-    if candidate.is_file():
+    if _names_a_path(selection) and candidate.is_file():
         return candidate.resolve()
     found = shutil.which(selection)
     if found is None:
         msg = f"the Z3 solver {selection!r} names no executable"
         raise ProverToolError(msg)
     return Path(found).resolve()
+
+
+def _names_a_path(selection: str) -> bool:
+    """Report whether a selection names a filesystem path rather than a command.
+
+    A bare command name resolves through ``PATH``, as the shell would resolve
+    it.  A same-named file in the working directory is not what the caller
+    asked for, and honouring it would bind the run to a solver the selection
+    never named.  Anything carrying a separator, and the spellings ``.`` and
+    ``..``, is a path and is read from the filesystem.
+    """
+    return Path(selection).name != selection or selection in {".", ".."}
 
 
 def qualify_z3(

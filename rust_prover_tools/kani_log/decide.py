@@ -215,15 +215,17 @@ def _witness_statuses(
     Two harnesses may describe their witnesses with the same words, so a
     global lookup would let one claim's satisfied cover stand in for another
     claim's unreachable one.  A cover CBMC printed without an owner is read
-    from the block it appears in, which is the harness it was checked for.  Two
-    covers may share a description, so every report for that description must
-    be satisfied before the declared cover counts as satisfied.
+    from the block it appears in, which is the harness it was checked for; one
+    owned by a called routine is that routine's result and is not this claim's
+    witness.  Two covers may share a description, so every report for that
+    description must be satisfied before the declared cover counts as
+    satisfied.
     """
     statuses: list[str] = []
     for claim in manifest.claims:
         seen = observed.get(claim.name)
         reported: dict[str, list[str]] = {}
-        for item in () if seen is None else (*seen.properties, *seen.unattributed):
+        for item in () if seen is None else seen.witnessed:
             if item.is_cover:
                 reported.setdefault(item.description, []).append(item.status)
         statuses.extend(
@@ -311,9 +313,14 @@ def _outcome(
         return KaniOutcome.UNSUPPORTED
     if any(item.indeterminate for item in reported):
         return KaniOutcome.UNDETERMINED
-    if len(reported) != len(manifest.claims):
-        return KaniOutcome.SKIPPED
-    return _standing_outcome(reported)
+    # A block Kani still declared failed had a failure somewhere.  If none of
+    # the attributed checks carries it, reading the verdict stops the run from
+    # being called verified by default.  A disproof outweighs a harness that
+    # never ran, so this is decided before the missing-claim check.
+    if any(not item.succeeded for item in reported):
+        return KaniOutcome.COUNTEREXAMPLE
+    complete = len(reported) == len(manifest.claims)
+    return KaniOutcome.VERIFIED if complete else KaniOutcome.SKIPPED
 
 
 def _has_counterexample(
@@ -345,18 +352,6 @@ def _has_resource_exhaustion(reported: list[Observed]) -> bool:
         ))
         for item in reported
     )
-
-
-def _standing_outcome(reported: list[Observed]) -> KaniOutcome:
-    """Return the outcome left when nothing above applies.
-
-    A block Kani still declared failed had a failure somewhere.  If none of
-    the attributed checks carries it, reading the verdict stops the run from
-    being called verified by default.
-    """
-    if any(not item.succeeded for item in reported):
-        return KaniOutcome.COUNTEREXAMPLE
-    return KaniOutcome.VERIFIED
 
 
 def _panics_as_expected(seen: Observed, manifest: Manifest) -> bool:

@@ -447,3 +447,47 @@ def test_a_module_named_twice_is_audited_once(tmp_path: Path) -> None:
         "src/lib.rs": [],
         "src/shared.rs": ["assume"],
     }
+
+
+def test_a_file_reached_twice_with_one_owner_is_audited_once(
+    tmp_path: Path,
+) -> None:
+    """Deduplicate a second declaration that agrees on the file's owner.
+
+    A ``#[path]``-loaded file owns the directory it sits in, so two attributes
+    naming it reach the same file under the same owner.  That is ordinary,
+    not the ambiguity a differing owner represents.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": (
+                '#[path = "common.rs"]\nmod x;\n#[path = "common.rs"]\nmod y;'
+            ),
+            "src/common.rs": "fn g() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/common.rs": ["assume"],
+        "src/lib.rs": [],
+    }
+
+
+def test_a_file_reached_under_two_owners_is_refused(tmp_path: Path) -> None:
+    """Refuse one file whose children would resolve beneath two directories.
+
+    ``#[path = "common.rs"]`` loads it as a file owning ``src``, while
+    ``mod common;`` loads it as a module owning ``src/common``; the crate
+    compiles both, reading their children from different places.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": '#[path = "common.rs"]\nmod x;\nmod common;',
+            "src/common.rs": "fn g() {}",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="different directories"):
+        audit_tree(tmp_path, ["src/lib.rs"])

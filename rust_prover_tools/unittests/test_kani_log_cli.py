@@ -107,7 +107,13 @@ def test_requiring_a_full_profile_fails_a_focused_run(
     captured = capsys.readouterr()
     assert without_requirement == 0
     assert with_requirement == 2
-    assert "passed" not in captured.out
+    assert captured.out == (
+        "outcome: verified\n"
+        "reason: decided from the parsed log\n"
+        "run mode: focused\n"
+        "cover harnesses::verified: the boundary below saturation is "
+        "reachable: satisfied\n"
+    )
 
 
 def test_an_invalid_manifest_is_an_input_error(

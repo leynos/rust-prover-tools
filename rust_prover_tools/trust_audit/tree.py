@@ -113,9 +113,12 @@ def audit_tree(
     identities: dict[pathlib.Path, str] = {}
     while pending:
         module = pending.pop()
+        # Every arrival is claimed before the deduplication below: skipping a
+        # file already scanned would hide that it was reached a second way,
+        # which is exactly the ambiguity ``_claim`` exists to refuse.
+        _claim(root, module, owners, identities)
         if module.relative in scanned:
             continue
-        _claim(root, module, owners, identities)
         result = scan(
             _read_source(root, module.relative),
             procedural_macro=procedural_macro,

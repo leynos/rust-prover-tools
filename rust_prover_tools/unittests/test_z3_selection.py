@@ -72,6 +72,27 @@ def test_a_command_name_is_looked_up_on_the_path(
     assert resolve_z3("z3", repo_root=tmp_path) == located.resolve()
 
 
+def test_a_bare_command_name_ignores_a_same_named_working_directory_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve a bare name through ``PATH``, as the shell would.
+
+    A file called ``z3`` in the working directory is not what the selection
+    names, so honouring it would bind the run to a solver the caller never
+    chose.
+    """
+    decoy = tmp_path / "z3"
+    decoy.write_text("", encoding="utf-8")
+    located = tmp_path / "bin" / "z3"
+    located.parent.mkdir()
+    located.write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(selection_module.shutil, "which", lambda _name: str(located))
+
+    assert resolve_z3("z3", repo_root=tmp_path) == located.resolve()
+
+
 def test_an_unknown_command_name_is_refused(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

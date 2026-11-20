@@ -12,7 +12,6 @@ summary beside a failure that would have to have been counted.
 
 from __future__ import annotations
 
-import itertools
 import typing as typ
 
 from rust_prover_tools.verus_log.model import VerusFailure, VerusLog, VerusSummary
@@ -120,11 +119,14 @@ def _failure(
     search ends at another diagnostic, or at a line the grammar does not name,
     because a span found beyond either of those belongs to somebody else.
 
-    The tail is walked with an iterator rather than a slice: a transcript with a
-    diagnostic on most lines would otherwise copy the remainder of the capture
-    once per diagnostic.
+    The tail is walked by position rather than sliced: a slice would copy the
+    remainder of the capture once per diagnostic, and an iterator restarts
+    from the first line to reach the offset.  Starting the walk at the
+    diagnostic's own index keeps a transcript with a diagnostic on most lines
+    linear in its length.
     """
-    for following in itertools.islice(lines, index + 1, None):
+    for position in range(index + 1, len(lines)):
+        following = lines[position]
         if ERROR_HEADER.match(following) is not None:
             break
         span = LOCATION.match(following)

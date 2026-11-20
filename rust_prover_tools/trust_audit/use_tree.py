@@ -13,9 +13,10 @@ Three forms change what a name refers to:
   way as the named form for the fail-closed reason the matcher states.
 
 The helpers here are deliberately narrow: they locate the statement, its root,
-and an optional alias. Deciding what a binding *means* belongs to
-`rust_prover_tools.trust_audit.matcher`, which owns the vocabulary; this module
-only reports what the source says.
+its aliases and the member renames inside it. `use_bindings` turns those facts
+into the local names an import binds, and
+`rust_prover_tools.trust_audit.matcher` owns the vocabulary that decides which
+of them matter.
 """
 
 from __future__ import annotations
@@ -28,147 +29,65 @@ from rust_prover_tools.trust_audit.use_alias import crate_alias_indices
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("alias_bindings", "member_bindings", "statement_end", "use_roots")
+__all__ = (
+    "file_roots",
+    "imported_roots",
+    "member_aliases",
+    "rooted_spans",
+    "statement_end",
+    "use_aliases",
+    "use_root",
+    "use_roots",
+)
 
-# ``extern``, ``crate``, the crate's name, ``as``, and the local name.
-_EXTERN_CRATE_TOKENS = 5
-
-
-def alias_bindings(tokens: tuple[Token, ...], root: str) -> frozenset[str]:
-    """Return every local name a file binds ``root`` to, plus ``root`` itself.
-
-    Rust lets a crate be renamed on import — ``use kani as k;`` — after which
-    ``k::assume`` is the same call as ``kani::assume``. The audit's location
-    claim is about what the code does, not what the crate is called at the use
-    site, so an alias is matched exactly like the literal root.
-
-    A grouped import can rename the crate as well, through the ``self`` member:
-    ``use kani::{self as k};`` binds ``k`` as another name for the crate. An
-    import that merely renames a *member* — ``use kani::{assume as a};`` — still
-    binds no crate alias: the ``as`` there belongs to ``assume``, and reading it
-    as one would make every ``a::`` path trust.
-
-    A glob import (``use kani::*;``) binds items rather than the crate, so the
-    qualified-path rule does not apply to it.
-
-    ``extern crate`` renames the crate the same way and without a ``use``:
-    ``extern crate kani as k;`` makes ``k::assume`` the Kani call. Missing it
-    would describe a file as trust-free while it assumed exactly what the
-    vocabulary names, which is the fail-open direction this module exists to
-    prevent.
-
-    An alias can itself be renamed — ``use kani as k; use k as kk;`` — so the
-    search repeats until a pass adds no name. Reading the statements once
-    would miss ``kk::assume`` and report the file as trusting nothing.
-
-    Examples
-    --------
-    A file that renames the crate reports both names: ``use kani as k;`` binds
-    ``k`` and ``kani``. An ``extern crate kani as k;`` reports the same pair.
-    """
-    names = {root}
-    while True:
-        discovered = _alias_round(tokens, names)
-        if discovered <= names:
-            return frozenset(names)
-        names |= discovered
+# ``extern``, ``crate``: the two words that open a crate declaration.
+_EXTERN_CRATE_KEYWORDS = ("extern", "crate")
 
 
-def _alias_round(
+def imported_roots(
     tokens: tuple[Token, ...],
-    names: cabc.Container[str],
-) -> set[str]:
-    """Return every name one pass binds to a crate already in ``names``."""
-    discovered: set[str] = set()
+    roots: cabc.Set[str],
+) -> frozenset[str]:
+    """Return the roots in ``roots`` this file imports.
+
+    Every root of every statement counts, not just its leading word.
+    ``use {std::mem, kani};`` imports ``kani`` as surely as the ungrouped form
+    does, and reading only the first identifier would quietly switch the
+    matcher's bare-word rule off for that file.
+
+    ``extern crate kani;`` is the same import spelled without a ``use``, and it
+    likewise makes a bare ``assume`` resolve to Kani, so it counts too. The
+    caller supplies the roots it cares about, which keeps this module free of
+    the vocabulary that names them.
+    """
+    return frozenset(file_roots(tokens) & roots)
+
+
+def file_roots(tokens: tuple[Token, ...]) -> frozenset[str]:
+    """Return every crate the file's ``use`` statements and ``extern crate`` name."""
+    found = set()
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT:
             continue
-        declared = _extern_crate_alias(tokens, index)
+        declared = _extern_crate_root(tokens, index)
         if declared is not None:
-            crate, alias = declared
-            if crate in names:
-                discovered.add(alias)
-            continue
-        if token.text != "use":
-            continue
-        end = statement_end(tokens, index + 1)
-        discovered.update(
-            alias
-            for crate, alias in use_roots(tokens, index + 1, end)
-            if crate in names and alias is not None
-        )
-    return discovered
+            found.add(declared)
+        elif token.text == "use":
+            end = statement_end(tokens, index + 1)
+            found.update(root for root, _ in use_roots(tokens, index + 1, end))
+    return frozenset(found)
 
 
-def member_bindings(
-    tokens: tuple[Token, ...],
-    roots: cabc.Container[str],
-) -> frozenset[tuple[str, str]]:
-    """Return ``(item, local name)`` for each renamed import from ``roots``.
-
-    ``use kani::{assume as a};`` binds ``a`` to Kani's ``assume``, so a later
-    ``a(x)`` is the same request for trust under another spelling. Unlike a
-    crate alias, the local name stands for one item: only a bare use of it is
-    trust, and a path through it is not, because a member is not a crate.
-
-    A rename of the crate itself — ``use kani as k;`` or
-    ``use kani::{self as k};`` — is not a member binding, and ``self`` is not an
-    item the vocabulary names. `alias_bindings` reports those instead.
-
-    A member can be renamed again: after ``use kani::{assume as a};``, the
-    statement ``use a as b;`` binds ``b`` to the same item. The search
-    therefore repeats until a pass adds no name, just as `alias_bindings` does
-    for crates; reading the statements once would miss ``b(x)`` and report the
-    file as trusting nothing at that use.
-
-    Examples
-    --------
-    ``use kani::{assume as a};`` reports ``(('assume', 'a'),)``.
-    """
-    bindings: dict[str, str] = {}
-    while True:
-        # A round re-reports every binding it can see, so only the names it
-        # newly explains may extend the map.  Extending with the rest would
-        # leave the loop with work to do forever.
-        discovered = {
-            alias: item
-            for alias, item in _binding_round(tokens, roots, bindings).items()
-            if bindings.get(alias) != item
-        }
-        if not discovered:
-            return frozenset((item, alias) for alias, item in bindings.items())
-        bindings.update(discovered)
-
-
-def _binding_round(
-    tokens: tuple[Token, ...],
-    roots: cabc.Container[str],
-    bindings: cabc.Mapping[str, str],
-) -> dict[str, str]:
-    """Return the names one pass binds to an item, keyed by the local name.
-
-    A path rooted at one of ``roots`` names a member of that crate. A path
-    rooted at a name ``bindings`` already maps to an item is a further rename
-    of that same item, which Rust permits as ``use alias as another;``.
-    """
-    discovered: dict[str, str] = {}
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or token.text != "use":
-            continue
-        end = statement_end(tokens, index + 1)
-        for root, start, stop in _rooted_spans(tokens, index + 1, end):
-            if root in roots:
-                discovered.update(
-                    (alias, member)
-                    for member, alias in _member_aliases(tokens, start, stop)
-                )
-            elif root in bindings:
-                discovered.update(
-                    (alias, bindings[root])
-                    for _root, alias in use_roots(tokens, start, stop)
-                    if alias is not None
-                )
-    return discovered
+def _extern_crate_root(tokens: tuple[Token, ...], index: int) -> str | None:
+    """Return the crate an ``extern crate`` declaration at ``index`` names."""
+    head = tuple(item.text for item in tokens[index : index + 2])
+    if head != _EXTERN_CRATE_KEYWORDS:
+        return None
+    name_index = index + len(_EXTERN_CRATE_KEYWORDS)
+    if name_index >= len(tokens):
+        return None
+    name = tokens[name_index]
+    return name.text if name.kind is Kind.IDENT else None
 
 
 def use_roots(
@@ -253,29 +172,7 @@ def statement_end(tokens: tuple[Token, ...], start: int) -> int:
     return len(tokens)
 
 
-def _extern_crate_alias(
-    tokens: tuple[Token, ...],
-    start: int,
-) -> tuple[str, str] | None:
-    """Return the crate and name ``extern crate <crate> as <name>;`` binds.
-
-    ``None`` covers every other shape, including an ``extern crate`` without a
-    rename: that spelling binds the crate under its own name, which is already
-    in the result set.
-    """
-    head = tokens[start : start + _EXTERN_CRATE_TOKENS]
-    if len(head) < _EXTERN_CRATE_TOKENS:
-        return None
-    if tuple(token.text for token in head[:2]) != ("extern", "crate"):
-        return None
-    if head[2].kind is not Kind.IDENT:
-        return None
-    if head[3].text != "as" or head[4].kind is not Kind.IDENT:
-        return None
-    return head[2].text, head[4].text
-
-
-def _rooted_spans(
+def rooted_spans(
     tokens: tuple[Token, ...],
     start: int,
     end: int,
@@ -289,14 +186,14 @@ def _rooted_spans(
     """
     if _is_grouped(tokens, start, end):
         for member_start, member_end in _top_level_members(tokens, start, end):
-            yield from _rooted_spans(tokens, member_start, member_end)
+            yield from rooted_spans(tokens, member_start, member_end)
         return
     root = use_root(tokens, start)
     if root is not None:
         yield root, start, end
 
 
-def _member_aliases(
+def member_aliases(
     tokens: tuple[Token, ...],
     start: int,
     end: int,

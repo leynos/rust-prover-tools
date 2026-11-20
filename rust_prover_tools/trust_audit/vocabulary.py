@@ -21,6 +21,7 @@ __all__ = (
     "KANI_ROOT",
     "KANI_VOCABULARY",
     "OPAQUE_MACROS",
+    "PROCEDURAL_OPAQUE_MACROS",
     "TRUST_ROOTS",
     "VERUS_ATTRIBUTE_HEADS",
     "VERUS_ROOTS",
@@ -77,3 +78,12 @@ VERUS_ATTRIBUTE_HEADS: typ.Final[frozenset[str]] = frozenset(
 OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset(
     {"include", "paste", "concat_idents"},
 )
+
+#: A macro whose splice is opaque only where literals are read as code.
+#:
+#: ``include_str!`` expands to a string literal.  An ordinary crate's literals
+#: are trivia, so the expansion adds nothing the audit reads.  A proc-macro
+#: crate's literals are scanned as potential code, and a spliced file's text
+#: never passed through the lexer, so there the macro is as opaque as
+#: ``include!``.
+PROCEDURAL_OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset({"include_str"})

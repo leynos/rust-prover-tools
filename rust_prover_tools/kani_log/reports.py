@@ -52,11 +52,31 @@ def results(reader: Reader, builder: _BlockBuilder) -> None:
         line = reader.peek()
         entry = CHECK.match(line)
         if entry is not None:
-            builder.properties.append(check(reader, entry))
+            _record_check(reader, builder, entry)
         elif not line.strip():
             reader.take()
         else:
             return
+
+
+def _record_check(
+    reader: Reader,
+    builder: _BlockBuilder,
+    entry: re.Match[str],
+) -> None:
+    """Append one check, refusing an identifier the block already reported.
+
+    Two checks sharing an identifier would describe one property twice, and a
+    reader that sums or compares per-check facts would then count it twice.
+    Kani prints each check once, so a repeat is a malformed report rather than
+    a fact to reconcile.  The same identifier in another block is ordinary,
+    because identifiers are unique only within a harness.
+    """
+    item = check(reader, entry)
+    if any(existing.identifier == item.identifier for existing in builder.properties):
+        msg = f"the block for {builder.name!r} reports check {item.identifier!r} twice"
+        raise KaniLogError(msg)
+    builder.properties.append(item)
 
 
 def check(reader: Reader, match: re.Match[str]) -> PropertyResult:

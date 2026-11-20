@@ -265,7 +265,11 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
         properties=checks,
         failures=failures,
         failed_count=None if is_timeout else failed,
-        total_count=None if is_timeout else len(checks),
+        # CBMC's ``N of M failed`` counts properties, and a cover is not one;
+        # the parser reads the printed count, so the fixture must not add it.
+        total_count=None
+        if is_timeout
+        else sum(1 for item in checks if not item.is_cover),
         other_counts=_status_counts(checks),
         covered_satisfied=sum(1 for item in covers if item.status == SATISFIED) or None,
         covered_total=len(covers) or None,

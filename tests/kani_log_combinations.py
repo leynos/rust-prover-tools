@@ -13,6 +13,7 @@ a variant added here widens every property stated over it.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import itertools
 import typing as typ
 
@@ -109,17 +110,6 @@ def occurrences(depth: int) -> cabc.Iterator[tuple[HarnessFact, ...]]:
     """Yield every ordered fact combination of ``depth`` harnesses."""
     for facts in itertools.product(variants(), repeat=depth):
         yield tuple(
-            HarnessFact(
-                f"h::{index}{fact.name.removeprefix('h::')}",
-                fact.role,
-                fact.status,
-                fact.cover,
-                fact.expected,
-                fact.should_panic,
-                fact.note,
-                fact.unwinding_checks,
-                fact.cover_description,
-                fact.expected_failure,
-            )
+            dc.replace(fact, name=f"h::{index}{fact.name.removeprefix('h::')}")
             for index, fact in enumerate(facts)
         )

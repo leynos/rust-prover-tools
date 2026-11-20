@@ -35,18 +35,14 @@ from rust_prover_tools.trust_audit.literals import decoded_literal_body_position
 from rust_prover_tools.trust_audit.model import ScanResult, TrustItem
 from rust_prover_tools.trust_audit.modules import module_references
 from rust_prover_tools.trust_audit.regions import verus_regions
-from rust_prover_tools.trust_audit.structure import texts
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
-from rust_prover_tools.trust_audit.use_tree import (
-    alias_bindings,
-    member_bindings,
-    statement_end,
-    use_roots,
-)
+from rust_prover_tools.trust_audit.use_bindings import alias_bindings, member_bindings
+from rust_prover_tools.trust_audit.use_tree import file_roots, imported_roots
 from rust_prover_tools.trust_audit.vocabulary import (
     KANI_ROOT,
     KANI_VOCABULARY,
     OPAQUE_MACROS,
+    PROCEDURAL_OPAQUE_MACROS,
     TRUST_ROOTS,
     VERUS_VOCABULARY,
     VOCABULARY,
@@ -56,8 +52,6 @@ __all__ = ("scan",)
 
 # The ``::`` and the qualifier in front of a path's last segment.
 _QUALIFIED_SEGMENTS = 2
-# ``extern crate``: the two words that open a crate declaration.
-_EXTERN_CRATE = ("extern", "crate")
 # A qualified Kani path inside a proc-macro string literal.
 _QUALIFIED_KANI = re.compile(r"\bkani\s*::\s*([A-Za-z_][A-Za-z0-9_]*)")
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -93,19 +87,31 @@ def scan(text: str, *, procedural_macro: bool = False) -> ScanResult:
     no code token.
     """
     tokens = tokenize(text)
-    _refuse_opaque_macros(tokens)
+    _refuse_opaque_macros(tokens, procedural_macro=procedural_macro)
     context = _Context(tokens, procedural_macro=procedural_macro)
     return ScanResult(context.run(), module_references(tokens))
 
 
-def _refuse_opaque_macros(tokens: tuple[Token, ...]) -> None:
+def _refuse_opaque_macros(
+    tokens: tuple[Token, ...],
+    *,
+    procedural_macro: bool,
+) -> None:
     """Fail closed on a macro whose expansion the scan cannot read.
 
     A rename is the same macro under another spelling: ``use std::include as
     load;`` makes ``load!`` expand as ``include!``, so the refusal follows the
     file's imports rather than only the literal name.
+
+    ``include_str!`` joins the refused set only for a proc-macro crate.  Its
+    expansion is a string literal, which an ordinary crate's scan never reads;
+    a proc-macro crate's literals are read as code, so there the spliced file
+    would carry code the lexer never saw.
     """
-    names = _opaque_names(tokens)
+    base = OPAQUE_MACROS
+    if procedural_macro:
+        base |= PROCEDURAL_OPAQUE_MACROS
+    names = _opaque_names(tokens, base)
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
         if token.kind is not Kind.IDENT or token.text not in names:
@@ -119,13 +125,16 @@ def _refuse_opaque_macros(tokens: tuple[Token, ...]) -> None:
         raise TrustAuditError(msg)
 
 
-def _opaque_names(tokens: tuple[Token, ...]) -> frozenset[str]:
+def _opaque_names(
+    tokens: tuple[Token, ...],
+    base: frozenset[str],
+) -> frozenset[str]:
     """Return the opaque macro names, plus every local name bound to one."""
-    names = set(OPAQUE_MACROS)
+    names = set(base)
     names.update(
         alias
-        for item, alias in member_bindings(tokens, _use_roots(tokens))
-        if item in OPAQUE_MACROS
+        for item, alias in member_bindings(tokens, file_roots(tokens))
+        if item in base
     )
     return frozenset(names)
 
@@ -140,7 +149,7 @@ class _Context:
     def __init__(self, tokens: tuple[Token, ...], *, procedural_macro: bool) -> None:
         """Record the tokens and the file-scoped facts the rules depend on."""
         self.tokens = tokens
-        self.imported_roots = _imported_roots(tokens)
+        self.imported_roots = imported_roots(tokens, TRUST_ROOTS)
         # A trust root may be in scope under another name. ``use kani as k;``
         # makes ``k::assume`` the same call as ``kani::assume``, and a scan that
         # matched only the literal root would report nothing for the file.
@@ -149,11 +158,7 @@ class _Context:
         # after ``use kani::{assume as a};`` a bare ``a(..)`` is Kani's call.
         # The crate may itself have been renamed first — ``use kani as k;``
         # then ``use k::{assume as a};`` — so the Kani aliases count as roots.
-        self.member_names = {
-            alias: member
-            for member, alias in member_bindings(tokens, TRUST_ROOTS | self.kani_names)
-            if member in VOCABULARY
-        }
+        self.member_names = _member_names(tokens, TRUST_ROOTS | self.kani_names)
         self.verus_regions = verus_regions(tokens)
         self.items: list[TrustItem] = []
         self._reported: set[TrustItem] = set()
@@ -194,18 +199,21 @@ class _Context:
         A renamed import is reported under the item it names, at the position
         where it is used: after ``use kani::{assume as a};`` the call ``a(x)``
         is Kani's ``assume``, and reporting the local spelling would leave the
-        audit unable to say which prover surface it reached.
+        audit unable to say which prover surface it reached.  ``self::a(..)``
+        names the item the same import bound, so it counts too; another
+        module's qualifier does not, because the binding there is not shown.
         """
         if not self.imported_roots:
             return
-        if not _is_bare_use(self.tokens, index):
-            return
-        if token.text in VOCABULARY:
+        if _is_bare_use(self.tokens, index) and token.text in VOCABULARY:
             self._report(token.text, token)
             return
-        item = self.member_names.get(token.text)
-        if item is not None and _is_member_use(self.tokens, index):
-            self._report(item, token)
+        items = self.member_names.get(token.text)
+        if items is None or not _is_member_use(self.tokens, index):
+            return
+        if _is_bare_use(self.tokens, index) or _is_self_qualified(self.tokens, index):
+            for item in sorted(items):
+                self._report(item, token)
 
     def _is_kani_path(self, index: int) -> bool:
         """Report whether this token ends a path rooted at Kani.
@@ -301,6 +309,41 @@ def _is_bare_use(tokens: tuple[Token, ...], index: int) -> bool:
     return tokens[index - 1].text not in {"::", "."}
 
 
+def _member_names(
+    tokens: tuple[Token, ...],
+    roots: frozenset[str],
+) -> dict[str, frozenset[str]]:
+    """Group every vocabulary member by the local name that denotes it.
+
+    Two scopes may bind one local name to different items — ``use kani::assume
+    as m;`` in one module and ``use kani::any_where as m;`` in another — and
+    the scan is file-scoped, so it cannot tell which scope a later ``m(..)``
+    sits in.  Keeping every item the name may denote, and reporting all of
+    them, leaves the item for the reader to justify rather than dropping one.
+    """
+    names: dict[str, set[str]] = {}
+    for member, alias in member_bindings(tokens, roots):
+        if member in VOCABULARY:
+            names.setdefault(alias, set()).add(member)
+    return {alias: frozenset(items) for alias, items in names.items()}
+
+
+def _is_self_qualified(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether this token is named through ``self::``.
+
+    A named import binds its item in the module it appears in, so
+    ``self::a(..)`` after ``use kani::assume as a;`` is the same call as the
+    bare ``a(..)``.  The qualifier is ``self`` rather than another module, so
+    it names the binding rather than turning the name into a path through an
+    item.
+    """
+    return (
+        index >= _QUALIFIED_SEGMENTS
+        and tokens[index - 1].text == "::"
+        and tokens[index - _QUALIFIED_SEGMENTS].text == "self"
+    )
+
+
 def _is_member_use(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether a renamed import is used as the item it renames.
 
@@ -311,50 +354,3 @@ def _is_member_use(tokens: tuple[Token, ...], index: int) -> bool:
     if index and tokens[index - 1].text == "as":
         return False
     return index + 1 >= len(tokens) or tokens[index + 1].text != "::"
-
-
-def _imported_roots(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return the trust roots this file imports, by ``use`` or ``extern crate``.
-
-    Every root of every statement counts, not just its leading word.
-    ``use {std::mem, kani};`` imports ``kani`` as surely as the ungrouped form
-    does, and reading only the first identifier would quietly switch rule 3 off
-    for that file.
-
-    ``extern crate kani;`` is the same import spelled without a ``use``, and it
-    likewise makes a bare ``assume`` resolve to Kani, so it counts too.
-    """
-    roots = set(_use_roots(tokens))
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT:
-            continue
-        declared = _extern_crate_root(tokens, token, index)
-        if declared is not None:
-            roots.add(declared)
-    return frozenset(roots & TRUST_ROOTS)
-
-
-def _use_roots(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return every crate the file's ``use`` statements take paths from."""
-    roots = set()
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or token.text != "use":
-            continue
-        end = statement_end(tokens, index + 1)
-        roots.update(root for root, _ in use_roots(tokens, index + 1, end))
-    return frozenset(roots)
-
-
-def _extern_crate_root(
-    tokens: tuple[Token, ...],
-    token: Token,
-    index: int,
-) -> str | None:
-    """Return the crate an ``extern crate`` declaration at ``index`` names."""
-    if texts(tokens, index, len(_EXTERN_CRATE)) != _EXTERN_CRATE:
-        return None
-    name_index = index + len(_EXTERN_CRATE)
-    if name_index >= len(tokens):
-        return None
-    name = tokens[name_index]
-    return name.text if name.kind is Kind.IDENT else None
