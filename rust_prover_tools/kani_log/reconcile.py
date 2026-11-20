@@ -38,7 +38,10 @@ def require_complete(builder: _BlockBuilder) -> None:
     if builder.verdict is None:
         msg = f"the block for {builder.name!r} ends without a verification result"
         raise KaniLogError(msg)
-    if builder.timed_out and not builder.has_results:
+    if builder.timed_out:
+        # A timeout aborts CBMC before ``RESULTS:``, so a block carrying the
+        # marker has nothing further to reconcile; anything that did arrive
+        # makes the marker contradictory, which ``_require_timeout`` refuses.
         _require_timeout(builder)
         return
     if not builder.has_results:
@@ -74,9 +77,9 @@ def _require_timeout(builder: _BlockBuilder) -> None:
     """Reconcile a block that timed out before reporting any check.
 
     A timeout aborts CBMC before it prints ``RESULTS:``, so the block has no
-    summary and no verification time; its failed verdict alone is the fact.
-    A successful verdict, or any of those later fields, means the block was not
-    the shape a timeout produces and must not take the exception.
+    results, summary or verification time; its failed verdict alone is the
+    fact.  A successful verdict, or any completed-result field, means the block
+    was not the shape a timeout produces and must not take the exception.
 
     Parameters
     ----------
@@ -90,10 +93,12 @@ def _require_timeout(builder: _BlockBuilder) -> None:
         completed result.
 
     """
-    has_completed_result = (
-        builder.seen_verification_time or builder.failed_count is not None
+    completed_fields = (
+        builder.has_results,
+        builder.seen_verification_time,
+        builder.failed_count is not None,
     )
-    if builder.verdict != "FAILED" or has_completed_result:
+    if builder.verdict != "FAILED" or any(completed_fields):
         msg = (
             f"the block for {builder.name!r} reports a timeout alongside a "
             "completed result"
@@ -173,12 +178,19 @@ def _require_other(
     builder: _BlockBuilder,
     checks: tuple[PropertyResult, ...],
 ) -> None:
-    """Require the parenthesised "other" count to reconcile."""
-    expected = OTHER_STATUS.get(builder.other_kind or "", "")
-    observed_other = sum(1 for item in checks if item.status == expected)
-    if builder.other_count not in {0, observed_other}:
+    """Require the parenthesised "other" count to reconcile.
+
+    An absent count says nothing about the checks, but a printed one does -
+    including a printed zero, which must agree that no check carried that
+    status.
+    """
+    if builder.other_kind is None:
+        return
+    expected = OTHER_STATUS.get(builder.other_kind, "")
+    observed = sum(1 for item in checks if item.status == expected)
+    if builder.other_count != observed:
         msg = (
             f"the block for {builder.name!r} counts {builder.other_count} "
-            f"{builder.other_kind} results but lists {observed_other}"
+            f"{builder.other_kind} results but lists {observed}"
         )
         raise KaniLogError(msg)

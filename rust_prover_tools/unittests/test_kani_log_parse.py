@@ -335,6 +335,23 @@ def test_both_cover_counts_are_reconciled() -> None:
     assert block.covered_undetermined == 1
 
 
+def test_an_explicit_zero_other_count_is_reconciled() -> None:
+    """Require a printed zero to agree that no check carried that status."""
+    text = log_text("insufficient_unwind").replace(
+        " ** 1 of 4 failed (3 undetermined)",
+        " ** 1 of 4 failed (0 undetermined)",
+    )
+    assert "counts 0 undetermined results but lists 3" in refused(text)
+
+
+def test_a_timeout_marker_beside_results_is_refused() -> None:
+    """Refuse a timeout marker on a block that went on to report results."""
+    lines = log_text("counterexample").splitlines()
+    solver = next(index for index, line in enumerate(lines) if "`cbmc " in line)
+    text = "\n".join([*lines[: solver + 1], "CBMC timed out.", *lines[solver + 1 :]])
+    assert "timeout alongside a completed result" in refused(text)
+
+
 def test_a_completed_result_beside_a_timeout_marker_is_refused() -> None:
     """Refuse a timeout block that also claims a successful verdict."""
     text = log_text("multiplication_timeout").replace(

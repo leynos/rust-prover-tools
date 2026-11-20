@@ -203,6 +203,31 @@ def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
     assert decision.outcome is KaniOutcome.VERIFIED
 
 
+def test_a_repeated_witness_description_must_all_be_satisfied() -> None:
+    """Require every cover sharing a description to be satisfied."""
+    name = "h::c"
+    block = HarnessBlock(
+        name=name,
+        properties=(
+            PropertyResult(f"{name}.cover.1", "UNREACHABLE", "the witness"),
+            PropertyResult("cover.2", "SATISFIED", "the witness"),
+        ),
+        failed_count=0,
+        total_count=0,
+        covered_satisfied=1,
+        covered_total=2,
+        covered_unreachable=1,
+        verdict="SUCCESSFUL",
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+        seen_verification_time=True,
+        has_results=True,
+    )
+    log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
+    manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
+    decision = analyse_kani_log(log, manifest)
+    assert decision.witness_statuses == ("unsatisfied",)
+
+
 def test_each_control_reports_its_disposition() -> None:
     """Require one disposition per control, drawn from the admitted set."""
     disagreeing = [

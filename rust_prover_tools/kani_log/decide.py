@@ -188,21 +188,27 @@ def _witness_statuses(
     Two harnesses may describe their witnesses with the same words, so a
     global lookup would let one claim's satisfied cover stand in for another
     claim's unreachable one.  A cover CBMC printed without an owner is read
-    from the block it appears in, which is the harness it was checked for.
+    from the block it appears in, which is the harness it was checked for.  Two
+    covers may share a description, so every report for that description must
+    be satisfied before the declared cover counts as satisfied.
     """
     statuses: list[str] = []
     for claim in manifest.claims:
         seen = observed.get(claim.name)
-        reported = {
-            item.description: item.status
-            for item in (() if seen is None else (*seen.properties, *seen.unattributed))
-            if item.is_cover
-        }
+        reported: dict[str, list[str]] = {}
+        for item in () if seen is None else (*seen.properties, *seen.unattributed):
+            if item.is_cover:
+                reported.setdefault(item.description, []).append(item.status)
         statuses.extend(
-            SATISFIED if reported.get(cover) == "SATISFIED" else UNSATISFIED
+            SATISFIED if _all_satisfied(reported.get(cover)) else UNSATISFIED
             for cover in claim.covers
         )
     return tuple(statuses)
+
+
+def _all_satisfied(statuses: list[str] | None) -> bool:
+    """Report whether one description was reported satisfied wherever it ran."""
+    return bool(statuses) and all(status == "SATISFIED" for status in statuses)
 
 
 def _control_statuses(
