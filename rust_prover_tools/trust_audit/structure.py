@@ -46,6 +46,22 @@ def matching(
 ) -> int:
     """Return the index of the token closing the group opened at ``open_index``.
 
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    open_index : int
+        Index of the opening delimiter in ``tokens``.
+    opener : str
+        The opening delimiter's text, such as ``"{"``.
+    closer : str
+        The matching closing delimiter's text, such as ``"}"``.
+
+    Returns
+    -------
+    int
+        The index of the closing token.
+
     Raises
     ------
     TrustAuditError
@@ -72,7 +88,23 @@ def matching(
 
 
 def texts(tokens: tuple[Token, ...], start: int, count: int) -> tuple[str, ...]:
-    """Return up to ``count`` token texts from ``start``, clipped at the end."""
+    """Return up to ``count`` token texts from ``start``, clipped at the end.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Index of the first token to read.
+    count : int
+        The maximum number of texts to return.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The texts found, fewer than ``count`` when the source ends first.
+
+    """
     return tuple(token.text for token in tokens[start : start + count])
 
 
@@ -83,6 +115,18 @@ def attribute_spans(tokens: tuple[Token, ...]) -> tuple[tuple[int, int], ...]:
     ``#![cfg_attr(…)]`` carry a Verus attribute equally well. Reading a span
     from the wrong bracket would make every attribute one token short, so the
     outer and inner forms are distinguished explicitly.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+
+    Returns
+    -------
+    tuple[tuple[int, int], ...]
+        One ``(open, close)`` pair of bracket indices per attribute, in source
+        order.
+
     """
     spans = []
     for index, token in enumerate(tokens):
@@ -101,7 +145,20 @@ def previous_closer(tokens: tuple[Token, ...], opener: int) -> int:
     Searching backwards rather than stepping a fixed distance keeps the walk
     correct for both ``#[…]`` and ``#![…]``: the two forms differ by one token
     at the front, and an offset calibrated for one is off by one for the other.
-    ``-1`` means no attribute precedes ``opener``.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    opener : int
+        Token index of an attribute's opening ``[``.
+
+    Returns
+    -------
+    int
+        Index of the ``]`` closing the attribute immediately before
+        ``opener``, or ``-1`` when no attribute precedes it.
+
     """
     for index in range(opener - 1, -1, -1):
         if tokens[index].text == "]":
@@ -116,6 +173,20 @@ def skip_visibility(tokens: tuple[Token, ...], index: int) -> int:
 
     ``pub(in path)`` and ``pub(crate)`` are handled by skipping the matching
     parentheses, so the four visibility forms need no separate cases.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    index : int
+        Token index to step backwards from.
+
+    Returns
+    -------
+    int
+        The index before the visibility modifier, or ``index`` unchanged when
+        the token there is not one.
+
     """
     if index >= 0 and tokens[index].text == "pub":
         return index - 1
@@ -128,7 +199,21 @@ def skip_visibility(tokens: tuple[Token, ...], index: int) -> int:
 
 
 def opening_paren(tokens: tuple[Token, ...], close_index: int) -> int | None:
-    """Return the index of the ``(`` matching the ``)`` at ``close_index``."""
+    """Return the index of the ``(`` matching the ``)`` at ``close_index``.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    close_index : int
+        Token index of the ``)`` to match.
+
+    Returns
+    -------
+    int | None
+        The matching ``(`` index, or ``None`` when none encloses it.
+
+    """
     depth = 0
     for index in range(close_index, -1, -1):
         if tokens[index].text == ")":
@@ -141,7 +226,21 @@ def opening_paren(tokens: tuple[Token, ...], close_index: int) -> int | None:
 
 
 def opening_bracket(tokens: tuple[Token, ...], close_index: int) -> int | None:
-    """Return the index of the ``[`` matching the ``]`` at ``close_index``."""
+    """Return the index of the ``[`` matching the ``]`` at ``close_index``.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    close_index : int
+        Token index of the ``]`` to match.
+
+    Returns
+    -------
+    int | None
+        The matching ``[`` index, or ``None`` when none encloses it.
+
+    """
     depth = 0
     for index in range(close_index, -1, -1):
         if tokens[index].text == "]":
@@ -161,6 +260,22 @@ def path_value(
     The value is Rust's reading of the literal, not its source spelling, so an
     escape such as ``"\\x63hild.rs"`` names ``child.rs`` exactly as the
     compiler resolves it.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    open_index : int
+        Token index of the attribute's ``[``.
+    close_index : int
+        Token index of that attribute's ``]``.
+
+    Returns
+    -------
+    str | None
+        The decoded value, or ``None`` when the span is not a
+        ``#[path = "…"]`` attribute.
+
     """
     value_index = open_index + 1 + len(_PATH_HEAD)
     if value_index >= close_index:
@@ -181,8 +296,23 @@ def payload_start(
 
     The predicate is the first item and may itself contain commas inside a
     nested call such as ``all(…)``, so only a comma at the attribute's own
-    bracket depth separates it from the payload. ``None`` means the attribute
-    carries no payload and so applies no attribute at all.
+    bracket depth separates it from the payload.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    open_index : int
+        Token index of the ``cfg_attr`` call's ``(``.
+    close_index : int
+        Token index of its matching ``)``.
+
+    Returns
+    -------
+    int | None
+        Index of the first payload token, or ``None`` when the attribute
+        carries no payload and so applies no attribute at all.
+
     """
     if open_index >= close_index or tokens[open_index].text != "(":
         return None
@@ -211,6 +341,22 @@ def conditional_path(
     Only the payload can select a target. The configuration predicate is the
     first item, so a predicate that happens to spell ``path = "…"`` — a custom
     configuration named ``path`` with a value — is not a path attribute.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    open_index : int
+        Token index of the attribute's ``[``.
+    close_index : int
+        Token index of that attribute's ``]``.
+
+    Returns
+    -------
+    bool
+        Whether the attribute is a ``cfg_attr`` whose payload carries
+        ``path = …``.
+
     """
     head_index = open_index + 1
     if head_index >= close_index or tokens[head_index].text != _CFG_ATTR:

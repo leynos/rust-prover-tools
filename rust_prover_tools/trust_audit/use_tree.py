@@ -59,12 +59,37 @@ def imported_roots(
     likewise makes a bare ``assume`` resolve to Kani, so it counts too. The
     caller supplies the roots it cares about, which keeps this module free of
     the vocabulary that names them.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    roots : Set[str]
+        The crate names the caller cares about.
+
+    Returns
+    -------
+    frozenset[str]
+        The subset of ``roots`` the file imports.
+
     """
     return frozenset(file_roots(tokens) & roots)
 
 
 def file_roots(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return every crate the file's ``use`` statements and ``extern crate`` name."""
+    """Return every crate the file's ``use`` statements and ``extern crate`` name.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+
+    Returns
+    -------
+    frozenset[str]
+        Every crate the file names as an import root, in any statement.
+
+    """
     found = set()
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT:
@@ -108,6 +133,22 @@ def use_roots(
     members. Groups nest, so a member may itself be a brace list, and the answer
     is the same set of roots however deeply the braces are nested.
 
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index of the first token after ``use``.
+    end : int
+        Token index ending the statement: the closing ``;`` for a whole
+        statement, or the brace or comma ending a member span.
+
+    Returns
+    -------
+    tuple[tuple[str, str | None], ...]
+        One ``(crate, alias)`` pair per rooted path, with ``None`` as the
+        alias when the path does not rename its crate.
+
     Examples
     --------
     ``use kani as k;`` reports ``(('kani', 'k'),)``, and
@@ -131,6 +172,20 @@ def use_root(tokens: tuple[Token, ...], start: int) -> str | None:
     ``{`` is a group rather than a root, so it is not read as one: ``use
     {std::mem, kani};`` is two paths, and `use_roots` splits it before this
     function is asked about a member.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index of the first token after ``use``.  No ``end`` is taken:
+        the walk stops at the next ``;``.
+
+    Returns
+    -------
+    str | None
+        The first crate the statement names, or ``None`` when it names none.
+
     """
     for index in range(start, statement_end(tokens, start)):
         token = tokens[index]
@@ -150,8 +205,23 @@ def use_aliases(tokens: tuple[Token, ...], start: int, end: int) -> frozenset[st
     its items.
 
     A rename of any other member — ``use root::{assume as a};`` — is not this
-    statement's own alias. Treating it as one would match every ``a::`` path in
-    the file against the trust root, which is a claim the source does not make.
+    statement's own alias: matching every ``a::`` path against the trust root
+    would claim what the source does not.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index of the first token after ``use``.
+    end : int
+        Token index ending the statement: its closing ``;``, or the brace or
+        comma ending a member span.
+
+    Returns
+    -------
+    frozenset[str]
+        The names bound to the crate itself.
 
     Examples
     --------
@@ -165,7 +235,22 @@ def use_aliases(tokens: tuple[Token, ...], start: int, end: int) -> frozenset[st
 
 
 def statement_end(tokens: tuple[Token, ...], start: int) -> int:
-    """Return the index of the ``;`` closing the statement opened at ``start``."""
+    """Return the index of the ``;`` closing the statement opened at ``start``.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index to search from.
+
+    Returns
+    -------
+    int
+        The index of the next ``;`` at or after ``start``, or ``len(tokens)``
+        when the source has none.
+
+    """
     for index in range(start, len(tokens)):
         if tokens[index].text == ";":
             return index
@@ -183,6 +268,23 @@ def rooted_spans(
     each member is reported with the root governing *it* rather than with the
     first root in the statement: ``use {std::x as X, kani::assume as a};``
     renames ``a`` out of Kani and ``X`` out of the standard library.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index of the first token after ``use``.
+    end : int
+        Token index ending the statement: its closing ``;``, or the brace or
+        comma ending a member span.
+
+    Returns
+    -------
+    Iterator[tuple[str, int, int]]
+        ``(root, start, end)`` for each leaf path, where the two indices bound
+        the tokens of that path.
+
     """
     if _is_grouped(tokens, start, end):
         for member_start, member_end in _top_level_members(tokens, start, end):
@@ -203,6 +305,22 @@ def member_aliases(
     The crate's own rename is left out. A member rename is any other ``as``
     with an identifier on each side, so ``kani::foo::assume as a`` and
     ``kani::{assume as a, assert as b}`` are read alike.
+
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index of the first token of one rooted path.
+    end : int
+        Token index just past that path's last token: the brace or comma that
+        ends a member span, or the statement's closing ``;``.
+
+    Returns
+    -------
+    Iterator[tuple[str, str]]
+        ``(item, local name)`` for each member rename in the path.
+
     """
     crate_aliases = set(crate_alias_indices(tokens, start, end))
     for index in range(start + 1, end - 1):
@@ -214,11 +332,7 @@ def member_aliases(
 
 
 def _is_grouped(tokens: tuple[Token, ...], start: int, end: int) -> bool:
-    """Report whether the statement opens with a brace of roots.
-
-    A leading ``::`` is path syntax rather than a root, so it is stepped over
-    before asking what the statement starts with.
-    """
+    """Report whether the statement, after any leading ``::``, opens a brace."""
     index = start
     while index < end and tokens[index].text == "::":
         index += 1
