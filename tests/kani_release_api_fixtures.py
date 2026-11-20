@@ -51,6 +51,7 @@ class FakeReleaseApi:
         self.exists = False
         self.is_draft = False
         self.body_text = body()
+        self.target_commitish = BUILDER
         self.provenance_verified = False
         self.stored: dict[str, bytes] = {}
         self.placeholders: dict[str, int] = {}
@@ -115,7 +116,7 @@ class FakeReleaseApi:
             exists=True,
             is_draft=self.is_draft,
             tag=tag,
-            target_commitish=BUILDER,
+            target_commitish=self.target_commitish,
             assets=assets,
             release_id=99,
             body=self.body_text,

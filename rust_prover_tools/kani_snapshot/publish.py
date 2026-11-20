@@ -117,16 +117,22 @@ def _discard(
 
 
 def _state_key(observed: ObservedRelease) -> tuple[object, ...]:
-    """Return the parts of an observation that decide what the draft holds.
+    """Return the parts of an observation the policy decides from.
 
-    Only the identity of each record is compared, not the digest: the two
-    readings sit on either side of a download, so one of them carries hashes
-    the other cannot, and that difference alone is not a change of state.
+    Every field the policy reads is included, not only the asset set: a draft
+    can be retargeted or re-bodied while its bytes are being downloaded, and
+    the newer reading is the one that would be refused. Only the computed
+    digests are left out, because the two readings sit on either side of a
+    download, so one of them carries hashes the other cannot, and that
+    difference alone is not a change of state.
     """
     return (
         observed.exists,
         observed.is_draft,
         observed.release_id,
+        observed.tag,
+        observed.target_commitish,
+        observed.body,
         tuple(
             sorted(
                 (asset.name, asset.size, asset.asset_id) for asset in observed.assets
@@ -149,13 +155,15 @@ def _recheck(
 
     The download takes time, and the listing it was started from is not
     evidence of what is still there when it finishes: an asset removed after
-    its own bytes were hashed would otherwise be published missing. So the
-    state is read once more after the verification, and the decision is made
-    from that reading. When the two readings agree, the verified observation is
-    the one decided on, because it carries the digests and the provenance
-    verdict the second reading cannot; when they disagree, the draft moved
-    while it was being read and the verified set no longer describes it, so the
-    newer reading is decided on instead.
+    its own bytes were hashed would otherwise be published missing, and a draft
+    retargeted or re-bodied mid-download would be published from an identity
+    the policy never approved. So the state is read once more after the
+    verification, and the decision is made from that reading. When the two
+    readings agree, the verified observation is the one decided on, because it
+    carries the digests and the provenance verdict the second reading cannot;
+    when they disagree, the draft moved while it was being read and the
+    verified set no longer describes it, so the newer reading is decided on
+    instead.
 
     The recheck narrows the window before the write; it does not close it.
     GitHub's release update has no conditional form, so the state can still

@@ -276,6 +276,18 @@ Terms used here:
   `tests/test_workflow_makefile_contract.py` loads the fence from the guide,
   substitutes representative inputs and runs it against the `gh` stand-in,
   asserting the exact dispatch vector including `publish=false`.
+- 20 November 2026: remediated the tenth completeness assessment (A10,
+  `EP258-2026-11-20-A10`). Its blocking finding was that the recheck's
+  comparison covered only the asset set, so a draft retargeted at another
+  commit or re-bodied to record another attempt while its bytes were being
+  downloaded was still published from the pre-download identity the policy had
+  approved. `_state_key` now includes every field the policy reads — tag,
+  target commit and body, as well as the release id, draft flag and each
+  asset's name, size and server identifier. Two cases in
+  `tests/test_kani_snapshot_publish_race.py` change the target and the body on
+  the second verification and assert a conflict with no publish call; both
+  publish on the previous code. D5, the developers guide and the users guide
+  say the confirming reading covers identity as well as assets.
 
 ## Surprises & discoveries
 
@@ -433,9 +445,12 @@ Terms used here:
 - *Publication is decided from a reading taken after its download.* The listing
   a recheck starts from cannot show an asset removed while its bytes were being
   hashed, so the recheck reads the draft again and acts on the newer reading
-  when the two disagree. The window between that reading and the PATCH is
-  unavoidable — GitHub's release update has no conditional form — and the
-  observation after the write is what reports a divergence there.
+  when the two disagree. The comparison covers every field the policy reads —
+  tag, target commit, body and asset identities — not just the asset set,
+  because a retargeted or re-bodied draft is one the policy would refuse. The
+  window between that reading and the PATCH is unavoidable — GitHub's release
+  update has no conditional form — and the observation after the write is what
+  reports a divergence there.
 
 ## Outcomes & retrospective
 

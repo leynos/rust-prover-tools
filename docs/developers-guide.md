@@ -921,13 +921,14 @@ edit — a placeholder to delete or a missing asset to upload — is hashed firs
 so a same-size asset whose bytes differ is refused before the draft is changed;
 a draft that needs no edit is verified whole instead, and that download hashes
 it. The write that would publish the draft is then decided from a reading taken
-after that download: the listing the download started from cannot show an asset
-removed while its bytes were being hashed, so publication reads the draft again
-and restores anything that disappeared before anything becomes public. Each
-side of that boundary has one module: `release_assets_policy` classifies an
-observed asset set, `release_markers` reads and writes the release-body
-markers, and the adapter's steps are `gh_release.document` for the served
-documents, `gh_release.attestation` for signature policy and
+after that download: the first listing cannot show an asset removed while its
+bytes were being hashed, nor a draft retargeted or re-bodied mid-download, so
+publication reads the draft again, restores anything that disappeared and
+refuses an identity the policy no longer approves before anything becomes
+public. Each side of that boundary has one module: `release_assets_policy`
+classifies an observed asset set, `release_markers` reads and writes the
+release-body markers, and the adapter's steps are `gh_release.document` for the
+served documents, `gh_release.attestation` for signature policy and
 `gh_release.download` for the download, digest and verification sequence. A
 change to one seam therefore cannot silently reach across into another.
 
