@@ -201,7 +201,8 @@ def parse_manifest(text: str) -> Manifest:
     ------
     KaniManifestError
         If the text is not valid JSON, repeats a key, contains a non-finite
-        constant, or describes an invalid manifest.
+        constant, nests deeper than the decoder can read, or describes an
+        invalid manifest.
 
     """
     try:
@@ -216,6 +217,11 @@ def parse_manifest(text: str) -> Manifest:
         # A digit run past CPython's integer-string limit fails here rather
         # than as a syntax error, and must still leave as a manifest error.
         _fail(f"contains a number this parser cannot read: {error}")
+    except RecursionError:
+        # JSON has no depth limit, but the decoder's recursion does.  The
+        # document is invalid input, not a fault in this program, so it leaves
+        # the same way every other unreadable manifest does.
+        _fail("is nested too deeply for this parser to read")
     if not isinstance(document, cabc.Mapping):
         _fail("must be a JSON object")
     return manifest_from_document(document)

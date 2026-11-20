@@ -54,6 +54,11 @@ class VerusAnalysis:
     failures: tuple[VerusFailure, ...] = ()
     reason: str = ""
     expectation: FailureExpectation | None = None
+    #: The number of failing functions the summary reported.  The diagnostics
+    #: are evidence of *where* a function failed, not of how many did: a
+    #: capture can lose one, and a diagnostic the parser could not place still
+    #: counts as a failure.
+    reported_errors: int = 0
 
     @property
     def located_failures(self) -> tuple[VerusFailure, ...]:
@@ -64,16 +69,20 @@ class VerusAnalysis:
     def expectation_met(self) -> bool:
         """Report whether the run failed exactly where it was meant to.
 
-        Exactly one failure must be reported, and it must fall inside the
-        expected region.  Checking the complete collection rather than only the
-        located failures is what keeps an unlocated diagnostic from hiding
-        beside the seeded fault: a run that also broke somewhere else has not
-        shown that the fault, and only the fault, would be caught.  An
-        expectation that was never declared is never met.
+        The summary must count exactly one failing function *and* the parser
+        must have found exactly one diagnostic, inside the expected region.
+        Both are required because each can be right while the other is
+        misleading: a capture that lost a diagnostic would otherwise pass on
+        the strength of the one it kept, and a run that broke in two functions
+        while reporting one of them is not the single seeded failure the
+        control exists to show.  Checking the complete collection rather than
+        only the located failures keeps an unlocated diagnostic from hiding
+        beside the seeded fault.  An expectation that was never declared is
+        never met.
         """
         if self.expectation is None:
             return False
-        if len(self.failures) != 1:
+        if self.reported_errors != 1 or len(self.failures) != 1:
             return False
         return self.expectation.contains(self.failures[0])
 
@@ -129,6 +138,7 @@ def analyse_verus_log(
             log.failures,
             reason,
             expectation,
+            summary.errors,
         )
     return VerusAnalysis(
         VerusOutcome.VERIFIED,
@@ -136,6 +146,7 @@ def analyse_verus_log(
         log.failures,
         _verified_reason(run_mode, summary.verified),
         expectation,
+        summary.errors,
     )
 
 

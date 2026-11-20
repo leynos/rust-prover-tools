@@ -233,18 +233,23 @@ Useful options are:
 The analysis reports one outcome, taken from the strongest fact the log
 supports. In decreasing precedence:
 
-1. `counterexample` — a claim's own substantive check failed, a called routine
-   failed, or Kani reported a failed verdict with no attributable failure.
+1. `counterexample` — a claim's own substantive check failed, a check under a
+   called routine failed, or Kani reported a failed verdict with no
+   attributable failure.
 2. `resource-exhausted` — a harness timed out, or an unwinding assertion ran
    out of bound.
 3. `unsupported` — Kani could not model a construct the harness reached.
-4. `undetermined` — a check was left undecided, or a cover was unreachable.
+4. `undetermined` — a check the solver left undecided anywhere in the call
+   tree, or an unreachable cover this harness owns or CBMC printed without an
+   owner.
 5. `skipped` — a declared claim never reported a block.
 6. `verified` — every declared claim ran and nothing disproved it.
 
 An unwinding failure is a bound, not a counterexample. A `should_panic` claim
-is excused only when Kani also reported that the panic matched, and the run is
-still bounded: none of these outcomes proves a property over every execution.
+is excused only when Kani also reported that the panic matched, and the
+exemption reaches a failed check under a called routine, which is the same
+panic seen one frame down. The run is still bounded: none of these outcomes
+proves a property over every execution.
 
 `tool-error` covers a log that cannot be decided from at all: truncated or
 otherwise structurally invalid output, a release other than 0.67.0, `kani list`
@@ -290,11 +295,14 @@ Exit statuses are:
   manifest is invalid.
 - `2` — the analysis completed but did not pass, including `tool-error`.
 
-Only Kani 0.67.0 transcripts are supported today. Output from `kani run`, its
-retained 64 KiB tail, and Kani 0.68.0 snapshot logs are not valid analysis
-input: `kani run` streams live output and deliberately keeps only the tail, so
-it loses the banner and the start of the report. Capture a fresh run through
-`kani exec` when you need an analysable log.
+Only Kani 0.67.0 transcripts are supported today. Kani 0.68.0 snapshot logs are
+not valid analysis input.
+
+A redirect of a `kani run` invocation is valid input: the command mirrors both
+streams live, so redirecting them captures the whole run. The 64 KiB tail that
+`kani run` retains for diagnostics is not: it is a truncated view of the run,
+so it loses the banner and the start of the report. Redirect to a file when you
+want to analyse a run afterwards, or capture a fresh run through `kani exec`.
 
 ### Kani snapshot commands
 
@@ -715,10 +723,10 @@ Useful options are:
 - `--log PATH`: the captured transcript to analyse.
 - `--expect-failure REGION`: declare a negative control. `REGION` is
   `path`, `path:line` or `path:start-end`, and the analysis passes only when
-  the run reports exactly one failure and it lands inside that region. A second
-  failure, located or not, means the run broke more than the seeded fault, and
-  a control that did not fail at all has not shown that the fault would be
-  caught.
+  the summary counts exactly one failing function and one diagnostic lands
+  inside that region. A second failure, located or not, or a second count in
+  the summary, means the run broke more than the seeded fault, and a control
+  that never failed has not shown that the fault would be caught.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for

@@ -296,10 +296,18 @@ def _has_counterexample(
     reported: list[Observed],
     manifest: Manifest,
 ) -> bool:
-    """Report whether a claim was disproved by its own or a called failure."""
+    """Report whether a claim was disproved by its own or a called failure.
+
+    The expected-panic exemption covers both sources.  A panic aborts the
+    routine it happens in and unwinds through the harness, so a check that
+    fails beneath a claim declared to panic is that same panic witnessed one
+    frame down.  Denying the claim for it would report the outcome the manifest
+    asked for as a counterexample.
+    """
     return any(
-        _counts_as_counterexample(item, manifest) or bool(item.foreign_failures)
-        for item in reported
+        (seen.substantive_failures or seen.foreign_failures)
+        and not _panics_as_expected(seen, manifest)
+        for seen in reported
     )
 
 
@@ -327,12 +335,12 @@ def _standing_outcome(reported: list[Observed]) -> KaniOutcome:
     return KaniOutcome.VERIFIED
 
 
-def _counts_as_counterexample(seen: Observed, manifest: Manifest) -> bool:
-    """Report whether this claim's failed property disproves the claim."""
-    if not seen.substantive_failures:
+def _panics_as_expected(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether the manifest declares this claim's panic, and it happened."""
+    if not seen.panics_as_expected:
         return False
     entry = next(item for item in manifest.claims if item.name == seen.name)
-    return not (entry.should_panic and seen.panics_as_expected)
+    return entry.should_panic
 
 
 def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:

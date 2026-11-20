@@ -260,6 +260,20 @@ def test_a_check_without_a_location_is_read() -> None:
     ]
 
 
+def test_a_check_without_a_numeric_ordinal_is_refused() -> None:
+    """Require the ordinal CBMC appends to every property it reports.
+
+    Without it a line that merely begins ``Check 1:`` would be read as a check
+    and could end the block's result section early.  The line is not a check,
+    so it is an unrecognised line in the block like any other.
+    """
+    text = log_text("verified").replace(
+        "Check 3: harnesses::verified.assertion.1",
+        "Check 3: harnesses::verified.assertion",
+    )
+    assert "unrecognised line in the block" in refused(text)
+
+
 def test_an_ownerless_check_keeps_its_kind() -> None:
     """Read the kind from two segments, as CBMC prints it without an owner."""
     text = log_text("verified").replace(

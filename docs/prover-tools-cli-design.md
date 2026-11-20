@@ -723,9 +723,12 @@ failures for one function.
 `--expect-failure` declares a negative control: a `path`, `path:line` or
 `path:start-end` region that the run's only failure must land in. The check
 reads the complete failure collection rather than the located subset, so an
-unlocated diagnostic beside the seeded fault also fails the control. The range
-exists because Verus reports a postcondition failure at the contract line above
-the body, not at the line a seeded mutation touched.
+unlocated diagnostic beside the seeded fault also fails the control. It also
+requires the summary to count exactly one failing function. The two facts can
+disagree: a capture can lose a diagnostic, and a run can break in two functions
+while reporting one of them. A control passes only when both say the same
+thing. The range exists because Verus reports a postcondition failure at the
+contract line above the body, not at the line a seeded mutation touched.
 
 ### Solver selection for Verus runs
 

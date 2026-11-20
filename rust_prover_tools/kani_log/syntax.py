@@ -53,7 +53,10 @@ VERIFICATION = re.compile(
     r"^VERIFICATION:- (?P<verdict>SUCCESSFUL|FAILED)(?: (?P<note>\(.*\)))?$",
 )
 VERIFICATION_TIME = re.compile(r"^Verification Time: \d+(?:\.\d+)?s$")
-CHECK = re.compile(r"^Check (?P<number>\d+): (?P<identifier>\S+)$")
+# CBMC names a check ``<owner>.<property>.<ordinal>``, where the ordinal counts
+# the checks that property produced.  Requiring it keeps a line that merely
+# begins like a check from being read as one and stopping the block early.
+CHECK = re.compile(r"^Check (?P<number>\d+): (?P<identifier>\S+\.\d+)$")
 FIELD = re.compile(
     r"^\t - (?P<key>Status|Description|Location): (?P<value>.*)$",
 )

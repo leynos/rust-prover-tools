@@ -23,7 +23,10 @@ from rust_prover_tools.kani_log.syntax import (
 
 __all__ = ("Observed",)
 
-INDETERMINATE_STATUSES = frozenset({"UNDETERMINED", "UNREACHABLE"})
+#: A check the solver could not decide, wherever in the call tree it sits.
+UNRESOLVED_STATUS = "UNDETERMINED"
+#: A check the harness never reaches, which only its own owner can explain.
+UNREACHABLE_STATUS = "UNREACHABLE"
 #: Check kinds whose failure limits or annotates a run rather than denying it.
 _NON_DENYING_KINDS = frozenset({COVER_KIND, UNWINDING_KIND, UNSUPPORTED_KIND})
 
@@ -99,15 +102,22 @@ class Observed:
     def indeterminate(self) -> bool:
         """Report whether any check in the block was left undecided.
 
-        An unreachable cover counts, including one CBMC printed without an
-        owner: it is still the block's evidence.  A check attributed to another
-        routine does not, because its reachability says nothing about this
-        harness.  A harness that assumes its precondition away reports a
-        successful verdict and no failed checks; the unreachable witness is the
-        only evidence that nothing was proved.
+        An unresolved check counts wherever it is owned.  The solver returned
+        no answer for an assertion the verdict rests on, and the routine that
+        owns it is part of what the harness claims, so the block proves nothing
+        even when the assertion sits in a called routine.
+
+        An unreachable check counts only when this harness owns it or CBMC
+        printed it without an owner.  A check attributed to another routine is
+        that routine's, and its unreachability says nothing about this harness,
+        which may simply never take that path.  A harness that assumes its
+        precondition away reports a successful verdict and no failed checks;
+        the unreachable witness is the only evidence that nothing was proved.
         """
         ownerless = (item for item in self.unattributed if item.owner is None)
+        decided_everywhere = (*self.properties, *self.unattributed)
+        if any(item.status == UNRESOLVED_STATUS for item in decided_everywhere):
+            return True
         return any(
-            item.status in INDETERMINATE_STATUSES
-            for item in (*self.properties, *ownerless)
+            item.status == UNREACHABLE_STATUS for item in (*self.properties, *ownerless)
         )

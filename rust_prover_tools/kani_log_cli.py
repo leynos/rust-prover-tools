@@ -125,7 +125,7 @@ def _json_payload(
 
 # The public command needs one parameter per documented flag.
 # pylint: disable-next=too-many-arguments
-def kani_analyse_log(
+def kani_analyse_log(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
     *,
     log: Path,
     manifest: Path,

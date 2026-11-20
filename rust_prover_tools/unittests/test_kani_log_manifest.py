@@ -211,6 +211,18 @@ def test_a_number_too_long_to_convert_is_a_manifest_error() -> None:
     assert "number this parser cannot read" in refused(text)
 
 
+def test_a_deeply_nested_document_is_a_manifest_error() -> None:
+    """Report a document past the decoder's limit as a manifest error.
+
+    JSON sets no nesting limit, but the decoder's recursion does, and it raises
+    :class:`RecursionError` where every other unreadable document raises
+    something the parser already converts.  A manifest is input, so it leaves
+    the same way all the rest do rather than as a traceback.
+    """
+    text = "[" * 100_000 + "]" * 100_000
+    assert "nested too deeply" in refused(text)
+
+
 def test_a_direct_manifest_refuses_a_duplicate_name() -> None:
     """Apply the same uniqueness rule to a directly constructed manifest."""
     with pytest.raises(KaniManifestError, match="twice"):

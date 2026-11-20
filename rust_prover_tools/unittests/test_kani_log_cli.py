@@ -123,6 +123,23 @@ def test_an_invalid_manifest_is_an_input_error(
     assert "Kani harness manifest" in captured.err
 
 
+def test_a_deeply_nested_manifest_is_an_input_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject a manifest past the decoder's nesting limit with status 1.
+
+    The decoder raises :class:`RecursionError` at its depth limit rather than a
+    syntax error, and a manifest the command cannot read is input it refuses.
+    """
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
+    status = run("verified", manifest=manifest)
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "nested too deeply" in captured.err
+
+
 def test_an_unreadable_log_is_an_input_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

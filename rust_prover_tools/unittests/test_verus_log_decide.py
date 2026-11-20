@@ -146,6 +146,29 @@ def test_a_negative_control_must_see_exactly_one_failure() -> None:
     assert analysis.passed is False
 
 
+def test_a_negative_control_needs_the_summary_to_count_one_failure() -> None:
+    """A summary counting two failures fails the control with one diagnostic.
+
+    The capture kept only the diagnostic it was given, but the summary states
+    that two functions failed, so the run broke more than the seeded fault.
+    Reading only the diagnostics would pass a control that proved nothing about
+    isolation.
+    """
+    log = VerusLog(
+        VerusSummary(0, 2),
+        (VerusFailure("postcondition not satisfied", "proofs/mutant.rs", 8, 13),),
+    )
+
+    analysis = analyse_verus_log(
+        log,
+        expectation=FailureExpectation("proofs/mutant.rs"),
+    )
+
+    assert analysis.reported_errors == 2
+    assert analysis.expectation_met is False
+    assert analysis.passed is False
+
+
 def test_an_unlocated_failure_beside_the_seeded_one_fails_the_control() -> None:
     """A run that also broke somewhere else has not isolated the seeded fault.
 

@@ -77,8 +77,8 @@ CORPUS_CASES: typ.Final[tuple[tuple[str, str], ...]] = tuple(
 def test_a_committed_log_parses_to_the_facts_it_records(
     version: str, name: str
 ) -> None:
-    """Every committed log yields exactly the facts the corpus records."""
-    recorded = corpus.expected()["logs"][name]
+    """Every committed log yields exactly the facts its own release records."""
+    recorded = corpus.expected_for(version)["logs"][name]
     log = parse_verus_log(
         (FIXTURES / version / f"{name}.log").read_text(encoding="utf-8"),
     )
