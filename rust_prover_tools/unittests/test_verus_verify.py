@@ -77,6 +77,59 @@ def test_failure_message_quotes_unsafe_paths(tmp_path: pathlib.Path) -> None:
     )
 
 
+def test_a_qualified_solver_is_bound_for_every_invocation(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selected solver reaches the child as ``VERUS_Z3_PATH``."""
+    solver = tmp_path / "z3"
+    specs: list[CommandSpec] = []
+
+    def fake_run_command(spec: CommandSpec) -> CommandResult:
+        """Record the invocation and report success."""
+        specs.append(spec)
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
+    monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
+
+    verify_proof_files(
+        (pathlib.Path("first.rs"), pathlib.Path("second.rs")),
+        VerusRunSettings(
+            pathlib.Path("/bin/verus"),
+            "toolchain",
+            z3_path=solver,
+        ),
+    )
+
+    assert [spec.env for spec in specs] == [
+        {"VERUS_Z3_PATH": str(solver)},
+        {"VERUS_Z3_PATH": str(solver)},
+    ], "Every invocation in the batch should carry the same solver binding"
+
+
+def test_no_solver_selection_leaves_the_environment_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a selection the child inherits the environment unchanged."""
+    specs: list[CommandSpec] = []
+
+    def fake_run_command(spec: CommandSpec) -> CommandResult:
+        """Record the invocation and report success."""
+        specs.append(spec)
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
+    monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
+
+    verify_proof_files(
+        (pathlib.Path("first.rs"),),
+        VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
+    )
+
+    assert specs[0].env is None, (
+        "An unset selection must not replace or clear the child environment"
+    )
+
+
 def test_verify_proof_files_emits_bounded_events(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

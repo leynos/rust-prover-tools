@@ -126,6 +126,10 @@ class VerusRunOptions:
         Whether to install Verus if the default binary is missing.
     extra_args : tuple[str, ...]
         Extra Verus arguments appended after each proof file.
+    z3_path : Path | None
+        Solver to bind through `VERUS_Z3_PATH` for every invocation, already
+        resolved and qualified by the caller. `None` leaves the verifier to
+        find its own solver.
     """
 
     paths: VerusPaths
@@ -140,6 +144,7 @@ class VerusRunOptions:
     should_ensure_toolchain: bool = True
     should_install_missing: bool = True
     extra_args: tuple[str, ...] = ()
+    z3_path: Path | None = None
 
     def __post_init__(self, proof_file: Path | None) -> None:
         """Fold the deprecated single-file alias into `proof_files`."""

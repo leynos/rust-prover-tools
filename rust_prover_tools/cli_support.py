@@ -12,7 +12,42 @@ from rust_prover_tools.verus import VerusProofFailedError
 if typ.TYPE_CHECKING:
     from rust_prover_tools.errors import ProverToolError
 
-__all__ = ("error_exit", "repo_root")
+__all__ = ("InputError", "error_exit", "read_input_text", "repo_root")
+
+
+class InputError(Exception):
+    """An input file that could not be read as text."""
+
+
+def read_input_text(path: Path, description: str) -> str:
+    """Read one command input as strict UTF-8, naming the file that failed.
+
+    Parameters
+    ----------
+    path : Path
+        File to read.
+    description : str
+        Short noun naming the input in the error message, such as ``log``.
+
+    Returns
+    -------
+    str
+        The file's decoded text.
+
+    Raises
+    ------
+    InputError
+        If the file cannot be read or is not valid UTF-8.
+
+    """
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        msg = f"cannot read {description} {path}: {error}"
+        raise InputError(msg) from error
+    except UnicodeDecodeError as error:
+        msg = f"{description} {path} is not valid UTF-8: {error}"
+        raise InputError(msg) from error
 
 
 def repo_root(path: Path | None) -> Path:

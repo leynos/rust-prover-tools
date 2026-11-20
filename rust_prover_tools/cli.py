@@ -2,8 +2,8 @@
 
 This module exposes the `prover-tools` console script. Commands are grouped by
 tool noun: `kani` handles installation, version checks and explicit qualified
-release execution, `verus` handles Verus installation and proof execution, and
-`z3` installs the solver that Verus uses.
+release execution, `verus` handles installation, proof execution and captured
+run analysis, and `z3` installs the solver that Verus uses.
 
 Examples
 --------
@@ -54,6 +54,7 @@ from rust_prover_tools.verus import (
     VerusPaths,
     install_verus,
 )
+from rust_prover_tools.verus_log_cli import verus_analyse_log
 from rust_prover_tools.verus_run_cli import verus_run
 from rust_prover_tools.z3 import Z3InstallOptions
 from rust_prover_tools.z3 import install_z3 as install_z3_solver
@@ -362,6 +363,7 @@ kani_app.command(kani_exec, name="exec")
 kani_app.command(kani_analyse_log, name="analyse-log", config=())
 kani_app.command(run_app, name="run")
 kani_app.command(snapshot_app, name="snapshot")
+verus_app.command(verus_analyse_log, name="analyse-log", config=())
 verus_app.command(verus_run, name="run")
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")

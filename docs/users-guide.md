@@ -601,6 +601,10 @@ Useful options are:
   missing.
 - `--extra-arg TEXT`: append an additional argument to each Verus invocation.
   This option may be repeated.
+- `--z3 TEXT`: bind a solver for the run. `pinned` selects the release
+  `prover-tools z3 install` writes; any other value is a path or command name.
+  The variable is also read from `VERUS_Z3_PATH`, the name the installer asks
+  callers to export.
 
 #### Verifying several proof files
 
@@ -647,6 +651,76 @@ The legacy Verus environment variables are still supported:
 - `VERUS_INSTALL_DIR`
 - `VERUS_BIN`
 - `VERUS_PROOF_FILE`
+
+#### Binding the solver
+
+Two runs that differ only in their Z3 build can disagree, so
+`prover-tools verus run` can pin the solver for every invocation:
+
+```bash
+prover-tools verus run --z3 pinned --proof-file verus/edge_harvest_proofs.rs
+```
+
+The selected executable is run once as `<solver> --version`, and the run is
+refused unless it reports exactly `Z3 version 4.16.0 - 64 bit`, which is the
+release this package pins and the solver the corpus under
+`tests/fixtures/verus_logs` was captured with. The command then prints a
+`Solver (<source>): <path>` line and exports the path as `VERUS_Z3_PATH` for
+each Verus invocation. A `pinned` selection needs `prover-tools z3 install` to
+have run first; a different release is reported by name rather than used. When
+`--z3` is omitted and `VERUS_Z3_PATH` is unset, Verus finds its own solver as
+before.
+
+### Verus log analysis
+
+`prover-tools verus analyse-log` reads one captured Verus transcript and
+reports what the run proved, without needing a Verus installation or a proof
+directory. A captured run is analysed from the facts Verus printed, so a log
+that never reached a verification result is never mistaken for a passing proof.
+
+```bash
+prover-tools verus run --proof-file proofs/example.rs 2>&1 | tee verus.log
+prover-tools verus analyse-log --log verus.log
+```
+
+Verus writes its `verification results::` summary to standard output and its
+diagnostics to standard error, so a capture may show either first. The analysis
+reads the same facts from any merge order; keep both streams when capturing,
+because a log missing standard error loses every diagnostic and one missing
+standard output loses the summary.
+
+The analysis reports one of three outcomes:
+
+- `verified`: the run printed a summary counting no errors.
+- `errors`: the run printed a summary counting at least one failing function,
+  and each diagnostic is reported with its source position.
+- `tool-error`: the run never printed a summary, and the first diagnostic, if
+  any, explains why.
+
+Beside the outcome it reports the run mode. `full` means Verus verified the
+whole crate. `partial` means the run selected part of it with `--verify-*`,
+which the summary itself marks; a partial run can pass while proving less than
+the crate.
+
+A log that contradicts itself is refused as a structural error and reported as a
+`tool-error`: two summaries, or a clean summary beside a diagnostic that the
+summary would have had to count.
+
+Useful options are:
+
+- `--log PATH`: the captured transcript to analyse.
+- `--expect-failure REGION`: declare a negative control. `REGION` is
+  `path`, `path:line` or `path:start-end`, and the analysis passes only when
+  exactly one located failure lands inside it. A control that fails somewhere
+  else has not shown that the seeded fault would be caught.
+- `--require-full`: fail unless the run verified the whole crate rather than a
+  selection.
+- `--format text|json`: choose the readable report or a stable JSON object for
+  automation. The JSON form carries `schema_version: 1`.
+
+The command exits `0` when the analysis passed and any full-run requirement
+holds, `2` when it completed but did not pass, and `1` when the log could not
+be read or the expectation could not be parsed.
 
 ### Z3 solver commands
 

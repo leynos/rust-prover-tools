@@ -19,6 +19,7 @@ from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - 
 
 from cyclopts import Parameter
 
+from rust_prover_tools.cli_support import InputError, read_input_text
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.kani_log import (
     FULL_PROFILE,
@@ -36,22 +37,6 @@ __all__ = ("ANALYSIS_SCHEMA_VERSION", "kani_analyse_log")
 
 #: Schema version of the JSON object this command writes.
 ANALYSIS_SCHEMA_VERSION: typ.Final[int] = 1
-
-
-class _AnalysisInputError(Exception):
-    """An input file that could not be read as text."""
-
-
-def _read_text(path: Path, description: str) -> str:
-    """Read one input as strict UTF-8, naming the file that failed."""
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError as error:
-        msg = f"cannot read {description} {path}: {error}"
-        raise _AnalysisInputError(msg) from error
-    except UnicodeDecodeError as error:
-        msg = f"{description} {path} is not valid UTF-8: {error}"
-        raise _AnalysisInputError(msg) from error
 
 
 def _declared_covers(manifest: Manifest) -> tuple[tuple[str, str], ...]:
@@ -184,8 +169,8 @@ def kani_analyse_log(
     manifest is rejected before analysis and exits ``1``.
     """
     try:
-        log_text = _read_text(log, "log")
-        manifest_text = _read_text(manifest, "manifest")
+        log_text = read_input_text(log, "log")
+        manifest_text = read_input_text(manifest, "manifest")
         parsed_manifest = parse_manifest(manifest_text)
         if harness:
             parsed_manifest = parsed_manifest.select(tuple(harness))
@@ -196,7 +181,7 @@ def kani_analyse_log(
             )
         except KaniLogError as error:
             analysis = from_kani_log_error(error)
-    except (KaniManifestError, _AnalysisInputError) as error:
+    except (KaniManifestError, InputError) as error:
         print_lines((str(error),), stream=sys.stderr)
         return 1
     if output_format == "json":

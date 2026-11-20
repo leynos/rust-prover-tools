@@ -45,6 +45,9 @@ class VerusRunSettings:
         Rust toolchain identifier, reported on failure.
     extra_args : tuple[str, ...]
         Extra verifier arguments appended after each proof file.
+    z3_path : Path | None
+        Solver bound to every invocation through `VERUS_Z3_PATH`. `None`
+        leaves the child's inherited environment untouched.
     clock : Callable[[], float]
         Monotonic time source for telemetry durations. Tests inject a
         deterministic fake; production callers keep the default.
@@ -53,6 +56,7 @@ class VerusRunSettings:
     verus_bin: Path
     toolchain: str
     extra_args: tuple[str, ...] = ()
+    z3_path: Path | None = None
     clock: cabc.Callable[[], float] = time.monotonic
 
 
@@ -166,14 +170,23 @@ def _partial_run_error(
     return ProverToolError(message)
 
 
-def _invoke(
-    verus_bin: Path,
-    proof_file: Path,
-    extra_args: tuple[str, ...],
-) -> CommandResult:
+def _environment(z3_path: Path | None) -> dict[str, str] | None:
+    """Return the child environment override that binds a solver.
+
+    An overlay can only add or replace variables, so `None` really does leave
+    the child's inherited environment alone rather than clearing it.
+    """
+    if z3_path is None:
+        return None
+    return {"VERUS_Z3_PATH": str(z3_path)}
+
+
+def _invoke(settings: VerusRunSettings, proof_file: Path) -> CommandResult:
     """Run the verifier once for a single proof file."""
-    command = (str(verus_bin), str(proof_file), *extra_args)
-    return run_command(CommandSpec(command, echo=True))
+    command = (str(settings.verus_bin), str(proof_file), *settings.extra_args)
+    return run_command(
+        CommandSpec(command, env=_environment(settings.z3_path), echo=True),
+    )
 
 
 @dc.dataclass(slots=True)
@@ -211,11 +224,7 @@ class _ProofBatch:
         exit_code: int | None = None
         error_category = "unexpected"
         try:
-            result = _invoke(
-                self.settings.verus_bin,
-                proof_file,
-                self.settings.extra_args,
-            )
+            result = _invoke(self.settings, proof_file)
         except OSError as exc:
             self.status_class, self.error_category = "failure", "execution"
             error_category = "execution"

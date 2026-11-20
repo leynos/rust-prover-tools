@@ -32,9 +32,11 @@ process exit codes. Commands with a wide parameter table live in a dedicated
 adapter module so the application module stays readable:
 `rust_prover_tools.kani_exec_cli` for legacy Kani execution,
 `rust_prover_tools.kani_snapshot_cli` for `kani snapshot install`,
-`kani snapshot check` and `kani run`, and `rust_prover_tools.verus_run_cli` for
-`verus run`. An adapter module owns its Cyclopts and environment-variable
-binding, output printing, and exit-code mapping.
+`kani snapshot check` and `kani run`, `rust_prover_tools.verus_run_cli` for
+`verus run`, `rust_prover_tools.kani_log_cli` for `kani analyse-log`, and
+`rust_prover_tools.verus_log_cli` for `verus analyse-log`. An adapter module
+owns its Cyclopts and environment-variable binding, output printing, and
+exit-code mapping.
 
 `rust_prover_tools.commands` is the only module that invokes external
 programmes. It builds Cuprum `CommandSpec` values and returns a small
@@ -61,6 +63,10 @@ Marker parsing is strict: the file must be a JSON object with exactly the
 `version` and `sha256` keys, both strings, the current version, and a
 64-character lowercase hexadecimal digest. Any other content, including a
 version-only marker from an earlier release, is a cache miss.
+`rust_prover_tools.z3_selection` resolves a solver selection to one executable
+and qualifies an observed version against the pin; it launches nothing, so the
+`--version` probe stays at the CLI boundary described under
+[solver selection](#solver-selection-for-verus-runs).
 
 `rust_prover_tools.binary_assets` is the manifest of pinned release artefacts:
 names, HTTPS URLs, SHA-256 digests, per-asset byte ceilings, archive members,
@@ -603,16 +609,16 @@ separate commands:
 
 - `kani analyse-log` with `--log`, `--manifest`, a repeatable `--harness`,
   `--require-full-profile` and `--format text|json`.
-- `verus analyse-log --log PATH --expect ... [--format text|json]`, added with
-  the Verus phase.
+- `verus analyse-log` with `--log`, `--expect-failure`, `--require-full` and
+  `--format text|json`.
 
 A separate command defines its own input, output and status semantics without
 touching how a verifier runs.
 
 The new code uses one package per feature, following the existing convention:
-`rust_prover_tools/kani_log/`, Verus log modules inside
-`rust_prover_tools/verus/`, and `rust_prover_tools/trust_audit/`. Combobulate
-keeps the equivalent code under `scripts/docs_validation/`.
+`rust_prover_tools/kani_log/`, `rust_prover_tools/verus_log/`, and
+`rust_prover_tools/trust_audit/`. Combobulate keeps the equivalent code under
+`scripts/docs_validation/`.
 
 ### Neutral vocabulary
 
@@ -635,6 +641,53 @@ The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
 manifest or digest binding.
 
+### Verus outcome vocabulary
+
+Verus prints one `verification results:: N verified, M errors` summary to
+standard output and each diagnostic to standard error, so a capture may merge
+the streams in either order. The parser scans the merged text once and keeps no
+positional assumption: the summary is a fact wherever it appears, and a
+diagnostic's span is the line printed beneath it.
+
+Three outcomes replace Kani's seven, because Verus reports less: `verified`,
+`errors` and `tool-error`. There is no counterexample, resource-exhaustion or
+unsupported category to recover, since a failing function is simply one error
+among the summary's count. A log with no summary is a `tool-error` whatever
+else it contains: a compiler error, a rejected option and a killed process are
+indistinguishable from the outside.
+
+The run mode is `full` or `partial`, read from the parenthesized marker Verus
+appends to the summary when the run selected part of the crate with a
+`--verify-*` flag. A `tool-error` reports no run mode, because nothing was
+verified either way.
+
+Unlike the Kani parser, the Verus reader tolerates lines its grammar does not
+name. Verus delegates to rustc, whose diagnostic vocabulary this package cannot
+pin, so unknown chatter is skipped. What is refused is a log that contradicts
+itself: two summaries, or a clean summary beside a diagnostic the summary would
+have had to count. The number of diagnostics is deliberately not checked
+against the error count, because `--multiple-errors` can report several
+failures for one function.
+
+`--expect-failure` declares a negative control: a `path`, `path:line` or
+`path:start-end` region in which exactly one located failure must land. The
+range exists because Verus reports a postcondition failure at the contract line
+above the body, not at the line a seeded mutation touched.
+
+### Solver selection for Verus runs
+
+Verus runs whichever Z3 `VERUS_Z3_PATH` names, so two runs that differ only in
+the solver can disagree. `prover-tools verus run --z3` resolves a selection to
+one executable and holds it to the pinned release by running
+`<solver> --version` and comparing the banner with
+`Z3 version <Z3_VERSION> - 64 bit`. Resolution stays pure and lives in
+`rust_prover_tools/z3_selection.py`; the probe belongs to the command boundary,
+`rust_prover_tools/verus_run_cli.py`, because it needs a process. The qualified
+path is carried on `VerusRunOptions` and `VerusRunSettings` and exported as
+`VERUS_Z3_PATH` for every invocation. Omitting the selection leaves the child
+environment untouched, which keeps the previous behaviour for callers who
+manage the variable themselves.
+
 ### Exit statuses
 
 Both analysis commands share one status contract:
@@ -654,7 +707,7 @@ Each qualified release keeps its own real-output corpus:
 `tests/fixtures/verus_logs/<verus-release>/`. A flat corpus that is overwritten
 on recapture was rejected because it keeps no evidence for a still-supported
 release. A release joins `SUPPORTED_KANI_VERSIONS` or
-`SUPPORTED_VERUS_RELEASES` only in the same change that adds its corpus, and
+`SUPPORTED_VERUS_VERSIONS` only in the same change that adds its corpus, and
 its directory is deleted when the release leaves the set. The corpora stay
 outside the wheel, following the compiler-floor precedent.
 

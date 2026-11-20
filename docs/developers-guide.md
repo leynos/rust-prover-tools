@@ -114,6 +114,10 @@ variables, output printing, and exit-code mapping:
 - `rust_prover_tools.kani_log_cli` for `kani analyse-log`. It disables inherited
   `INPUT_*` configuration and maps unreadable inputs to status `1` and a
   completed non-passing analysis to status `2`.
+- `rust_prover_tools.verus_log_cli` for `verus analyse-log`. It applies the
+  same input-and-status mapping, parses `--expect-failure` into a
+  `FailureExpectation`, and renders either text or the schema-versioned JSON
+  object.
 
 Feature modules should own workflow behaviour:
 
@@ -134,6 +138,14 @@ Feature modules should own workflow behaviour:
   grammar and extraction; `manifest` validates the expected harness set;
   `observation` reduces one block to the facts a decision reads; and `decide`
   applies the outcome precedence.
+- `rust_prover_tools.verus_log` for Verus transcript parsing and decisions.
+  `syntax` owns the grammar and the release it was qualified against, `model`
+  holds the parsed facts, `reader` scans a merged capture, `expectation` reads
+  a negative-control region, and `decide` maps the facts to an outcome and run
+  mode.
+- `rust_prover_tools.z3_selection` for resolving a solver selection and
+  qualifying an observed version. It runs nothing: the `--version` probe lives
+  in `verus_run_cli`.
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified

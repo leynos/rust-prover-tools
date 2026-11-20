@@ -14,6 +14,7 @@ from pathlib import Path
 
 from cyclopts import Parameter
 
+from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.verus import (
@@ -22,6 +23,14 @@ from rust_prover_tools.verus import (
     VerusProofFailedError,
     VerusRunOptions,
     run_verus,
+)
+from rust_prover_tools.z3_selection import (
+    EXPLICIT_SOURCE,
+    PINNED_SOURCE,
+    PINNED_Z3,
+    Z3Selection,
+    qualify_z3,
+    resolve_z3,
 )
 
 
@@ -39,6 +48,49 @@ def _single_env_token(
     """
     del delimiter
     return [value]
+
+
+def probe_and_qualify_z3(
+    selection: str,
+    *,
+    repo_root: Path,
+    install_dir: Path | None = None,
+) -> Z3Selection:
+    """Resolve a solver selection and hold its reported version to the pin.
+
+    This is the only step in a proof run that executes the solver before Verus
+    does: ``<solver> --version`` is what proves the executable is the release
+    this package pins, and running it needs a process. Everything else about a
+    selection is pure.
+
+    Parameters
+    ----------
+    selection : str
+        ``pinned``, an executable path, or a command name on `PATH`.
+    repo_root : Path
+        Repository root used to find the pinned installation.
+    install_dir : Path | None
+        Directory holding the pinned ``z3``, overriding the repository default.
+
+    Returns
+    -------
+    Z3Selection
+        The qualified solver, ready to bind through `VERUS_Z3_PATH`.
+
+    Raises
+    ------
+    ProverToolError
+        If the selection names no executable, or the executable reports a
+        release other than the calibrated one.
+    """
+    executable = resolve_z3(selection, repo_root=repo_root, install_dir=install_dir)
+    probe = run_command(CommandSpec((str(executable), "--version")))
+    return qualify_z3(
+        executable,
+        exit_code=probe.exit_code,
+        reported=probe.stdout,
+        source=PINNED_SOURCE if selection == PINNED_Z3 else EXPLICIT_SOURCE,
+    )
 
 
 # CLI parameter binding needs one explicit parameter per flag/env-var mapping.
@@ -82,6 +134,10 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
         bool,
         Parameter(negative="--no-install-missing"),
     ] = True,
+    z3: typ.Annotated[
+        str | None,
+        Parameter(env_var="VERUS_Z3_PATH"),
+    ] = None,
     extra_arg: typ.Annotated[
         list[str] | None,
         Parameter(allow_repeating=True, env_var="INPUT_EXTRA_ARG"),
@@ -111,6 +167,11 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
         Whether to install the required Rust toolchain with `rustup`.
     install_missing : bool
         Whether to install the default Verus binary when missing.
+    z3 : str | None
+        Solver to bind: `pinned` for the release this package installs, or an
+        executable path or command name. It is also read from
+        `VERUS_Z3_PATH`, the variable `prover-tools z3 install` asks callers to
+        export, so an exported selection is checked rather than trusted.
     extra_arg : list[str] | None
         Extra Verus arguments appended after each proof file.
 
@@ -123,13 +184,19 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
     -----
     Verus accepts one input filename per invocation, so each proof file runs
     as its own verifier invocation. See `run_verus` for ordering, partial
-    result reporting, and first-failure behaviour.
+    result reporting, and first-failure behaviour. A selected solver is
+    probed and qualified here, at the command boundary, and named on standard
+    output before the first proof file runs.
     """
     try:
+        root = (repo_root or Path.cwd()).resolve()
+        solver = None if z3 is None else probe_and_qualify_z3(z3, repo_root=root)
+        if solver is not None:
+            print_lines((f"Solver ({solver.source}): {solver.executable}",))
         lines = run_verus(
             VerusRunOptions(
                 paths=VerusPaths(
-                    repo_root=(repo_root or Path.cwd()).resolve(),
+                    repo_root=root,
                     version_file=version_file,
                     checksum_file=checksum_file,
                 ),
@@ -140,6 +207,7 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
                 should_ensure_toolchain=ensure_toolchain,
                 should_install_missing=install_missing,
                 extra_args=tuple(extra_arg or ()),
+                z3_path=None if solver is None else solver.executable,
             ),
         )
     except ProverToolError as exc:
