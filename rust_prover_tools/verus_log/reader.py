@@ -111,12 +111,27 @@ def _failure(
     lines: list[str],
     index: int,
 ) -> VerusFailure:
-    """Build one failure, taking the span printed on the following line."""
-    if index + 1 >= len(lines):
-        return VerusFailure(message)
-    span = LOCATION.match(lines[index + 1])
-    if span is None:
-        return VerusFailure(message)
+    """Build one failure, taking the span printed beneath it.
+
+    Verus writes a diagnostic and its span to standard error and its summary to
+    standard output, so a capture that merges the streams can put a summary or
+    a selection note between the two. Those named records are stepped over. The
+    search ends at another diagnostic, or at a line the grammar does not name,
+    because a span found beyond either of those belongs to somebody else.
+    """
+    for following in lines[index + 1 :]:
+        if ERROR_HEADER.match(following) is not None:
+            break
+        span = LOCATION.match(following)
+        if span is not None:
+            return _located(message, span)
+        if SUMMARY.match(following) is None and SELECTION_NOTE.match(following) is None:
+            break
+    return VerusFailure(message)
+
+
+def _located(message: str, span: re.Match[str]) -> VerusFailure:
+    """Build the failure a span locates, or an unlocated one it cannot."""
     try:
         line = int(span["line"])
         column = int(span["column"])

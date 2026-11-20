@@ -34,6 +34,7 @@ __all__ = (
     "CORPUS_VERSION",
     "analysis_for",
     "expected",
+    "expected_for",
     "log_names",
     "log_text",
     "parse_log",
@@ -52,8 +53,22 @@ CORPUS = CORPUS_ROOT / CORPUS_VERSION
 
 
 def log_names() -> tuple[str, ...]:
-    """Name every committed log, in a stable order, without its extension."""
-    return tuple(sorted(path.stem for path in CORPUS.glob("*.log")))
+    """Name every committed log, in a stable order, without its extension.
+
+    The directory is listed with `Path.iterdir` rather than `Path.glob`,
+    because from Python 3.13 a glob silently skips a directory it may not read.
+    An empty result would leave every corpus-parametrized test with no cases,
+    so an unreadable corpus would look like a passing suite. Listing raises
+    instead, which fails the suite.
+
+    Raises
+    ------
+    OSError
+        If the corpus directory cannot be listed.
+    """
+    return tuple(
+        sorted(path.stem for path in CORPUS.iterdir() if path.suffix == ".log"),
+    )
 
 
 def log_text(name: str) -> str:
@@ -66,6 +81,16 @@ def expected() -> dict[str, typ.Any]:
     return typ.cast(
         "dict[str, typ.Any]",
         json.loads(CORPUS.joinpath("expected.json").read_text(encoding="utf-8")),
+    )
+
+
+def expected_for(version: str) -> dict[str, typ.Any]:
+    """Return the committed record for one release's corpus."""
+    return typ.cast(
+        "dict[str, typ.Any]",
+        json.loads(
+            (CORPUS_ROOT / version / "expected.json").read_text(encoding="utf-8"),
+        ),
     )
 
 

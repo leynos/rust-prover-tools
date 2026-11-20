@@ -64,15 +64,18 @@ class VerusAnalysis:
     def expectation_met(self) -> bool:
         """Report whether the run failed exactly where it was meant to.
 
-        Exactly one located failure must fall inside the expected region.  A
-        second failure elsewhere means the run broke something other than the
-        seeded fault, so it has not shown that the fault would be caught.  An
+        Exactly one failure must be reported, and it must fall inside the
+        expected region.  Checking the complete collection rather than only the
+        located failures is what keeps an unlocated diagnostic from hiding
+        beside the seeded fault: a run that also broke somewhere else has not
+        shown that the fault, and only the fault, would be caught.  An
         expectation that was never declared is never met.
         """
         if self.expectation is None:
             return False
-        located = self.located_failures
-        return len(located) == 1 and self.expectation.contains(located[0])
+        if len(self.failures) != 1:
+            return False
+        return self.expectation.contains(self.failures[0])
 
     @property
     def passed(self) -> bool:
@@ -110,6 +113,7 @@ def analyse_verus_log(
 
     Examples
     --------
+    >>> from rust_prover_tools.verus_log.model import VerusLog, VerusSummary
     >>> analyse_verus_log(VerusLog(VerusSummary(3, 0))).passed
     True
     """

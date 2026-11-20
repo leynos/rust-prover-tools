@@ -54,10 +54,22 @@ def failure_facts(
     return (failure.message, failure.path, failure.line, failure.column)
 
 
+def _log_names(directory: Path) -> tuple[str, ...]:
+    """Name the committed logs in one release directory, in a stable order.
+
+    Listed with `Path.iterdir` rather than `Path.glob`: from Python 3.13 a glob
+    silently skips a directory it may not read, which would leave the corpus
+    parametrized with no cases and the suite passing without reading a log.
+    """
+    return tuple(
+        sorted(path.stem for path in directory.iterdir() if path.suffix == ".log"),
+    )
+
+
 CORPUS_CASES: typ.Final[tuple[tuple[str, str], ...]] = tuple(
     (version, name)
     for version in SUPPORTED_VERUS_VERSIONS
-    for name in sorted(path.stem for path in (FIXTURES / version).glob("*.log"))
+    for name in _log_names(FIXTURES / version)
 )
 
 
@@ -87,6 +99,61 @@ def test_the_corpus_names_one_qualified_release() -> None:
     """The corpus directory is the release the parser claims to support."""
     assert (CURRENT_CORPUS / "expected.json").is_file()
     assert corpus.expected()["release"] == SUPPORTED_VERUS_VERSIONS[0]
+
+
+@pytest.mark.parametrize("version", SUPPORTED_VERUS_VERSIONS)
+def test_every_committed_log_is_recorded(version: str) -> None:
+    """Each release's logs and its recorded names are the same set.
+
+    A log added without an expectation, or an expectation left behind by a
+    deleted log, would otherwise pass unnoticed: the parametrized tests only
+    read the logs that were discovered.
+    """
+    assert _log_names(FIXTURES / version) == tuple(
+        sorted(corpus.expected_for(version)["logs"]),
+    )
+
+
+def test_a_span_is_found_past_a_summary_the_capture_interleaved() -> None:
+    """A summary between a diagnostic and its span does not lose the span.
+
+    Verus writes the two to different streams, so a merged capture can place
+    the summary - and the note that follows it - between the header rustc
+    printed and the ``-->`` line beneath it.
+    """
+    text = "\n".join(
+        (
+            "error: assertion failed",
+            "verification results:: 1 verified, 1 errors",
+            "note: verifying root module",
+            "  --> assertion.rs:11:12",
+            "  |",
+        ),
+    )
+
+    log = parse_verus_log(text)
+
+    assert log.failures == (VerusFailure("assertion failed", "assertion.rs", 11, 12),)
+
+
+def test_a_span_is_not_borrowed_from_a_later_diagnostic() -> None:
+    """A diagnostic without a span keeps none when the next one has one.
+
+    The search stops at the next ``error:`` line, so the second failure's span
+    cannot be read as the first one's, which would report a position the log
+    never associated with that message.
+    """
+    text = "\n".join(
+        (
+            "error: could not find function absent",
+            "error: postcondition not satisfied",
+            "  --> postcondition.rs:8:13",
+        ),
+    )
+
+    log = parse_verus_log(text)
+
+    assert [failure.where for failure in log.failures] == ["", "postcondition.rs:8:13"]
 
 
 def test_the_merged_stream_capture_matches_the_sequence_it_merges() -> None:

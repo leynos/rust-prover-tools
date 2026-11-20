@@ -122,6 +122,12 @@ CHECK_STATUSES = frozenset(
 # from here rather than keeping a second vocabulary.
 OTHER_STATUS = {"undetermined": "UNDETERMINED", "unreachable": "UNREACHABLE"}
 COVER_STATUSES = frozenset(OTHER_STATUS)
+# The statuses a cover property can carry.  Kani's renderer turns a cover
+# CBMC reported as ``FAILURE`` into ``SATISFIED`` before printing, so a cover
+# line carrying ``FAILURE`` is a report Kani cannot have produced.
+COVER_PROPERTY_STATUSES = frozenset(
+    {"SATISFIED", "UNSATISFIABLE", "UNREACHABLE", "UNDETERMINED"},
+)
 COVER_KIND = "cover"
 UNWINDING_KIND = "unwind"
 UNSUPPORTED_KIND = "unsupported_construct"

@@ -657,6 +657,8 @@ The legacy Verus environment variables are still supported:
 Two runs that differ only in their Z3 build can disagree, so
 `prover-tools verus run` can pin the solver for every invocation:
 
+<!-- tested-example: verus-solver-selection -->
+
 ```bash
 prover-tools verus run --z3 pinned --proof-file verus/edge_harvest_proofs.rs
 ```
@@ -677,6 +679,8 @@ before.
 reports what the run proved, without needing a Verus installation or a proof
 directory. A captured run is analysed from the facts Verus printed, so a log
 that never reached a verification result is never mistaken for a passing proof.
+
+<!-- tested-example: verus-log-analysis -->
 
 ```bash
 prover-tools verus run --proof-file proofs/example.rs 2>&1 | tee verus.log
@@ -711,8 +715,10 @@ Useful options are:
 - `--log PATH`: the captured transcript to analyse.
 - `--expect-failure REGION`: declare a negative control. `REGION` is
   `path`, `path:line` or `path:start-end`, and the analysis passes only when
-  exactly one located failure lands inside it. A control that fails somewhere
-  else has not shown that the seeded fault would be caught.
+  the run reports exactly one failure and it lands inside that region. A
+  second failure, located or not, means the run broke more than the seeded
+  fault, and a control that did not fail at all has not shown that the fault
+  would be caught.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for

@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.kani_log.syntax import OTHER_STATUS, KaniLogError
+from rust_prover_tools.kani_log.syntax import (
+    COVER_PROPERTY_STATUSES,
+    OTHER_STATUS,
+    KaniLogError,
+)
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_log.reader import _BlockBuilder
@@ -130,6 +134,7 @@ def _require_counts(
 
 def _require_covers(builder: _BlockBuilder) -> None:
     """Require cover counts and statuses to reconcile."""
+    _require_cover_statuses(builder)
     if builder.covered_total is None and builder.covers:
         msg = (
             f"the block for {builder.name!r} lists {len(builder.covers)} "
@@ -173,6 +178,24 @@ def _require_covers(builder: _BlockBuilder) -> None:
             f"{observed_undetermined}"
         )
         raise KaniLogError(msg)
+
+
+def _require_cover_statuses(builder: _BlockBuilder) -> None:
+    """Refuse a cover status Kani cannot print.
+
+    A cover line is not one of the checks whose count is reconciled, so an
+    impossible status there would otherwise pass unexamined: the entry is
+    excluded from both the check total and every cover count.  Kani converts a
+    cover CBMC reported as ``FAILURE`` into ``SATISFIED`` before rendering, so
+    the status is evidence the report did not come from the pinned release.
+    """
+    for cover in builder.covers:
+        if cover.status not in COVER_PROPERTY_STATUSES:
+            msg = (
+                f"the block for {builder.name!r} reports cover "
+                f"{cover.identifier!r} as {cover.status}, which Kani never prints"
+            )
+            raise KaniLogError(msg)
 
 
 def _require_other(

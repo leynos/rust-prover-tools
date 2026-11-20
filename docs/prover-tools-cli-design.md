@@ -637,6 +637,12 @@ echoed solver command decides the setting and a missing bound proves nothing. A
 block that echoed no command, or one whose command cannot be split into
 arguments, stays `focused`: the log does not show which flags were passed.
 
+Kani's renderer rewrites a cover CBMC reported as `FAILURE` into `SATISFIED`
+before printing it, and a listed cover is not one of the checks whose count is
+reconciled. A cover carrying any status outside `SATISFIED`, `UNSATISFIABLE`,
+`UNREACHABLE` and `UNDETERMINED` is therefore refused: accepting it would admit
+a report the pinned release cannot produce.
+
 The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
 manifest or digest binding.
@@ -647,7 +653,10 @@ Verus prints one `verification results:: N verified, M errors` summary to
 standard output and each diagnostic to standard error, so a capture may merge
 the streams in either order. The parser scans the merged text once and keeps no
 positional assumption: the summary is a fact wherever it appears, and a
-diagnostic's span is the line printed beneath it.
+diagnostic's span is the `-->` line printed beneath it. A summary or selection
+note that lands between the diagnostic and its span is stepped over, because
+the two streams interleave; the search stops at the next diagnostic, so a span
+is never borrowed from a failure further down the log.
 
 Three outcomes replace Kani's seven, because Verus reports less: `verified`,
 `errors` and `tool-error`. There is no counterexample, resource-exhaustion or
@@ -670,9 +679,11 @@ against the error count, because `--multiple-errors` can report several
 failures for one function.
 
 `--expect-failure` declares a negative control: a `path`, `path:line` or
-`path:start-end` region in which exactly one located failure must land. The
-range exists because Verus reports a postcondition failure at the contract line
-above the body, not at the line a seeded mutation touched.
+`path:start-end` region that the run's only failure must land in. The check
+reads the complete failure collection rather than the located subset, so an
+unlocated diagnostic beside the seeded fault also fails the control. The range
+exists because Verus reports a postcondition failure at the contract line above
+the body, not at the line a seeded mutation touched.
 
 ### Solver selection for Verus runs
 

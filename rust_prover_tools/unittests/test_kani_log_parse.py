@@ -335,6 +335,19 @@ def test_both_cover_counts_are_reconciled() -> None:
     assert block.covered_undetermined == 1
 
 
+def test_a_cover_with_a_failure_status_is_refused() -> None:
+    """Refuse a cover status Kani converts before it renders a report.
+
+    A listed cover is excluded from the checks whose count is reconciled, so
+    without this rule an impossible cover status would pass unexamined.
+    """
+    text = log_text("verified").replace(
+        "Check 2: harnesses::verified.cover.1\n\t - Status: SATISFIED",
+        "Check 2: harnesses::verified.cover.1\n\t - Status: FAILURE",
+    )
+    assert "as FAILURE, which Kani never prints" in refused(text)
+
+
 def test_an_explicit_zero_other_count_is_reconciled() -> None:
     """Require a printed zero to agree that no check carried that status."""
     text = log_text("insufficient_unwind").replace(
