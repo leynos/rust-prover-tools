@@ -11,6 +11,7 @@ from rust_prover_tools.kani_log.syntax import (
     CHECK_STATUSES,
     COMPLETE,
     COVER,
+    COVER_STATUSES,
     FAILED_CHECK,
     FAILED_FOR,
     FAILED_LOCATION,
@@ -39,6 +40,9 @@ __all__ = (
     "unsupported_constructs",
     "verification",
 )
+
+#: The shortest description that can carry a pair of framing quotes.
+_FRAMED_LENGTH = 2
 
 
 def results(reader: Reader, builder: _BlockBuilder) -> None:
@@ -83,7 +87,14 @@ def check(reader: Reader, match: re.Match[str]) -> PropertyResult:
         if field_match is None:
             break
         reader.take()
-        values[field_match["key"]] = field_match["value"]
+        key = field_match["key"]
+        if key in values:
+            msg = (
+                f"{reader.where()}: check {match['identifier']!r} repeats its "
+                f"{key} field"
+            )
+            raise KaniLogError(msg)
+        values[key] = field_match["value"]
     missing = [key for key in CHECK_FIELDS if key not in values]
     if missing:
         msg = (
@@ -100,8 +111,40 @@ def check(reader: Reader, match: re.Match[str]) -> PropertyResult:
     return PropertyResult(
         identifier=match["identifier"],
         status=values["Status"],
-        description=values["Description"].strip('"'),
+        description=_unquote(values["Description"]),
     )
+
+
+def _unquote(value: str) -> str:
+    """Remove one framing pair of quotes from a rendered description.
+
+    Kani wraps the description in quotes but does not escape any it finds
+    inside, so a cover written as ``"ready"`` is printed ``""ready""``.
+    Stripping every quote would lose the text the manifest declares.
+    """
+    if len(value) < _FRAMED_LENGTH:
+        return value
+    if value[0] == value[-1] == '"':
+        return value[1:-1]
+    return value
+
+
+def _report_int(reader: Reader, value: str) -> int:
+    """Convert one rendered integer, refusing a value too long to be a count.
+
+    CPython limits integer string conversion, and a digit run past that limit
+    raises :class:`ValueError` rather than producing a number.  The parser must
+    turn that into a structural error so callers see the same ``tool-error``
+    result as any other malformed report line.
+    """
+    try:
+        return int(value)
+    except ValueError:
+        msg = (
+            f"{reader.where()}: the report's integer {value[:16]!r} is not a "
+            "count this parser can read"
+        )
+        raise KaniLogError(msg) from None
 
 
 def summary(reader: Reader, builder: _BlockBuilder) -> None:
@@ -141,9 +184,9 @@ def _record_total(
         msg = f"the block for {builder.name!r} has two failure counts"
         raise KaniLogError(msg)
     reader.take()
-    builder.failed_count = int(match["failed"])
-    builder.total_count = int(match["total"])
-    builder.other_count = int(match["other"] or 0)
+    builder.failed_count = _report_int(reader, match["failed"])
+    builder.total_count = _report_int(reader, match["total"])
+    builder.other_count = _report_int(reader, match["other"] or "0")
     builder.other_kind = match["other_kind"]
 
 
@@ -157,10 +200,29 @@ def _record_cover(
         msg = f"the block for {builder.name!r} has two cover counts"
         raise KaniLogError(msg)
     reader.take()
-    builder.covered_satisfied = int(match["satisfied"])
-    builder.covered_total = int(match["total"])
-    if match["unreachable"] is not None:
-        builder.covered_unreachable = int(match["unreachable"])
+    builder.covered_satisfied = _report_int(reader, match["satisfied"])
+    builder.covered_total = _report_int(reader, match["total"])
+    counts = _cover_counts(reader, match["counts"])
+    builder.covered_unreachable = counts.get("unreachable")
+    builder.covered_undetermined = counts.get("undetermined")
+
+
+def _cover_counts(reader: Reader, rendered: str | None) -> dict[str, int]:
+    """Parse the parenthesised per-status counts on a cover line.
+
+    Kani prints one count per status, comma separated when more than one
+    applies, such as ``(1 unreachable, 1 undetermined)``.
+    """
+    if rendered is None:
+        return {}
+    counts: dict[str, int] = {}
+    for entry in rendered.split(", "):
+        number, _, word = entry.partition(" ")
+        if word not in COVER_STATUSES:
+            msg = f"{reader.where()}: a cover count names the unknown status {word!r}"
+            raise KaniLogError(msg)
+        counts[word] = _report_int(reader, number)
+    return counts
 
 
 def failed_check(reader: Reader, match: re.Match[str]) -> FailedCheck:
@@ -171,7 +233,7 @@ def failed_check(reader: Reader, match: re.Match[str]) -> FailedCheck:
         location = FAILED_LOCATION.match(reader.peek())
         if location is not None:
             reader.take()
-            path, line = location["path"], int(location["line"])
+            path, line = location["path"], _report_int(reader, location["line"])
     return FailedCheck(message=match["message"], path=path, line=line)
 
 
@@ -205,9 +267,9 @@ def manual(reader: Reader) -> ManualSummary:
         elif complete is not None:
             reader.take()
             return ManualSummary(
-                int(complete["verified"]),
-                int(complete["failures"]),
-                int(complete["total"]),
+                _report_int(reader, complete["verified"]),
+                _report_int(reader, complete["failures"]),
+                _report_int(reader, complete["total"]),
                 tuple(failed),
             )
         elif not line.strip():

@@ -46,7 +46,9 @@ SUPPORTED_KANI_VERSIONS: tuple[str, ...] = ("0.67.0",)
 BANNER = re.compile(
     r"^Kani Rust Verifier (?P<version>\d+\.\d+\.\d+) \((?P<kind>[^)]+)\)$",
 )
-HARNESS_START = re.compile(r"^Checking harness (?P<name>[A-Za-z0-9_:.<>]+)\.\.\.$")
+# The harness name is whatever Kani printed, which may contain non-ASCII
+# characters.  Only the trailing ellipsis is fixed.
+HARNESS_START = re.compile(r"^Checking harness (?P<name>.+?)\.\.\.$")
 VERIFICATION = re.compile(
     r"^VERIFICATION:- (?P<verdict>SUCCESSFUL|FAILED)(?: (?P<note>\(.*\)))?$",
 )
@@ -61,7 +63,7 @@ TOTAL = re.compile(
 )
 COVER = re.compile(
     r"^ \*\* (?P<satisfied>\d+) of (?P<total>\d+) cover properties satisfied"
-    r"(?: \((?P<unreachable>\d+) unreachable\))?$",
+    r"(?: \((?P<counts>\d+ [a-z]+(?:, \d+ [a-z]+)*)\))?$",
 )
 COMPLETE = re.compile(
     r"^Complete - (?P<verified>\d+) successfully verified harnesses, "
@@ -86,12 +88,11 @@ UNSUPPORTED_REACHABLE = (
 # The driver echoes the solver command it runs.  It is the only place a log
 # records what CBMC was asked for, so the decision reads it rather than
 # inferring the setting from a failure.  Kani does not pass
-# `--unwinding-assertions` at all: CBMC generates unwinding assertions whenever
-# it is given a bound, and the driver disables them with
-# `--no-unwinding-assertions`.
+# `--unwinding-assertions` at all: it disables the assertions with
+# `--no-unwinding-assertions` when the checks are off and otherwise relies on
+# CBMC's default, so the presence of that one flag decides the setting.
 SOLVER_COMMAND = "[Kani] Running: `cbmc "
-UNWINDING_BOUND_FLAGS = (" --unwind ", " --unwindset ")
-NO_UNWINDING_ASSERTIONS_FLAG = " --no-unwinding-assertions"
+NO_UNWINDING_ASSERTIONS_FLAG = "--no-unwinding-assertions"
 TIMED_OUT = "CBMC timed out."
 CBMC_FAILED = "CBMC failed"
 # Kani's own wording when it reaches a construct it cannot model.  The corpus's
@@ -99,7 +100,9 @@ CBMC_FAILED = "CBMC failed"
 # an ``unsupported_construct`` check, so the phrase is the only distinguishing
 # evidence for that shape.
 UNSUPPORTED_MARKER = "not currently supported by kani"
-CHECK_FIELDS = ("Status", "Description", "Location")
+# Kani omits ``Location`` when CBMC supplied neither a file nor a function, so
+# only the two fields every check carries are required.
+CHECK_FIELDS = ("Status", "Description")
 CHECK_STATUSES = frozenset(
     {
         "SUCCESS",
@@ -110,8 +113,11 @@ CHECK_STATUSES = frozenset(
         "UNSATISFIABLE",
     },
 )
-# Map the word Kani prints in parentheses to the status the checks carry.
+# Map the word Kani prints in parentheses to the status the checks carry.  The
+# same words qualify a cover count, which is why the cover parser reads them
+# from here rather than keeping a second vocabulary.
 OTHER_STATUS = {"undetermined": "UNDETERMINED", "unreachable": "UNREACHABLE"}
+COVER_STATUSES = frozenset(OTHER_STATUS)
 COVER_KIND = "cover"
 UNWINDING_KIND = "unwind"
 UNSUPPORTED_KIND = "unsupported_construct"
@@ -180,9 +186,10 @@ class KaniLogError(ProverToolError):
 class PropertyResult:
     """One ``Check N:`` entry from a Kani report.
 
-    The ``Location`` field is parsed and required, but its value is not kept.
-    Nothing reads it, and the source locations a caller can cite come from the
-    `` File:`` lines beneath failures, which :class:`FailedCheck` keeps.
+    The ``Location`` field is accepted but optional and its value is not kept.
+    Kani omits it when CBMC supplied no source location, and nothing reads it:
+    the locations a caller can cite come from the `` File:`` lines beneath
+    failures, which :class:`FailedCheck` keeps.
     """
 
     identifier: str
@@ -195,9 +202,11 @@ class PropertyResult:
 
         Kani ends a check identifier with the property it reports, so
         ``harnesses::x.unwind.0`` is an unwinding check and
-        ``harnesses::x.cover.1`` a cover, whatever the status says.
-        Classifying by identifier rather than description keeps a seeded
-        mutation from relabelling a check by editing prose.
+        ``harnesses::x.cover.1`` a cover, whatever the status says.  CBMC may
+        omit the owner entirely - ``cover.1`` and ``unwind.1`` - so two
+        segments are enough to name the kind.  Classifying by identifier rather
+        than description keeps a seeded mutation from relabelling a check by
+        editing prose.
 
         Returns
         -------
@@ -207,7 +216,7 @@ class PropertyResult:
 
         """
         parts = self.identifier.split(".")
-        return parts[-2] if len(parts) >= _ATTRIBUTED_SEGMENTS else ""
+        return parts[-2] if len(parts) >= _PROPERTY_SEGMENTS else ""
 
     @property
     def is_cover(self) -> bool:

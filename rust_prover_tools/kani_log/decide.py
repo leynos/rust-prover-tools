@@ -36,6 +36,7 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_log.manifest import Harness, Manifest
     from rust_prover_tools.kani_log.model import HarnessBlock
     from rust_prover_tools.kani_log.model import KaniLog as ParsedLog
+    from rust_prover_tools.kani_log.syntax import PropertyResult
 
 __all__ = (
     "ACCEPTED",
@@ -224,17 +225,39 @@ def _rejected_as_intended(control: Harness, seen: Observed) -> bool:
     """Report whether a control failed exactly the property the manifest expects.
 
     The expected failure may name a full identifier, the property within the
-    harness, or a check kind; anything else is ``rejected-otherwise``.  A
-    seeded fault that trips an unrelated check has not shown that the claim
-    would be caught.
+    harness, or a check kind; anything else is ``rejected-otherwise``.  Every
+    failed check must match, including one owned by a called routine: a seeded
+    fault that also trips an unrelated check has not shown that the claim's own
+    property would be caught.
     """
     expected = (control.expected_failure or "").strip()
     if not expected:
         return False
-    return any(
-        expected in {item.identifier, item.property, item.kind}
-        for item in seen.failures
+    failed = seen.failed_checks
+    if not failed:
+        return False
+    return all(
+        _matches_expected(item, expected, owned=item not in seen.unattributed)
+        for item in failed
     )
+
+
+def _matches_expected(
+    item: PropertyResult,
+    expected: str,
+    *,
+    owned: bool,
+) -> bool:
+    """Report whether one failed check is the failure the manifest expects.
+
+    A property name such as ``assertion.1`` identifies a check only within its
+    owner.  A called routine's check may carry the same property name, so only
+    its full identifier or kind can name it.
+    """
+    names = {item.identifier, item.kind}
+    if owned:
+        names.add(item.property)
+    return expected in names
 
 
 def _outcome(
@@ -309,7 +332,10 @@ def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:
     covers the whole crate - so it counts only when this harness was left
     undecided.
     """
-    if any(item.kind == UNSUPPORTED_KIND for item in seen.properties):
+    if any(
+        item.kind == UNSUPPORTED_KIND and item.status == "FAILURE"
+        for item in seen.properties
+    ):
         return True
     if any(UNSUPPORTED_MARKER in text.lower() for text in seen.failure_messages):
         return True

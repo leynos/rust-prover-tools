@@ -1,0 +1,184 @@
+"""Reconcile one finished harness block against the checks it listed.
+
+The reader collects a block's fields as it walks the log; this module decides
+whether the collected fields describe a report that Kani could have printed.
+Every check here is a structural one: a verdict that never arrived, a section
+that was lost to truncation, or a count that disagrees with the checks beneath
+it.
+"""
+
+from __future__ import annotations
+
+import typing as typ
+
+from rust_prover_tools.kani_log.syntax import OTHER_STATUS, KaniLogError
+
+if typ.TYPE_CHECKING:
+    from rust_prover_tools.kani_log.reader import _BlockBuilder
+    from rust_prover_tools.kani_log.syntax import PropertyResult
+
+__all__ = ("require_complete",)
+
+
+def require_complete(builder: _BlockBuilder) -> None:
+    """Reconcile one block's counts against the checks it listed.
+
+    Parameters
+    ----------
+    builder : _BlockBuilder
+        The block that is about to be finished.
+
+    Raises
+    ------
+    KaniLogError
+        If the block is missing a verdict, results or summary, or if any count
+        disagrees with the listed checks.
+
+    """
+    if builder.verdict is None:
+        msg = f"the block for {builder.name!r} ends without a verification result"
+        raise KaniLogError(msg)
+    if builder.timed_out and not builder.has_results:
+        _require_timeout(builder)
+        return
+    if not builder.has_results:
+        # Kani prints ``RESULTS:`` even when there are no checks, so a block
+        # that lacks it lost part of its report rather than reporting none.
+        msg = f"the block for {builder.name!r} has no results section"
+        raise KaniLogError(msg)
+    if not builder.seen_verification_time:
+        # `Verification Time` is the last line of every non-timeout block.
+        # Requiring it is what makes truncating a complete log detectable at
+        # all: everything after the summary is optional chatter.
+        msg = (
+            f"the log is truncated: the block for {builder.name!r} "
+            "has no verification time"
+        )
+        raise KaniLogError(msg)
+    if builder.failed_count is None or builder.total_count is None:
+        msg = f"the block for {builder.name!r} has no summary"
+        raise KaniLogError(msg)
+    checks = builder.checks
+    if len(checks) != builder.total_count:
+        msg = (
+            f"the block for {builder.name!r} counts {builder.total_count} "
+            f"checks but lists {len(checks)}"
+        )
+        raise KaniLogError(msg)
+    _require_counts(builder, checks)
+    _require_covers(builder)
+    _require_other(builder, checks)
+
+
+def _require_timeout(builder: _BlockBuilder) -> None:
+    """Reconcile a block that timed out before reporting any check.
+
+    A timeout aborts CBMC before it prints ``RESULTS:``, so the block has no
+    summary and no verification time; its failed verdict alone is the fact.
+    A successful verdict, or any of those later fields, means the block was not
+    the shape a timeout produces and must not take the exception.
+
+    Parameters
+    ----------
+    builder : _BlockBuilder
+        The block carrying the timeout marker.
+
+    Raises
+    ------
+    KaniLogError
+        If the block's verdict is not ``FAILED`` or it also reports a
+        completed result.
+
+    """
+    has_completed_result = (
+        builder.seen_verification_time or builder.failed_count is not None
+    )
+    if builder.verdict != "FAILED" or has_completed_result:
+        msg = (
+            f"the block for {builder.name!r} reports a timeout alongside a "
+            "completed result"
+        )
+        raise KaniLogError(msg)
+
+
+def _require_counts(
+    builder: _BlockBuilder,
+    checks: tuple[PropertyResult, ...],
+) -> None:
+    """Require failed-check counts and explanations to reconcile."""
+    failed = sum(1 for item in checks if item.status == "FAILURE")
+    if failed != builder.failed_count:
+        msg = (
+            f"the block for {builder.name!r} counts "
+            f"{builder.failed_count} failures but lists {failed}"
+        )
+        raise KaniLogError(msg)
+    if len(builder.failures) != builder.failed_count:
+        msg = (
+            f"the block for {builder.name!r} counts "
+            f"{builder.failed_count} failures but explains "
+            f"{len(builder.failures)}"
+        )
+        raise KaniLogError(msg)
+
+
+def _require_covers(builder: _BlockBuilder) -> None:
+    """Require cover counts and statuses to reconcile."""
+    if builder.covered_total is None and builder.covers:
+        msg = (
+            f"the block for {builder.name!r} lists {len(builder.covers)} "
+            "covers but has no cover count"
+        )
+        raise KaniLogError(msg)
+    covers = builder.covers
+    if builder.covered_total is not None and len(covers) != builder.covered_total:
+        msg = (
+            f"the block for {builder.name!r} counts "
+            f"{builder.covered_total} covers but lists {len(covers)}"
+        )
+        raise KaniLogError(msg)
+    satisfied = sum(1 for item in covers if item.status == "SATISFIED")
+    if builder.covered_satisfied is not None and satisfied != builder.covered_satisfied:
+        msg = (
+            f"the block for {builder.name!r} counts "
+            f"{builder.covered_satisfied} satisfied covers but lists "
+            f"{satisfied}"
+        )
+        raise KaniLogError(msg)
+    observed_unreachable = sum(1 for item in covers if item.status == "UNREACHABLE")
+    if (
+        builder.covered_unreachable is not None
+        and builder.covered_unreachable != observed_unreachable
+    ):
+        msg = (
+            f"the block for {builder.name!r} counts "
+            f"{builder.covered_unreachable} unreachable covers but lists "
+            f"{observed_unreachable}"
+        )
+        raise KaniLogError(msg)
+    observed_undetermined = sum(1 for item in covers if item.status == "UNDETERMINED")
+    if (
+        builder.covered_undetermined is not None
+        and builder.covered_undetermined != observed_undetermined
+    ):
+        msg = (
+            f"the block for {builder.name!r} counts "
+            f"{builder.covered_undetermined} undetermined covers but lists "
+            f"{observed_undetermined}"
+        )
+        raise KaniLogError(msg)
+
+
+def _require_other(
+    builder: _BlockBuilder,
+    checks: tuple[PropertyResult, ...],
+) -> None:
+    """Require the parenthesised "other" count to reconcile."""
+    expected = OTHER_STATUS.get(builder.other_kind or "", "")
+    observed_other = sum(1 for item in checks if item.status == expected)
+    if builder.other_count not in {0, observed_other}:
+        msg = (
+            f"the block for {builder.name!r} counts {builder.other_count} "
+            f"{builder.other_kind} results but lists {observed_other}"
+        )
+        raise KaniLogError(msg)

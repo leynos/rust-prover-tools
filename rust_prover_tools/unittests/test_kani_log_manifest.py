@@ -198,6 +198,18 @@ def test_a_direct_harness_refuses_an_invalid_role() -> None:
         Harness("h::x", "witness")
 
 
+def test_a_direct_harness_refuses_a_non_string_role() -> None:
+    """Refuse a role of the wrong type rather than failing on the lookup."""
+    with pytest.raises(KaniManifestError, match="unknown role"):
+        Harness("h::x", typ.cast("str", []))
+
+
+def test_a_number_too_long_to_convert_is_a_manifest_error() -> None:
+    """Report an over-long JSON integer as a manifest error, not a ValueError."""
+    text = json.dumps(document()).replace("1", "9" * 4301, 1)
+    assert "number this parser cannot read" in refused(text)
+
+
 def test_a_direct_manifest_refuses_a_duplicate_name() -> None:
     """Apply the same uniqueness rule to a directly constructed manifest."""
     with pytest.raises(KaniManifestError, match="twice"):

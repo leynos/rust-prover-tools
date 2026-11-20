@@ -124,8 +124,9 @@ def degrade(
         fact.expected,
         fact.should_panic,
         fact.note,
-        fact.bounded,
+        fact.unwinding_checks,
         fact.cover_description,
+        fact.expected_failure,
     )
     return (*combination[:index], replaced, *combination[index + 1 :])
 

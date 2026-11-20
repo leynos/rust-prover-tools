@@ -154,10 +154,11 @@ nothing, and a run can leave a declared harness out entirely.
 Capture standard output and standard error separately, then concatenate them in
 that order:
 
+<!-- tested-example: kani-log-capture -->
+
 ```bash
 prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" --cwd "$PWD" \
-  --extra-arg=--verbose --extra-arg=--harness=harnesses::verified \
-  >kani.out 2>kani.err
+  --extra-arg=--verbose >kani.out 2>kani.err
 cat kani.out kani.err >kani.log
 ```
 
@@ -177,6 +178,8 @@ Schema version `1` is the only accepted version. Each harness entry has:
   default and must name one.
 - `should_panic` — whether a failed claim is the panic Kani was asked to
   expect; defaults to `false`.
+
+<!-- tested-example: kani-log-manifest -->
 
 ```json
 {
@@ -205,9 +208,13 @@ Duplicate keys and duplicate harness names are refused, as are `NaN`,
 `Infinity`, unknown keys, an unknown role, an empty harness list, a control
 without `expected_failure`, a `should_panic` control, and a `should_panic`
 claim that also declares covers. A control's expected failure may name a full
-property identifier, the property within the harness, or a check kind.
+property identifier, the property within the harness, or a check kind. A
+failure owned by a called routine must be named by its full identifier or its
+kind, because its property name alone also names the control's own property.
 
 #### Reading a log
+
+<!-- tested-example: kani-log-analysis -->
 
 ```bash
 prover-tools kani analyse-log --log kani.log --manifest harnesses.json
@@ -249,14 +256,19 @@ Each declared cover is reported as `satisfied` or `unsatisfied`. A cover that
 Kani reported unreachable, or did not report at all, is `unsatisfied`. Each
 control is reported as one of:
 
-- `rejected-as-intended` — failed exactly the expected property.
-- `rejected-otherwise` — failed, but not for the declared reason.
+- `rejected-as-intended` — every failed check, including one owned by a called
+  routine, matches the expected property.
+- `rejected-otherwise` — failed, but not only for the declared reason.
 - `accepted` — passed, so it did not demonstrate the claim's guard.
 - `not-run` — the log reported no block for it.
 
 The run mode is `full-profile` only when the log reports exactly the selected
-manifest's harnesses and unwinding checks are enabled in every block. Otherwise
-it is `focused`, because something could have been left out.
+manifest's harnesses and unwinding checks are enabled in every block. Kani
+disables those checks with `--no-unwinding-assertions` and otherwise relies on
+CBMC's default, so a block whose echoed solver command lacks that flag counts
+as enabled. A block that echoed no solver command is `focused`, because the log
+cannot show what it was asked for. Anything short of that is `focused`, because
+something could have been left out.
 
 A run passes only when the outcome is `verified`, every declared cover is
 `satisfied`, and every control is `rejected-as-intended`. The text form prints

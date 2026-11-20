@@ -48,7 +48,7 @@ def test_a_verified_log_passes_and_prints_its_cover(
     captured = capsys.readouterr()
     assert status == 0
     assert "outcome: verified\n" in captured.out
-    assert "run mode: focused\n" in captured.out
+    assert "run mode: full-profile\n" in captured.out
     assert (
         "cover harnesses::verified: the boundary below saturation is "
         "reachable: satisfied\n"
@@ -74,16 +74,40 @@ def test_a_truncated_log_is_a_tool_error(
 
 
 def test_requiring_a_full_profile_fails_a_focused_run(
+    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The profile requirement turns a passing focused run into status 2."""
-    status = run(
-        "verified",
+    """The profile requirement turns a passing focused run into status 2.
+
+    A log whose block never echoed its solver command cannot show whether
+    unwinding checks ran, so the run stays focused even though it passed.
+    """
+    log = tmp_path / "verified.log"
+    solver_echo = "[Kani] Running: `cbmc "
+    lines = (FIXTURES / "verified.log").read_text(encoding="utf-8").splitlines()
+    log.write_text(
+        "\n".join(line for line in lines if not line.startswith(solver_echo)),
+        encoding="utf-8",
+    )
+    without_requirement = kani_analyse_log(
+        log=log,
+        manifest=MANIFEST,
+        harness=["harnesses::verified"],
+        require_full_profile=False,
+        output_format="text",
+    )
+    capsys.readouterr()
+    with_requirement = kani_analyse_log(
+        log=log,
+        manifest=MANIFEST,
         harness=["harnesses::verified"],
         require_full_profile=True,
+        output_format="text",
     )
-    assert status == 2
-    assert "passed" not in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert without_requirement == 0
+    assert with_requirement == 2
+    assert "passed" not in captured.out
 
 
 def test_an_invalid_manifest_is_an_input_error(

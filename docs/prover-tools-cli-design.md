@@ -624,6 +624,12 @@ constant `bounds` field is dropped, and `passed` is derived from the outcome,
 covers and controls. Combobulate's VO-11a identifiers and evidence-gate wording
 are removed from docstrings and messages.
 
+The run mode reads Kani's one disabling flag, `--no-unwinding-assertions`,
+rather than the presence of an unwinding bound. The pinned driver emits that
+flag when the checks are off and otherwise relies on CBMC's default, so the
+echoed solver command decides the setting and a missing bound proves nothing. A
+block that echoed no command stays `focused`.
+
 The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
 manifest or digest binding.

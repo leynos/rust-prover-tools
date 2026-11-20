@@ -59,6 +59,20 @@ class Observed:
         )
 
     @property
+    def failed_checks(self) -> tuple[PropertyResult, ...]:
+        """Every check the block reports as failed, whoever owns it.
+
+        A control that is expected to trip one property has shown nothing if it
+        also trips another, so the expected-failure decision reads this whole
+        set rather than the harness's own failures alone.
+        """
+        return tuple(
+            item
+            for item in (*self.properties, *self.unattributed)
+            if item.status == "FAILURE"
+        )
+
+    @property
     def foreign_failures(self) -> tuple[PropertyResult, ...]:
         """The block's substantive failures owned by a called routine."""
         return tuple(

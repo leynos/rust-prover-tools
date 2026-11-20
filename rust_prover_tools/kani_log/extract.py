@@ -11,6 +11,7 @@ unrecognised line inside a report block.
 from __future__ import annotations
 
 import dataclasses as dc
+import shlex
 
 from rust_prover_tools.kani_log.model import HarnessBlock, KaniLog, ManualSummary
 from rust_prover_tools.kani_log.reader import Reader
@@ -20,7 +21,6 @@ from rust_prover_tools.kani_log.syntax import (
     NO_UNWINDING_ASSERTIONS_FLAG,
     SUPPORTED_KANI_VERSIONS,
     UNSUPPORTED_PRELUDE,
-    UNWINDING_BOUND_FLAGS,
     KaniLogError,
 )
 
@@ -105,6 +105,12 @@ def _scan(reader: Reader) -> _ObservedLog:
             is_list = True
             reader.take()
         elif header := HARNESS_START.match(line):
+            if manual is not None:
+                msg = (
+                    f"{reader.where()}: a harness block follows the manual "
+                    "harness summary"
+                )
+                raise KaniLogError(msg)
             blocks.append(reader.block(header))
         else:
             reader.take()
@@ -119,7 +125,7 @@ def _scan(reader: Reader) -> _ObservedLog:
 def _reconcile(version: str, seen: _ObservedLog) -> KaniLog:
     """Reconcile the log's parts, refusing any combination that cannot be real."""
     if seen.is_list:
-        if seen.blocks:
+        if seen.blocks or seen.manual is not None:
             msg = "the log claims to be both an inventory and a verification run"
             raise KaniLogError(msg)
         return KaniLog(version, "inventory", (), None, seen.unsupported)
@@ -180,20 +186,35 @@ def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:
     Returns
     -------
     bool | None
-        ``True`` when the echoed CBMC command carries an unwinding bound and
-        does not disable the assertions, ``False`` when it carries no bound or
-        disables them, and ``None`` when no solver command was echoed.
+        ``False`` when the echoed command disables the assertions, ``True``
+        otherwise, and ``None`` when no solver command was echoed.
 
     Notes
     -----
-    The rule is CBMC's, not a guess: a bound is what makes CBMC emit the
-    assertion in the first place, which is why Kani's driver never passes
-    ``--unwinding-assertions`` and instead disables them with
-    ``--no-unwinding-assertions``.
+    The rule is Kani's, read from the pinned driver rather than guessed: the
+    driver passes ``--no-unwinding-assertions`` when the checks are off and
+    otherwise passes only ``--no-self-loops-to-assumptions``, relying on
+    CBMC's own default.  So the echoed command decides with one flag, and a
+    missing bound says nothing about whether the assertions were generated.
 
     """
     if block.solver_command is None:
         return None
-    if NO_UNWINDING_ASSERTIONS_FLAG in block.solver_command:
-        return False
-    return any(flag in block.solver_command for flag in UNWINDING_BOUND_FLAGS)
+    return NO_UNWINDING_ASSERTIONS_FLAG not in _solver_arguments(block.solver_command)
+
+
+def _solver_arguments(command: str) -> frozenset[str]:
+    """Split the echoed ``cbmc`` command into its arguments and their options.
+
+    Kani quotes a path holding spaces as one argument, so ``--unwind`` there is
+    part of a path, not an option.  Each argument contributes itself and, when
+    written ``--option=value``, the option alone; the flags read here are
+    written as separate words, so matching whole arguments is enough.
+    """
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        # An unbalanced quote cannot be split into arguments, so nothing in the
+        # line is known to be an option at a boundary.
+        return frozenset()
+    return frozenset(word for item in words for word in (item, item.partition("=")[0]))

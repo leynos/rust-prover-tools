@@ -16,6 +16,7 @@ from rust_prover_tools.kani_log import (
     KaniLog,
     KaniLogError,
     parse_kani_log,
+    unwinding_checks_enabled,
 )
 
 FIXTURES: typ.Final[Path] = (
@@ -238,6 +239,163 @@ def test_mismatched_manual_counts_are_refused() -> None:
     assert "the manual summary claims" in refused(text)
 
 
+def test_a_non_ascii_harness_name_is_read() -> None:
+    """Read a harness whose name is not plain ASCII."""
+    text = log_text("verified").replace("harnesses::verified", "harnesses::vérifie")
+    assert parse_text(text).blocks[0].name == "harnesses::vérifie"
+
+
+def test_a_check_without_a_location_is_read() -> None:
+    """Accept a check Kani could not attribute to a source location."""
+    text = "\n".join(
+        line
+        for line in log_text("verified").splitlines()
+        if not line.strip().startswith("- Location:")
+    )
+    block = parse_text(text).blocks[0]
+    assert [item.kind for item in block.properties] == [
+        "assertion",
+        "cover",
+        "assertion",
+    ]
+
+
+def test_an_ownerless_check_keeps_its_kind() -> None:
+    """Read the kind from two segments, as CBMC prints it without an owner."""
+    text = log_text("verified").replace(
+        "Check 2: harnesses::verified.cover.1",
+        "Check 2: cover.1",
+    )
+    block = parse_text(text).blocks[0]
+    assert [item.kind for item in block.covers] == ["cover"]
+    assert block.covers[0].owner is None
+
+
+def test_a_repeated_check_field_is_refused() -> None:
+    """Refuse a check that lists the same field twice rather than guessing."""
+    text = log_text("verified").replace(
+        "\t - Status: SUCCESS\n\t - Description:",
+        "\t - Status: SUCCESS\n\t - Status: SUCCESS\n\t - Description:",
+    )
+    assert "repeats its Status field" in refused(text)
+
+
+def test_only_the_framing_quotes_are_removed() -> None:
+    """Keep the quotes that belong to the description itself."""
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: ""ready""',
+    )
+    assert parse_text(text).blocks[0].covers[0].description == '"ready"'
+
+
+def test_an_undetermined_cover_is_counted() -> None:
+    """Reconcile a cover count that names an undetermined cover."""
+    text = (
+        log_text("verified")
+        .replace(
+            " ** 1 of 1 cover properties satisfied",
+            " ** 0 of 1 cover properties satisfied (1 undetermined)",
+        )
+        .replace(
+            "Check 2: harnesses::verified.cover.1\n\t - Status: SATISFIED",
+            "Check 2: harnesses::verified.cover.1\n\t - Status: UNDETERMINED",
+        )
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covered_undetermined == 1
+    assert [item.status for item in block.covers] == ["UNDETERMINED"]
+
+
+def test_both_cover_counts_are_reconciled() -> None:
+    """Read the comma-separated form Kani prints for two cover statuses."""
+    original = (
+        "Check 2: harnesses::verified.cover.1\n"
+        "\t - Status: SATISFIED\n"
+        '\t - Description: "the boundary below saturation is reachable"\n'
+        "\t - Location: src/harnesses.rs:11:5 in function harnesses::verified\n"
+    )
+    undetermined = original.replace("SATISFIED", "UNDETERMINED")
+    other = (
+        undetermined
+        .replace("Check 2:", "Check 4:")
+        .replace(".cover.1", ".cover.2")
+        .replace("UNDETERMINED", "UNREACHABLE")
+    )
+    text = (
+        log_text("verified")
+        .replace(original, f"{undetermined}\n{other}")
+        .replace(
+            " ** 1 of 1 cover properties satisfied",
+            " ** 0 of 2 cover properties satisfied (1 unreachable, 1 undetermined)",
+        )
+    )
+    block = parse_text(text).blocks[0]
+    assert (block.covered_total, block.covered_unreachable) == (2, 1)
+    assert block.covered_undetermined == 1
+
+
+def test_a_completed_result_beside_a_timeout_marker_is_refused() -> None:
+    """Refuse a timeout block that also claims a successful verdict."""
+    text = log_text("multiplication_timeout").replace(
+        "VERIFICATION:- FAILED",
+        "VERIFICATION:- SUCCESSFUL",
+    )
+    assert "timeout alongside a completed result" in refused(text)
+
+
+def test_a_block_without_results_is_refused() -> None:
+    """Require the ``RESULTS:`` section even when a block has no checks."""
+    lines = log_text("verified").splitlines()
+    text = "\n".join(
+        lines[: lines.index("RESULTS:")] + lines[lines.index("SUMMARY:") :]
+    )
+    assert "has no results section" in refused(text)
+
+
+def test_an_unconvertible_report_integer_is_refused() -> None:
+    """Turn a digit run too long to convert into a structural error."""
+    text = log_text("verified").replace(
+        "Complete - 1 successfully verified",
+        f"Complete - {'9' * 4301} successfully verified",
+    )
+    assert "not a count this parser can read" in refused(text)
+
+
+def test_an_inventory_with_a_manual_summary_is_refused() -> None:
+    """Refuse inventory output that also carries a verification summary."""
+    verified = log_text("verified").splitlines()
+    manual = verified[verified.index("Manual Harness Summary:") :]
+    text = "\n".join([*log_text("list").splitlines(), *manual])
+    assert "both an inventory and a verification run" in refused(text)
+
+
+def test_a_harness_block_after_the_manual_summary_is_refused() -> None:
+    """Refuse a block that follows the run's closing summary."""
+    lines = log_text("verified").splitlines()
+    manual = lines.index("Manual Harness Summary:")
+    summary = lines[manual : manual + 2]
+    rest = [*lines[:manual], *lines[manual + 2 :]]
+    text = "\n".join([rest[0], *summary, *rest[1:]])
+    assert "follows the manual harness summary" in refused(text)
+
+
+def test_a_flag_inside_a_path_does_not_disable_unwinding_checks() -> None:
+    """Read solver flags at argument boundaries, not as substrings."""
+    inside_a_path = HarnessBlock(
+        name="h::x",
+        solver_command='[Kani] Running: `cbmc "/tmp/run --no-unwinding-assertions" '
+        "--sat-solver cadical`",
+    )
+    separate = HarnessBlock(
+        name="h::x",
+        solver_command="[Kani] Running: `cbmc --no-unwinding-assertions "
+        "--sat-solver cadical`",
+    )
+    assert unwinding_checks_enabled(inside_a_path) is True
+    assert unwinding_checks_enabled(separate) is False
+
+
 def test_an_unknown_line_inside_a_block_is_refused() -> None:
     """An unrecognised line inside a report is a structural error."""
     lines = log_text("verified").splitlines()
@@ -248,14 +406,16 @@ def test_an_unknown_line_inside_a_block_is_refused() -> None:
     assert "unrecognised line in the block" in refused("\n".join(lines))
 
 
-def test_a_failure_without_a_location_is_refused() -> None:
-    """Every failed check must carry the source location Kani printed."""
+def test_a_failure_without_a_location_is_retained() -> None:
+    """Keep the explanation when Kani could not attribute it to a location."""
     text = "\n".join(
         line
         for line in log_text("counterexample").splitlines()
         if not line.startswith(' File: "')
     )
-    assert "without a source location" in refused(text)
+    block = parse_text(text).blocks[0]
+    assert [(item.path, item.line) for item in block.failures] == [(None, None)]
+    assert block.failures[0].message
 
 
 def test_a_mixed_inventory_and_verification_log_is_refused() -> None:

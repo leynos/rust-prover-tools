@@ -81,10 +81,16 @@ OTHERWISE = "otherwise"
 UNSUPPORTED_WORDING = "TerminatorKind::InlineAsm is not currently supported by Kani."
 LIBRARY_CHECK = "core::fmt::Arguments::<'_>::from_str.assertion.1"
 LIBRARY_OWNER = LIBRARY_CHECK.rpartition(".")[0].rpartition(".")[0]
-BOUNDED_SOLVER = (
-    "[Kani] Running: `cbmc --object-bits 16 --unwind 2 --sat-solver cadical`"
+# Kani's driver disables unwinding assertions with one flag and otherwise
+# relies on CBMC's default, so the echoed command differs by that flag alone.
+ENABLED_SOLVER = (
+    "[Kani] Running: `cbmc --object-bits 16 --unwind 2 "
+    "--no-self-loops-to-assumptions --sat-solver cadical`"
 )
-UNBOUNDED_SOLVER = "[Kani] Running: `cbmc --object-bits 16 --sat-solver cadical`"
+DISABLED_SOLVER = (
+    "[Kani] Running: `cbmc --object-bits 16 --no-unwinding-assertions "
+    "--sat-solver cadical`"
+)
 FAILING = (
     FAILURE,
     AS_INTENDED,
@@ -105,6 +111,11 @@ class HarnessFact:
     declare, which the analysis calls a structural error.  ``should_panic`` and
     ``note`` are separate because Kani's verdict note, not the manifest, is what
     excuses a failed assertion.
+
+    ``expected`` names which observed failure class a control's log shows;
+    ``expected_failure`` is what the generated manifest declares for it.  They
+    are separate so a table row can declare a property the fixture's observed
+    check does not name, which is what the decision table's mismatch rows test.
     """
 
     name: str
@@ -114,8 +125,9 @@ class HarnessFact:
     expected: str = AS_INTENDED
     should_panic: bool = False
     note: bool = False
-    bounded: bool = False
+    unwinding_checks: bool = False
     cover_description: str | None = None
+    expected_failure: str | None = None
 
     @property
     def witness(self) -> str:
@@ -243,7 +255,7 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
         or None,
         verdict=fact.verdict,
         panics_as_expected=fact.should_panic and fact.note,
-        solver_command=BOUNDED_SOLVER if fact.bounded else UNBOUNDED_SOLVER,
+        solver_command=ENABLED_SOLVER if fact.unwinding_checks else DISABLED_SOLVER,
         seen_verification_time=not is_timeout,
         timed_out=is_timeout,
         unwinding_reported=fact.status == UNWIND_FAILURE,
@@ -258,7 +270,9 @@ def manifest_of(facts: cabc.Iterable[HarnessFact]) -> Manifest:
         if fact.role is None:
             continue
         covers = (fact.witness,) if fact.cover != NOTHING else ()
-        expected = "assertion.1" if fact.expected == AS_INTENDED else "assertion.2"
+        expected = fact.expected_failure or (
+            "assertion.1" if fact.expected == AS_INTENDED else "assertion.2"
+        )
         entries.append(
             Harness(
                 fact.name,
@@ -332,6 +346,7 @@ def facts_of_row(row: dict[str, typ.Any]) -> tuple[HarnessFact, ...]:
                 bool(entry.get("should_panic")),
                 bool(entry.get("panics_as_expected")),
                 cover_description=covers[0] if covers else None,
+                expected_failure=entry.get("expected_failure"),
             ),
         )
     return tuple(facts)

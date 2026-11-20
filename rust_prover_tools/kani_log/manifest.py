@@ -78,7 +78,7 @@ class Harness:
         """Refuse a field whose type cannot describe a declaration."""
         if not isinstance(self.name, str) or not self.name:
             _fail("entry does not name a harness")
-        if self.role not in ROLES:
+        if not isinstance(self.role, str) or self.role not in ROLES:
             _fail(f"harness {self.name!r} has unknown role {self.role!r}")
         if not isinstance(self.covers, tuple) or not all(
             isinstance(cover, str) for cover in self.covers
@@ -212,6 +212,10 @@ def parse_manifest(text: str) -> Manifest:
         )
     except json.JSONDecodeError as error:
         _fail(f"is not valid JSON: {error.msg} at line {error.lineno}")
+    except ValueError as error:
+        # A digit run past CPython's integer-string limit fails here rather
+        # than as a syntax error, and must still leave as a manifest error.
+        _fail(f"contains a number this parser cannot read: {error}")
     if not isinstance(document, cabc.Mapping):
         _fail("must be a JSON object")
     return manifest_from_document(document)

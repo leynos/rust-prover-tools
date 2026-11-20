@@ -638,13 +638,13 @@
       "outcome": "counterexample",
       "witnesses": [],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "expected_panic": {
       "outcome": "verified",
       "witnesses": [],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "fail_fast": {
       "outcome": "skipped",
@@ -665,7 +665,7 @@
         "satisfied"
       ],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "insufficient_unwind": {
       "outcome": "resource-exhausted",
@@ -683,7 +683,7 @@
       "outcome": "resource-exhausted",
       "witnesses": [],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "seeded_wrapping_mutant": {
       "outcome": "verified",
@@ -694,7 +694,7 @@
           "rejected-as-intended"
         ]
       ],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "selected_harness": {
       "outcome": "verified",
@@ -702,7 +702,7 @@
         "satisfied"
       ],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "truncated": {
       "outcome": "tool-error",
@@ -717,13 +717,13 @@
         "unsatisfied"
       ],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "unsupported": {
       "outcome": "unsupported",
       "witnesses": [],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "vacuous_assumption": {
       "outcome": "undetermined",
@@ -731,7 +731,7 @@
         "unsatisfied"
       ],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "verified": {
       "outcome": "verified",
@@ -739,7 +739,7 @@
         "satisfied"
       ],
       "controls": [],
-      "run_mode": "focused"
+      "run_mode": "full-profile"
     },
     "default_unwind": {
       "outcome": "verified",

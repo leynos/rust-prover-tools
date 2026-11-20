@@ -16,19 +16,22 @@ from __future__ import annotations
 
 import typing as typ
 
-import pytest
-
 from rust_prover_tools.kani_log import (
     CLAIM,
     CONTROL,
     FOCUSED,
     FULL_PROFILE,
+    REJECTED_OTHERWISE,
+    FailedCheck,
     Harness,
+    HarnessBlock,
     KaniAnalysis,
     KaniLog,
     KaniLogError,
     KaniOutcome,
     Manifest,
+    ManualSummary,
+    PropertyResult,
     analyse_kani_log,
     from_kani_log_error,
 )
@@ -198,25 +201,96 @@ def test_a_control_never_becomes_a_claim() -> None:
     )
 
 
-@pytest.mark.parametrize("name", ["selected_harness", "verified"])
-def test_a_single_harness_run_is_never_full_profile(name: str) -> None:
-    """Require a selected single harness to run in focused mode."""
-    assert corpus.corpus_decision_for(name).run_mode == FOCUSED
+def _control_log(*checks: PropertyResult) -> KaniLog:
+    """Build a one-control log whose block reports exactly ``checks``."""
+    name = "h::k"
+    block = HarnessBlock(
+        name=name,
+        properties=checks,
+        failures=tuple(FailedCheck(item.description, None, None) for item in checks),
+        failed_count=sum(1 for item in checks if item.status == "FAILURE"),
+        total_count=len(checks),
+        verdict="FAILED",
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+        seen_verification_time=True,
+        has_results=True,
+    )
+    return KaniLog(
+        "0.67.0",
+        "regular",
+        (block,),
+        ManualSummary(0, 1, 1, (name,)),
+        (),
+    )
+
+
+def test_a_control_with_an_extra_failure_is_rejected_otherwise() -> None:
+    """Require every failed check to match the declared expectation."""
+    log = _control_log(
+        PropertyResult("h::k.assertion.1", "FAILURE", "the seeded fault fires"),
+        PropertyResult("h::k.assertion.2", "FAILURE", "an unrelated check fails"),
+    )
+    manifest = Manifest((Harness("h::k", CONTROL, expected_failure="assertion.1"),))
+    assert analyse_kani_log(log, manifest).control_statuses == (REJECTED_OTHERWISE,)
+
+
+def test_a_control_that_fails_a_called_property_is_rejected_otherwise() -> None:
+    """Count a failure owned by a called routine as an unexpected failure."""
+    log = _control_log(
+        PropertyResult("h::k.assertion.1", "FAILURE", "the seeded fault fires"),
+        PropertyResult(
+            "core::fmt::Arguments::<'_>::from_str.assertion.1",
+            "FAILURE",
+            "attempt to shift left with overflow",
+        ),
+    )
+    manifest = Manifest((Harness("h::k", CONTROL, expected_failure="assertion.1"),))
+    assert analyse_kani_log(log, manifest).control_statuses == (REJECTED_OTHERWISE,)
+
+
+def test_a_passing_unsupported_construct_check_is_not_unsupported() -> None:
+    """Require the check to have failed before it can deny a claim."""
+    name = "h::c"
+    block = HarnessBlock(
+        name=name,
+        properties=(
+            PropertyResult(
+                f"{name}.unsupported_construct.1",
+                "SUCCESS",
+                "the construct was modelled",
+            ),
+        ),
+        failed_count=0,
+        total_count=1,
+        verdict="SUCCESSFUL",
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+        seen_verification_time=True,
+        has_results=True,
+    )
+    log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
+    manifest = Manifest((Harness(name, CLAIM),))
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED
+
+
+def test_a_single_harness_run_is_full_profile_for_its_own_manifest() -> None:
+    """Require a run narrowed to one harness to cover that manifest completely."""
+    assert corpus.corpus_decision_for("selected_harness").run_mode == FULL_PROFILE
 
 
 def test_the_corpus_contains_a_full_profile_run() -> None:
-    """Require at least one committed log to reach the full profile."""
+    """Require only the runs that omit a declared harness to stay focused."""
     decisions = {name: corpus.corpus_decision_for(name) for name in corpus.log_names()}
-    full_profile = {
+    focused = {
+        name for name, decision in decisions.items() if decision.run_mode == FOCUSED
+    }
+    assert focused == {"fail_fast", "list", "truncated"}
+    verified = {
         name
         for name, decision in decisions.items()
         if decision.run_mode == FULL_PROFILE
+        and decision.outcome == KaniOutcome.VERIFIED
     }
-    assert full_profile == {"default_unwind", "insufficient_unwind"}
-    reaching_bounded = {
-        name for name in full_profile if decisions[name].outcome == KaniOutcome.VERIFIED
-    }
-    assert reaching_bounded == {"default_unwind"}
+    assert {"default_unwind", "verified"} <= verified
 
 
 def test_full_profile_requires_every_manifest_harness() -> None:
@@ -230,7 +304,7 @@ def test_full_profile_requires_every_manifest_harness() -> None:
             fact.expected,
             fact.should_panic,
             fact.note,
-            bounded=True,
+            unwinding_checks=True,
         )
         for fact in (
             facts.HarnessFact("h::a", CLAIM, facts.SUCCESS),
@@ -241,7 +315,7 @@ def test_full_profile_requires_every_manifest_harness() -> None:
 
 
 def test_full_profile_requires_enabled_unwinding_checks() -> None:
-    """Require an unbounded run to stay focused even when the manifest is covered."""
+    """Require a run that disabled unwinding checks to stay focused."""
     combination = (
         facts.HarnessFact("h::a", CLAIM, facts.SUCCESS),
         facts.HarnessFact("h::k", CONTROL, facts.AS_INTENDED),

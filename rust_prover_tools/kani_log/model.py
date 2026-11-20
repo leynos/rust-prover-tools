@@ -48,6 +48,8 @@ class HarnessBlock:
         Total cover count, when the block declared covers.
     covered_unreachable : int | None
         Unreachable cover count, when Kani reported one.
+    covered_undetermined : int | None
+        Undetermined cover count, when Kani reported one.
     verdict : str | None
         ``SUCCESSFUL`` or ``FAILED`` from ``VERIFICATION:``.
     panics_as_expected : bool
@@ -75,6 +77,7 @@ class HarnessBlock:
     covered_satisfied: int | None = None
     covered_total: int | None = None
     covered_unreachable: int | None = None
+    covered_undetermined: int | None = None
     verdict: str | None = None
     panics_as_expected: bool = False
     solver_command: str | None = None
@@ -121,7 +124,21 @@ class HarnessBlock:
 
 @dc.dataclass(frozen=True, slots=True)
 class ManualSummary:
-    """The counts Kani prints once after every harness block."""
+    """The counts Kani prints once after every harness block.
+
+    Attributes
+    ----------
+    verified : int
+        Harnesses whose verdict was ``SUCCESSFUL``.
+    failures : int
+        Harnesses whose verdict was ``FAILED``; it counts harnesses, not
+        failed checks.
+    total : int
+        Harnesses the run reported.
+    failed : tuple[str, ...]
+        Names of the failed harnesses, in the order Kani listed them.
+
+    """
 
     verified: int
     failures: int
@@ -136,6 +153,21 @@ class KaniLog:
     ``format`` is ``regular`` for a verification run and ``inventory`` for
     ``kani list`` output, which carries no harness verdicts.  A log that is
     neither cannot be analysed, and :func:`parse_kani_log` refuses it.
+
+    Attributes
+    ----------
+    banner_version : str
+        Kani release the log's banner named.
+    format : str
+        ``regular`` for a verification run, ``inventory`` for ``kani list``.
+    blocks : tuple[HarnessBlock, ...]
+        One block per harness Kani ran, in log order; empty for an inventory.
+    manual : ManualSummary | None
+        The run's closing counts, or ``None`` for an inventory, which has no
+        manual summary.
+    unsupported_constructs : tuple[str, ...]
+        Constructs Kani named as unsupported before verification began.
+
     """
 
     banner_version: str
