@@ -507,6 +507,59 @@ def test_a_narrowed_manifest_is_what_makes_a_run_full_profile() -> None:
     assert whole.run_mode == FOCUSED
 
 
+def _log_of(*names: str) -> KaniLog:
+    """Build a log with one successful block per named harness."""
+    return KaniLog(
+        "0.67.0",
+        "regular",
+        tuple(
+            HarnessBlock(
+                name=name,
+                properties=(
+                    PropertyResult(f"{name}.assertion.1", "SUCCESS", "the claim"),
+                ),
+                failed_count=0,
+                total_count=1,
+                verdict="SUCCESSFUL",
+                solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+                seen_verification_time=True,
+                has_results=True,
+            )
+            for name in names
+        ),
+        ManualSummary(len(names), 0, len(names), ()),
+        (),
+    )
+
+
+def test_a_block_for_an_unselected_harness_is_skipped_not_refused() -> None:
+    """Skip a block the run did not select instead of calling it undeclared.
+
+    ``--harness`` narrows the manifest after the declaration, so a log from a
+    wider run reports harnesses the analysis was not asked about. The
+    declaration, not the selection, is what decides whether a block is
+    undeclared.
+    """
+    log = _log_of("h::a", "h::b")
+    whole = Manifest((Harness("h::a", CLAIM), Harness("h::b", CLAIM)))
+    decision = analyse_kani_log(
+        log,
+        whole.select(("h::a",)),
+        declared=whole.names(),
+    )
+    assert decision.outcome is KaniOutcome.VERIFIED
+    assert decision.run_mode == FULL_PROFILE
+
+
+def test_a_block_the_declaration_does_not_name_is_still_refused() -> None:
+    """Refuse a block for a harness the manifest never declared at all."""
+    log = _log_of("h::a", "h::stray")
+    manifest = Manifest((Harness("h::a", CLAIM),))
+    decision = analyse_kani_log(log, manifest)
+    assert decision.outcome is KaniOutcome.TOOL_ERROR
+    assert "does not declare" in decision.reason
+
+
 def test_a_structural_refusal_decides_tool_error() -> None:
     """Require the killed run to decide tool-error with its structural reason."""
     decision = corpus.corpus_decision_for("truncated")

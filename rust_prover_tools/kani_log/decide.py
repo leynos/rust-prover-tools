@@ -24,8 +24,8 @@ import dataclasses as dc
 import enum
 import typing as typ
 
-from rust_prover_tools.kani_log.extract import unwinding_checks_enabled
 from rust_prover_tools.kani_log.observation import Observed
+from rust_prover_tools.kani_log.run_mode import FOCUSED, FULL_PROFILE, run_mode
 from rust_prover_tools.kani_log.syntax import (
     UNSUPPORTED_KIND,
     UNSUPPORTED_MARKER,
@@ -33,8 +33,9 @@ from rust_prover_tools.kani_log.syntax import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from rust_prover_tools.kani_log.manifest import Harness, Manifest
-    from rust_prover_tools.kani_log.model import HarnessBlock
     from rust_prover_tools.kani_log.model import KaniLog as ParsedLog
     from rust_prover_tools.kani_log.syntax import PropertyResult
 
@@ -53,8 +54,6 @@ __all__ = (
     "from_kani_log_error",
 )
 
-FULL_PROFILE = "full-profile"
-FOCUSED = "focused"
 SATISFIED = "satisfied"
 UNSATISFIED = "unsatisfied"
 REJECTED_AS_INTENDED = "rejected-as-intended"
@@ -101,7 +100,12 @@ class KaniAnalysis:
         )
 
 
-def analyse_kani_log(log: ParsedLog, manifest: Manifest) -> KaniAnalysis:
+def analyse_kani_log(
+    log: ParsedLog,
+    manifest: Manifest,
+    *,
+    declared: cabc.Iterable[str] | None = None,
+) -> KaniAnalysis:
     """Decide what a parsed log proves about a manifest's claims.
 
     Parameters
@@ -110,6 +114,11 @@ def analyse_kani_log(log: ParsedLog, manifest: Manifest) -> KaniAnalysis:
         Facts extracted from one Kani invocation.
     manifest : Manifest
         The harnesses the run was meant to cover.
+    declared : Iterable[str] | None
+        Every harness name the manifest declared before it was narrowed.  A
+        ``--harness`` selection leaves the log able to report a harness that
+        was declared but not selected, and that block is skipped rather than
+        refused.  Defaults to the manifest's own names.
 
     Returns
     -------
@@ -119,7 +128,7 @@ def analyse_kani_log(log: ParsedLog, manifest: Manifest) -> KaniAnalysis:
         :attr:`KaniOutcome.TOOL_ERROR` rather than an exception.
     """
     try:
-        return _analyse(log, manifest)
+        return _analyse(log, manifest, declared)
     except ValueError as error:
         return _tool_error(str(error))
 
@@ -134,18 +143,22 @@ def _tool_error(reason: str) -> KaniAnalysis:
     return KaniAnalysis(KaniOutcome.TOOL_ERROR, reason=reason)
 
 
-def _analyse(log: ParsedLog, manifest: Manifest) -> KaniAnalysis:
+def _analyse(
+    log: ParsedLog,
+    manifest: Manifest,
+    declared: cabc.Iterable[str] | None,
+) -> KaniAnalysis:
     """Apply the precedence table, refusing a structural mismatch."""
     if log.format != "regular":
         msg = f"the log is {log.format!r} output, which carries no harness verdicts"
         raise ValueError(msg)
-    observed = _observations(log, manifest)
+    observed = _observations(log, manifest, declared)
     claims = [observed.get(item.name) for item in manifest.claims]
     return KaniAnalysis(
         _outcome(log, claims, manifest),
         _witness_statuses(manifest, observed),
         _control_statuses(manifest, observed),
-        _run_mode(log, manifest),
+        run_mode(log, manifest),
         reason="decided from the parsed log",
     )
 
@@ -153,17 +166,28 @@ def _analyse(log: ParsedLog, manifest: Manifest) -> KaniAnalysis:
 def _observations(
     log: ParsedLog,
     manifest: Manifest,
+    declared: cabc.Iterable[str] | None,
 ) -> dict[str, Observed]:
-    """Attribute every reported check to a manifest harness."""
-    declared = set(manifest.names())
+    """Attribute every reported check to a harness the run declares.
+
+    A manifest narrowed by ``--harness`` lists only the selected harnesses, so
+    a log captured from a wider run may still hold blocks for declared ones the
+    caller did not select.  Those blocks are skipped: the selection is what the
+    call asks about.  A block no declaration names remains a structural
+    mismatch, because the log and the manifest then describe different runs.
+    """
+    known = frozenset(manifest.names() if declared is None else declared)
+    selected = frozenset(manifest.names())
     observed: dict[str, Observed] = {}
     for block in log.blocks:
-        if block.name not in declared:
+        if block.name not in known:
             msg = (
                 f"the log reports harness {block.name!r}, which the manifest "
                 "does not declare"
             )
             raise ValueError(msg)
+        if block.name not in selected:
+            continue
         observed[block.name] = Observed(
             name=block.name,
             succeeded=block.succeeded,
@@ -360,24 +384,3 @@ def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:
     if any(UNSUPPORTED_MARKER in text.lower() for text in seen.failure_messages):
         return True
     return bool(log.unsupported_constructs) and seen.indeterminate
-
-
-def _run_mode(log: ParsedLog, manifest: Manifest) -> str:
-    """Report ``full-profile`` only when nothing could have been left out.
-
-    Coverage is a set comparison: Kani emits blocks in its own order, so
-    comparing positions would report a complete run as focused merely because
-    the manifest listed its harnesses differently.
-    """
-    observed = log.harnesses
-    claimed = manifest.names()
-    if len(set(observed)) != len(observed) or set(observed) != set(claimed):
-        return FOCUSED
-    if not all(_unwinding_enabled(block) for block in log.blocks):
-        return FOCUSED
-    return FULL_PROFILE
-
-
-def _unwinding_enabled(block: HarnessBlock) -> bool:
-    """Read the tri-state unwinding check as a yes/no gate."""
-    return unwinding_checks_enabled(block) is True

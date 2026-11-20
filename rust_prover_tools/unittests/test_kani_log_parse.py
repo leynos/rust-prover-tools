@@ -482,6 +482,23 @@ def test_a_flag_inside_a_path_does_not_disable_unwinding_checks() -> None:
     assert unwinding_checks_enabled(separate) is False
 
 
+def test_a_flag_last_in_the_solver_command_is_still_read() -> None:
+    """Read a flag that abuts the echo's closing backtick.
+
+    Kani frames the echoed command in backticks, so the final argument carries
+    one unless the framing is removed first. Reading it attached would leave
+    the run's most common command - every flag present, the last one closing
+    the echo - looking as though checks were enabled.
+    """
+    flag_last = HarnessBlock(
+        name="h::x",
+        solver_command=(
+            "[Kani] Running: `cbmc --sat-solver cadical --no-unwinding-assertions`"
+        ),
+    )
+    assert unwinding_checks_enabled(flag_last) is False
+
+
 def test_an_unreadable_solver_command_leaves_unwinding_checks_unknown() -> None:
     """Report an unknown command rather than reading it as enabled checks."""
     unreadable = HarnessBlock(

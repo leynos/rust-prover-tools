@@ -19,6 +19,7 @@ from rust_prover_tools.kani_log.syntax import (
     HARNESS_START,
     LIST_WRITTEN,
     NO_UNWINDING_ASSERTIONS_FLAG,
+    SOLVER_FRAME,
     SUPPORTED_KANI_VERSIONS,
     UNSUPPORTED_PRELUDE,
     KaniLogError,
@@ -217,6 +218,11 @@ def _solver_arguments(command: str) -> frozenset[str] | None:
     written ``--option=value``, the option alone; the flags read here are
     written as separate words, so matching whole arguments is enough.
 
+    The echo's own framing is removed first.  A closing backtick is an ordinary
+    character to ``shlex``, so leaving it on would join it to the last argument
+    and hide a trailing flag such as ``--no-unwinding-assertions`` from the
+    membership test.
+
     Returns
     -------
     frozenset[str] | None
@@ -224,8 +230,9 @@ def _solver_arguments(command: str) -> frozenset[str] | None:
         cannot be split, because an unbalanced quote leaves no argument
         boundary to trust.
     """
+    framed = command.removeprefix(SOLVER_FRAME).removesuffix("`")
     try:
-        words = shlex.split(command)
+        words = shlex.split(framed)
     except ValueError:
         return None
     return frozenset(word for item in words for word in (item, item.partition("=")[0]))

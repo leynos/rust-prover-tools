@@ -77,8 +77,15 @@ CORPUS_SELECTIONS = {
 
 
 def log_names() -> tuple[str, ...]:
-    """Name every committed log, in a stable order, without its extension."""
-    return tuple(sorted(path.stem for path in CORPUS.glob("*.log")))
+    """Name every committed log, in a stable order, without its extension.
+
+    The directory is listed rather than globbed because ``Path.glob`` swallows
+    the scanning error on an unreadable directory and reports an empty corpus,
+    which would read as evidence that every log passed.
+    """
+    return tuple(
+        sorted(path.stem for path in CORPUS.iterdir() if path.suffix == ".log")
+    )
 
 
 def log_text(name: str) -> str:

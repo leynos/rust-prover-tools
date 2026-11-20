@@ -169,15 +169,21 @@ def test_a_negative_control_needs_the_summary_to_count_one_failure() -> None:
     assert analysis.passed is False
 
 
-def test_an_unlocated_failure_beside_the_seeded_one_fails_the_control() -> None:
+@pytest.mark.parametrize("reported_errors", [1, 2])
+def test_an_unlocated_failure_beside_the_seeded_one_fails_the_control(
+    reported_errors: int,
+) -> None:
     """A run that also broke somewhere else has not isolated the seeded fault.
 
     The extra diagnostic names no source position, so it cannot be placed. The
     control reads the complete failure collection rather than the located
-    subset, which would otherwise see exactly one failure and pass.
+    subset, which would otherwise see exactly one failure and pass. The summary
+    count is varied because a count other than one is refused before the
+    collection is consulted, so only the count of one exercises the guard that
+    reads it.
     """
     log = VerusLog(
-        VerusSummary(0, 2),
+        VerusSummary(0, reported_errors),
         (
             VerusFailure("postcondition not satisfied", "proofs/mutant.rs", 8, 13),
             VerusFailure("could not find function absent"),

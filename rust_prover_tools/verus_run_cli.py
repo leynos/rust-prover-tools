@@ -80,11 +80,19 @@ def probe_and_qualify_z3(
     Raises
     ------
     ProverToolError
-        If the selection names no executable, or the executable reports a
-        release other than the calibrated one.
+        If the selection names no executable, the executable cannot be run, or
+        it reports a release other than the calibrated one.
     """
     executable = resolve_z3(selection, repo_root=repo_root, install_dir=install_dir)
-    probe = run_command(CommandSpec((str(executable), "--version")))
+    try:
+        probe = run_command(CommandSpec((str(executable), "--version")))
+    except OSError as error:
+        # A file that exists but is not executable passes resolution; the
+        # failure only surfaces when the process is launched.  It is a solver
+        # selection problem, so it leaves as the same diagnostic every other
+        # unusable selection does.
+        msg = f"{executable} could not be run: {error}"
+        raise ProverToolError(msg) from error
     return qualify_z3(
         executable,
         exit_code=probe.exit_code,

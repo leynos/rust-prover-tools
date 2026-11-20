@@ -97,8 +97,11 @@ UNSUPPORTED_REACHABLE = (
 # inferring the setting from a failure.  Kani does not pass
 # `--unwinding-assertions` at all: it disables the assertions with
 # `--no-unwinding-assertions` when the checks are off and otherwise relies on
-# CBMC's default, so the presence of that one flag decides the setting.
-SOLVER_COMMAND = "[Kani] Running: `cbmc "
+# CBMC's default, so the presence of that one flag decides the setting.  The
+# echo is framed by a fixed prefix and a closing backtick, both of which are
+# removed before the command is split into arguments.
+SOLVER_FRAME = "[Kani] Running: `"
+SOLVER_COMMAND = f"{SOLVER_FRAME}cbmc "
 NO_UNWINDING_ASSERTIONS_FLAG = "--no-unwinding-assertions"
 TIMED_OUT = "CBMC timed out."
 CBMC_FAILED = "CBMC failed"

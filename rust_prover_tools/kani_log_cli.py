@@ -172,12 +172,17 @@ def kani_analyse_log(  # ruff: ignore[too-many-arguments] - one keyword per CLI 
         log_text = read_input_text(log, "log")
         manifest_text = read_input_text(manifest, "manifest")
         parsed_manifest = parse_manifest(manifest_text)
+        # The declaration outlives the selection: a log from a wider run can
+        # report a harness the caller did not select, and the analysis skips
+        # it rather than calling it undeclared.
+        declared = parsed_manifest.names()
         if harness:
             parsed_manifest = parsed_manifest.select(tuple(harness))
         try:
             analysis = analyse_kani_log(
                 parse_kani_log(log_text),
                 parsed_manifest,
+                declared=declared,
             )
         except KaniLogError as error:
             analysis = from_kani_log_error(error)

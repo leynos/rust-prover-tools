@@ -182,6 +182,31 @@ def test_probing_the_pinned_selection_records_that_it_was_pinned(
     assert qualified.executable == binary.resolve()
 
 
+def test_a_selected_solver_that_cannot_be_run_is_a_prover_tool_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Turn the launch failure into the diagnostic a bad selection gets.
+
+    A file that exists but is not executable passes resolution, and the
+    failure only surfaces when the process is launched. It is a solver
+    selection problem, so it must leave as `ProverToolError` rather than as
+    the raw `OSError` escaping the command boundary.
+    """
+
+    def refuse(_spec: object) -> CommandResult:
+        """Fail the launch the way a non-executable file would."""
+        msg = "permission denied"
+        raise PermissionError(msg)
+
+    binary = tmp_path / "solver"
+    binary.write_text("", encoding="utf-8")
+    monkeypatch.setattr(run_cli, "run_command", refuse)
+
+    with pytest.raises(ProverToolError, match="could not be run"):
+        run_cli.probe_and_qualify_z3(str(binary), repo_root=tmp_path)
+
+
 def test_probing_an_explicit_selection_records_that_it_was_explicit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
