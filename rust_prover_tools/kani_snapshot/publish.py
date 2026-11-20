@@ -19,6 +19,10 @@ import typing as typ
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.publish_budget import (
+    StepOutcome,
+    decide_exhausted,
+)
 from rust_prover_tools.kani_snapshot.publish_observation import (
     observe_or_keep,
     settle,
@@ -123,7 +127,7 @@ def _publish(
     api: ReleaseApi,
     request: PublicationRequest,
     observed: ObservedRelease,
-) -> ObservedRelease | None:
+) -> StepOutcome:
     """Make a draft public only while a fresh observation still authorises it.
 
     The observation that authorised publication downloaded the draft's bytes,
@@ -132,20 +136,27 @@ def _publish(
     nobody verified. Re-observing binds the write to state read immediately
     before it: when the state no longer authorises publication, the fresh
     observation is returned so the next pass applies the policy to it instead
-    of writing. `None` asks the caller to observe again after the write, whose
-    outcome cannot be assumed from a successful call.
+    of writing. A published call reports that the write was attempted, because
+    its outcome cannot be assumed from a successful call — nor denied from a
+    failed one.
     """
     if observed.release_id is None:
         msg = "cannot publish a draft without its release identifier"
         raise ProverToolError(msg)
     fresh, recheck = _recheck(api, request)
     if recheck.action is not ReleaseAction.PUBLISH:
-        return fresh
+        return StepOutcome(observed=fresh)
     if fresh.release_id is None:
         msg = "cannot publish a draft without its release identifier"
         raise ProverToolError(msg)
-    api.publish(request.expected.tag, fresh.release_id)
-    return None
+    try:
+        api.publish(request.expected.tag, fresh.release_id)
+    except ReleaseTransientError:
+        # The call was entered, so it may have landed. Treating this as a
+        # plain retryable failure is how a publication is sent twice.
+        _log_transient(ReleaseAction.PUBLISH)
+        return StepOutcome(write_attempted=True)
+    return StepOutcome(write_attempted=True)
 
 
 def _apply(
@@ -223,65 +234,36 @@ def _with_verification(
     )
 
 
+def _log_transient(action: ReleaseAction) -> None:
+    """Record a retryable failure against the action that was being performed.
+
+    The failing action is enough to identify the step, because the decision
+    event logged immediately before it records the same action beside its step
+    number.
+    """
+    log_event(_LOGGER, "kani.snapshot.publish.transient", action=action.value)
+
+
 def _step(
     api: ReleaseApi,
     request: PublicationRequest,
     decision: ReleaseDecision,
     observed: ObservedRelease,
-) -> ObservedRelease | None:
-    """Perform one decision's effect, re-observing after a transient failure.
+) -> StepOutcome:
+    """Perform one decision's effect, reporting what the next pass must establish.
 
-    The write may have landed before its failure was reported, so the next
-    observation decides what actually happened rather than the caller repeating
-    a write that already took effect. The failing action is enough to identify
-    the step: the decision event logged immediately before this call records
-    the same action beside its step number.
+    The write may have landed before its failure was reported, so the outcome
+    says whether the publish call was entered instead of the caller repeating a
+    write that already took effect. A failure before that call leaves no such
+    ambiguity: the state is simply read again.
     """
     try:
         if decision.action is ReleaseAction.PUBLISH:
             return _publish(api, request, observed)
-        return _apply(api, request, decision, observed)
+        return StepOutcome(observed=_apply(api, request, decision, observed))
     except ReleaseTransientError:
-        log_event(
-            _LOGGER,
-            "kani.snapshot.publish.transient",
-            action=decision.action.value,
-        )
-        return None
-
-
-def _unconfirmed(
-    request: PublicationRequest,
-    api: ReleaseApi,
-    span: OperationSpan,
-) -> ReleaseDecision:
-    """Report a budget that ended on a publish call, without denying the write.
-
-    A publish is the one irreversible step, and the caller is told to observe
-    again after it rather than assume its outcome. So a budget that ends on
-    that step reads the release once more: a reading that already converges is
-    the answer, and anything else is reported as an unconfirmed publication.
-    The step budget may simply have run out after the write landed, and saying
-    that the state "did not converge" would describe the one outcome this run
-    cannot vouch for.
-    """
-    try:
-        confirmed = api.observe(request.expected.tag)
-    except ReleaseTransientError:
-        confirmed = None
-    if confirmed is not None:
-        decision = decide(request.expected, confirmed, request.validation)
-        if decision.action is ReleaseAction.NOOP:
-            span.finish("noop")
-            return decision
-    span.finish("unconfirmed")
-    msg = (
-        "publication reached a publish call on its last allowed step, so the"
-        " release may already be public; this run could not confirm it within"
-        " its step budget, and a re-run will observe the release and drive it"
-        " to a verified no-op"
-    )
-    raise ProverToolError(msg)
+        _log_transient(decision.action)
+        return StepOutcome()
 
 
 def _converge(
@@ -292,7 +274,8 @@ def _converge(
 ) -> ReleaseDecision:
     """Apply policy to successive observations until publication converges."""
     observed: ObservedRelease | None = None
-    last_action: ReleaseAction | None = None
+    outcome = StepOutcome()
+    publish_attempted = False
     for step in range(1, max_steps + 1):
         observed = observe_or_keep(api, request.expected.tag, observed)
         if observed is None:
@@ -312,10 +295,18 @@ def _converge(
             span.finish("conflict")
             msg = f"publication conflict: {decision.reason}"
             raise ProverToolError(msg)
-        last_action = decision.action
-        observed = _step(api, request, decision, observed)
-    if last_action is ReleaseAction.PUBLISH:
-        return _unconfirmed(request, api, span)
+        outcome = _step(api, request, decision, observed)
+        publish_attempted = publish_attempted or outcome.write_attempted
+        observed = outcome.observed
+    if observed is None and publish_attempted:
+        # The write may have landed and its response was never read, so the
+        # state is read once more before the ending is described.
+        observed = observe_or_keep(api, request.expected.tag, None)
+    decision = decide_exhausted(
+        request, observed, span, publish_attempted=publish_attempted
+    )
+    if decision is not None:
+        return decision
     span.finish("not_converged")
     msg = f"publication did not converge after {max_steps} observed steps"
     raise ProverToolError(msg)

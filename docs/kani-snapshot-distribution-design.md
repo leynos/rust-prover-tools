@@ -920,10 +920,13 @@ orchestrator. The entrypoint's subcommands are:
   re-verifies the receipt binding and the payloads, and drives the immutable
   release to a recorded no-op observation. A changed input, a foreign tag or an
   extra asset is refused rather than repaired, because published bytes are
-  never replaced. The attempt is bounded, and a budget that ends on the publish
-  call itself reads the release once more before reporting anything: a
-  publication that may have landed is reported as unconfirmed rather than as a
-  state that never moved.
+  never replaced. The attempt is bounded, and what a spent budget may claim is
+  decided from whether the publish call was entered, not from the action that
+  was decided on. A budget that ends on that call reads the release once more
+  and reports a publication that may have landed as unconfirmed, or reports the
+  conflict that reading found with its reason. A budget that ends on the
+  recheck which withdrew authority for the write reports a state that did not
+  converge, because nothing was published.
 
 Publication observation resolves `refs/tags/<tag>` rather than trusting the
 release's `target_commitish`, which GitHub ignores once the tag exists: an

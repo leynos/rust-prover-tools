@@ -859,15 +859,20 @@ serves, `release_markers` reads and writes the release-body markers, and
 the only caller of `publish_release`: it observes, decides, acts and observes
 again, re-observes and re-decides before the single irreversible publish call,
 and stops after a bounded number of steps (`max_steps`, 16 by default) instead
-of assuming a state it cannot reconcile. A budget that ends on the publish call
-itself takes one confirming observation and reports an unconfirmed publication,
-never a state that did not converge. `publish_observation` decides when two
-readings describe the same release, which is what lets a completed download be
-believed only if the release did not move while it ran. `publish_request` holds
-the record of what one attempt is asked to publish; checking the local files
-against the manifest reads and hashes them, so `publish` owns that precondition
-and runs it before any release API call. The policy these steps carry is D5 in
-the distribution design
+of assuming a state it cannot reconcile. `publish_budget` decides what a spent
+budget may claim, from `StepOutcome`: whether the irreversible call was entered
+at all, and the newest reading the run holds. A budget that ends on the publish
+call takes one confirming observation and reports an unconfirmed publication —
+or the conflict that observation found, with its reason — and never a state
+that did not converge. A budget that ends on the recheck which withdrew
+authority for the write reports a state that did not converge, because nothing
+was published. `publish_observation` decides when two readings describe the
+same release, which is what lets a completed download be believed only if the
+release did not move while it ran. `publish_request` holds the record of what
+one attempt is asked to publish; checking the local files against the manifest
+reads and hashes them, so `publish` owns that precondition and runs it before
+any release API call. The policy these steps carry is D5 in the distribution
+design
 (`docs/kani-snapshot-distribution-design.md#d5-workflow-and-immutable-publication`);
 this guide names the code rather than restating the rules.
 

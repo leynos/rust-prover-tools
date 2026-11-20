@@ -378,6 +378,25 @@ Terms used here:
   leaves each module naming one facet of the state machine. The absent-state
   helper now takes the tag ref it already addresses, so the adoption case reads
   as one observation.
+- 20 November 2026: remediated the fourth review round on `6ddb62b`, which
+  found that the confirming read added by the round above discarded every
+  decision except `NOOP`. A confirmation that observed a conflict therefore
+  reported "may already be public" with no reason, hiding the one thing the
+  observation had established; and the confirmation could fire on a step where
+  the pre-publish recheck withdrew authority for the write, so a publish that
+  was never attempted was described as one that may have landed. The ending is
+  now decided from whether the publish call was entered, not from the action
+  the step decided on. `publish_budget` holds that decision: `StepOutcome`
+  carries the reading a step produced without writing and whether the
+  irreversible call was entered, and `decide_exhausted` applies the policy to
+  the newest reading before describing the ending. An observed conflict is
+  reported with its reason, and is marked as observed after a publish call only
+  when one was entered; a recheck that stopped the write reports a state that
+  did not converge. The lost-publish-response case still reports an unconfirmed
+  publication, because a failed call that was entered may have landed. Two
+  final-step tests hold the new endings, and the successful, lost-response and
+  unreadable-confirmation tests now assert that the observation after the write
+  actually happened: removing it fails all four.
 
 ## Surprises & discoveries
 
