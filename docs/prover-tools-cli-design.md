@@ -647,6 +647,43 @@ The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
 manifest or digest binding.
 
+### Trust audit command
+
+`prover-tools audit trust` takes the entry points to walk and the repository
+root that bounds them, and reports `path:line:column: word` for every trusted
+item it found:
+
+- `PATHS` are crate roots, usually each crate's `lib.rs` or `main.rs`. A
+  relative path is read as repository-relative so the answer does not depend on
+  the working directory; an absolute path must already sit beneath the root.
+- `--repo-root` anchors every reported location and bounds the walk. Defaults
+  to the working directory.
+- `--procedural-macro` reads string literals as well as code, for a crate that
+  can expand a literal into code.
+- `--format text|json` chooses the readable report or the schema-versioned
+  object.
+
+The status reports whether the audit _completed_: `0` when every source was
+audited and `1` when a source was missing, unreadable or outside the root. A
+non-empty report is not a failure, because the audit keeps no record of which
+requests were justified — the evidence gate that would compare items against
+such a record is excluded machinery. A command that failed on every legitimate
+`assume` would be a gate this repository cannot satisfy.
+
+The audit follows `mod` declarations rather than sweeping a directory. A file no
+`mod` names is not compiled, so scanning it would report dead code as though
+it were part of the proof; conversely every compiled file must be read, so a
+declaration that resolves to no file is refused rather than skipped. `#[path]`
+targets, inline modules and the mod-rs directory rules are all honoured, and a
+target outside the root is refused for what it is before its existence is asked
+about.
+
+The vocabulary is the full set both current releases document, not the subset
+the ticket names. Under-reporting is a soundness failure in an audit, so
+`external_trait_specification` and `exec_allows_no_decreases_clause` are
+included with the words the ticket lists; over-reporting only asks a reviewer
+to read one more line.
+
 ### Verus outcome vocabulary
 
 Verus prints one `verification results:: N verified, M errors` summary to

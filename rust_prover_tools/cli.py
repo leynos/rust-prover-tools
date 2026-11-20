@@ -3,7 +3,8 @@
 This module exposes the `prover-tools` console script. Commands are grouped by
 tool noun: `kani` handles installation, version checks and explicit qualified
 release execution, `verus` handles installation, proof execution and captured
-run analysis, and `z3` installs the solver that Verus uses.
+run analysis, `z3` installs the solver that Verus uses, and `audit` reports
+what a proof asked its verifier to accept without proof.
 
 Examples
 --------
@@ -47,6 +48,7 @@ from rust_prover_tools.kani import (
 from rust_prover_tools.kani_exec_cli import kani_exec
 from rust_prover_tools.kani_log_cli import kani_analyse_log
 from rust_prover_tools.kani_snapshot_cli import run_app, snapshot_app
+from rust_prover_tools.trust_audit_cli import audit_trust
 from rust_prover_tools.verus import (
     DEFAULT_TARGET,
     VERUS_BASE_URL,
@@ -76,6 +78,10 @@ verus_app: cyclopts.App = App(
 z3_app: cyclopts.App = App(
     "z3",
     help="Install the pinned Z3 solver used by Verus",
+)
+audit_app: cyclopts.App = App(
+    "audit",
+    help="Report what the sources of a proof ask a verifier to accept",
 )
 
 
@@ -365,9 +371,11 @@ kani_app.command(run_app, name="run")
 kani_app.command(snapshot_app, name="snapshot")
 verus_app.command(verus_analyse_log, name="analyse-log", config=())
 verus_app.command(verus_run, name="run")
+audit_app.command(audit_trust, name="trust", config=())
 app.command(kani_app, name="kani")
 app.command(verus_app, name="verus")
 app.command(z3_app, name="z3")
+app.command(audit_app, name="audit")
 
 
 def main() -> None:

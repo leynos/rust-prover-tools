@@ -146,6 +146,7 @@
   Usage: prover-tools COMMAND
   
   ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ audit        Report what the sources of a proof ask a verifier to accept     │
   │ kani         Manage Kani verifier installation and version checking          │
   │ verus        Manage Verus verifier installation and proof execution          │
   │ z3           Install the pinned Z3 solver used by Verus                      │

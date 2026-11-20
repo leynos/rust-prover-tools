@@ -118,6 +118,11 @@ variables, output printing, and exit-code mapping:
   same input-and-status mapping, parses `--expect-failure` into a
   `FailureExpectation`, and renders either text or the schema-versioned JSON
   object.
+- `rust_prover_tools.trust_audit_cli` for `audit trust`. It resolves the
+  repository root, bounds every reported location to it, and renders either the
+  item list or the schema-versioned JSON object. A refused source is status
+  `1`; a completed audit is `0` however many items it found, because the audit
+  keeps no record of which requests were justified.
 
 Feature modules should own workflow behaviour:
 
@@ -143,6 +148,12 @@ Feature modules should own workflow behaviour:
   holds the parsed facts, `reader` scans a merged capture, `expectation` reads
   a negative-control region, and `decide` maps the facts to an outcome and run
   mode.
+- `rust_prover_tools.trust_audit` for the Rust trust audit. `vocabulary` names
+  the words each prover documents; `syntax` lexes Rust so trivia is never read
+  as code; `structure`, `use_tree` and `modules` locate the brackets, imports
+  and module declarations the rules depend on; `matcher` decides which
+  occurrences are trust; and `tree` follows `mod` declarations from a set of
+  entry points. Only `tree` touches a filesystem.
 - `rust_prover_tools.z3_selection` for resolving a solver selection and
   qualifying an observed version. It runs nothing: the `--version` probe lives
   in `verus_run_cli`.

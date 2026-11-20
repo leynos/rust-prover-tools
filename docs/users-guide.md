@@ -715,10 +715,10 @@ Useful options are:
 - `--log PATH`: the captured transcript to analyse.
 - `--expect-failure REGION`: declare a negative control. `REGION` is
   `path`, `path:line` or `path:start-end`, and the analysis passes only when
-  the run reports exactly one failure and it lands inside that region. A
-  second failure, located or not, means the run broke more than the seeded
-  fault, and a control that did not fail at all has not shown that the fault
-  would be caught.
+  the run reports exactly one failure and it lands inside that region. A second
+  failure, located or not, means the run broke more than the seeded fault, and
+  a control that did not fail at all has not shown that the fault would be
+  caught.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for
@@ -727,6 +727,64 @@ Useful options are:
 The command exits `0` when the analysis passed and any full-run requirement
 holds, `2` when it completed but did not pass, and `1` when the log could not
 be read or the expectation could not be parsed.
+
+### Trust audit
+
+`prover-tools audit trust` lists the places where a proof asked Kani or Verus
+to accept something without proof, so a reviewer can read each one against a
+justification. It reads source files, so it needs neither verifier installed.
+
+<!-- tested-example: trust-audit -->
+
+```bash
+prover-tools audit trust --repo-root . verus/lib.rs kani/src/lib.rs
+```
+
+Each item is reported as `path:line:column: word`, and the report ends with the
+number of files read and the number of trusted items found. A file that
+contains no trusted item is still reported in the count: "audited and clean" is
+different from "never read".
+
+The audit follows `mod` declarations from the files it is given rather than
+listing directories, so dead files nobody compiles are not reported and every
+file the crate compiles is. A declaration may use `#[path]`, inline modules, or
+nested module directories; each target is resolved as Rust resolves it, and a
+declaration that resolves to no file, or to a file outside the repository root,
+is refused.
+
+A word counts as trust only in a context that gives it meaning:
+
+- a Kani item reached through a path rooted at `kani`, including one the file
+  renamed with `use kani as k;` or `extern crate kani as k;`;
+- a Verus word inside a `verus!` body, inside a `verifier`, `verus_verify` or
+  `verus_spec` attribute, or inside a `cfg_attr` that carries one of those;
+- any unqualified vocabulary word in a file that imports from `kani`, `vstd` or
+  `verus_builtin`.
+
+The third rule is deliberately wide. A named import such as `use kani::assume;`
+makes a later bare `assume(..)` ambiguous, so it is reported with every other
+unqualified vocabulary word in that file. An audit that reports a word wrongly
+leaves something for the reviewer to dismiss; one that stays silent hides a
+request for proof by assumption.
+
+Source the audit cannot read is refused rather than skipped: comments and
+literals that never terminate, and the macros `include!`, `paste!` and
+`concat_idents!`, whose expansion it never sees.
+
+Useful options are:
+
+- `--repo-root PATH`: the directory every reported location is relative to, and
+  which bounds the audit. Defaults to the working directory.
+- `--procedural-macro`: read string literals as well as code, for a proc-macro
+  crate that can turn a literal into code.
+- `--format text|json`: choose the readable report or a stable JSON object for
+  automation. The JSON form carries `schema_version: 1`.
+
+A relative path is read as repository-relative; an absolute one must already be
+beneath the root. The command exits `0` when every source was audited — a
+non-empty report is not by itself a failure, because the audit keeps no record
+of which requests were justified — and `1` when a source was missing,
+unreadable or outside the root.
 
 ### Z3 solver commands
 
