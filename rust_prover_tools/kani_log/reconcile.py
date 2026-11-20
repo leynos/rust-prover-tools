@@ -178,19 +178,18 @@ def _require_other(
     builder: _BlockBuilder,
     checks: tuple[PropertyResult, ...],
 ) -> None:
-    """Require the parenthesised "other" count to reconcile.
+    """Require each parenthesised status count to reconcile.
 
     An absent count says nothing about the checks, but a printed one does -
     including a printed zero, which must agree that no check carried that
     status.
     """
-    if builder.other_kind is None:
-        return
-    expected = OTHER_STATUS.get(builder.other_kind, "")
-    observed = sum(1 for item in checks if item.status == expected)
-    if builder.other_count != observed:
-        msg = (
-            f"the block for {builder.name!r} counts {builder.other_count} "
-            f"{builder.other_kind} results but lists {observed}"
-        )
-        raise KaniLogError(msg)
+    for kind, counted in builder.other_counts.items():
+        expected = OTHER_STATUS.get(kind, "")
+        observed = sum(1 for item in checks if item.status == expected)
+        if counted != observed:
+            msg = (
+                f"the block for {builder.name!r} counts {counted} "
+                f"{kind} results but lists {observed}"
+            )
+            raise KaniLogError(msg)

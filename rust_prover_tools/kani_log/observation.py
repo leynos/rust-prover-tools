@@ -97,10 +97,17 @@ class Observed:
 
     @property
     def indeterminate(self) -> bool:
-        """Report whether any of the harness's own checks was left undecided.
+        """Report whether any check in the block was left undecided.
 
-        An unreachable cover counts.  A harness that assumes its precondition
-        away reports a successful verdict and no failed checks; the unreachable
-        witness is the only evidence that nothing was proved.
+        An unreachable cover counts, including one CBMC printed without an
+        owner: it is still the block's evidence.  A check attributed to another
+        routine does not, because its reachability says nothing about this
+        harness.  A harness that assumes its precondition away reports a
+        successful verdict and no failed checks; the unreachable witness is the
+        only evidence that nothing was proved.
         """
-        return any(item.status in INDETERMINATE_STATUSES for item in self.properties)
+        ownerless = (item for item in self.unattributed if item.owner is None)
+        return any(
+            item.status in INDETERMINATE_STATUSES
+            for item in (*self.properties, *ownerless)
+        )

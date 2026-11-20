@@ -20,10 +20,7 @@
           "verdict": "FAILED",
           "failed": 1,
           "total": 2,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -64,10 +61,7 @@
           "verdict": "SUCCESSFUL",
           "failed": 1,
           "total": 2,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": true,
@@ -110,10 +104,7 @@
           "verdict": "FAILED",
           "failed": 1,
           "total": 2,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -155,8 +146,10 @@
           "failed": 0,
           "total": 2,
           "other": [
-            1,
-            "unreachable"
+            [
+              "unreachable",
+              1
+            ]
           ],
           "timed_out": false,
           "unwinding_reported": false,
@@ -204,8 +197,10 @@
           "failed": 1,
           "total": 4,
           "other": [
-            3,
-            "undetermined"
+            [
+              "undetermined",
+              3
+            ]
           ],
           "timed_out": false,
           "unwinding_reported": true,
@@ -266,10 +261,7 @@
           "verdict": "FAILED",
           "failed": null,
           "total": null,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": true,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -297,10 +289,7 @@
           "verdict": "FAILED",
           "failed": 1,
           "total": 2,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -342,8 +331,10 @@
           "failed": 0,
           "total": 2,
           "other": [
-            1,
-            "unreachable"
+            [
+              "unreachable",
+              1
+            ]
           ],
           "timed_out": false,
           "unwinding_reported": false,
@@ -392,8 +383,10 @@
           "failed": 0,
           "total": 2,
           "other": [
-            1,
-            "unreachable"
+            [
+              "unreachable",
+              1
+            ]
           ],
           "timed_out": false,
           "unwinding_reported": false,
@@ -442,10 +435,7 @@
           "verdict": "FAILED",
           "failed": 1,
           "total": 1,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -482,10 +472,7 @@
           "verdict": "SUCCESSFUL",
           "failed": 0,
           "total": 0,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -522,8 +509,10 @@
           "failed": 0,
           "total": 2,
           "other": [
-            1,
-            "unreachable"
+            [
+              "unreachable",
+              1
+            ]
           ],
           "timed_out": false,
           "unwinding_reported": false,
@@ -570,10 +559,7 @@
           "verdict": "FAILED",
           "failed": 1,
           "total": 2,
-          "other": [
-            0,
-            null
-          ],
+          "other": [],
           "timed_out": false,
           "unwinding_reported": false,
           "panics_as_expected": false,
@@ -602,8 +588,10 @@
           "failed": 0,
           "total": 2,
           "other": [
-            1,
-            "unreachable"
+            [
+              "unreachable",
+              1
+            ]
           ],
           "timed_out": false,
           "unwinding_reported": false,

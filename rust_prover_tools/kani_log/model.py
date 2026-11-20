@@ -38,10 +38,10 @@ class HarnessBlock:
         Failure count from ``SUMMARY:``; ``None`` for a timed-out block.
     total_count : int | None
         Check count from ``SUMMARY:``; ``None`` for a timed-out block.
-    other_count : int
-        Number of checks carrying the parenthesised "other" status.
-    other_kind : str | None
-        Word Kani printed for that status, such as ``undetermined``.
+    other_counts : tuple[tuple[str, int], ...]
+        Counts Kani printed in parentheses after the failure count, one pair
+        per status, such as ``(("undetermined", 3),)``; empty when the block
+        printed none.
     covered_satisfied : int | None
         Satisfied cover count, when the block declared covers.
     covered_total : int | None
@@ -72,8 +72,7 @@ class HarnessBlock:
     failures: tuple[FailedCheck, ...] = ()
     failed_count: int | None = None
     total_count: int | None = None
-    other_count: int = 0
-    other_kind: str | None = None
+    other_counts: tuple[tuple[str, int], ...] = ()
     covered_satisfied: int | None = None
     covered_total: int | None = None
     covered_unreachable: int | None = None

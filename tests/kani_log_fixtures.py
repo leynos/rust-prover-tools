@@ -228,6 +228,25 @@ def _checks(fact: HarnessFact) -> list[PropertyResult]:
     return checks
 
 
+def _status_counts(
+    checks: tuple[PropertyResult, ...],
+) -> tuple[tuple[str, int], ...]:
+    """Build the parenthesised status counts a summary would print.
+
+    Kani counts non-cover checks only, so an unreachable cover does not appear
+    here.  The order is the one Kani prints: undetermined, then unreachable.
+    """
+    results = tuple(item for item in checks if not item.is_cover)
+    return tuple(
+        (word, count)
+        for word, status in (
+            ("undetermined", UNDETERMINED),
+            ("unreachable", UNREACHABLE),
+        )
+        if (count := sum(1 for item in results if item.status == status))
+    )
+
+
 def block_of(fact: HarnessFact) -> HarnessBlock | None:
     """Build the harness block a log would report, or ``None`` when absent."""
     if fact.status == ABSENT:
@@ -247,8 +266,7 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
         failures=failures,
         failed_count=None if is_timeout else failed,
         total_count=None if is_timeout else len(checks),
-        other_count=sum(1 for item in checks if item.status == UNDETERMINED),
-        other_kind="undetermined" if fact.status == UNDETERMINED else None,
+        other_counts=_status_counts(checks),
         covered_satisfied=sum(1 for item in covers if item.status == SATISFIED) or None,
         covered_total=len(covers) or None,
         covered_unreachable=sum(1 for item in covers if item.status == UNREACHABLE)

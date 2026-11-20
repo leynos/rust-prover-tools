@@ -186,8 +186,7 @@ def _record_total(
     reader.take()
     builder.failed_count = _report_int(reader, match["failed"])
     builder.total_count = _report_int(reader, match["total"])
-    builder.other_count = _report_int(reader, match["other"] or "0")
-    builder.other_kind = match["other_kind"]
+    builder.other_counts = _status_counts(reader, match["counts"])
 
 
 def _record_cover(
@@ -202,22 +201,22 @@ def _record_cover(
     reader.take()
     builder.covered_satisfied = _report_int(reader, match["satisfied"])
     builder.covered_total = _report_int(reader, match["total"])
-    counts = _cover_counts(reader, match["counts"])
+    counts = _status_counts(reader, match["counts"])
     builder.covered_unreachable = counts.get("unreachable")
     builder.covered_undetermined = counts.get("undetermined")
 
 
-def _cover_counts(reader: Reader, rendered: str | None) -> dict[str, int]:
-    """Parse the parenthesised per-status counts on a cover line.
+def _status_counts(reader: Reader, rendered: str | None) -> dict[str, int]:
+    """Parse a parenthesised list of per-status counts.
 
-    Kani prints one count per status, comma separated when more than one
-    applies, such as ``(1 unreachable, 1 undetermined)``.
+    Kani prints one count per status, joined with a comma when more than one
+    applies, such as ``(1 undetermined,2 unreachable)``.
     """
     if rendered is None:
         return {}
     counts: dict[str, int] = {}
-    for entry in rendered.split(", "):
-        number, _, word = entry.partition(" ")
+    for entry in rendered.split(","):
+        number, _, word = entry.strip().partition(" ")
         if word not in COVER_STATUSES:
             msg = f"{reader.where()}: a cover count names the unknown status {word!r}"
             raise KaniLogError(msg)

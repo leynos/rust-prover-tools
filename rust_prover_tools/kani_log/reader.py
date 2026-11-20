@@ -45,8 +45,7 @@ class _BlockBuilder:
     failures: list[FailedCheck] = dc.field(default_factory=list)
     failed_count: int | None = None
     total_count: int | None = None
-    other_count: int = 0
-    other_kind: str | None = None
+    other_counts: dict[str, int] = dc.field(default_factory=dict)
     covered_satisfied: int | None = None
     covered_total: int | None = None
     covered_unreachable: int | None = None
@@ -77,8 +76,7 @@ class _BlockBuilder:
             failures=tuple(self.failures),
             failed_count=self.failed_count,
             total_count=self.total_count,
-            other_count=self.other_count,
-            other_kind=self.other_kind,
+            other_counts=tuple(self.other_counts.items()),
             covered_satisfied=self.covered_satisfied,
             covered_total=self.covered_total,
             covered_unreachable=self.covered_unreachable,

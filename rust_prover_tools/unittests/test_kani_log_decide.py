@@ -203,6 +203,32 @@ def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
     assert decision.outcome is KaniOutcome.VERIFIED
 
 
+def test_an_unreachable_ownerless_cover_leaves_the_run_undetermined() -> None:
+    """Count an undecided cover from the block even without an owner."""
+    name = "h::c"
+    block = HarnessBlock(
+        name=name,
+        properties=(
+            PropertyResult(f"{name}.cover.1", "SATISFIED", "reachable"),
+            PropertyResult("cover.2", "UNREACHABLE", "other"),
+        ),
+        failed_count=0,
+        total_count=0,
+        covered_satisfied=1,
+        covered_total=2,
+        covered_unreachable=1,
+        verdict="SUCCESSFUL",
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical`",
+        seen_verification_time=True,
+        has_results=True,
+    )
+    log = KaniLog("0.67.0", "regular", (block,), ManualSummary(1, 0, 1, ()), ())
+    manifest = Manifest((Harness(name, CLAIM, covers=("reachable",)),))
+    decision = analyse_kani_log(log, manifest)
+    assert decision.witness_statuses == ("satisfied",)
+    assert decision.outcome is KaniOutcome.UNDETERMINED
+
+
 def test_a_repeated_witness_description_must_all_be_satisfied() -> None:
     """Require every cover sharing a description to be satisfied."""
     name = "h::c"

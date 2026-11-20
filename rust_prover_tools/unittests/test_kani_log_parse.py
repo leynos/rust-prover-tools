@@ -68,7 +68,7 @@ def block_facts(block: HarnessBlock) -> dict[str, object]:
         "verdict": block.verdict,
         "failed": block.failed_count,
         "total": block.total_count,
-        "other": [block.other_count, block.other_kind],
+        "other": [list(pair) for pair in block.other_counts],
         "timed_out": block.timed_out,
         "unwinding_reported": block.unwinding_reported,
         "panics_as_expected": block.panics_as_expected,
@@ -327,7 +327,7 @@ def test_both_cover_counts_are_reconciled() -> None:
         .replace(original, f"{undetermined}\n{other}")
         .replace(
             " ** 1 of 1 cover properties satisfied",
-            " ** 0 of 2 cover properties satisfied (1 unreachable, 1 undetermined)",
+            " ** 0 of 2 cover properties satisfied (1 undetermined,1 unreachable)",
         )
     )
     block = parse_text(text).blocks[0]
@@ -342,6 +342,24 @@ def test_an_explicit_zero_other_count_is_reconciled() -> None:
         " ** 1 of 4 failed (0 undetermined)",
     )
     assert "counts 0 undetermined results but lists 3" in refused(text)
+
+
+def test_both_check_status_counts_are_reconciled() -> None:
+    """Read the comma-joined form Kani prints for two check statuses."""
+    original = (
+        "Check 3: core::fmt::Arguments::<'_>::from_str.assertion.1\n"
+        "\t - Status: UNDETERMINED\n"
+    )
+    text = (
+        log_text("insufficient_unwind")
+        .replace(original, original.replace("UNDETERMINED", "UNREACHABLE"))
+        .replace(
+            " ** 1 of 4 failed (3 undetermined)",
+            " ** 1 of 4 failed (2 undetermined,1 unreachable)",
+        )
+    )
+    block = parse_text(text).blocks[0]
+    assert block.other_counts == (("undetermined", 2), ("unreachable", 1))
 
 
 def test_a_timeout_marker_beside_results_is_refused() -> None:

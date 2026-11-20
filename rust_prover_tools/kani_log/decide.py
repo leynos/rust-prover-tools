@@ -249,7 +249,7 @@ def _rejected_as_intended(control: Harness, seen: Observed) -> bool:
     if not failed:
         return False
     return all(
-        _matches_expected(item, expected, owned=item not in seen.unattributed)
+        _matches_expected(item, expected, owned=item.owner == seen.name)
         for item in failed
     )
 

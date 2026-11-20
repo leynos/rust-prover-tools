@@ -57,13 +57,17 @@ CHECK = re.compile(r"^Check (?P<number>\d+): (?P<identifier>\S+)$")
 FIELD = re.compile(
     r"^\t - (?P<key>Status|Description|Location): (?P<value>.*)$",
 )
+# Kani 0.67.0 joins several counts with a bare comma and no space, as in
+# ``(1 undetermined,2 unreachable)``.  The optional space also accepts the
+# spaced form, so a release that adds one does not break the parser.
+_STATUS_COUNTS = r"\d+ [a-z]+(?:, ?\d+ [a-z]+)*"
 TOTAL = re.compile(
     r"^ \*\* (?P<failed>\d+) of (?P<total>\d+) failed"
-    r"(?: \((?P<other>\d+) (?P<other_kind>[a-z]+)\))?$",
+    rf"(?: \((?P<counts>{_STATUS_COUNTS})\))?$",
 )
 COVER = re.compile(
     r"^ \*\* (?P<satisfied>\d+) of (?P<total>\d+) cover properties satisfied"
-    r"(?: \((?P<counts>\d+ [a-z]+(?:, \d+ [a-z]+)*)\))?$",
+    rf"(?: \((?P<counts>{_STATUS_COUNTS})\))?$",
 )
 COMPLETE = re.compile(
     r"^Complete - (?P<verified>\d+) successfully verified harnesses, "
