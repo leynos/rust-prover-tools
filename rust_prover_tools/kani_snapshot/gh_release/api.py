@@ -98,17 +98,6 @@ def _optional_object(path: str, field: str) -> tuple[str, str] | None:
     return _object_document(decoded(stdout), field)
 
 
-def _absent(tag: str, tag_commit: str | None) -> ObservedRelease:
-    """Return the absent state, refusing a tag that already points somewhere."""
-    if tag_commit is None:
-        return ObservedRelease(exists=False, is_draft=False)
-    msg = (
-        f"tag {tag!r} already addresses {tag_commit} but no release carries it; "
-        "refusing to create a draft that would adopt the existing tag"
-    )
-    raise ProverToolError(msg)
-
-
 class GhReleaseApi:
     """GitHub release adapter built on `gh` argument vectors.
 
@@ -139,14 +128,14 @@ class GhReleaseApi:
         metadata's `target_commitish` is ignored when the tag already exists.
         An existing tag therefore decides what the release points at, and an
         annotated tag is peeled to its commit rather than reported as its own
-        tag object. A tag with no release at all is refused: creating a draft
-        would silently adopt it.
+        tag object.
 
-        A published release must resolve to a tag ref: GitHub creates the tag
-        when a draft is published, so a published release whose tag cannot be
-        resolved describes a state this run must not accept, and policy would
-        otherwise reach a no-op without confirming any target. A draft has no
-        tag yet by design, so its recorded `target_commitish` stands.
+        Two states are reported rather than refused, because what they mean is
+        policy, not transport: a tag that no release carries, and a published
+        release whose tag ref cannot be resolved. `ObservedRelease.tag_commit`
+        records the resolution, and `release_policy` decides whether either
+        state may authorise a write. A draft has no tag yet by design, so its
+        recorded `target_commitish` stands.
 
         The observation reports `provenance_verified=False`: a state query
         cannot authenticate anything, and only `verify` may claim it did. A
@@ -157,16 +146,11 @@ class GhReleaseApi:
             observed = self._observe_by_list(tag)
         tag_commit = self._tag_commit(tag)
         if observed is None:
-            return _absent(tag, tag_commit)
-        if tag_commit is None and not observed.is_draft:
-            msg = (
-                f"published release {tag!r} does not resolve to a tag ref; "
-                "refusing to accept a publication with no confirmed target"
-            )
-            raise ProverToolError(msg)
+            return ObservedRelease(exists=False, is_draft=False, tag_commit=tag_commit)
         return dc.replace(
             observed,
             target_commitish=tag_commit or observed.target_commitish,
+            tag_commit=tag_commit,
             provenance_verified=False,
             provenance_reason=None,
         )

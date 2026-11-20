@@ -1,12 +1,14 @@
-"""The local bytes one publication attempt is asked to publish.
+"""The record of what one publication attempt is asked to publish.
 
 Publication authenticates the release it finds; it must also refuse to upload
-bytes the manifest does not describe. Both facts are decided from the request
-alone, before any release API is called, so a tampered or missing local asset
-fails without creating, editing or publishing anything.
+bytes the manifest does not describe. The request carries that intent — the
+identity to publish, the validation evidence that authorises it, and where each
+expected asset's bytes are meant to come from — so the rest of the attempt can
+be decided without repeating it.
 
-This module holds the request record and that precondition. The orchestration
-that consumes it lives in `publish`.
+This module is a record only. Reading and hashing the local files is an
+orchestration concern: `publish` checks them against the manifest before any
+release API call, which keeps this record free of path and hashing concerns.
 """
 
 from __future__ import annotations
@@ -14,20 +16,16 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.downloads import sha256_file
-from rust_prover_tools.errors import ProverToolError
-
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.release_policy import (
         ExpectedRelease,
-        ReleaseAsset,
         ValidationBinding,
     )
 
-__all__ = ("PublicationRequest", "require_local_assets")
+__all__ = ("PublicationRequest",)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -47,29 +45,3 @@ class PublicationRequest:
     expected: ExpectedRelease
     validation: ValidationBinding
     asset_paths: cabc.Mapping[str, Path]
-
-
-def _require_local_asset(asset: ReleaseAsset, path: Path | None) -> None:
-    """Require one local file to hold exactly the bytes the manifest records."""
-    if path is None:
-        msg = f"publication is missing local asset {asset.name!r}"
-        raise ProverToolError(msg)
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        msg = f"failed to stat release asset '{path}': {exc}"
-        raise ProverToolError(msg) from exc
-    if size != asset.size or sha256_file(path) != asset.sha256:
-        msg = f"local release asset {asset.name!r} does not match its manifest"
-        raise ProverToolError(msg)
-
-
-def require_local_assets(request: PublicationRequest) -> None:
-    """Require every local upload to match the expected bytes before any call."""
-    names = {asset.name for asset in request.expected.assets}
-    extra = sorted(set(request.asset_paths) - names)
-    if extra:
-        msg = f"publication names local assets outside the expected set: {extra}"
-        raise ProverToolError(msg)
-    for asset in request.expected.assets:
-        _require_local_asset(asset, request.asset_paths.get(asset.name))

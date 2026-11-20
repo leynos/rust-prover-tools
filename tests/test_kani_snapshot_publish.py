@@ -7,9 +7,11 @@ lemma they hold is that no failure can make the publisher upload twice, publish
 unverified bytes, or replace anything already published: recovery is always a
 fresh observation.
 
-The pure decision rules are witnessed in `test_kani_snapshot_release_policy`,
-the generated state machine lives in `test_kani_snapshot_publish_machine`, and
-the `gh` adapter's argument vectors are checked in `test_kani_gh_release_api`.
+The pure decision rules are witnessed in `test_kani_snapshot_release_policy`
+and `test_kani_snapshot_release_policy_published`, the generated state machine
+lives in `test_kani_snapshot_publish_machine`, the step budget and its closing
+observation in `test_kani_snapshot_publish_budget`, and the `gh` adapter's
+argument vectors in `test_kani_gh_release_api`.
 """
 
 from __future__ import annotations
@@ -301,17 +303,6 @@ def test_publication_refuses_a_published_release_with_other_bytes(
         publish_release(_request(tmp_path), api)
     assert api.calls.count("publish") == 0
     assert not api.uploads
-
-
-def test_a_persistently_failing_observation_never_converges(
-    tmp_path: pathlib.Path,
-) -> None:
-    """An API that never answers is refused rather than treated as success."""
-    api = FakeReleaseApi()
-    for _ in range(4):
-        api.fail_next("observe")
-    with pytest.raises(ProverToolError, match="did not converge"):
-        publish_release(_request(tmp_path), api, max_steps=4)
 
 
 _LOGGER_NAME: typ.Final[str] = "rust_prover_tools.kani_snapshot.publish"

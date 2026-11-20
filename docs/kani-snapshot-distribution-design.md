@@ -920,21 +920,26 @@ orchestrator. The entrypoint's subcommands are:
   re-verifies the receipt binding and the payloads, and drives the immutable
   release to a recorded no-op observation. A changed input, a foreign tag or an
   extra asset is refused rather than repaired, because published bytes are
-  never replaced.
+  never replaced. The attempt is bounded, and a budget that ends on the publish
+  call itself reads the release once more before reporting anything: a
+  publication that may have landed is reported as unconfirmed rather than as a
+  state that never moved.
 
 Publication observation resolves `refs/tags/<tag>` rather than trusting the
 release's `target_commitish`, which GitHub ignores once the tag exists: an
-existing tag therefore decides the commit an observation reports, an annotated
-tag is peeled to its commit, and a tag no release carries is refused before a
-draft could adopt it. A published release must also resolve to a tag ref: one
-whose tag cannot be resolved has no confirmed target, so observation refuses it
-rather than letting policy reach a no-op. A published release is then
-re-verified from its own downloaded bytes — the manifest must record this tag,
-its checksums and payloads must match, its attestation must be a well-formed
-in-toto provenance statement naming its digest, its recorded identities must
-reproduce the build-input fingerprint in the release body, and the bundle must
-satisfy the consumer's own `gh attestation verify` policy for this repository's
-signer workflow, the manifest's builder commit and this run and attempt. The
+existing tag therefore decides the commit an observation reports, and an
+annotated tag is peeled to its commit. The observation reports that resolution
+as `ObservedRelease.tag_commit` instead of judging it, because what the two
+possible disagreements mean is policy: a tag that no release carries would be
+adopted by a new draft, and a published release whose tag ref cannot be
+resolved has no confirmed target. `release_policy` refuses both, so the adapter
+only translates what it read. A published release is then re-verified from its
+own downloaded bytes — the manifest must record this tag, its checksums and
+payloads must match, its attestation must be a well-formed in-toto provenance
+statement naming its digest, its recorded identities must reproduce the
+build-input fingerprint in the release body, and the bundle must satisfy the
+consumer's own `gh attestation verify` policy for this repository's signer
+workflow, the manifest's builder commit and this run and attempt. The
 structural checks are a cheap refusal; the verifier alone decides
 `provenance_verified`. Exercising the same policy on a clean runner remains D6
 and EP-M5.

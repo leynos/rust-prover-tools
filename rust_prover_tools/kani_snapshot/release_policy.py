@@ -4,8 +4,11 @@ Publication is a state machine over one immutable tag, never a sequence of
 unchecked writes. The states that matter are absent, a draft release, a draft
 whose assets are incomplete or unverified, a published release that matches the
 expected identity, and a conflict that must be diagnosed rather than repaired
-in place. The state shapes live in `release_model`; this module is the only
-place that interprets them.
+in place. Two repository facts belong to this state machine rather than to the
+adapter that reads them: a tag that exists while no release carries it, which a
+new draft would silently adopt, and a published release whose tag ref cannot be
+resolved, which has no confirmed target. The state shapes live in
+`release_model`; this module is the only place that interprets them.
 
 The lemma this module exists for is narrow and testable: `decide` never returns
 `PUBLISH` while an expected asset is absent, has the wrong size, has a digest
@@ -66,6 +69,13 @@ def _published_conflict(
 ) -> str | None:
     """Return why a published release differs from the expected identity."""
     return first_reason((
+        (
+            observed.tag_commit is None,
+            (
+                "published release does not resolve to a tag ref; refusing to"
+                " accept a publication with no confirmed target"
+            ),
+        ),
         (
             observed.tag != expected.tag,
             "published release reports another tag",
@@ -249,6 +259,17 @@ def decide(
     if conflict is not None:
         return ReleaseDecision(ReleaseAction.CONFLICT, conflict)
     if not observed.exists:
+        if observed.tag_commit is not None:
+            # GitHub creates a draft's tag at the commit the draft was opened
+            # against, and a tag that already addresses something cannot be
+            # moved by creating a release. A new draft would therefore adopt
+            # that commit and publish under an identity this run never chose.
+            return ReleaseDecision(
+                ReleaseAction.CONFLICT,
+                f"tag {expected.tag!r} already addresses {observed.tag_commit}"
+                " but no release carries it; a new draft would adopt the"
+                " existing tag",
+            )
         return ReleaseDecision(
             ReleaseAction.CREATE_DRAFT,
             "no release exists for the immutable tag",

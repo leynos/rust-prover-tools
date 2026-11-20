@@ -259,6 +259,14 @@ class ObservedRelease:
         than trusting the release metadata, which GitHub ignores when the tag
         already exists; for a release whose tag is not created yet (a fresh
         draft), it is the recorded target the tag will be created at.
+    tag_commit : str | None
+        Commit the tag ref itself resolves to, or `None` when the tag does not
+        exist. The adapter reports it as a fact about the repository rather
+        than judging it, because two policy rules need it: a tag that exists
+        with no release carrying it would be silently adopted by a new draft,
+        and a published release whose tag ref cannot be resolved has no
+        confirmed target. Keeping both rules in policy means the adapter only
+        translates what it read.
     assets : tuple[ObservedAsset, ...]
         Assets currently attached to the release.
     release_id : int | None
@@ -289,6 +297,7 @@ class ObservedRelease:
     is_draft: bool
     tag: str | None = None
     target_commitish: str | None = None
+    tag_commit: str | None = None
     assets: tuple[ObservedAsset, ...] = ()
     release_id: int | None = None
     body: str | None = None

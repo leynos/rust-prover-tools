@@ -167,6 +167,7 @@ def published(
         is_draft=False,
         tag=TAG,
         target_commitish=BUILDER,
+        tag_commit=BUILDER,
         assets=assets,
         release_id=99,
         body=body_text,

@@ -1,14 +1,13 @@
-"""The release policy alone decides what a publication state means.
+"""The draft-side policy: what may become public, and on whose evidence.
 
-These witnesses hold the lemma the policy exists for: `PUBLISH` is never chosen
-while an expected asset is absent, the wrong size, unhashed, or while the
-draft's own served evidence does not authenticate its manifest; `NOOP` is never
-chosen for a published release whose recorded inputs differ or whose own bytes
-were not re-verified; and no decision ever deletes, replaces or moves a
-published asset. A published release is compared by the input fingerprint in its
-body rather than by this run's asset bytes, because a rebuild of unchanged
-inputs still produces a new manifest. Each case names the one property that
-makes the state safe to act on, so a regression points at the rule that broke.
+These witnesses hold the lemma the policy exists for before anything is
+published: `PUBLISH` is never chosen while an expected asset is absent, the
+wrong size or unhashed, or while the draft's own evidence does not authenticate
+its manifest; a draft is resumed only by the run and attempt holding the
+validation receipt; and a tag that already addresses a commit is never adopted
+by a new draft. Published releases are witnessed in
+`test_kani_snapshot_release_policy_published`. Each case names the one property
+that makes the state safe to act on.
 """
 
 from __future__ import annotations
@@ -24,15 +23,23 @@ from rust_prover_tools.kani_snapshot.release_policy import (
 from tests import kani_publish_fixtures as fixtures
 
 
-def _absent() -> ObservedRelease:
-    """Return the absent state."""
-    return ObservedRelease(exists=False, is_draft=False)
+def _absent(tag_commit: str | None = None) -> ObservedRelease:
+    """Return the absent state, naming a tag ref that already addresses a commit."""
+    return ObservedRelease(exists=False, is_draft=False, tag_commit=tag_commit)
 
 
 def test_an_absent_release_creates_a_draft() -> None:
     """No release is the only state that creates one."""
     decision = decide(fixtures.expected(), _absent(), fixtures.validation())
     assert decision.action is ReleaseAction.CREATE_DRAFT
+
+
+def test_a_tag_with_no_release_is_not_adopted_by_a_new_draft() -> None:
+    """A new draft would inherit the commit the existing tag already addresses."""
+    observed = _absent(tag_commit=fixtures.BUILDER)
+    decision = decide(fixtures.expected(), observed, fixtures.validation())
+    assert decision.action is ReleaseAction.CONFLICT
+    assert "would adopt the existing tag" in decision.reason
 
 
 def test_cross_run_validation_cannot_authorise_publication() -> None:
@@ -271,86 +278,6 @@ def test_a_draft_targeting_another_commit_conflicts() -> None:
     decision = decide(fixtures.expected(), observed, fixtures.validation())
     assert decision.action is ReleaseAction.CONFLICT
     assert "builder commit" in decision.reason
-
-
-def test_a_published_release_matching_exactly_is_a_no_op() -> None:
-    """Recovery from a lost response ends in observation, not a second write."""
-    observed = fixtures.published(fixtures.verified_assets())
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.NOOP
-
-
-def test_a_published_release_with_unverified_provenance_conflicts() -> None:
-    """A published release whose bytes did not re-verify is never a no-op."""
-    observed = fixtures.published(
-        fixtures.verified_assets(),
-        provenance_verified=False,
-        provenance_reason="attestation does not cover the published manifest",
-    )
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.CONFLICT
-    assert "did not authenticate its own publication" in decision.reason
-    assert "does not cover the published manifest" in decision.reason
-
-
-def test_a_published_release_not_yet_verified_asks_for_verification() -> None:
-    """A metadata-only observation must be verified before it is a no-op.
-
-    Otherwise "already published" would be a claim read from the API rather
-    than evidence computed from the bytes the release serves.
-    """
-    observed = fixtures.published(fixtures.verified_assets(), provenance_verified=False)
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.VERIFY_ASSETS
-    assert decision.verifications == tuple(sorted(fixtures.PAYLOADS))
-
-
-def test_a_published_release_with_a_different_asset_set_conflicts() -> None:
-    """An asset set that changed after publication is never repaired in place."""
-    observed = fixtures.published(fixtures.verified_assets()[:-1])
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.CONFLICT
-    assert "different asset set" in decision.reason
-
-
-def test_a_published_release_recording_other_inputs_conflicts() -> None:
-    """A newer input set takes a new revision, never this release."""
-    observed = fixtures.published(
-        fixtures.verified_assets(),
-        body_text=fixtures.body(fingerprint=fixtures.OTHER_FINGERPRINT),
-    )
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.CONFLICT
-    assert "different build inputs" in decision.reason
-
-
-def test_published_metadata_is_refused_before_any_download_is_requested() -> None:
-    """A release the notes already refuse is never asked for its bytes.
-
-    The assets carry no digest, so the download that would authenticate them
-    is the expensive step. When the recorded inputs differ, that download
-    cannot change the verdict, and asking for it would let a transport failure
-    be reported in place of the conflict the metadata already establishes.
-    """
-    unverified = tuple(
-        fixtures.observed_asset(name, sha256=None) for name in fixtures.PAYLOADS
-    )
-    observed = fixtures.published(
-        unverified,
-        body_text=fixtures.body(fingerprint=fixtures.OTHER_FINGERPRINT),
-    )
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.CONFLICT
-    assert "different build inputs" in decision.reason
-    assert decision.verifications == (), "a refused release was still downloaded"
-
-
-def test_a_published_release_without_recorded_inputs_conflicts() -> None:
-    """A release that cannot name its inputs is not assumed to match."""
-    observed = fixtures.published(fixtures.verified_assets(), body_text=None)
-    decision = decide(fixtures.expected(), observed, fixtures.validation())
-    assert decision.action is ReleaseAction.CONFLICT
-    assert "does not record its build inputs" in decision.reason
 
 
 def test_a_draft_from_another_attempt_is_never_resumed() -> None:

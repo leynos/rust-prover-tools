@@ -124,6 +124,9 @@ class FakeReleaseApi:
             is_draft=self.is_draft,
             tag=tag,
             target_commitish=self.target_commitish,
+            # GitHub creates the tag when the draft is published, so a draft
+            # has none to resolve while a published release does.
+            tag_commit=None if self.is_draft else self.target_commitish,
             assets=assets,
             release_id=99,
             body=self.body_text,

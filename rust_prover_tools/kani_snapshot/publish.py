@@ -17,11 +17,13 @@ import dataclasses as dc
 import logging
 import typing as typ
 
+from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.publish_request import (
-    PublicationRequest,
-    require_local_assets,
+from rust_prover_tools.kani_snapshot.publish_observation import (
+    observe_or_keep,
+    settle,
 )
+from rust_prover_tools.kani_snapshot.publish_request import PublicationRequest
 from rust_prover_tools.kani_snapshot.release_policy import (
     ObservedAsset,
     ObservedRelease,
@@ -37,6 +39,7 @@ from rust_prover_tools.observability import OperationSpan, log_event, operation_
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 __all__ = (
     "PublicationRequest",
@@ -69,54 +72,6 @@ def _discard(
     """Delete the records an interrupted upload left behind."""
     for asset in placeholders:
         api.discard(request.expected.tag, asset)
-
-
-def _state_key(observed: ObservedRelease) -> tuple[object, ...]:
-    """Return the parts of an observation the policy decides from.
-
-    Every field the policy reads is included, not only the asset set: a draft
-    can be retargeted or re-bodied while its bytes are being downloaded, and
-    the newer reading is the one that would be refused. Only the computed
-    digests are left out, because the two readings sit on either side of a
-    download, so one of them carries hashes the other cannot, and that
-    difference alone is not a change of state.
-    """
-    return (
-        observed.exists,
-        observed.is_draft,
-        observed.release_id,
-        observed.tag,
-        observed.target_commitish,
-        observed.body,
-        tuple(
-            sorted(
-                (asset.name, asset.size, asset.asset_id) for asset in observed.assets
-            )
-        ),
-    )
-
-
-def _settle(
-    api: ReleaseApi,
-    tag: str,
-    observed: ObservedRelease,
-    completed: ObservedRelease,
-) -> ObservedRelease:
-    """Return the reading a completed download may be decided from.
-
-    A download takes time, and its listing may have gone out of date by the
-    time it finishes: an asset can be removed after its own bytes were read, a
-    draft retargeted, a release's notes rewritten. The completed reading only
-    describes the release the policy saw if the release still matches it, so
-    the state is read once more and the completed reading is discarded when it
-    does not. The newer reading then carries no verification verdict, and the
-    next decision asks for the download it needs rather than trusting one taken
-    across a change.
-    """
-    confirmed = api.observe(tag)
-    if _state_key(confirmed) != _state_key(observed):
-        return confirmed
-    return completed
 
 
 def _recheck(
@@ -160,7 +115,7 @@ def _recheck(
         observed,
         api.verify(request.expected.tag, observed, names),
     )
-    settled = _settle(api, request.expected.tag, observed, verified)
+    settled = settle(api, request.expected.tag, observed, verified)
     return settled, decide(request.expected, settled, request.validation)
 
 
@@ -223,14 +178,14 @@ def _apply(
         # The hashes describe the bytes named by this listing. An edit made
         # from them would be authorised by a state that may have moved while
         # they were being read, so the state is confirmed first.
-        return _settle(api, request.expected.tag, observed, hashed)
+        return settle(api, request.expected.tag, observed, hashed)
     if decision.action is ReleaseAction.VERIFY_ASSETS:
         verified = api.verify(request.expected.tag, observed, decision.verifications)
         settled = _with_verification(observed, verified)
         # A published release's notes stay editable, and its assets can be
         # replaced by same-named ones; a verdict reached against the old
         # reading must not outlive it.
-        return _settle(api, request.expected.tag, observed, settled)
+        return settle(api, request.expected.tag, observed, settled)
     return None
 
 
@@ -268,20 +223,6 @@ def _with_verification(
     )
 
 
-def _observe_or_keep(
-    api: ReleaseApi,
-    tag: str,
-    observed: ObservedRelease | None,
-) -> ObservedRelease | None:
-    """Observe the release once, keeping the previous state after a retryable error."""
-    if observed is not None:
-        return observed
-    try:
-        return api.observe(tag)
-    except ReleaseTransientError:
-        return None
-
-
 def _step(
     api: ReleaseApi,
     request: PublicationRequest,
@@ -309,6 +250,40 @@ def _step(
         return None
 
 
+def _unconfirmed(
+    request: PublicationRequest,
+    api: ReleaseApi,
+    span: OperationSpan,
+) -> ReleaseDecision:
+    """Report a budget that ended on a publish call, without denying the write.
+
+    A publish is the one irreversible step, and the caller is told to observe
+    again after it rather than assume its outcome. So a budget that ends on
+    that step reads the release once more: a reading that already converges is
+    the answer, and anything else is reported as an unconfirmed publication.
+    The step budget may simply have run out after the write landed, and saying
+    that the state "did not converge" would describe the one outcome this run
+    cannot vouch for.
+    """
+    try:
+        confirmed = api.observe(request.expected.tag)
+    except ReleaseTransientError:
+        confirmed = None
+    if confirmed is not None:
+        decision = decide(request.expected, confirmed, request.validation)
+        if decision.action is ReleaseAction.NOOP:
+            span.finish("noop")
+            return decision
+    span.finish("unconfirmed")
+    msg = (
+        "publication reached a publish call on its last allowed step, so the"
+        " release may already be public; this run could not confirm it within"
+        " its step budget, and a re-run will observe the release and drive it"
+        " to a verified no-op"
+    )
+    raise ProverToolError(msg)
+
+
 def _converge(
     request: PublicationRequest,
     api: ReleaseApi,
@@ -317,8 +292,9 @@ def _converge(
 ) -> ReleaseDecision:
     """Apply policy to successive observations until publication converges."""
     observed: ObservedRelease | None = None
+    last_action: ReleaseAction | None = None
     for step in range(1, max_steps + 1):
-        observed = _observe_or_keep(api, request.expected.tag, observed)
+        observed = observe_or_keep(api, request.expected.tag, observed)
         if observed is None:
             log_event(_LOGGER, "kani.snapshot.publish.deferred", step=step)
             continue
@@ -336,10 +312,44 @@ def _converge(
             span.finish("conflict")
             msg = f"publication conflict: {decision.reason}"
             raise ProverToolError(msg)
+        last_action = decision.action
         observed = _step(api, request, decision, observed)
+    if last_action is ReleaseAction.PUBLISH:
+        return _unconfirmed(request, api, span)
     span.finish("not_converged")
     msg = f"publication did not converge after {max_steps} observed steps"
     raise ProverToolError(msg)
+
+
+def _require_local_asset(asset: ReleaseAsset, path: Path | None) -> None:
+    """Require one local file to hold exactly the bytes the manifest records."""
+    if path is None:
+        msg = f"publication is missing local asset {asset.name!r}"
+        raise ProverToolError(msg)
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        msg = f"failed to stat release asset '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+    if size != asset.size or sha256_file(path) != asset.sha256:
+        msg = f"local release asset {asset.name!r} does not match its manifest"
+        raise ProverToolError(msg)
+
+
+def require_local_assets(request: PublicationRequest) -> None:
+    """Require every local upload to match the expected bytes before any call.
+
+    The check belongs here rather than in the request record: it reads and
+    hashes files, which the orchestration may do, and which the record that
+    describes one attempt must not.
+    """
+    names = {asset.name for asset in request.expected.assets}
+    extra = sorted(set(request.asset_paths) - names)
+    if extra:
+        msg = f"publication names local assets outside the expected set: {extra}"
+        raise ProverToolError(msg)
+    for asset in request.expected.assets:
+        _require_local_asset(asset, request.asset_paths.get(asset.name))
 
 
 def publish_release(
@@ -367,8 +377,9 @@ def publish_release(
     Raises
     ------
     ProverToolError
-        Raised for a local asset mismatch, an unreconcilable conflict, or a
-        state that does not converge within `max_steps`.
+        Raised for a local asset mismatch, an unreconcilable conflict, a state
+        that does not converge within `max_steps`, or a budget that ended on a
+        publish that could not be confirmed.
     """
     with operation_span(_LOGGER, "kani.snapshot.publish") as span:
         require_local_assets(request)

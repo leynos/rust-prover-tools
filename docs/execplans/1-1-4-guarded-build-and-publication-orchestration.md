@@ -352,6 +352,32 @@ Terms used here:
   `--archive-root`, and passes it to `validate_archive_inventory`; a walk alone
   records the opposite carrier, so the test binds the archive parsing rather
   than a supplied carrier map.
+- 20 November 2026: remediated the third review round on `7b891cd`, whose
+  Domain Architecture and Testing rows returned to the converge loop and named
+  three further boundaries. A budget that ends on the publish call is now
+  followed by one confirming observation, and reports an unconfirmed
+  publication instead of "did not converge": the write may have landed, so the
+  failure may not claim nothing happened. Four tests hold it, including a lost
+  publish response on the last step that must not be sent twice, an unreadable
+  confirmation, and a budget of exactly the six steps the transition needs,
+  which fails if the loop bound spends a step on itself. The adoption refusal
+  and the unresolved-tag refusal moved out of the `gh` adapter into
+  `release_policy`, driven by a new `ObservedRelease.tag_commit`, so the
+  adapter only translates. The local asset precondition moved from
+  `publish_request` into `publish`, leaving the request a pure record.
+  `publish_observation` took the reading-comparison helpers so `publish` stays
+  below pylint's module budget. The documented example runner drops inherited
+  `MAKEFLAGS`, `GNUMAKEFLAGS` and `MAKEOVERRIDES`, because a parent make exports
+  `UV=/absolute/uv` through them and that outranks the pin, reopening the
+  decoy-`gh` edge; the decoy regression now carries that channel.
+- 20 November 2026: split two test modules that the round above pushed past
+  pylint's 400-line module budget, rather than trimming the cases that crossed
+  it. The step-budget witnesses moved to
+  `tests/test_kani_snapshot_publish_budget.py`, and the published-release
+  witnesses to `tests/test_kani_snapshot_release_policy_published.py`, which
+  leaves each module naming one facet of the state machine. The absent-state
+  helper now takes the tag ref it already addresses, so the adoption case reads
+  as one observation.
 
 ## Surprises & discoveries
 

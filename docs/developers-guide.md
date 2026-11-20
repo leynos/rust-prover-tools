@@ -849,16 +849,25 @@ modules, each owning one boundary rather than one file format:
 The publication boundary is split the same way. `release_model` holds the
 port-facing records as frozen dataclasses, and `release_policy.decide` maps one
 observation to the next action without performing any effect, so the decision
-rules are testable without a release. `release_assets_policy.classify_assets`
-classifies the assets a draft serves, `release_markers` reads and writes the
-release-body markers, and `release_port` declares the `ReleaseApi` port.
-`publish` owns that port and is the only caller of `publish_release`: it
-observes, decides, acts and observes again, re-observes and re-decides before
-the single irreversible publish call, and stops after a bounded number of steps
-(`max_steps`, 16 by default) instead of assuming a state it cannot reconcile.
-`publish_request` holds the local bytes a run is asked to publish and the
-precondition that refuses a missing or tampered local asset before any release
-API call. The policy these steps carry is D5 in the distribution design
+rules are testable without a release. Those rules include refusing a tag that
+no release carries, which a new draft would adopt, and a published release
+whose tag does not resolve; `ObservedRelease.tag_commit` is the observation
+that carries the resolution, and the adapter reports it rather than acting on
+it. `release_assets_policy.classify_assets` classifies the assets a draft
+serves, `release_markers` reads and writes the release-body markers, and
+`release_port` declares the `ReleaseApi` port. `publish` owns that port and is
+the only caller of `publish_release`: it observes, decides, acts and observes
+again, re-observes and re-decides before the single irreversible publish call,
+and stops after a bounded number of steps (`max_steps`, 16 by default) instead
+of assuming a state it cannot reconcile. A budget that ends on the publish call
+itself takes one confirming observation and reports an unconfirmed publication,
+never a state that did not converge. `publish_observation` decides when two
+readings describe the same release, which is what lets a completed download be
+believed only if the release did not move while it ran. `publish_request` holds
+the record of what one attempt is asked to publish; checking the local files
+against the manifest reads and hashes them, so `publish` owns that precondition
+and runs it before any release API call. The policy these steps carry is D5 in
+the distribution design
 (`docs/kani-snapshot-distribution-design.md#d5-workflow-and-immutable-publication`);
 this guide names the code rather than restating the rules.
 

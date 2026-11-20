@@ -35,6 +35,20 @@ _USERS_GUIDE = REPO_ROOT / "docs" / "users-guide.md"
 _SMOKE_EXAMPLE = "kani-snapshot-smoke"
 #: The placeholders the example shows, with representative values substituted.
 _SUBSTITUTIONS = {"<full upstream commit>": _SHA, "<12 hex>": "0123456789ab"}
+#: Variables through which a parent make turns an inherited environment into
+#: command-line assignments. GNU make gives those precedence over the
+#: Makefile's own `export UV :=`, so a child that must see only this test's
+#: environment has to drop them; `MAKEFLAGS` is the one that carries them.
+_MAKE_OVERRIDE_VARIABLES = ("MAKEFLAGS", "GNUMAKEFLAGS", "MAKEOVERRIDES")
+
+
+def _without_make_overrides(environment: dict[str, str]) -> dict[str, str]:
+    """Return `environment` without inherited make command-line overrides."""
+    return {
+        name: value
+        for name, value in environment.items()
+        if name not in _MAKE_OVERRIDE_VARIABLES
+    }
 
 
 def _make(
@@ -93,12 +107,12 @@ def _gh_stub(
     home_gh.chmod(0o755)
     log = tmp_path / "gh-args"
     decoy_log = tmp_path / "gh-decoy"
-    environment = {
+    environment = _without_make_overrides({
         **os.environ,
         "GH_ARGS_FILE": str(log),
         "GH_DECOY_FILE": str(decoy_log),
         "HOME": str(home),
-    }
+    })
     environment["PATH"] = f"{binary.parent}{os.pathsep}{environment['PATH']}"
     return environment, log, decoy_log
 
@@ -182,14 +196,16 @@ def _run_example(
     helper finds that uv, and a ``gh`` sitting beside it would then run ahead
     of the reader's own — dispatching the hosted workflow with the caller's
     credentials. Pinning the variable isolates that edge without adding an
-    override to the documented command.
+    override to the documented command. Inherited make overrides are dropped
+    first: ``MAKEFLAGS`` can carry ``UV=/absolute/uv`` as a command-line
+    assignment, which would beat the pin and reopen the same edge.
     """
     shell = shutil.which("sh")
     assert shell is not None, "a POSIX shell is required to run the example"
     return subprocess.run(
         [shell, "-eu", "-c", command],
         cwd=REPO_ROOT,
-        env={**environment, "UV": "uv"},
+        env={**_without_make_overrides(environment), "UV": "uv"},
         capture_output=True,
         text=True,
         timeout=60,
@@ -225,11 +241,12 @@ def test_a_gh_beside_an_inherited_uv_cannot_shadow_the_reader_s_own(
 ) -> None:
     """An inherited absolute ``UV`` must not put a ``gh`` of its own first.
 
-    ``UV`` reaches the Makefile from the caller's environment, and its
-    directory is prepended to ``PATH``. A checkout whose uv shares a directory
-    with a ``gh`` would then dispatch the hosted workflow with the caller's
-    credentials, so the example runner pins ``UV`` to the bare name: the decoy
-    beside the uv must never run, and the reader's own stub must answer.
+    ``UV`` reaches the Makefile from the caller's environment and from
+    ``MAKEFLAGS``, and its directory is prepended to ``PATH`` either way. A
+    checkout whose uv shares a directory with a ``gh`` would then dispatch the
+    hosted workflow with the caller's credentials, so the example runner drops
+    inherited make overrides and pins ``UV`` to the bare name: the decoy beside
+    the uv must never run, and the reader's own stub must answer.
     """
     real_uv = shutil.which("uv")
     assert real_uv is not None, "the suite needs uv on the PATH"
@@ -241,6 +258,9 @@ def test_a_gh_beside_an_inherited_uv_cannot_shadow_the_reader_s_own(
     decoy.chmod(0o755)
     environment, log, decoy_log = _gh_stub(tmp_path, reader_home=True)
     environment["UV"] = str(uv_directory / "uv")
+    # A parent make exports its command-line assignments through MAKEFLAGS,
+    # where they outrank the Makefile's own `export UV :=`.
+    environment["MAKEFLAGS"] = f"-- UV={uv_directory / 'uv'}"
 
     completed = _run_example(_documented_command(), environment)
 

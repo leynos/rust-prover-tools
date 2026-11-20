@@ -225,8 +225,8 @@ def test_observe_refuses_a_fifth_annotated_tag_object(cmd_mox: CmdMox) -> None:
     )
 
 
-def test_observe_refuses_a_tag_that_no_release_carries(cmd_mox: CmdMox) -> None:
-    """An orphan tag would be adopted silently by a new draft."""
+def test_observe_reports_a_tag_that_no_release_carries(cmd_mox: CmdMox) -> None:
+    """An orphan tag is reported as a fact; policy decides it cannot be adopted."""
     server = _ReleaseServer(
         release=None,
         objects={
@@ -237,10 +237,11 @@ def test_observe_refuses_a_tag_that_no_release_carries(cmd_mox: CmdMox) -> None:
         },
     )
     cmd_mox.stub("gh").runs(server.handle)
-    with pytest.raises(ProverToolError, match="no release carries it"):
-        GhReleaseApi().observe(fixtures.TAG)
+    observed = GhReleaseApi().observe(fixtures.TAG)
+    assert not observed.exists, "an orphan tag was reported as a release"
+    assert observed.tag_commit == TAG_COMMIT, "the orphan tag's commit was dropped"
     assert server.calls[-1][1] == f"repos/{REPOSITORY}/git/ref/tags/{fixtures.TAG}", (
-        "the tag ref was not the last read before the orphan was refused"
+        "the tag ref was not the last read before the orphan was reported"
     )
 
 
@@ -279,12 +280,15 @@ def test_observe_finds_a_draft_through_the_release_list(cmd_mox: CmdMox) -> None
     )
 
 
-def test_observe_refuses_a_published_release_without_a_tag(cmd_mox: CmdMox) -> None:
-    """A published release with no resolvable tag has no confirmed target."""
+def test_observe_reports_a_published_release_without_a_tag(cmd_mox: CmdMox) -> None:
+    """A published release with no resolvable tag is reported, not judged."""
     server = _ReleaseServer(release=fixtures.release_json(draft=False))
     cmd_mox.stub("gh").runs(server.handle)
-    with pytest.raises(ProverToolError, match="does not resolve to a tag ref"):
-        GhReleaseApi().observe(fixtures.TAG)
+    observed = GhReleaseApi().observe(fixtures.TAG)
+    assert not observed.is_draft, "the release under test was a draft"
+    assert observed.tag_commit is None, (
+        "a tag that does not exist must be reported as unresolved"
+    )
 
 
 def test_observe_keeps_a_draft_target_when_the_tag_is_absent(
