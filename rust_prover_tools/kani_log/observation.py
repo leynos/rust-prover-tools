@@ -37,6 +37,7 @@ class Observed:
 
     name: str
     succeeded: bool
+    failed_verdict: bool = False
     properties: tuple[PropertyResult, ...] = ()
     unattributed: tuple[PropertyResult, ...] = ()
     failure_messages: tuple[str, ...] = ()

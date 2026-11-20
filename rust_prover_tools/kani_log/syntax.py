@@ -1,7 +1,7 @@
 """Name the grammar of one Kani log and the small facts inside it.
 
 Every regular expression, literal marker and accepted status the parser
-recognises lives here, together with the two leaf value types a single report
+recognizes lives here, together with the two leaf value types a single report
 line can produce.  Keeping the grammar separate means a new Kani release can be
 compared against the vocabulary without reading the cursor logic.
 
@@ -251,7 +251,7 @@ class PropertyResult:
         return ".".join(parts[:-2]) if len(parts) >= _ATTRIBUTED_SEGMENTS else None
 
     @property
-    def property(self) -> str:
+    def name_in_owner(self) -> str:
         """Name this property within its owner, such as ``assertion.1``.
 
         Returns

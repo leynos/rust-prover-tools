@@ -573,6 +573,49 @@ def test_a_failed_verdict_outweighs_a_missing_claim() -> None:
     assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
 
 
+def test_a_failed_verdict_outranks_another_claims_timeout() -> None:
+    """Prefer an unexplained failure to a timeout in a different claim.
+
+    The precedence ranks a counterexample above resource exhaustion.  A block
+    Kani declared failed with every attributed check passing carries a
+    disproof the analysis cannot see; a sibling claim's timeout is the weaker
+    fact and must not decide the run.
+    """
+    name = "h::a"
+    block = _block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        failed_count=0,
+        total_count=1,
+        verdict="FAILED",
+    )
+    timed_out = HarnessBlock(name="h::b", verdict="FAILED", timed_out=True)
+    log = KaniLog(
+        "0.67.0",
+        "regular",
+        (block, timed_out),
+        ManualSummary(0, 2, 2, (name, "h::b")),
+        (),
+    )
+    manifest = Manifest((Harness(name, CLAIM), Harness("h::b", CLAIM)))
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
+
+
+def test_a_timeout_without_an_unexplained_failure_is_exhaustion() -> None:
+    """Keep a timeout's own classification when no verdict is unexplained."""
+    timed_out = HarnessBlock(name="h::a", verdict="FAILED", timed_out=True)
+    log = KaniLog(
+        "0.67.0",
+        "regular",
+        (timed_out,),
+        ManualSummary(0, 1, 1, ("h::a",)),
+        (),
+    )
+    manifest = Manifest((Harness("h::a", CLAIM),))
+    decision = analyse_kani_log(log, manifest)
+    assert decision.outcome is KaniOutcome.RESOURCE_EXHAUSTED
+
+
 def test_a_block_the_declaration_does_not_name_is_still_refused() -> None:
     """Refuse a block for a harness the manifest never declared at all."""
     log = _log_of("h::a", "h::stray")

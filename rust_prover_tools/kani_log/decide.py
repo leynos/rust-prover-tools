@@ -191,6 +191,7 @@ def _observations(
         observed[block.name] = Observed(
             name=block.name,
             succeeded=block.succeeded,
+            failed_verdict=block.verdict == "FAILED",
             properties=block.owned(block.name),
             # Covers stay here too: CBMC may print one without an owner, and
             # the block it appears in is still the harness it describes.  The
@@ -294,7 +295,7 @@ def _matches_expected(
     """
     names = {item.identifier, item.kind}
     if owned:
-        names.add(item.property)
+        names.add(item.name_in_owner)
     return expected in names
 
 
@@ -307,20 +308,35 @@ def _outcome(
     reported = [item for item in claims if item is not None]
     if _has_counterexample(reported, manifest):
         return KaniOutcome.COUNTEREXAMPLE
+    # A block Kani still declared failed had a failure somewhere.  If none of
+    # the attributed checks carries it, reading the verdict stops the run from
+    # being called verified by default.  A disproof outranks exhaustion, so
+    # this is decided first; a timeout's own exhaustion is not an unexplained
+    # failure and keeps its place below.
+    if any(_unexplained_failure(item) for item in reported):
+        return KaniOutcome.COUNTEREXAMPLE
     if _has_resource_exhaustion(reported):
         return KaniOutcome.RESOURCE_EXHAUSTED
     if any(_is_unsupported(log, item) for item in reported):
         return KaniOutcome.UNSUPPORTED
     if any(item.indeterminate for item in reported):
         return KaniOutcome.UNDETERMINED
-    # A block Kani still declared failed had a failure somewhere.  If none of
-    # the attributed checks carries it, reading the verdict stops the run from
-    # being called verified by default.  A disproof outweighs a harness that
-    # never ran, so this is decided before the missing-claim check.
-    if any(not item.succeeded for item in reported):
-        return KaniOutcome.COUNTEREXAMPLE
     complete = len(reported) == len(manifest.claims)
     return KaniOutcome.VERIFIED if complete else KaniOutcome.SKIPPED
+
+
+def _unexplained_failure(seen: Observed) -> bool:
+    """Report whether Kani failed a block that no reported check explains.
+
+    A failed verdict says something failed.  When every check the block
+    attributes passed, or no check was reported at all, the failure sits
+    somewhere the analysis cannot see, and treating the run as verified would
+    accept an unproved claim.  A timeout is excluded because its exhaustion is
+    the explanation, and it is classified as resource exhaustion below.  A
+    block with any failed check is excluded because the reported checks
+    already carry that failure, whatever its kind.
+    """
+    return seen.failed_verdict and not seen.timed_out and not seen.failed_checks
 
 
 def _has_counterexample(

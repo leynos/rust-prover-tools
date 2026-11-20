@@ -73,9 +73,10 @@ def _record_check(
     because identifiers are unique only within a harness.
     """
     item = check(reader, entry)
-    if any(existing.identifier == item.identifier for existing in builder.properties):
+    if item.identifier in builder.check_ids:
         msg = f"the block for {builder.name!r} reports check {item.identifier!r} twice"
         raise KaniLogError(msg)
+    builder.check_ids.add(item.identifier)
     builder.properties.append(item)
 
 
@@ -115,6 +116,8 @@ def check(reader: Reader, match: re.Match[str]) -> PropertyResult:
             )
             raise KaniLogError(msg)
         values[key] = field_match["value"]
+        if key == "Description":
+            values[key] = _joined_description(reader, values[key])
     missing = [key for key in CHECK_FIELDS if key not in values]
     if missing:
         msg = (
@@ -133,6 +136,53 @@ def check(reader: Reader, match: re.Match[str]) -> PropertyResult:
         status=values["Status"],
         description=_unquote(values["Description"]),
     )
+
+
+def _joined_description(reader: Reader, value: str) -> str:
+    """Join the lines a newline in a description splits it across.
+
+    Kani frames a description in quotes and escapes nothing inside it, so a
+    description holding a newline is printed over several lines: the opening
+    quote ends the ``Description:`` line and the closing quote ends the last
+    continuation line.  Reading only the first line would leave the rest to be
+    rejected by the block reader as an unrecognized line, refusing an otherwise
+    complete log.  A description that opens no quote, or closes it on the same
+    line, is returned unchanged.
+
+    Parameters
+    ----------
+    reader : Reader
+        The log cursor, positioned after the ``Description`` line.
+    value : str
+        The rendered value from that line.
+
+    Returns
+    -------
+    str
+        The complete rendered value, continuation lines joined by newlines.
+
+    Raises
+    ------
+    KaniLogError
+        If the log ends before the description's closing quote.
+
+    """
+    while _is_open_quotation(value):
+        if reader.exhausted:
+            msg = f"{reader.where()}: the log ends inside a check description"
+            raise KaniLogError(msg)
+        value = f"{value}\n{reader.take()}"
+    return value
+
+
+def _is_open_quotation(value: str) -> bool:
+    """Report whether a rendered description still waits for its closing quote.
+
+    Only the last character can close the frame, because Kani prints the value
+    between one pair of quotes without escaping anything inside it.
+    """
+    framed = len(value) >= _FRAMED_LENGTH and value.endswith('"')
+    return value.startswith('"') and not framed
 
 
 def _unquote(value: str) -> str:

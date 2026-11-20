@@ -42,6 +42,7 @@ class _BlockBuilder:
 
     name: str
     properties: list[PropertyResult] = dc.field(default_factory=list)
+    check_ids: set[str] = dc.field(default_factory=set)
     failures: list[FailedCheck] = dc.field(default_factory=list)
     failed_count: int | None = None
     total_count: int | None = None
@@ -250,7 +251,7 @@ class Reader:
         elif line.startswith(TIMED_OUT):
             builder.timed_out = True
         elif line.startswith(SOLVER_COMMAND):
-            builder.solver_command = line
+            _record_solver_command(builder, line)
         elif line in {CBMC_FAILED, UNSUPPORTED_REACHABLE} or reports.is_noise(line):
             # Build and driver chatter carries no fact the analysis reads.
             pass
@@ -258,6 +259,32 @@ class Reader:
             return False
         self.take()
         return True
+
+
+def _record_solver_command(builder: _BlockBuilder, line: str) -> None:
+    """Record one solver echo, refusing a second that disagrees.
+
+    The run mode reads the echoed command to learn whether the unwinding
+    assertions were generated, and one block is one solver invocation.  Two
+    different echoes cannot both describe it, so keeping whichever came last
+    would let the reported profile depend on line order.  A repeated identical
+    echo adds no fact and is accepted.
+
+    Raises
+    ------
+    KaniLogError
+        If the block already echoed a different command.
+
+    """
+    if builder.solver_command is None:
+        builder.solver_command = line
+        return
+    if builder.solver_command != line:
+        msg = (
+            f"the block for {builder.name!r} echoes two different solver "
+            f"commands: {builder.solver_command!r} and {line!r}"
+        )
+        raise KaniLogError(msg)
 
 
 def _is_solver_transcript(builder: _BlockBuilder) -> bool:

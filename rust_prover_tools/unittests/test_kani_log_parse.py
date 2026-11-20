@@ -336,6 +336,22 @@ def test_only_the_framing_quotes_are_removed() -> None:
     assert parse_text(text).blocks[0].covers[0].description == '"ready"'
 
 
+def test_a_description_spanning_lines_is_read_in_full() -> None:
+    """Join a value Kani printed over several lines into one description.
+
+    Kani does not escape a description, so a newline inside a cover message
+    starts a line with no framing of its own.  Reading only the first line
+    would leave the continuation to be rejected as an unrecognized line in the
+    block, refusing an otherwise complete log.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: "the boundary below\nsaturation is reachable"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == "the boundary below\nsaturation is reachable"
+
+
 def test_an_undetermined_cover_is_counted() -> None:
     """Reconcile a cover count that names an undetermined cover."""
     text = (
@@ -539,6 +555,39 @@ def test_an_unreadable_solver_command_leaves_unwinding_checks_unknown() -> None:
         solver_command="[Kani] Running: `cbmc --no-unwinding-assertions 'open`",
     )
     assert unwinding_checks_enabled(unreadable) is None
+
+
+def test_two_conflicting_solver_echoes_are_refused() -> None:
+    """Refuse a block whose echoes disagree about the solver's settings.
+
+    The run mode reads the echoed command to learn whether the unwinding
+    assertions were generated.  Two different echoes cannot both describe the
+    single invocation that produced the block, so keeping whichever came last
+    would make the reported profile depend on line order.
+    """
+    lines = log_text("verified").splitlines()
+    echo = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("[Kani] Running: `cbmc ")
+    )
+    lines.insert(
+        echo + 1,
+        "[Kani] Running: `cbmc --no-unwinding-assertions --sat-solver cadical`",
+    )
+    assert "echoes two different solver commands" in refused("\n".join(lines))
+
+
+def test_a_repeated_identical_solver_echo_is_accepted() -> None:
+    """Accept a block that echoes the same solver command twice."""
+    lines = log_text("verified").splitlines()
+    echo = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("[Kani] Running: `cbmc ")
+    )
+    lines.insert(echo + 1, lines[echo])
+    assert parse_text("\n".join(lines)).blocks[0].solver_command == lines[echo]
 
 
 def test_an_unknown_line_inside_a_block_is_refused() -> None:
