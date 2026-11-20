@@ -370,6 +370,20 @@ def test_a_timeout_marker_beside_results_is_refused() -> None:
     assert "timeout alongside a completed result" in refused(text)
 
 
+def test_a_timeout_marker_beside_a_cover_summary_is_refused() -> None:
+    """Refuse a timeout block that also carries a cover summary.
+
+    A summary line is only printed once CBMC finished, so its presence beside
+    the marker contradicts the marker even when the failed-check count is
+    absent.
+    """
+    text = log_text("multiplication_timeout").replace(
+        "VERIFICATION:- FAILED",
+        "SUMMARY:\n ** 0 of 1 cover properties satisfied\nVERIFICATION:- FAILED",
+    )
+    assert "timeout alongside a completed result" in refused(text)
+
+
 def test_a_completed_result_beside_a_timeout_marker_is_refused() -> None:
     """Refuse a timeout block that also claims a successful verdict."""
     text = log_text("multiplication_timeout").replace(
