@@ -27,7 +27,6 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.models import CgroupObservation
 
 __all__ = (
-    "AttemptOutcome",
     "DiagnosticRef",
     "HarnessClassification",
     "HarnessResult",
@@ -60,34 +59,6 @@ class DiagnosticRef:
 
     sink: str
     offset: int
-
-
-@dc.dataclass(frozen=True, slots=True)
-class AttemptOutcome:
-    """Everything an adapter needs to classify one finished attempt.
-
-    Attributes
-    ----------
-    spec : HarnessSpec
-        Requested identity.
-    stop_reason : StopReason
-        Why the supervisor stopped waiting.
-    exit_code : int | None
-        Raw child status.
-    signal_number : int | None
-        POSIX signal that ended the child.
-    duration_seconds : float
-        Wall-clock duration of the attempt.
-    last_output : str | None
-        Last decoded output line, bounded.
-    """
-
-    spec: HarnessSpec
-    stop_reason: StopReason
-    exit_code: int | None
-    signal_number: int | None
-    duration_seconds: float
-    last_output: str | None
 
 
 @dc.dataclass(frozen=True, slots=True)

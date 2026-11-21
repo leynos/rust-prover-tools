@@ -158,7 +158,7 @@ def _prepare_snapshot(route: SnapshotRoute) -> PreparedRoute:
     grammar = grammar_for(qualified.backend_version)
 
     def build(harness: InventoryHarness) -> LaunchCommand:
-        """Compose one legacy invocation for `harness`."""
+        """Compose one snapshot invocation for `harness`."""
         arguments = compose_arguments(harness, grammar, route.arguments)
         validate_forwarded_args(arguments)
         command = qualified.command(

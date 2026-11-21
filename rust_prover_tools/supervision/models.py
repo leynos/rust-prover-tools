@@ -92,6 +92,9 @@ class Measurement:
         if (self.value is None) == (self.unavailable_reason is None):
             msg = "a measurement needs exactly one of value or unavailable_reason"
             raise ValueError(msg)
+        if self.value is not None and self.value < 0:
+            msg = "a measurement cannot be negative"
+            raise ValueError(msg)
 
     @classmethod
     def available(cls, value: int) -> Measurement:

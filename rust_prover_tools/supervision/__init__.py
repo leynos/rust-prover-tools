@@ -97,7 +97,6 @@ from rust_prover_tools.supervision.resources import (
     sum_group_rss,
 )
 from rust_prover_tools.supervision.results import (
-    AttemptOutcome,
     DiagnosticRef,
     HarnessClassification,
     HarnessResult,
@@ -146,7 +145,6 @@ __all__ = [
     "TRUNCATION_MARKER",
     "AsyncSleeper",
     "AttemptEvidence",
-    "AttemptOutcome",
     "AttemptSupervisor",
     "CgroupMemory",
     "CgroupObservation",

@@ -12,6 +12,8 @@ from rust_prover_tools.kani_harness_run import (
     KaniHarnessRun,
     KaniHarnessRunOptions,
     LegacyRoute,
+    execute_harnesses,
+    prepare_harnesses,
     run_harnesses,
 )
 from rust_prover_tools.kani_inventory import (
@@ -330,3 +332,51 @@ def test_the_report_document_names_the_measurement_limits(tmp_path: Path) -> Non
 
     document = json.loads(report_path.read_text(encoding="utf-8"))
     assert any("sampled" in note or "sample" in note for note in document["notes"])
+
+
+def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
+    """Discovery and qualification leave both destinations untouched."""
+    human = tmp_path / "human.log"
+    jsonl = tmp_path / "evidence.jsonl"
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(
+        per_harness={
+            "alpha::harnesses::a": _script("verified", "harnesses::a"),
+        },
+        clock=clock,
+    )
+    dependencies = KaniHarnessDependencies(
+        clock=clock,
+        launcher=launcher,
+        probe=ScriptedProbe(),
+        cgroup=ScriptedCgroup(),
+        sleeper=VirtualSleeper(clock),
+        prepare=lambda route: _prepared(),
+    )
+    config = SupervisionConfig(
+        watchdog_threshold_bytes=None,
+        sinks=DiagnosticSinks(human_path=human, jsonl_path=jsonl),
+    )
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+        inventory=_inventory("harnesses::a"),
+        config=config,
+        dependencies=dependencies,
+    )
+
+    preparation = prepare_harnesses(options)
+
+    assert not human.exists()
+    assert not jsonl.exists()
+    assert [harness.harness for harness in preparation.selected] == ["harnesses::a"]
+    assert preparation.commands["alpha::harnesses::a"].argv[:2] == (
+        "driver",
+        "kani",
+    )
+
+    run = execute_harnesses(preparation, config, dependencies)
+
+    assert run.report.passed
+    assert human.exists()
+    assert jsonl.exists()

@@ -31,6 +31,7 @@ from rust_prover_tools.kani_log import (
     KaniLog,
     KaniLogError,
     KaniLogReader,
+    UnsupportedKaniGrammarError,
     grammar_for,
 )
 from rust_prover_tools.kani_release import KANI_RELEASE_VERSION
@@ -59,16 +60,30 @@ class KaniObserver:
     reader : KaniLogReader
         Incremental parser for this attempt.
     last_progress : str | None
-        Last structurally recognised report line.
+        Last structurally recognized report line.
+    banner_error : str | None
+        Why an opening banner could not be attributed, when it could not be.
     """
 
     reader: KaniLogReader = dc.field(default_factory=KaniLogReader)
     last_progress: str | None = None
+    banner_error: str | None = None
 
     def observe(self, line: OutputLine) -> None:
-        """Feed one decoded line to the reader and remember its progress."""
+        """Feed one decoded line to the reader and remember its progress.
+
+        An unregistered banner is retained as evidence instead of escaping
+        through the drain loop. Losing the whole run to one line would discard
+        the measurements and records already emitted for earlier harnesses.
+        """
+        if self.banner_error is not None:
+            return
         stream = "stdout" if line.stream == "stdout" else "stderr"
-        self.reader.feed_line(stream, line.text)
+        try:
+            self.reader.feed_line(stream, line.text)
+        except UnsupportedKaniGrammarError as error:
+            self.banner_error = str(error)
+            return
         progress = self.reader.facts.last_progress
         if progress is not None:
             self.last_progress = progress
@@ -113,6 +128,12 @@ class KaniAdapter:
             return _classification(
                 ExecutionStatus.ERROR,
                 detail=f"launch failed: {evidence.launch_error}",
+            )
+        if kani.banner_error is not None:
+            return _classification(
+                ExecutionStatus.ERROR,
+                detail=kani.banner_error,
+                progress=kani.last_progress,
             )
         selection = _selection_status(evidence, kani)
         if selection is not None:

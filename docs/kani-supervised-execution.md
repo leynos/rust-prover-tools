@@ -450,7 +450,10 @@ bounded detail, and the last recognized progress line.
 
 `KaniAdapter` is the reference implementation. It checks the registered grammar
 before observation, feeds the shared 0.67.0 reader, and applies the precedence
-in Table 2. An adapter for another prover must not reimplement timing,
+in Table 2. The reader retains at most 256 refusal issues plus an exhaustion
+sentinel, so a noisy harness cannot size the attempt's memory; a banner that
+names an unregistered release is retained as a typed error rather than escaping
+the line hook. An adapter for another prover must not reimplement timing,
 measurement, evidence, or accounting.
 
 ## Test doubles

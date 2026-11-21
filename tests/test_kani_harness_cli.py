@@ -7,6 +7,7 @@ import typing as typ
 
 from rust_prover_tools.cli import app
 from rust_prover_tools.kani_harness_run import (
+    KaniHarnessPreparation,
     KaniHarnessRun,
     KaniHarnessRunOptions,
     LegacyRoute,
@@ -319,3 +320,39 @@ def test_shared_human_and_jsonl_destinations_are_refused(
     assert status == 1
     assert "distinct" in capsys.readouterr().err
     assert not shared.exists()
+
+
+def test_an_unopenable_destination_is_a_clean_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A destination that cannot be opened exits one without a traceback."""
+    directory = tmp_path / "evidence.jsonl"
+    directory.mkdir()
+
+    def prepared(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+        """Reach destination opening without qualifying a real installation."""
+        del options
+        return typ.cast("KaniHarnessPreparation", object())
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.prepare_harnesses", prepared
+    )
+
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--inventory",
+        str(inventory_file(tmp_path)),
+        "--jsonl",
+        str(directory),
+    ])
+
+    assert status == 1
+    assert "evidence.jsonl" in capsys.readouterr().err

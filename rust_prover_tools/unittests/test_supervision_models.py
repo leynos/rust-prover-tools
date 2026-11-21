@@ -161,3 +161,9 @@ def test_a_symlink_alias_is_not_a_distinct_destination(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="distinct"):
         DiagnosticSinks(jsonl_path=target, report_path=alias)
+
+
+def test_a_directly_constructed_negative_measurement_is_refused() -> None:
+    """The value object, not only its factory, refuses impossible bytes."""
+    with pytest.raises(ValueError, match="negative"):
+        Measurement(value=-1)

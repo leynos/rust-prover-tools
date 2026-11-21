@@ -349,3 +349,72 @@ def test_an_inline_path_in_a_non_mod_rs_file_uses_its_child_directory(
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "foo::inline::proofs::h"
     ]
+
+
+def test_plain_children_of_an_inline_path_module_use_that_directory(
+    tmp_path: Path,
+) -> None:
+    """A `#[path]` inline module is the directory for its plain children."""
+    (tmp_path / "src" / "thread_files").mkdir(parents=True)
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[path = "thread_files"]\nmod thread { mod baz; }\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "thread_files" / "baz.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "thread::baz::h"
+    ]
+
+
+def test_an_inline_path_in_a_non_mod_rs_file_keeps_the_file_parent_base(
+    tmp_path: Path,
+) -> None:
+    """`foo.rs` resolves an inline `#[path]` from `src`, not from `src/foo`."""
+    (tmp_path / "src" / "thread_files").mkdir(parents=True)
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("mod foo;\n", encoding="utf-8")
+    (tmp_path / "src" / "foo.rs").write_text(
+        '#[path = "thread_files"]\nmod thread { mod baz; }\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "thread_files" / "baz.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "foo::thread::baz::h"
+    ]
+
+
+def test_a_string_valued_attribute_does_not_name_a_module_file(
+    tmp_path: Path,
+) -> None:
+    """`#[doc = "..."]` is not a `#[path]`, even though it has a string value."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[doc = "not_a_path.rs"]\nmod proofs;\n', encoding="utf-8")
+    (tmp_path / "src" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::h"
+    ]
+
+
+def test_a_comment_inside_cfg_kani_stays_unconditional(tmp_path: Path) -> None:
+    """A comment is whitespace, so `cfg(kani /* note */)` is still `cfg(kani)`."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[cfg(kani /* active under the verifier */)]\n#[kani::proof]\nfn h() {}\n",
+        encoding="utf-8",
+    )
+
+    (proof,) = collect_proofs(root, tmp_path)
+
+    assert not proof.conditional

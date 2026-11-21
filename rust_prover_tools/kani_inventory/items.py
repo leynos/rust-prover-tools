@@ -111,13 +111,15 @@ class _AttributeFacts:
     def record(self, original: str, masked: str) -> None:
         """Record one attribute's facts, ignoring inner attributes."""
         name, _ = _attribute_name(masked)
-        content = original
         if name in _PROOF_ATTRIBUTES:
             self.proof.append(name)
-        value = _path_value(content)
-        if value is not None:
-            self.path = value
-        if name == "cfg" and _normalise(content) != "cfg(kani)":
+        if name == "path":
+            # Only `#[path = "..."]` names a module file; a string-valued
+            # attribute such as `#[doc = "..."]` must not redirect discovery.
+            value = _path_value(original)
+            if value is not None:
+                self.path = value
+        if name == "cfg" and _normalise(masked) != "cfg(kani)":
             self.conditional = True
 
 

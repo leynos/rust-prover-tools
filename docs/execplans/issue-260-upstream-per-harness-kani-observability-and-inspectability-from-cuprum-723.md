@@ -253,6 +253,16 @@ Plain-language terms used in this plan:
   `unsatisfied_cover`, `unsupported`, `vacuous_assumption`, and `verified`.
   Evidence: `scripts/tests/fixtures/kani_logs/` at `9dd6e3c`. Impact: the port
   keeps all fifteen and their `expected.json` facts.
+- Observation: self-review against `rustc` found two discovery semantics that
+  the earlier tests did not pin. An inline `#[path = "..."]` module is itself
+  the directory for its plain children, including in a non-mod-rs file, and a
+  string-valued attribute such as `#[doc = "..."]` is not a `#[path]`. Evidence:
+  `rustc --edition 2021` resolves
+  `#[path = "thread_files"] mod thread { mod baz; }` only from
+  `src/thread_files/baz.rs`, and a `#[doc]` module test failed before the path
+  fact was restricted to a `path` attribute. Impact: discovery now computes the
+  inline directory from the path root and reads path values only from `path`;
+  regression tests cover both.
 
 ## Decision log
 

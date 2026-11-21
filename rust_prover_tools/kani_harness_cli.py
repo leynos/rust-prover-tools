@@ -57,8 +57,9 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("SignalInterrupt", "harnesses_app")
 
-#: Errors this adapter reports as an ordinary nonzero exit.
-_EXPECTED_ERRORS = (ProverToolError, ValueError)
+#: Errors this adapter reports as an ordinary nonzero exit. A destination the
+#: process cannot open is a usage or environment error, not a crash.
+_EXPECTED_ERRORS = (ProverToolError, ValueError, OSError)
 
 _DEFAULT_SELECTION = SelectionFlags()
 _DEFAULT_ROUTE = RouteFlags()
@@ -120,8 +121,16 @@ class SignalInterrupt:
         del frame
         if self._signum is None:
             self._signum = signum
-        if self._loop is not None and self._event is not None:
-            self._loop.call_soon_threadsafe(self._event.set)
+        self._notify()
+
+    def _notify(self) -> None:
+        """Release the monitor when its loop is still usable."""
+        loop = self._loop
+        event = self._event
+        if loop is None or event is None:
+            return
+        if not loop.is_closed():
+            loop.call_soon_threadsafe(event.set)
 
     async def wait(self) -> None:
         """Wait until a signal asks the run to stop."""

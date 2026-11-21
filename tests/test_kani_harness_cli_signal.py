@@ -230,3 +230,15 @@ def _run_cli(tmp_path: Path, evidence: Path, *, use_inventory: bool) -> int:
     if use_inventory:
         arguments.extend(("--inventory", str(inventory_file(tmp_path))))
     return app(arguments)
+
+
+def test_a_signal_after_the_loop_closed_is_still_recorded() -> None:
+    """A late signal records its reason without touching a closed loop."""
+    interrupt = SignalInterrupt()
+    loop = asyncio.new_event_loop()
+    interrupt.bind(loop)
+    loop.close()
+
+    interrupt._handle(signal.SIGTERM, None)
+
+    assert interrupt.signum == signal.SIGTERM

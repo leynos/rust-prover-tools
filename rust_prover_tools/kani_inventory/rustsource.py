@@ -185,14 +185,22 @@ def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> Non
                 )
             )
         elif isinstance(item, InlineModItem):
+            # An inline module is a directory for its children. A `#[path]`
+            # on that module replaces the directory name, and it is relative
+            # to the containing file's parent, even in a non-mod-rs file.
+            inline_directory = (
+                module.path_root / item.path_attribute
+                if item.path_attribute is not None
+                else module.directory / item.name
+            )
             _walk_items(
                 walk,
                 dc.replace(
                     module,
                     module_path=(*module.module_path, item.name),
                     conditional=item.conditional,
-                    directory=module.directory / item.name,
-                    path_root=module.directory / (item.path_attribute or item.name),
+                    directory=inline_directory,
+                    path_root=inline_directory,
                 ),
                 item.items,
             )

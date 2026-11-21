@@ -269,3 +269,21 @@ def test_a_passing_log_without_an_exit_status_is_an_error() -> None:
 
     assert result.status is ExecutionStatus.ERROR
     assert "no exit status" in result.detail
+
+
+def test_an_unregistered_banner_becomes_typed_evidence() -> None:
+    """A release without a grammar is an attempt error, not a run crash."""
+    observer = KaniObserver()
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Kani Rust Verifier 0.68.0 (cargo plugin)",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+
+    classification = KaniAdapter().classify(_evidence("alpha::harness"), observer)
+
+    assert classification.status is ExecutionStatus.ERROR
+    assert "0.68.0" in classification.detail
