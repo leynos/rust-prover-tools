@@ -56,8 +56,9 @@ def require_distinct_destinations(
     Human and JSONL records have different grammars, so appending both to one
     file produces a file that is neither. The report is written atomically and
     would replace whatever evidence already occupies its path. Paths are
-    resolved first, so a relative spelling, a symlink, or a symlinked parent
-    cannot disguise an alias.
+    resolved first, and existing paths are compared by inode, so a relative
+    spelling, a symlink, a symlinked parent, or a hard link cannot disguise an
+    alias.
 
     Parameters
     ----------
@@ -73,22 +74,36 @@ def require_distinct_destinations(
     ValueError
         Two supplied destinations resolve to the same file.
     """
-    seen: dict[Path, str] = {}
-    for name, path in (
-        ("human_path", human_path),
-        ("jsonl_path", jsonl_path),
-        ("report_path", report_path),
-    ):
-        if path is None:
-            continue
+    supplied = [
+        (name, path)
+        for name, path in (
+            ("human_path", human_path),
+            ("jsonl_path", jsonl_path),
+            ("report_path", report_path),
+        )
+        if path is not None
+    ]
+    seen: list[tuple[str, Path]] = []
+    for name, path in supplied:
         resolved = path.resolve()
-        if resolved in seen:
-            msg = (
-                "diagnostic destinations must be distinct: "
-                f"{seen[resolved]} and {name} both name {resolved}"
-            )
-            raise ValueError(msg)
-        seen[resolved] = name
+        for other_name, other_path in seen:
+            if resolved == other_path or _same_file(path, other_path):
+                msg = (
+                    "diagnostic destinations must be distinct: "
+                    f"{other_name} and {name} both name {resolved}"
+                )
+                raise ValueError(msg)
+        seen.append((name, resolved))
+
+
+def _same_file(first: Path, second: Path) -> bool:
+    """Whether two existing paths name one inode, as a hard link does."""
+    try:
+        left = first.stat()
+        right = second.stat()
+    except OSError:
+        return False
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
 
 
 @dc.dataclass(frozen=True, slots=True)

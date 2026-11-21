@@ -8,8 +8,11 @@ standard error.
 
 Signal handling lives here and nowhere else. The library installs no handlers,
 so an embedding application keeps control; this adapter installs SIGINT and
-SIGTERM for the duration of one run, finalizes the report on interruption, and
-returns ``128 + signal``.
+SIGTERM for the duration of the supervised execution phase, finalizes the
+report on interruption, and returns ``128 + signal``. Discovery and route
+qualification run before those handlers exist, so a signal there ends the
+process under its normal disposition instead of being recorded for a phase
+that has not started.
 """
 
 from __future__ import annotations

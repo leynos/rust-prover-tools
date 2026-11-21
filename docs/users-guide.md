@@ -376,7 +376,8 @@ run refuses until a 0.68.0 grammar is registered. Every harness runs as its own
 group. A failed, timed-out, or watchdog-stopped harness does not prevent later
 harnesses from running. The command exits zero only for a complete passing run,
 one for any other completed run or expected error, and `128 + signal` when a
-signal interrupted the run after its report was finalized.
+signal interrupted the run. An execution-phase interruption still finalizes the
+report; preparation ends immediately because no supervised child exists yet.
 
 The defaults below are policy, and every one is configurable:
 
@@ -422,7 +423,7 @@ the same phase boundary to that application.
 
 `--extra-arg` is repeatable and passes proof-affecting verifier arguments
 verbatim, such as `--unwind` or `-Z`. An argument that would override selection
-or output is refused, including `--harness`, `--exact`, `--package`,
+or output is refused, including `--harness`, `--exact`, `--tests`, `--package`,
 `--output-format`, `--output-into-files`, `--quiet`, `--workspace`, `--jobs`,
 and their short spellings `-q`, `-j`, and `-p`, whether written as a separate
 value, a joined value, or a short option, on either side of `--`.

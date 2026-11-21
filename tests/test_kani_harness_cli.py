@@ -356,3 +356,24 @@ def test_an_unopenable_destination_is_a_clean_error(
 
     assert status == 1
     assert "evidence.jsonl" in capsys.readouterr().err
+
+
+def test_the_legacy_route_refuses_a_snapshot_cache_dir(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A snapshot-only option must not be silently ignored."""
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    ])
+
+    assert status == 1
+    assert "--cache-dir is only valid" in capsys.readouterr().err

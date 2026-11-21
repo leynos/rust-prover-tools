@@ -6,11 +6,13 @@ import pytest
 
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
+    InventoryDiscoveryError,
     InventoryHarness,
     PackageInventory,
     SelectionError,
     compose_arguments,
     conflicting_options,
+    restrict_inventory,
     select_harnesses,
     selections,
 )
@@ -214,3 +216,9 @@ def test_an_empty_selection_set_is_refused() -> None:
     """No harnesses means no run, not an empty success."""
     with pytest.raises(SelectionError, match="no harness was selected"):
         selections((), KANI_067)
+
+
+def test_a_duplicate_package_restriction_is_refused() -> None:
+    """Naming one package twice is a request error, not a duplicate model."""
+    with pytest.raises(InventoryDiscoveryError, match="twice"):
+        restrict_inventory(_inventory(), ("alpha", "alpha"))

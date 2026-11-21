@@ -167,3 +167,14 @@ def test_a_directly_constructed_negative_measurement_is_refused() -> None:
     """The value object, not only its factory, refuses impossible bytes."""
     with pytest.raises(ValueError, match="negative"):
         Measurement(value=-1)
+
+
+def test_a_hard_link_alias_is_not_a_distinct_destination(tmp_path: Path) -> None:
+    """Resolved paths differ, but one inode under two names is still shared."""
+    first = tmp_path / "first.log"
+    first.touch()
+    second = tmp_path / "second.log"
+    second.hardlink_to(first)
+
+    with pytest.raises(ValueError, match="distinct"):
+        DiagnosticSinks(human_path=first, jsonl_path=second)

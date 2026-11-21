@@ -16,11 +16,11 @@ Examples
 
 from __future__ import annotations
 
-import re
 import typing as typ
 
 from rust_prover_tools.kani_log.issues import Issue, IssueKind
 from rust_prover_tools.kani_log.model import HarnessBlock
+from rust_prover_tools.kani_log.other_counts import parse_other_pairs
 from rust_prover_tools.kani_log.syntax import (
     CHECK_FIELDS,
     CHECK_STATUSES,
@@ -29,6 +29,9 @@ from rust_prover_tools.kani_log.syntax import (
     FailedCheck,
     PropertyResult,
 )
+
+if typ.TYPE_CHECKING:
+    import re
 
 __all__ = ("BlockCursor", "Issue", "IssueKind")
 
@@ -161,7 +164,7 @@ class BlockCursor:
         self.block.failed_count = int(match["failed"])
         self.block.total_count = int(match["total"])
         try:
-            pairs = _other_pairs(match["others"])
+            pairs = parse_other_pairs(match["others"])
         except ValueError:
             return [
                 Issue(
@@ -207,6 +210,13 @@ class BlockCursor:
 
     def finish(self) -> list[Issue]:
         """Reconcile the block and return every reason it cannot be believed."""
+        if self._awaiting_failure is not None:
+            # The stream ended before a location line arrived. Keep the
+            # message as an unlocated failure rather than dropping the last
+            # explanation the verifier produced.
+            message = self._awaiting_failure
+            self._awaiting_failure = None
+            self.block.failures.append(FailedCheck(message, None, None))
         reasons = self.flush_check()
         if self.block.verdict is None:
             reasons.append(
@@ -379,17 +389,3 @@ class BlockCursor:
                     )
                 )
         return reasons
-
-
-def _other_pairs(text: str | None) -> tuple[tuple[int, str], ...]:
-    """Parse a comma-separated list of ``N kind`` other-result pairs."""
-    if not text:
-        return ()
-    pairs: list[tuple[int, str]] = []
-    for part in text.split(","):
-        match = re.fullmatch(r"\s*(\d+)\s+([a-z]+)\s*", part)
-        if match is None:
-            msg = f"malformed other-result pair {part!r}"
-            raise ValueError(msg)
-        pairs.append((int(match[1]), match[2]))
-    return tuple(pairs)

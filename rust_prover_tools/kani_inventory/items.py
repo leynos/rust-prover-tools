@@ -310,7 +310,7 @@ def _path_value(content: str) -> str | None:
     _, _, value = content.partition("=")
     try:
         parsed = ast.literal_eval(value.strip())
-    except SyntaxError, ValueError:
+    except (SyntaxError, ValueError):  # fmt: skip
         return None
     return parsed if isinstance(parsed, str) else None
 

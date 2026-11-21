@@ -196,17 +196,7 @@ Plain-language terms used in this plan:
   complete pass, 1 otherwise, and `128 + signal` on interruption. Help
   snapshots and injected contract tests cover the surface. The full gate passes
   with 1,779 tests and 6 skips.
-- [x] (2026-11-21 19:30Z) CodeRabbit review and remediation. Three local
-  review passes were run after the deterministic gates; every actionable
-  finding was fixed with a regression test or a cited, tested design record.
-  The third pass added the bounded parser issue budget, distinct-destination
-  validation, the prepare/execute split that keeps handlers off discovery and
-  qualification, structured CLI option groups with no pylint suppressions,
-  heartbeat recognized-progress precedence, and the alpha-only snapshot release
-  note. The one residual limitation is the Cuprum 0.2.0b2 newline-free line
-  accumulation, which cannot be bounded through the pinned public API and is
-  documented as a limitation.
-- [x] (2026-11-21 21:35Z) Posted the parser coordination comment on #250,
+- [x] (2026-11-21 19:05Z) Posted the parser coordination comment on #250,
   naming `rust_prover_tools/kani_log/` as the landed parser layer, the open
   manifest and `decide()` work, and the captures 0.68.0 will need.
 - [x] (2026-11-21 19:10Z) `EP-M6` Documentation, roadmap, schema
@@ -217,6 +207,22 @@ Plain-language terms used in this plan:
   CLI design guides, README, and roadmap, and exported the typed public API from
   `rust_prover_tools`. `make all PYTEST_XDIST_WORKERS=4` passes with 1,779
   tests and 6 skips; the opt-in live 0.67.0 fixture also passes.
+- [x] (2026-11-21 19:30Z) CodeRabbit review and remediation. Three local
+  review passes were run after the deterministic gates; every actionable
+  finding was fixed with a regression test or a cited, tested design record.
+  The third pass added the bounded parser issue budget, distinct-destination
+  validation, the prepare/execute split that keeps handlers off discovery and
+  qualification, structured CLI option groups with no pylint suppressions,
+  heartbeat recognized-progress precedence, and the alpha-only snapshot release
+  note. The one residual limitation is the Cuprum 0.2.0b2 newline-free line
+  accumulation, which cannot be bounded through the pinned public API and is
+  documented as a limitation.
+- [x] (2026-11-21 20:19Z) Self-review hardening after the third pass:
+  inline `#[path]` directory semantics verified against `rustc`, path values
+  restricted to `path` attributes, unregistered banners retained as typed
+  errors, hard-link destination aliases rejected, and caller-supplied `--tests`
+  forbidden. Each change has a focused regression test; the full deterministic
+  gate is re-run before the draft is marked ready.
 
 ## Surprises & discoveries
 

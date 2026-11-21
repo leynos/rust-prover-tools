@@ -80,7 +80,8 @@ def select_harnesses(
     Returns
     -------
     tuple[InventoryHarness, ...]
-        Selected harnesses in inventory order.
+        Selected harnesses in request order. An empty request returns the
+        inventory's own order.
 
     Raises
     ------
@@ -305,6 +306,9 @@ def restrict_inventory(
     """
     if not packages:
         return inventory
+    if len(set(packages)) != len(packages):
+        msg = f"the package restriction names a package twice: {list(packages)}"
+        raise InventoryDiscoveryError(msg)
     by_name = {package.package: package for package in inventory.packages}
     unknown = [name for name in packages if name not in by_name]
     if unknown:

@@ -66,7 +66,8 @@ installed-release route above for a 0.67.0 release.
 
 The `run` command exits zero only for a complete passing run, one for any other
 completed run or expected error, and `128 + signal` when a signal interrupted
-the run after its report was finalized.
+the run. An execution-phase interruption still finalizes the report;
+preparation ends immediately because no supervised child exists yet.
 
 ## Configuration
 
@@ -171,8 +172,10 @@ The selector comes first, the registry's output argument comes next, and caller
 arguments are preserved verbatim after it. A caller argument that spells a
 selector or output override is refused, in separate-value form
 (`--harness value`), joined form (`--harness=value`), or short-option form
-(`-pvalue`), on either side of `--`. Proof-affecting flags such as `--unwind`,
-`--default-unwind`, `-Z`, and `--fail-fast` are preserved.
+(`-pvalue`), on either side of `--`. A test target additionally receives
+`--tests` after `--exact`, because Kani only builds an integration-test target
+when asked; a caller may not supply that flag. Proof-affecting flags such as
+`--unwind`, `--default-unwind`, `-Z`, and `--fail-fast` are preserved.
 
 Selection refuses a bare name that matches more than one package, a name the
 inventory does not declare, and a duplicate request. A package-qualified
