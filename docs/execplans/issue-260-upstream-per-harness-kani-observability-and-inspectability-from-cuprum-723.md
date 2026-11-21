@@ -242,6 +242,17 @@ Plain-language terms used in this plan:
   completed the Rust attribute grammar for whitespace, nested `cfg_attr`,
   string continuations, and Unicode escapes. The full deterministic gate passes
   with 1,898 tests and 6 skips.
+- [x] (2026-11-21 22:49Z) Sixth CodeRabbit pass: 24 findings. The substantive
+  findings were fixed with regression tests: recorded target selectors, serial
+  `--jobs=1` output, snapshot routing rejection, a repository-root working
+  directory, the remaining Rust attribute forms, an attempt-wide record budget,
+  cover and other-result reconciliation, assertion-only expected panics,
+  non-fatal independent diagnostics, bounded `MemorySink`, complete resource
+  extrema, and monitor cleanup. Three findings are documented skips: the
+  tested-example loader does not exist in this repository, Cuprum 0.2.0b2
+  exposes no chunk-level line hook, and the test parameterization suggestions
+  would churn existing test conventions without changing behaviour. The full
+  deterministic gate passes with 1,911 tests and 6 skips.
 
 ## Surprises & discoveries
 
