@@ -395,3 +395,20 @@ def test_verify_proof_files_runs_an_ordered_prefix(
         verify_proof_files(proof_files, _proof_settings())
 
     _assert_failed_batch(proof_files, failing_index, exc_info, invocations)
+
+
+def test_a_positional_fourth_argument_remains_the_clock() -> None:
+    """Keep ``clock`` where existing positional callers put it.
+
+    ``z3_path`` was added later and is keyword-only, so a four-argument call
+    cannot bind a clock to the solver variable.
+    """
+
+    def tick() -> float:
+        """Return one deterministic timestamp."""
+        return 42.0
+
+    settings = VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain", (), tick)
+
+    assert settings.clock is tick
+    assert settings.z3_path is None

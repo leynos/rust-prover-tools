@@ -129,43 +129,32 @@ def test_an_unresolved_foreign_check_leaves_the_run_undetermined() -> None:
     assert analyse_kani_log(log, manifest).outcome is KaniOutcome.UNDETERMINED
 
 
-def test_an_unreachable_foreign_check_is_not_this_blocks_evidence() -> None:
-    """Leave another routine's unreachable check out of the block's evidence.
-
-    Its unreachability says that routine was not reached on this path, which
-    is that routine's fact.  Only an unreachable check the harness owns, or one
-    CBMC printed without an owner, shows that nothing was proved here.
-    """
-    name = "h::c"
-    block = shapes.block(
-        name,
-        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
-        PropertyResult("other.cover.1", "UNREACHABLE", "foreign"),
-        failed_count=0,
-        total_count=2,
-    )
-    log = shapes.verified_log(block)
-    manifest = Manifest((Harness(name, CLAIM),))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
-
-
-def test_an_unreachable_foreign_assertion_is_not_this_blocks_evidence() -> None:
-    """Leave another routine's unreachable assertion out of the evidence too.
+@pytest.mark.parametrize(
+    "identifier",
+    ["other.cover.1", "other.assertion.1"],
+    ids=["cover", "assertion"],
+)
+def test_an_unreachable_foreign_check_is_not_this_blocks_evidence(
+    identifier: str,
+) -> None:
+    """Leave a called routine's unreachable check out of the evidence.
 
     The rule is not about covers: any check owned by a called routine is that
     routine's fact, so its unreachability cannot show that this harness proved
-    nothing.  An implementation that only special-cased covers would fail here.
+    nothing.  Only the harness's own checks, or one CBMC printed without an
+    owner, count here.
     """
     name = "h::c"
     block = shapes.block(
         name,
         PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
-        PropertyResult("other.assertion.1", "UNREACHABLE", "foreign"),
+        PropertyResult(identifier, "UNREACHABLE", "foreign"),
         failed_count=0,
         total_count=2,
     )
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
+
     assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
 
 
@@ -294,35 +283,23 @@ def test_a_foreign_unsupported_construct_check_denies_the_claim() -> None:
     assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNSUPPORTED
 
 
-def test_a_foreign_recursion_bound_counts_as_resource_exhaustion() -> None:
-    """A called routine's recursion bound limits the run; it is not a disproof.
+@pytest.mark.parametrize(
+    "identifier",
+    ["other::helper.recursion.1", "{name}.recursion.1"],
+    ids=["foreign", "owned"],
+)
+def test_a_recursion_bound_counts_as_resource_exhaustion(identifier: str) -> None:
+    """Classify both of Kani's bound checks as resource exhaustion.
 
-    CBMC names the check ``recursion`` where a loop bound is named ``unwind``.
-    Reading only the latter as a bound check would report a counterexample for
-    a run that merely needs a larger recursion limit.
+    CBMC names the recursion bound ``recursion`` where a loop bound is named
+    ``unwind``.  Reading only the latter as a bound check would report a
+    counterexample for a run that merely needs a larger recursion limit,
+    whichever routine owns the check.
     """
     name = "h::c"
     block = shapes.block(
         name,
-        PropertyResult("other::helper.recursion.1", "FAILURE", "recursion"),
-        failed_count=1,
-        total_count=1,
-        verdict="FAILED",
-    )
-    log = shapes.verified_log(block)
-    manifest = Manifest((Harness(name, CLAIM),))
-
-    decision = analyse_kani_log(log, manifest)
-
-    assert decision.outcome == KaniOutcome.RESOURCE_EXHAUSTED
-
-
-def test_the_harness_own_recursion_bound_counts_as_resource_exhaustion() -> None:
-    """The same classification applies to a check the harness owns."""
-    name = "h::c"
-    block = shapes.block(
-        name,
-        PropertyResult(f"{name}.recursion.1", "FAILURE", "recursion"),
+        PropertyResult(identifier.format(name=name), "FAILURE", "recursion"),
         failed_count=1,
         total_count=1,
         verdict="FAILED",
@@ -382,3 +359,49 @@ def test_a_certified_panic_ignores_a_crate_wide_unsupported_warning() -> None:
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
 
     assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED
+
+
+def test_a_should_panic_claim_without_the_note_is_undetermined() -> None:
+    """Require Kani's note before accepting a claim declared to panic.
+
+    A successful block with no note is a report the release cannot print; the
+    claim has not shown the panic the manifest declared, so the run cannot be
+    verified.
+    """
+    name = "h::c"
+    block = shapes.block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "the assertion holds"),
+        failed_count=0,
+        total_count=1,
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
+
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNDETERMINED
+
+
+def test_a_secondary_failure_is_not_verified() -> None:
+    """A second failed check denies a block whose primary class succeeded."""
+    fact = facts.HarnessFact(
+        "h::c",
+        CLAIM,
+        facts.SUCCESS,
+        extra=facts.FAILURE,
+    )
+
+    assert facts.decision_for((fact,)).outcome == KaniOutcome.COUNTEREXAMPLE
+
+
+def test_every_failed_check_carries_its_own_explanation() -> None:
+    """Build one failure explanation per failed check, as Kani prints them."""
+    fact = facts.HarnessFact(
+        "h::c",
+        CLAIM,
+        facts.FAILURE,
+        extra=facts.FAILURE,
+    )
+    block = facts.block_of(fact)
+
+    assert block is not None
+    assert len(block.failures) == block.failed_count == 2

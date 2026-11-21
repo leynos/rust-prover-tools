@@ -717,6 +717,12 @@ A second banner means the capture holds two invocations. The parser refuses it
 rather than returning the first run's facts, because those facts say nothing
 about whatever the second run reported.
 
+A claim declared `should_panic` is verified only when Kani printed the
+expected-panic note; a successful block without it is undetermined. The note is
+also refused when no check failed, because the driver prints it only after
+excusing a failed property and a block with nothing to excuse is a report the
+release cannot produce.
+
 The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
 manifest or digest binding. Each `Vocabulary` names the prover, its words, the
@@ -780,14 +786,15 @@ another file is outside the per-file scan, which the user guide states. A
 declaration whose name a metavariable supplies is refused, because only the
 invocation's arguments decide that name and the scan never evaluates them; an
 expansion that invokes a macro through a metavariable, or reaches a trust item
-through one such as `$p::assume`, is refused for the same reason. A target
-reached through a symbolic link is reported as the physical file, so a cyclic
-`#[path]` terminates, while the children of that module resolve from the
+through one such as `$p::assume` or `kani::$f`, is refused for the same reason.
+A target reached through a symbolic link is reported as the physical file, so a
+cyclic `#[path]` terminates, while the children of that module resolve from the
 pathname the compiler loaded rather than the link's target. A file reached with
-two owners that name different directories is refused, because its children
-would resolve beneath one or the other. When a plain crate and a proc-macro
-crate both reach one file, the stronger literal-reading policy wins and the
-file is rescanned. A `#[path]` that a `cfg_attr` can select is refused: the
+two owners, or two declaring directories, that name different directories is
+refused, because a file-scope `#[path]` would resolve its children beneath one
+or the other. When a plain crate and a proc-macro crate both reach one file,
+the stronger literal-reading policy wins and the file and its children are
+rescanned. A `#[path]` that a `cfg_attr` can select is refused: the
 configuration decides which file compiles, so no single answer would be true. A
 nested `cfg_attr` is read through its own payload, so a predicate that merely
 spells `path = …` is not mistaken for an applied path attribute; an unrelated

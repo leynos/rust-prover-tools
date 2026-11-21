@@ -13,15 +13,27 @@ and hashed like the block it came from.
 from __future__ import annotations
 
 import dataclasses as dc
+import typing as typ
+
+if typ.TYPE_CHECKING:
+    from rust_prover_tools.kani_log.manifest import Manifest
+
 
 from rust_prover_tools.kani_log.syntax import (
+    ASSERTION_KIND,
     COVER_KIND,
     UNSUPPORTED_KIND,
     UNWINDING_KINDS,
     PropertyResult,
 )
 
-__all__ = ("Observed",)
+__all__ = (
+    "Observed",
+    "denies_claim",
+    "is_indeterminate",
+    "lacks_panic_evidence",
+    "panics_as_expected",
+)
 
 #: A check the solver could not decide, wherever in the call tree it sits.
 UNRESOLVED_STATUS = "UNDETERMINED"
@@ -151,3 +163,52 @@ class Observed:
         return any(
             item.status == UNREACHABLE_STATUS for item in (*self.properties, *ownerless)
         )
+
+
+def lacks_panic_evidence(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether a claim declared to panic lacks Kani's panic note."""
+    entry = next(
+        (claim for claim in manifest.claims if claim.name == seen.name),
+        None,
+    )
+    return entry is not None and entry.should_panic and not seen.panics_as_expected
+
+
+def is_indeterminate(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether a block leaves a claim undecided.
+
+    A certified expected panic explains an unreachable check: the code after
+    the panic is unreachable by construction, and Kani's note says the panic
+    was the one the harness declared.  Counting that as undetermined would fail
+    a claim the manifest asked for and Kani certified.  A solver that returned
+    no answer is still undetermined, because the panic note says nothing about
+    it.
+    """
+    if panics_as_expected(seen, manifest):
+        return seen.unresolved
+    return seen.indeterminate
+
+
+def denies_claim(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether one block carries a failure its manifest cannot excuse."""
+    failures = (*seen.substantive_failures, *seen.foreign_failures)
+    if not failures:
+        return False
+    if not panics_as_expected(seen, manifest):
+        return True
+    return any(item.kind != ASSERTION_KIND for item in failures)
+
+
+def panics_as_expected(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether the manifest declares this claim's panic, and it happened.
+
+    The note is Kani's own certificate rather than an inference from the
+    failure: the driver prints it only for a harness declared to panic whose
+    every failed property is an assertion, and it is that combination the
+    driver calls successful.  It therefore says nothing about a failure of any
+    other kind, which is why the caller still reads the failed checks.
+    """
+    if not seen.panics_as_expected:
+        return False
+    entry = next(item for item in manifest.claims if item.name == seen.name)
+    return entry.should_panic

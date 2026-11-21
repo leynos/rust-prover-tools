@@ -98,7 +98,7 @@ def use_roots(
     """
     if is_grouped(tokens, start, end):
         return _grouped_roots(tokens, start, end)
-    root = use_root(tokens, start)
+    root = use_root(tokens, start, end)
     if root is None:
         return ()
     return tuple((root, alias) for alias in use_aliases(tokens, start, end)) or (
@@ -106,7 +106,7 @@ def use_roots(
     )
 
 
-def use_root(tokens: tuple[Token, ...], start: int) -> str | None:
+def use_root(tokens: tuple[Token, ...], start: int, end: int) -> str | None:
     """Return the crate a ``use`` statement takes its paths from.
 
     A leading ``::`` means an absolute path, so the root is the first identifier
@@ -120,8 +120,12 @@ def use_root(tokens: tuple[Token, ...], start: int) -> str | None:
     tokens : tuple[Token, ...]
         The lexed source.
     start : int
-        Token index of the first token after ``use``.  No ``end`` is taken:
-        the walk stops at the next ``;``.
+        Token index of the first token after ``use``.
+    end : int
+        Token index ending the path, which the caller already knows.  Reading
+        it here rather than searching for the statement's ``;`` keeps a grouped
+        import linear: every member would otherwise rescan the remainder of
+        the statement.
 
     Returns
     -------
@@ -129,7 +133,7 @@ def use_root(tokens: tuple[Token, ...], start: int) -> str | None:
         The first crate the statement names, or ``None`` when it names none.
 
     """
-    for index in range(start, statement_end(tokens, start)):
+    for index in range(start, end):
         token = tokens[index]
         if token.text == "{":
             continue
@@ -205,7 +209,7 @@ def _grouped_roots(
         if is_grouped(tokens, member_start, member_end):
             roots.extend(_grouped_roots(tokens, member_start, member_end))
             continue
-        root = use_root(tokens, member_start)
+        root = use_root(tokens, member_start, member_end)
         if root is None:
             continue
         aliases = use_aliases(tokens, member_start, member_end)

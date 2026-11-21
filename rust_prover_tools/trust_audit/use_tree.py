@@ -160,7 +160,7 @@ def rooted_spans(
         for member_start, member_end in top_level_members(tokens, start, end):
             yield from rooted_spans(tokens, member_start, member_end)
         return
-    root = use_root(tokens, start)
+    root = use_root(tokens, start, end)
     if root is not None:
         yield root, start, end
 

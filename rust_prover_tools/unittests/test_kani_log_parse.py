@@ -872,3 +872,17 @@ def test_a_description_holding_a_results_marker_is_read_in_full() -> None:
     )
     block = parse_text(text).blocks[0]
     assert block.covers[0].description == 'first"\n\nRESULTS:\nand second'
+
+
+def test_an_expected_panic_note_without_a_failed_check_is_refused() -> None:
+    """Refuse a report Kani never prints: a note with nothing to excuse.
+
+    The driver prints the note only after excusing a failed property as the
+    declared panic, so a block whose checks all passed cannot carry it.
+    """
+    text = log_text("expected_panic").replace(
+        "Check 1: harnesses::expected_panic.assertion.1\n\t - Status: FAILURE",
+        "Check 1: harnesses::expected_panic.assertion.1\n\t - Status: SUCCESS",
+    )
+
+    assert "expected-panic note but no check failed" in refused(text)

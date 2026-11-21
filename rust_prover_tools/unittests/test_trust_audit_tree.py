@@ -36,11 +36,15 @@ def write(root: Path, files: cabc.Mapping[str, str]) -> None:
 
 
 def audited(root: Path, *drivers: str) -> dict[str, list[str]]:
-    """Return each audited file's items, keyed by repository-relative path."""
-    return {
-        file.path: [item.item for item in file.items]
-        for file in audit_tree(root, drivers)
-    }
+    """Return each audited file's items, keyed by repository-relative path.
+
+    The raw path sequence is checked for duplicates first: a dictionary would
+    silently keep the last of two reports for one file.
+    """
+    files = audit_tree(root, drivers)
+    paths = [file.path for file in files]
+    assert len(paths) == len(set(paths)), f"duplicate audited files: {paths}"
+    return {file.path: [item.item for item in file.items] for file in files}
 
 
 def test_an_inline_module_body_names_no_file() -> None:
@@ -67,6 +71,21 @@ def test_a_path_attribute_is_found_past_a_visibility_modifier() -> None:
 def test_a_path_attribute_is_found_past_another_attribute() -> None:
     """Keep walking the attribute run when an earlier one is not ``#[path]``."""
     source = '#[cfg(test)]\n#[path = "other.rs"]\nmod x;'
+    assert references(source) == [("x", "other.rs", ())]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '#[path = "other.rs"]\n#[allow(dead_code)]\nmod x;',
+        '#[allow(dead_code)]\n#[path = "other.rs"]\nmod x;',
+    ],
+    ids=["path-first", "unrelated-first"],
+)
+def test_a_path_attribute_is_found_past_an_unrelated_attribute(
+    source: str,
+) -> None:
+    """Search the whole attribute run, not only the one nearest ``mod``."""
     assert references(source) == [("x", "other.rs", ())]
 
 
@@ -949,3 +968,54 @@ def test_a_later_procedural_crate_rescans_a_shared_file(tmp_path: Path) -> None:
     result = audited(tmp_path, "proc/src/lib.rs", "plain/src/lib.rs")
 
     assert result["shared/helper.rs"] == ["assume"]
+
+
+def test_two_resolution_contexts_for_one_file_are_refused(
+    tmp_path: Path,
+) -> None:
+    """Refuse one file reached under two declaring directories.
+
+    ``src/lib.rs`` reaches ``src/foo.rs`` as ``mod foo;`` (owning ``src/foo``
+    from directory ``src``) and through a ``#[path]`` symlink (owning
+    ``src/foo`` from directory ``src/foo``).  A file-scope ``#[path]`` inside
+    the file resolves differently in the two contexts, so neither can be
+    chosen.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": 'mod foo;\n#[path = "foo/alias.rs"] mod other;',
+            "src/foo.rs": '#[path = "trusted.rs"]\nmod child;',
+            "src/foo/trusted.rs": "fn f() {}",
+            "src/trusted.rs": "fn g() {}",
+        },
+    )
+    (tmp_path / "src/foo/alias.rs").symlink_to(tmp_path / "src/foo.rs")
+
+    with pytest.raises(TrustAuditError, match="reached both as a file owning"):
+        audit_tree(tmp_path, ["src/lib.rs"])
+
+
+def test_a_policy_upgrade_reaches_child_modules(tmp_path: Path) -> None:
+    """Rescan a shared module's children under the stronger policy.
+
+    The shared module is first reached from a plain crate; its child is
+    discovered then.  The later proc-macro arrival upgrades the parent, and the
+    child must be re-enqueued so its literals are read as code.
+    """
+    write(
+        tmp_path,
+        {
+            "plain/Cargo.toml": '[package]\nname = "plain"\nversion = "0.1.0"\n',
+            "proc/Cargo.toml": '[package]\nname = "proc"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "plain/src/lib.rs": '#[path = "../../shared/helper.rs"]\nmod h;',
+            "proc/src/lib.rs": '#[path = "../../shared/helper.rs"]\nmod h;',
+            "shared/helper.rs": '#[path = "child.rs"]\nmod child;',
+            "shared/child.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    result = audited(tmp_path, "proc/src/lib.rs", "plain/src/lib.rs")
+
+    assert result["shared/child.rs"] == ["assume"]

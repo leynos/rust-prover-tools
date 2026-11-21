@@ -11,6 +11,7 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.trust_audit.conditions import attribute_items, payload_start
+from rust_prover_tools.trust_audit.crate_bindings import alias_bindings
 from rust_prover_tools.trust_audit.structure import attribute_spans, matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_bindings import member_bindings
@@ -85,10 +86,21 @@ def _verus_bodies(tokens: tuple[Token, ...]) -> cabc.Iterator[tuple[int, int]]:
 
 
 def _verus_macro_names(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return ``verus`` and every local name the file binds it to."""
+    """Return ``verus`` and every local name the file binds it to.
+
+    A crate may be renamed before its macro is imported —
+    ``use vstd as local_vstd; use local_vstd::prelude::verus as local_verus;``
+    — so the roots are expanded with their aliases before the member search.
+    Reading only the literal roots would leave such a body unread.
+    """
+    roots = set(VERUS_ROOTS)
+    for root in VERUS_ROOTS:
+        roots.update(alias_bindings(tokens, root))
     names = {"verus"}
     names.update(
-        alias for item, alias in member_bindings(tokens, VERUS_ROOTS) if item == "verus"
+        alias
+        for item, alias in member_bindings(tokens, frozenset(roots))
+        if item == "verus"
     )
     return frozenset(names)
 

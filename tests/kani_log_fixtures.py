@@ -130,7 +130,14 @@ class HarnessFact:
 
     @property
     def verdict(self) -> str:
-        """The verdict Kani would print for this fact set."""
+        """The verdict Kani would print for this fact set.
+
+        A secondary failed check denies the block even when the primary class
+        is a success; the expected-panic note still excuses an assertion that
+        is part of the declared panic.
+        """
+        if self.extra == FAILURE and not self.panic_excused:
+            return "FAILED"
         if self.status in {SUCCESS, UNDETERMINED} or self.panic_excused:
             return "SUCCESSFUL"
         return "FAILED"
@@ -271,10 +278,10 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
     checks = tuple(_checks(fact))
     covers = tuple(item for item in checks if item.is_cover)
     failed = tuple(item for item in checks if item.status == "FAILURE")
-    # Kani explains each failure with the description it listed, so the first
-    # failed check is the description every failing class explains.
-    failures = (
-        (FailedCheck(failed[0].description, "src/harnesses.rs", 7),) if failed else ()
+    # Kani explains every failed check with the description it listed, so the
+    # explanations must match the failed count the summary reports.
+    failures = tuple(
+        FailedCheck(item.description, "src/harnesses.rs", 7) for item in failed
     )
     is_timeout = fact.status == TIMEOUT
     return HarnessBlock(

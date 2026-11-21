@@ -109,14 +109,14 @@ def audit_tree(
         for driver in drivers
     ]
     scanned: dict[str, tuple[TrustItem, ...]] = {}
-    owners: dict[str, str] = {}
+    contexts: dict[str, tuple[str, str]] = {}
     policies: dict[str, bool] = {}
     while pending:
         module = pending.pop()
         # Every arrival is claimed before the deduplication below: skipping a
         # file already scanned would hide that it was reached a second way,
         # which is exactly the ambiguity ``_claim`` exists to refuse.
-        _claim(root, module, owners)
+        _claim(root, module, contexts)
         first_arrival = module.relative not in scanned
         if not first_arrival and not _needs_rescan(
             scanned_as_procedural=policies[module.relative],
@@ -130,8 +130,9 @@ def audit_tree(
         )
         scanned[module.relative] = result.items
         policies[module.relative] = module.procedural_macro
-        if first_arrival:
-            pending.extend(_module_targets(root, module, result.modules))
+        # Re-enqueue after an upgrade too: a child first reached through
+        # the plain crate must still receive the stronger policy.
+        pending.extend(_module_targets(root, module, result.modules))
     return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
 
 
@@ -199,34 +200,40 @@ def _normalize(relative: str) -> str:
 def _claim(
     root: pathlib.Path,
     module: Module,
-    owners: cabc.MutableMapping[str, str],
+    contexts: cabc.MutableMapping[str, tuple[str, str]],
 ) -> None:
-    """Record how ``module`` was reached, refusing an ambiguous owner.
+    """Record how ``module`` was reached, refusing an ambiguous context.
 
-    A file reached twice through the same owner is ordinary — two declarations
-    may name one module — and is deduplicated by the caller.  Two *different*
-    owners are not: the file's child modules would resolve beneath one
-    directory or the other, so the audit cannot say which files the crate
-    compiles.  Owners are compared after resolution, because two spellings such
-    as ``plain/src/../shared`` and ``proc/src/../shared`` may name one
-    directory.
+    A file reached twice through the same context is ordinary — two
+    declarations may name one module — and is deduplicated by the caller.  A
+    different owner, or a different declaring directory for a file-scope
+    ``#[path]``, is not: its child modules would resolve beneath one directory
+    or the other, so the audit cannot say which files the crate compiles.
+    Both facts are compared after resolution, because two spellings such as
+    ``plain/src/../shared`` and ``proc/src/../shared`` may name one directory.
     """
-    owner = owners.setdefault(module.relative, module.owner)
-    if owner != module.owner and _owner_directory(
+    key = (module.owner, module.directory)
+    previous = contexts.setdefault(module.relative, key)
+    if key != previous and _resolution_context(
         root,
-        owner,
-    ) != _owner_directory(root, module.owner):
+        previous,
+    ) != _resolution_context(root, key):
         msg = (
-            f"{module.relative} is reached both as a file owning {owner!r} and "
-            f"as one owning {module.owner!r}; its child modules would resolve "
-            "beneath different directories"
+            f"{module.relative} is reached both as a file owning "
+            f"{previous[0]!r} in {previous[1]!r} and as one owning "
+            f"{module.owner!r} in {module.directory!r}; its child modules "
+            "would resolve beneath different directories"
         )
         raise TrustAuditError(msg)
 
 
-def _owner_directory(root: pathlib.Path, owner: str) -> pathlib.Path:
-    """Return the directory an owner spelling names, with links resolved."""
-    return (root / owner).resolve()
+def _resolution_context(
+    root: pathlib.Path,
+    context: tuple[str, str],
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """Return a context's owner and declaring directory, with links resolved."""
+    owner, directory = context
+    return (root / owner).resolve(), (root / directory).resolve()
 
 
 def _read_source(root: pathlib.Path, relative: str) -> str:

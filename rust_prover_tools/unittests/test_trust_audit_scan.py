@@ -352,7 +352,7 @@ def test_a_line_continuation_is_not_part_of_the_literal_value(newline: str) -> N
     Rust normalizes a CRLF to LF before reading the literal, so the two
     spellings hide the newline alike.
     """
-    source = f'"kani::assume\\{newline}    (x);"'
+    source = f'"kani::ass\\{newline}    ume(x);"'
     found = scan(source, procedural_macro=True).items
     assert [(item.item, item.column) for item in found] == [("assume", 8)]
 
@@ -513,6 +513,9 @@ def test_a_leading_inner_attribute_is_not_a_shebang() -> None:
     """Keep an inner attribute that begins with ``#!`` in the token stream."""
     source = "#![allow(dead_code)]\nkani::assume(x);"
 
+    words = [token.text for token in tokenize(source) if token.kind == "ident"]
+    assert "allow" in words, "the inner attribute must survive tokenization"
+    assert "dead_code" in words
     assert items(source) == [("assume", 2)]
 
 
@@ -766,3 +769,43 @@ def test_a_nested_cfg_attr_payload_is_still_read() -> None:
     )
 
     assert [item for item, _ in items(source)] == ["external_body"]
+
+
+def test_a_grouped_crate_root_import_binds_its_aliases() -> None:
+    """Read ``use crate::{k as kk};`` like the ungrouped form."""
+    source = "use crate::{k as kk};\nfn f() { kk::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_macro_rules_definition_inside_a_matcher_is_not_a_definition() -> None:
+    """Do not treat a matcher's literal tokens as a second definition."""
+    source = "\n".join(
+        (
+            "macro_rules! outer { (macro_rules! x { () => {} }) => {}; }",
+            "macro_rules! x { () => {} }",
+        ),
+    )
+
+    assert items(source) == []
+
+
+def test_a_metavariable_final_path_segment_is_refused() -> None:
+    """Refuse ``kani::$f(..)``, whose called item only the arguments decide."""
+    source = "macro_rules! call { ($f:ident) => { kani::$f(true) }; }"
+
+    with pytest.raises(TrustAuditError, match="final path segment"):
+        items(source)
+
+
+def test_a_verus_macro_alias_through_a_renamed_crate_opens_a_region() -> None:
+    """Resolve a renamed Verus crate before collecting the macro alias."""
+    source = "\n".join(
+        (
+            "use vstd as local_vstd;",
+            "use local_vstd::prelude::verus as local_verus;",
+            "local_verus! { fn f() { admit(); } }",
+        ),
+    )
+
+    assert [item for item, _ in items(source)] == ["admit"]

@@ -254,10 +254,13 @@ An unwinding failure is a bound, not a counterexample. A `should_panic` claim
 is excused only when Kani also reported that the panic matched, and then only
 for the checks it counts as a panic: the driver prints that note only when
 every failed property is an assertion, so a failure of any other kind beside it
-is an independent failure and still a counterexample. The exemption reaches a
-failed assertion under a called routine, which is the same panic seen one frame
-down, and an unreachable check after the panic is explained the same way rather
-than reported as undetermined. The run is still bounded: none of these outcomes
+is an independent failure and still a counterexample. A claim declared to panic
+is verified only when the note is present; a successful block without it is
+reported as `undetermined`, and a block carrying the note with no failed check
+is refused as a report the release cannot print. The exemption reaches a failed
+assertion under a called routine, which is the same panic seen one frame down,
+and an unreachable check after the panic is explained the same way rather than
+reported as undetermined. The run is still bounded: none of these outcomes
 proves a property over every execution.
 
 `tool-error` covers a log that cannot be decided from at all: truncated or
@@ -805,11 +808,16 @@ tell which one an invocation expands. A declaration whose name comes from a
 metavariable is refused, because only the invocation's arguments decide that
 name, and an expansion that invokes a macro through a metavariable is refused
 for the same reason, as is one that reaches a trust item through a metavariable
-path such as `$p::assume`. A target reached through a symbolic link is reported
-as the physical file it reaches, so a cyclic `#[path]` is scanned once; a
-`#[path]` inside that module still resolves from the pathname the compiler
-loaded. When a plain crate and a proc-macro crate both reach one file through
-`#[path]`, the file is rescanned with the stronger literal-reading policy.
+path such as `$p::assume` or `kani::$f`. A target reached through a symbolic
+link is reported as the physical file it reaches, so a cyclic `#[path]` is
+scanned once; a `#[path]` inside that module still resolves from the pathname
+the compiler loaded. Two arrivals at one physical file are accepted only when
+they agree on both the owner directory and the declaring directory, because a
+file-scope `#[path]` resolves against the latter. When a plain crate and a
+proc-macro crate both reach one file through `#[path]`, the file and its
+children are rescanned with the stronger literal-reading policy. A
+`macro_rules!` definition spelled inside a matcher is input, not a second
+definition.
 
 A `#[path]` is resolved from the directory rustc uses at that position. At file
 scope that is the declaring file's own directory; the first inline `#[path]`
@@ -842,11 +850,11 @@ names when the use is bare, is reached through `self::`, `crate::` or
 `super::`, or is qualified by a module the same file declares —
 `mod m { pub use kani::assume as a; } m::a(..)` reaches the binding the file
 shows. A module declared elsewhere is not shown, so its names are left alone,
-except that a name imported from the crate root (`use crate::k;`) is treated as
-a possible crate alias because the declaration it names is outside the file. A
-crate alias re-exported by a module the file declares is followed
-(`use m::k as kk;`). A turbofish call such as `a::<u32, _>(..)` is a call on
-the renamed item, not a path through it.
+except that a name imported from the crate root — `use crate::k;` or
+`use crate::{k as kk};` — is treated as a possible crate alias because the
+declaration it names is outside the file. A crate alias re-exported by a module
+the file declares is followed (`use m::k as kk;`). A turbofish call such as
+`a::<u32, _>(..)` is a call on the renamed item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a

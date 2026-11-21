@@ -31,10 +31,14 @@ from rust_prover_tools.kani_log.controls import (
     REJECTED_OTHERWISE,
     control_statuses,
 )
-from rust_prover_tools.kani_log.observation import Observed
+from rust_prover_tools.kani_log.observation import (
+    Observed,
+    denies_claim,
+    is_indeterminate,
+    lacks_panic_evidence,
+)
 from rust_prover_tools.kani_log.run_mode import FOCUSED, FULL_PROFILE, run_mode
 from rust_prover_tools.kani_log.syntax import (
-    ASSERTION_KIND,
     UNSUPPORTED_KIND,
     UNSUPPORTED_MARKER,
     KaniLogError,
@@ -264,7 +268,7 @@ def _outcome(
         return KaniOutcome.RESOURCE_EXHAUSTED
     if any(_is_unsupported(log, item, manifest) for item in reported):
         return KaniOutcome.UNSUPPORTED
-    if any(_is_indeterminate(item, manifest) for item in reported):
+    if any(is_indeterminate(item, manifest) for item in reported):
         return KaniOutcome.UNDETERMINED
     return _final_outcome(reported, manifest)
 
@@ -281,26 +285,17 @@ def _final_outcome(
     """
     if not manifest.claims:
         return KaniOutcome.SKIPPED
+    if any(lacks_panic_evidence(seen, manifest) for seen in reported):
+        # A claim declared to panic must be verified by Kani's own note.  A
+        # successful block without it is a report the pinned release cannot
+        # produce, and accepting it would pass a harness whose panic never
+        # happened.
+        return KaniOutcome.UNDETERMINED
     return (
         KaniOutcome.VERIFIED
         if len(reported) == len(manifest.claims)
         else KaniOutcome.SKIPPED
     )
-
-
-def _is_indeterminate(seen: Observed, manifest: Manifest) -> bool:
-    """Report whether a block leaves a claim undecided.
-
-    A certified expected panic explains an unreachable check: the code after
-    the panic is unreachable by construction, and Kani's note says the panic
-    was the one the harness declared.  Counting that as undetermined would fail
-    a claim the manifest asked for and Kani certified.  A solver that returned
-    no answer is still undetermined, because the panic note says nothing about
-    it.
-    """
-    if _panics_as_expected(seen, manifest):
-        return seen.unresolved
-    return seen.indeterminate
 
 
 def _unexplained_failure(seen: Observed) -> bool:
@@ -330,17 +325,7 @@ def _has_counterexample(
     kind is not: the note cannot explain it, and excusing it would report the
     claim verified beside an independent safety failure.
     """
-    return any(_denies_claim(seen, manifest) for seen in reported)
-
-
-def _denies_claim(seen: Observed, manifest: Manifest) -> bool:
-    """Report whether one block carries a failure its manifest cannot excuse."""
-    failures = (*seen.substantive_failures, *seen.foreign_failures)
-    if not failures:
-        return False
-    if not _panics_as_expected(seen, manifest):
-        return True
-    return any(item.kind != ASSERTION_KIND for item in failures)
+    return any(denies_claim(seen, manifest) for seen in reported)
 
 
 def _has_resource_exhaustion(reported: list[Observed]) -> bool:
@@ -353,21 +338,6 @@ def _has_resource_exhaustion(reported: list[Observed]) -> bool:
         ))
         for item in reported
     )
-
-
-def _panics_as_expected(seen: Observed, manifest: Manifest) -> bool:
-    """Report whether the manifest declares this claim's panic, and it happened.
-
-    The note is Kani's own certificate rather than an inference from the
-    failure: the driver prints it only for a harness declared to panic whose
-    every failed property is an assertion, and it is that combination the
-    driver calls successful.  It therefore says nothing about a failure of any
-    other kind, which is why the caller still reads the failed checks.
-    """
-    if not seen.panics_as_expected:
-        return False
-    entry = next(item for item in manifest.claims if item.name == seen.name)
-    return entry.should_panic
 
 
 def _is_unsupported(
@@ -393,4 +363,4 @@ def _is_unsupported(
         return True
     if any(UNSUPPORTED_MARKER in text.lower() for text in seen.failure_messages):
         return True
-    return bool(log.unsupported_constructs) and _is_indeterminate(seen, manifest)
+    return bool(log.unsupported_constructs) and is_indeterminate(seen, manifest)

@@ -212,6 +212,7 @@ def test_a_clean_summary_beside_a_failing_status_is_refused() -> None:
         LogExpectations(exit_status=1),
     )
 
+    assert not result.meets
     assert result.disagreements == (
         "the summary reported no errors, but the invocation exited 1",
     )
@@ -224,6 +225,7 @@ def test_a_failing_summary_beside_a_clean_status_is_refused() -> None:
         LogExpectations(exit_status=0),
     )
 
+    assert not result.meets
     assert result.disagreements == (
         "the summary reported 1 failing functions, but the invocation exited 0",
     )

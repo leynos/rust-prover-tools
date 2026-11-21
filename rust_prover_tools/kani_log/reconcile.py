@@ -42,18 +42,7 @@ def require_complete(builder: _BlockBuilder) -> None:
     if builder.verdict is None:
         msg = f"the block for {builder.name!r} ends without a verification result"
         raise KaniLogError(msg)
-    if builder.panics_as_expected and builder.verdict != "SUCCESSFUL":
-        # The driver prints the note only when every failed property was the
-        # panic the harness declared, and that is the same condition under
-        # which it calls the harness successful.  A failed verdict carrying
-        # the note is therefore a report the pinned release cannot produce,
-        # and accepting it would let the note excuse a failure Kani itself
-        # treated as unexpected.
-        msg = (
-            f"the block for {builder.name!r} reports {builder.verdict} with the "
-            "expected-panic note, which Kani prints only for a successful verdict"
-        )
-        raise KaniLogError(msg)
+    _require_panic_note(builder)
     if builder.timed_out:
         # A timeout aborts CBMC before ``RESULTS:``, so a block carrying the
         # marker has nothing further to reconcile; anything that did arrive
@@ -87,6 +76,30 @@ def require_complete(builder: _BlockBuilder) -> None:
     _require_counts(builder, checks)
     _require_covers(builder)
     _require_other(builder, checks)
+
+
+def _require_panic_note(builder: _BlockBuilder) -> None:
+    """Reconcile the expected-panic note against the block it certifies.
+
+    Kani prints the note only when it excused a failed property as the panic
+    the harness declared, and that is the same condition under which it calls
+    the harness successful.  A failed verdict, or a block with no failed check
+    to excuse, is therefore a report the pinned release cannot produce.
+    """
+    if not builder.panics_as_expected:
+        return
+    if not any(item.status == "FAILURE" for item in builder.properties):
+        msg = (
+            f"the block for {builder.name!r} reports the expected-panic note "
+            "but no check failed"
+        )
+        raise KaniLogError(msg)
+    if builder.verdict != "SUCCESSFUL":
+        msg = (
+            f"the block for {builder.name!r} reports {builder.verdict} with the "
+            "expected-panic note, which Kani prints only for a successful verdict"
+        )
+        raise KaniLogError(msg)
 
 
 def _require_timeout(builder: _BlockBuilder) -> None:

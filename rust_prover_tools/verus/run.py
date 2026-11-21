@@ -136,7 +136,7 @@ def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
             resolved,
             toolchain,
             options.extra_args,
-            options.z3_path,
+            z3_path=options.z3_path,
         ),
     )
     return lines

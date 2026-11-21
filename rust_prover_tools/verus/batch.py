@@ -45,19 +45,20 @@ class VerusRunSettings:
         Rust toolchain identifier, reported on failure.
     extra_args : tuple[str, ...]
         Extra verifier arguments appended after each proof file.
-    z3_path : Path | None
-        Solver bound to every invocation through `VERUS_Z3_PATH`. `None`
-        leaves the child's inherited environment untouched.
     clock : Callable[[], float]
         Monotonic time source for telemetry durations. Tests inject a
         deterministic fake; production callers keep the default.
+    z3_path : Path | None
+        Solver bound to every invocation through `VERUS_Z3_PATH`. `None`
+        leaves the child's inherited environment untouched. It is
+        keyword-only so an existing positional call cannot bind a clock to it.
     """
 
     verus_bin: Path
     toolchain: str
     extra_args: tuple[str, ...] = ()
-    z3_path: Path | None = None
     clock: cabc.Callable[[], float] = time.monotonic
+    z3_path: Path | None = dc.field(default=None, kw_only=True)
 
 
 def _outcome_class(exit_code: int) -> str:

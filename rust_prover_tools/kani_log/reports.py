@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.kani_log.checks import check
+from rust_prover_tools.kani_log.checks import check, explained_message
 from rust_prover_tools.kani_log.model import ManualSummary
 from rust_prover_tools.kani_log.syntax import (
     CHECK,
@@ -40,7 +40,29 @@ __all__ = (
 
 
 def results(reader: Reader, builder: _BlockBuilder) -> None:
-    """Consume the ``RESULTS:`` section into ``builder``."""
+    """Consume the ``RESULTS:`` section into ``builder``.
+
+    Parameters
+    ----------
+    reader : Reader
+        The log cursor, positioned immediately after the caller consumed the
+        ``RESULTS:`` heading line.
+    builder : _BlockBuilder
+        The block the listed checks are recorded on.  ``has_results`` is set
+        before the first check is read.
+
+    Returns
+    -------
+    None
+        The cursor stops at the first line that is neither a ``Check N:``
+        entry nor blank, which is the section boundary the block reader
+        continues from.
+
+    Raises
+    ------
+    KaniLogError
+        If a check entry is malformed or the log ends inside one.
+    """
     builder.has_results = True
     while not reader.exhausted:
         line = reader.peek()
@@ -93,7 +115,28 @@ def _report_int(reader: Reader, value: str) -> int:
 
 
 def summary(reader: Reader, builder: _BlockBuilder) -> None:
-    """Consume the ``SUMMARY:`` section, including failed-check explanations."""
+    """Consume the ``SUMMARY:`` section, including failed-check explanations.
+
+    Parameters
+    ----------
+    reader : Reader
+        The log cursor, positioned immediately after the caller consumed the
+        ``SUMMARY:`` heading line.
+    builder : _BlockBuilder
+        The block the counts, covers and failure explanations are recorded on.
+
+    Returns
+    -------
+    None
+        The cursor stops before the verdict line that ends the section, which
+        the block reader consumes next.
+
+    Raises
+    ------
+    KaniLogError
+        If a summary line is unrecognised or the log is truncated before the
+        verdict.
+    """
     while not reader.exhausted:
         line = reader.peek()
         total = TOTAL.match(line)
@@ -201,7 +244,7 @@ def failed_check(
         If the explanation disagrees with the check it repeats.
 
     """
-    message = _explained_message(reader, builder, match["message"])
+    message = explained_message(reader, builder, match["message"])
     path: str | None = None
     line: int | None = None
     if not reader.exhausted:
@@ -212,60 +255,33 @@ def failed_check(
     return FailedCheck(message=message, path=path, line=line)
 
 
-def _explained_message(
-    reader: Reader,
-    builder: _BlockBuilder,
-    first_line: str,
-) -> str:
-    """Read the whole explanation of the failure being explained.
-
-    Kani prints the failed property's description again after ``Failed
-    Checks:``, and escapes nothing, so a description holding a newline arrives
-    over several lines with only the first on the labelled line.  The results
-    section has already been read, and Kani renders one explanation per failed
-    check in the order it listed them, so the description says exactly how many
-    lines the explanation occupies and what they must say.  Reading by the
-    text that happens to follow would stop at the wrong line whenever the next
-    report line looked like prose.
-
-    A summary that explains something the results did not list contradicts
-    itself, so a first line or continuation that disagrees is refused rather
-    than attributed to the check.
-    """
-    described = [
-        item.description for item in builder.properties if item.status == "FAILURE"
-    ]
-    index = len(builder.failures)
-    if index >= len(described):
-        # More explanations than failures is a contradiction the block's count
-        # reconciliation refuses once the block ends; until then there is no
-        # description to read the continuation from.
-        return first_line
-    expected = described[index].split("\n")
-    if expected[0] != first_line:
-        msg = (
-            f"{reader.where()}: the failure explanation {first_line!r} "
-            "disagrees with the check it explains"
-        )
-        raise KaniLogError(msg)
-    pieces = [first_line]
-    for piece in expected[1:]:
-        if reader.exhausted or reader.peek() != piece:
-            msg = (
-                f"{reader.where()}: the failure explanation for "
-                f"{first_line!r} disagrees with the check it explains"
-            )
-            raise KaniLogError(msg)
-        pieces.append(reader.take())
-    return "\n".join(pieces)
-
-
 def verification(
     reader: Reader,
     builder: _BlockBuilder,
     match: re.Match[str],
 ) -> None:
-    """Record the verdict from one already-matched ``VERIFICATION:`` line."""
+    """Record the verdict from one already-matched ``VERIFICATION:`` line.
+
+    Parameters
+    ----------
+    reader : Reader
+        The log cursor, positioned at the verdict line.
+    builder : _BlockBuilder
+        The block the verdict and expected-panic note are recorded on.
+    match : re.Match[str]
+        The already-matched verdict line.
+
+    Returns
+    -------
+    None
+        The verdict line is consumed.
+
+    Raises
+    ------
+    KaniLogError
+        If the block already carries a verdict, because one block is one
+        verification result.
+    """
     reader.take()
     if builder.verdict is not None:
         msg = f"the block for {builder.name!r} reports two verification results"
@@ -277,7 +293,24 @@ def verification(
 
 
 def manual(reader: Reader) -> ManualSummary:
-    """Consume the ``Manual Harness Summary`` that ends a complete run."""
+    """Consume the ``Manual Harness Summary`` that ends a complete run.
+
+    Parameters
+    ----------
+    reader : Reader
+        The log cursor, positioned at the ``Manual Harness Summary:`` heading.
+
+    Returns
+    -------
+    ManualSummary
+        The counts and failed harness names the summary printed.  The heading
+        and every consumed summary line are behind the cursor.
+
+    Raises
+    ------
+    KaniLogError
+        If a summary line is unrecognised or the counts never arrive.
+    """
     reader.take()
     failed: list[str] = []
     while not reader.exhausted:
@@ -305,7 +338,25 @@ def manual(reader: Reader) -> ManualSummary:
 
 
 def unsupported_constructs(reader: Reader) -> list[str]:
-    """Consume Kani's pre-flight list of constructs it cannot model."""
+    """Consume Kani's pre-flight list of constructs it cannot model.
+
+    Parameters
+    ----------
+    reader : Reader
+        The log cursor, positioned at the list's heading line.
+
+    Returns
+    -------
+    list[str]
+        One name per listed construct, in source order.  The heading and the
+        entries are behind the cursor; the first non-entry line is left for
+        the caller.
+
+    Raises
+    ------
+    KaniLogError
+        Never directly; a truncated list simply ends at the last entry.
+    """
     reader.take()
     names: list[str] = []
     while not reader.exhausted:
@@ -321,5 +372,17 @@ def unsupported_constructs(reader: Reader) -> list[str]:
 
 
 def is_noise(line: str) -> bool:
-    """Report whether a line is build or driver chatter, not report content."""
+    """Report whether a line is build or driver chatter, not report content.
+
+    Parameters
+    ----------
+    line : str
+        One rendered log line.
+
+    Returns
+    -------
+    bool
+        ``True`` for a blank line or one beginning with a known chatter
+        prefix.
+    """
     return not line.strip() or line.startswith(NOISE_PREFIXES)

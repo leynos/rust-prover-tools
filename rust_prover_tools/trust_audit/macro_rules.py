@@ -99,13 +99,36 @@ class _Definitions:
 def _definition_bounds(
     tokens: tuple[Token, ...],
 ) -> tuple[dict[str, int], set[int]]:
-    """Return each macro's head index and every token inside a definition."""
+    """Return each macro's head index and every token inside a definition.
+
+    A matcher can spell a whole ``macro_rules!`` definition as the input it
+    matches, and those tokens declare nothing.  The pattern spans are collected
+    from every candidate head first, so a head that sits inside a matcher is
+    skipped before its name can collide with the real definition.
+    """
+    candidates = [
+        (index, spans)
+        for index in range(len(tokens) - len(_MACRO_HEAD))
+        if (spans := _definition_spans(tokens, index)) is not None
+    ]
+    patterns = _candidate_patterns(tokens, candidates)
     found = _Definitions()
-    for index in range(len(tokens) - len(_MACRO_HEAD)):
-        spans = _definition_spans(tokens, index)
-        if spans is not None:
+    for index, spans in candidates:
+        if index not in patterns:
             _record_definition(tokens, found, index, spans)
     return found.heads, found.definitions
+
+
+def _candidate_patterns(
+    tokens: tuple[Token, ...],
+    candidates: cabc.Iterable[tuple[int, tuple[str, int, int]]],
+) -> set[int]:
+    """Return the matcher tokens of every candidate definition."""
+    patterns: set[int] = set()
+    for _, (_, opening, closing) in candidates:
+        body_patterns, _ = _rule_spans(tokens, opening, closing)
+        patterns.update(body_patterns)
+    return patterns
 
 
 def _record_definition(

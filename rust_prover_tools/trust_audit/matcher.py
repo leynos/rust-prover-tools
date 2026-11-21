@@ -33,6 +33,7 @@ never sees.
 from __future__ import annotations
 
 from rust_prover_tools.trust_audit.context import Context
+from rust_prover_tools.trust_audit.crate_bindings import alias_bindings
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import ScanResult
@@ -54,6 +55,9 @@ __all__ = ("scan",)
 
 # The delimiters a macro invocation may open.
 _MACRO_DELIMITERS = frozenset({"(", "[", "{"})
+# The qualifier, its ``::``, and the metavariable marker before a final path
+# segment: the three tokens that say where a hidden path is rooted.
+_TRUST_PATH_SEGMENTS = 3
 
 
 def scan(
@@ -95,11 +99,16 @@ def scan(
     """
     tokens = tokenize(text)
     words = frozenset(item for vocabulary in vocabularies for item in vocabulary.items)
+    roots = frozenset(root for vocabulary in vocabularies for root in vocabulary.roots)
     try:
+        qualifiers = set(roots)
+        for root in roots:
+            qualifiers.update(alias_bindings(tokens, root))
         _refuse_opaque_macros(
             tokens,
             procedural_macro=procedural_macro,
             words=words,
+            qualifiers=frozenset(qualifiers),
         )
         modules = module_references(tokens)
         context = Context(
@@ -124,6 +133,7 @@ def _refuse_opaque_macros(
     *,
     procedural_macro: bool,
     words: frozenset[str],
+    qualifiers: frozenset[str],
 ) -> None:
     """Fail closed on a macro whose expansion the scan cannot read.
 
@@ -147,7 +157,7 @@ def _refuse_opaque_macros(
         base |= PROCEDURAL_OPAQUE_MACROS
     names = _opaque_names(tokens, base)
     rules = macro_rules(tokens)
-    _refuse_metavariable_invocations(tokens, rules, words)
+    _refuse_metavariable_invocations(tokens, rules, words, qualifiers)
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
         if index in rules.patterns:
@@ -167,6 +177,7 @@ def _refuse_metavariable_invocations(
     tokens: tuple[Token, ...],
     rules: MacroRules,
     words: frozenset[str],
+    qualifiers: frozenset[str],
 ) -> None:
     """Fail closed on an expansion whose metavariable hides a trust use.
 
@@ -200,6 +211,28 @@ def _refuse_metavariable_invocations(
                 f"'${token.text}', so the audit cannot tell which crate it names"
             )
             raise TrustAuditError(msg)
+        if following == "(" and _is_trust_qualified(tokens, index, qualifiers):
+            msg = (
+                f"the macro_rules! expansion at line {token.line}, column "
+                f"{token.column} reaches a trust item through the metavariable "
+                f"'${token.text}' as its final path segment, so the audit "
+                "cannot tell which item is called"
+            )
+            raise TrustAuditError(msg)
+
+
+def _is_trust_qualified(
+    tokens: tuple[Token, ...],
+    index: int,
+    qualifiers: frozenset[str],
+) -> bool:
+    """Report whether a metavariable ends a path rooted at a trust crate."""
+    return (
+        index >= _TRUST_PATH_SEGMENTS
+        and tokens[index - 1].text == "$"
+        and tokens[index - 2].text == "::"
+        and tokens[index - 3].text in qualifiers
+    )
 
 
 def _opaque_names(

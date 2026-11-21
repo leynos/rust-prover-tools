@@ -38,7 +38,7 @@ from rust_prover_tools.kani_log.syntax import (
 if typ.TYPE_CHECKING:
     import re
 
-    from rust_prover_tools.kani_log.reader import Reader
+    from rust_prover_tools.kani_log.reader import Reader, _BlockBuilder
 
 __all__ = ("check",)
 
@@ -246,3 +246,51 @@ def _unquote(value: str) -> str:
     if value[0] == value[-1] == '"':
         return value[1:-1]
     return value
+
+
+def explained_message(
+    reader: Reader,
+    builder: _BlockBuilder,
+    first_line: str,
+) -> str:
+    """Read the whole explanation of the failure being explained.
+
+    Kani prints the failed property's description again after ``Failed
+    Checks:``, and escapes nothing, so a description holding a newline arrives
+    over several lines with only the first on the labelled line.  The results
+    section has already been read, and Kani renders one explanation per failed
+    check in the order it listed them, so the description says exactly how many
+    lines the explanation occupies and what they must say.  Reading by the
+    text that happens to follow would stop at the wrong line whenever the next
+    report line looked like prose.
+
+    A summary that explains something the results did not list contradicts
+    itself, so a first line or continuation that disagrees is refused rather
+    than attributed to the check.
+    """
+    described = [
+        item.description for item in builder.properties if item.status == "FAILURE"
+    ]
+    index = len(builder.failures)
+    if index >= len(described):
+        # More explanations than failures is a contradiction the block's count
+        # reconciliation refuses once the block ends; until then there is no
+        # description to read the continuation from.
+        return first_line
+    expected = described[index].split("\n")
+    if expected[0] != first_line:
+        msg = (
+            f"{reader.where()}: the failure explanation {first_line!r} "
+            "disagrees with the check it explains"
+        )
+        raise KaniLogError(msg)
+    pieces = [first_line]
+    for piece in expected[1:]:
+        if reader.exhausted or reader.peek() != piece:
+            msg = (
+                f"{reader.where()}: the failure explanation for "
+                f"{first_line!r} disagrees with the check it explains"
+            )
+            raise KaniLogError(msg)
+        pieces.append(reader.take())
+    return "\n".join(pieces)

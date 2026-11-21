@@ -231,20 +231,23 @@ def test_probing_an_explicit_selection_records_that_it_was_explicit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A solver the caller named is recorded as their choice."""
+    """Probe the executable the caller named, and record it as their choice."""
     binary = tmp_path / "solver"
     binary.write_text("", encoding="utf-8")
-    monkeypatch.setattr(
-        run_cli,
-        "run_command",
-        _probe_returning(
-            CommandResult(stdout=CALIBRATED_Z3_BANNER, stderr="", exit_code=0),
-        ),
-    )
+    seen: list[tuple[str, ...]] = []
+
+    def observe(spec: CommandSpec) -> CommandResult:
+        """Record the argv the command boundary would execute."""
+        seen.append(spec.argv)
+        return CommandResult(stdout=CALIBRATED_Z3_BANNER, stderr="", exit_code=0)
+
+    monkeypatch.setattr(run_cli, "run_command", observe)
 
     qualified = run_cli.probe_and_qualify_z3(str(binary), repo_root=tmp_path)
 
     assert qualified.source == EXPLICIT_SOURCE
+    assert qualified.executable == binary.resolve()
+    assert seen == [(str(binary.resolve()), "--version")]
 
 
 def test_probing_refuses_a_solver_that_reports_another_release(

@@ -14,8 +14,13 @@ import typing as typ
 
 from rust_prover_tools.trust_audit.inline_modules import inline_module_names
 from rust_prover_tools.trust_audit.modules import module_references
+from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
-from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
+from rust_prover_tools.trust_audit.use_paths import (
+    statement_end,
+    top_level_members,
+    use_roots,
+)
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
     member_aliases,
@@ -100,45 +105,66 @@ def alias_bindings(tokens: tuple[Token, ...], root: str) -> frozenset[str]:
 
 
 def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return the local names ``use crate::name;`` binds in this file.
+    """Return the local names a ``crate::`` import binds in this file.
 
     A single-segment import from the crate root may name an alias the root
-    declares; a deeper path names a member and is left to the member rules.
-    The local spelling is what a qualified use would carry.
+    declares; its grouped form (``use crate::{k as kk, j};``) binds the same
+    names.  A deeper path names a member and is left to the member rules.  The
+    local spelling is what a qualified use would carry.
     """
     names: set[str] = set()
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or token.text != "use":
             continue
         end = statement_end(tokens, index + 1)
-        local = _crate_root_binding(tokens, index + 1, end)
-        if local is not None:
-            names.add(local)
+        for root, start, stop in rooted_spans(tokens, index + 1, end):
+            if root == "crate":
+                names.update(_crate_root_names(tokens, start, stop))
     return frozenset(names)
 
 
-def _crate_root_binding(
+def _crate_root_names(
     tokens: tuple[Token, ...],
     start: int,
-    end: int,
-) -> str | None:
-    """Return the local name a single-segment ``crate::`` import binds.
+    stop: int,
+) -> set[str]:
+    """Return the local names one ``crate::`` path binds."""
+    index = start + 1
+    if index >= stop or tokens[index].text != "::":
+        return set()
+    index += 1
+    if index >= stop:
+        return set()
+    if tokens[index].text == "{":
+        return _grouped_crate_names(tokens, index)
+    return _crate_member_names(tokens, index, stop)
 
-    A deeper path names a member rather than an alias, and a path that names
-    only the crate root binds nothing this rule reads, so both report ``None``.
+
+def _grouped_crate_names(tokens: tuple[Token, ...], opener: int) -> set[str]:
+    """Return the local names a ``crate::{…}`` group binds."""
+    closer = matching(tokens, opener, "{", "}")
+    names: set[str] = set()
+    for member_start, member_end in top_level_members(tokens, opener, closer + 1):
+        names.update(_crate_member_names(tokens, member_start, member_end))
+    return names
+
+
+def _crate_member_names(
+    tokens: tuple[Token, ...],
+    start: int,
+    stop: int,
+) -> set[str]:
+    """Return the local name one crate-root member binds, if it is an alias.
+
+    A deeper path names a member rather than a crate-root item, so it is left
+    out; the group's members are single segments by construction.
     """
-    index = start
-    while index < end and tokens[index].text == "::":
-        index += 1
-    if index + 2 >= end or tokens[index].text != "crate":
-        return None
-    if tokens[index + 1].text != "::" or tokens[index + 2].kind is not Kind.IDENT:
-        return None
-    member = tokens[index + 2]
-    following = index + 3
-    if following < end and tokens[following].text == "::":
-        return None
-    return _local_name(tokens, member, following, end)
+    if any(tokens[index].text == "::" for index in range(start, stop)):
+        return set()
+    if start >= stop or tokens[start].kind is not Kind.IDENT:
+        return set()
+    member = tokens[start]
+    return {_local_name(tokens, member, start + 1, stop)}
 
 
 def _local_name(
