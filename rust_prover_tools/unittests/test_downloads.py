@@ -5,11 +5,18 @@ from __future__ import annotations
 import hashlib
 import logging
 import pathlib
+import socket
+import threading
 import typing as typ
 
 import pytest
 
-from rust_prover_tools import download_stream, download_transport, downloads
+from rust_prover_tools import (
+    download_deadline,
+    download_stream,
+    download_transport,
+    downloads,
+)
 from rust_prover_tools.downloads import (
     BoundedAsset,
     DownloadLimits,
@@ -21,6 +28,7 @@ from rust_prover_tools.downloads import (
 from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import os
     from pathlib import Path
 
@@ -143,15 +151,171 @@ class FakeConnection:
 
 
 class FakeSocket:
-    """A socket double that records the timeouts it is given."""
+    """A socket double that records the timeouts and shutdowns it receives."""
 
-    def __init__(self) -> None:
-        """Start with no recorded timeouts."""
+    def __init__(self, release: threading.Event | None = None) -> None:
+        """Start with no recorded traffic and an optional release signal."""
         self.timeouts: list[float] = []
+        self.shutdowns: list[int] = []
+        self.timeout: float | None = None
+        self._release = release
 
     def settimeout(self, value: float) -> None:
         """Record a requested timeout."""
         self.timeouts.append(value)
+        self.timeout = value
+
+    def shutdown(self, how: int) -> None:
+        """Record a shutdown, releasing any fake call blocked on the socket."""
+        self.shutdowns.append(how)
+        if self._release is not None:
+            self._release.set()
+
+
+class FakeHopConnection:
+    """A scripted connection double for one transport hop.
+
+    The transport constructs its connection, so a test builds this double with
+    the phases it scripts and hands it out through `HopFactory`. `connect()`
+    creates the socket the transport captures, which keeps the constructor
+    timeout and the pre-send re-arm distinguishable in `sock.timeouts`.
+    """
+
+    def __init__(
+        self,
+        *,
+        sock: FakeSocket | None = None,
+        clock: FakeClock | None = None,
+        connect_seconds: float = 0.0,
+        response: FakeResponse | None = None,
+        clear_sock_on_response: bool = False,
+        on_request: cabc.Callable[[], None] | None = None,
+        on_response: cabc.Callable[[], None] | None = None,
+        on_close: cabc.Callable[[], None] | None = None,
+    ) -> None:
+        """Configure the socket and the work each hop phase performs."""
+        self.sock = sock
+        self.host: str | None = None
+        self.port: int | None = None
+        self.timeout: float | None = None
+        self.requests: list[dict[str, object]] = []
+        self.responses = 0
+        self.closed = False
+        self._clock = clock
+        self._connect_seconds = connect_seconds
+        self._response = response or FakeResponse(chunks=(b"payload",))
+        self._clear_sock_on_response = clear_sock_on_response
+        self._on_request = on_request
+        self._on_response = on_response
+        self._on_close = on_close
+
+    def connect(self) -> None:
+        """Create the socket the transport captures, spending connect time."""
+        if self._clock is not None:
+            self._clock.advance(self._connect_seconds)
+        if self.sock is None:
+            self.sock = FakeSocket()
+
+    def request(
+        self,
+        method: str,
+        target: str,
+        *,
+        headers: dict[str, str],
+    ) -> None:
+        """Record the request and the timeout in force, then run its script."""
+        self.requests.append(
+            {
+                "method": method,
+                "target": target,
+                "headers": headers,
+                "timeout": None if self.sock is None else self.sock.timeout,
+            },
+        )
+        if self._on_request is not None:
+            self._on_request()
+
+    def getresponse(self) -> FakeResponse:
+        """Return the canned response, clearing the socket when scripted."""
+        self.responses += 1
+        if self._on_response is not None:
+            self._on_response()
+        if self._clear_sock_on_response:
+            # `http.client` clears `sock` when it cannot reuse the connection,
+            # so a response double must be able to model that.
+            self.sock = None
+        return self._response
+
+    def close(self) -> None:
+        """Record closure, then run any scripted close work."""
+        self.closed = True
+        if self._on_close is not None:
+            self._on_close()
+
+
+class HopFactory:
+    """Serve scripted hops in order from the patched connection constructor."""
+
+    def __init__(self, *hops: FakeHopConnection) -> None:
+        """Store the hops to hand out, in order."""
+        self._hops = list(hops)
+        self.constructed: list[FakeHopConnection] = []
+
+    def __call__(
+        self,
+        host: str,
+        port: int | None,
+        *,
+        timeout: float,
+    ) -> FakeHopConnection:
+        """Record the constructor budget on the next scripted hop."""
+        hop = self._hops.pop(0)
+        hop.host = host
+        hop.port = port
+        hop.timeout = timeout
+        self.constructed.append(hop)
+        return hop
+
+
+class HopWorker:
+    """Run one transport call off the test thread and join it with a bound."""
+
+    def __init__(self, release: threading.Event) -> None:
+        """Bind the signal a blocked fake call waits on."""
+        self._release = release
+        self._action: cabc.Callable[[], object] | None = None
+        self.value: object = None
+        self.error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def run(
+        self,
+        action: cabc.Callable[[], object],
+        *,
+        timeout: float = 5.0,
+    ) -> HopWorker:
+        """Run `action`, releasing and joining the worker even on failure."""
+        self._action = action
+        self._thread.start()
+        try:
+            self._thread.join(timeout)
+            assert not self._thread.is_alive(), (
+                "the transport call must finish within its bounded deadline"
+            )
+        finally:
+            # A watchdog that never fired would otherwise leave this worker
+            # blocked in its fake call for the whole test session.
+            self._release.set()
+            self._thread.join(timeout)
+        return self
+
+    def _run(self) -> None:
+        """Call the action and keep whatever it returned or raised."""
+        assert self._action is not None
+        try:
+            self.value = self._action()
+        except BaseException as exc:  # ruff: ignore[blind-except] - reported to the test
+            self.error = exc
 
 
 def test_stream_rejects_oversized_content_length_before_reading(
@@ -920,7 +1084,7 @@ def test_download_pinned_removes_pending_file_when_stream_is_stopped(
 ) -> None:
     """The content-length ceiling removes the pending file from disk."""
     clock = FakeClock()
-    monkeypatch.setattr(download_transport, "monotonic", clock.monotonic)
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
     connection = FakeConnection()
     response = FakeResponse(
         headers={"Content-Length": "100"},
@@ -1052,10 +1216,14 @@ def test_open_requests_the_validated_path_with_identity_encoding(
             *,
             timeout: float,
         ) -> None:
-            """Record the connection target and bind the fake socket."""
+            """Record the connection target."""
             captured["host"] = host
             captured["port"] = port
             captured["timeout"] = timeout
+            self.sock: FakeSocket | None = None
+
+        def connect(self) -> None:
+            """Create the socket the transport captures and re-arms."""
             self.sock = sock
 
         def request(
@@ -1084,16 +1252,26 @@ def test_open_requests_the_validated_path_with_identity_encoding(
         FakeConnection,
     )
 
-    returned_response, connection = download_transport._open(
+    returned_response, hop = download_transport._open(
         "https://example.test:8443/asset.bin?token=abc",
         DownloadLimits(connect_timeout_seconds=5.0),
         download_transport.monotonic() + 60.0,
     )
+    try:
+        assert returned_response.status == 200, "the response status must be returned"
+        assert returned_response.read(7) == b"payload", (
+            "the response body must be readable"
+        )
+    finally:
+        hop.close()
 
-    assert returned_response.status == 200, "the response status must be returned"
-    assert returned_response.read(7) == b"payload", "the response body must be readable"
-    assert sock.timeouts == [5.0], "the read must use the configured socket timeout"
-    assert isinstance(connection, FakeConnection), "the connection must be returned"
+    assert sock.timeouts == [5.0, 5.0], (
+        "the send and the body read must each be armed with the configured timeout"
+    )
+    assert isinstance(hop, download_transport._HopHandle), (
+        "a hop handle must be returned"
+    )
+    assert captured["closed"] is True, "the hop handle must close the connection"
     assert captured["host"] == "example.test", "the host must come from the URL"
     assert captured["port"] == 8443, "the port must come from the URL"
     assert captured["target"] == "/asset.bin?token=abc", (
@@ -1111,7 +1289,7 @@ def test_open_reports_a_failed_request(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A connection error is reported and the connection is closed."""
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
 
     class FailingConnection:
         """A connection whose every request fails with a connection error."""
@@ -1125,8 +1303,13 @@ def test_open_reports_a_failed_request(
         ) -> None:
             """Track this connection so the test can check it was closed."""
             del host, port, timeout
+            self.sock: FakeSocket | None = None
             self.closed = False
             connections.append(self)
+
+        def connect(self) -> None:
+            """Create the socket the transport captures before the request."""
+            self.sock = FakeSocket()
 
         def request(
             self,
@@ -1182,13 +1365,363 @@ def test_open_rejects_an_expired_deadline() -> None:
         )
 
 
+def test_open_sends_the_request_under_the_time_left_after_connecting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A five-second connect leaves fifty-five seconds for the request."""
+    clock = FakeClock()
+    # The hop budget and the watchdog read the deadline module's clock, while
+    # the response wrapper reads the stream's.
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+    sock = FakeSocket()
+    hop = FakeHopConnection(sock=sock, clock=clock, connect_seconds=5.0)
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+
+    _response, handle = download_transport._open(
+        "https://example.test/asset.bin",
+        DownloadLimits(connect_timeout_seconds=60.0),
+        60.0,
+    )
+    try:
+        assert hop.timeout == pytest.approx(60.0), "the hop opens with its full budget"
+        assert hop.requests[0]["timeout"] == pytest.approx(55.0), (
+            "a socket timeout bounds one call, so the request must be sent "
+            "under the time the connect phase left"
+        )
+    finally:
+        handle.close()
+
+    assert hop.closed, "the hop handle must close the connection"
+
+
+def test_open_refuses_a_hop_whose_connect_spends_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A connect that reaches the deadline sends no request."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
+    clock = FakeClock()
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
+    sock = FakeSocket()
+    hop = FakeHopConnection(sock=sock, clock=clock, connect_seconds=60.0)
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+
+    with pytest.raises(
+        ProverToolError,
+        match="exceeded the transfer deadline",
+    ) as raised:
+        download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(connect_timeout_seconds=60.0),
+            60.0,
+        )
+
+    assert not isinstance(raised.value, TransientDownloadError), (
+        "a spent deadline is not a retryable transport fault"
+    )
+    assert hop.requests == [], "a spent hop must not send a request"
+    assert sock.timeouts == [], "a spent hop must not re-arm its socket"
+    assert hop.closed, "the refused connection must close"
+    assert {
+        "event": "download.failed",
+        "reason": "deadline",
+    } in events_from(caplog), "a refused hop must report the deadline"
+
+
+def test_open_reports_a_blocked_request_at_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A send the watchdog shuts down surfaces as the transfer's deadline."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
+    released = threading.Event()
+    sock = FakeSocket(release=released)
+
+    def block_until_shutdown() -> None:
+        """Block until the watchdog shuts the socket down, then fail."""
+        if not released.wait(5.0):
+            msg = "the watchdog never released the blocked send"
+            raise AssertionError(msg)
+        msg = "connection reset by peer"
+        raise OSError(msg)
+
+    hop = FakeHopConnection(sock=sock, on_request=block_until_shutdown)
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+    deadline = download_transport.monotonic() + 0.2
+
+    worker = HopWorker(released).run(
+        lambda: download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(),
+            deadline,
+        ),
+    )
+
+    error = worker.error
+    assert isinstance(error, ProverToolError), "a blocked send must fail the download"
+    assert not isinstance(error, TransientDownloadError), (
+        "a send the deadline cut short must not be retried as a transport fault"
+    )
+    assert "exceeded the transfer deadline" in str(error)
+    assert isinstance(error.__cause__, OSError), (
+        "the socket failure the watchdog caused must be chained"
+    )
+    assert sock.shutdowns == [socket.SHUT_RDWR], (
+        "the watchdog must shut the socket down at the deadline"
+    )
+    assert hop.responses == 0, "a send cut short must not read a response"
+    assert hop.closed, "the failed hop must close its connection"
+    assert {
+        "event": "download.failed",
+        "reason": "deadline",
+    } in events_from(caplog), "the blocked send must report the deadline"
+
+
+def test_open_reports_a_blocked_response_at_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response the watchdog cuts short surfaces as the deadline."""
+    released = threading.Event()
+    sock = FakeSocket(release=released)
+
+    def block_until_shutdown() -> None:
+        """Block until the watchdog shuts the socket down, then fail."""
+        if not released.wait(5.0):
+            msg = "the watchdog never released the blocked response"
+            raise AssertionError(msg)
+        msg = "connection reset by peer"
+        raise OSError(msg)
+
+    hop = FakeHopConnection(sock=sock, on_response=block_until_shutdown)
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+    deadline = download_transport.monotonic() + 0.2
+
+    worker = HopWorker(released).run(
+        lambda: download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(),
+            deadline,
+        ),
+    )
+
+    error = worker.error
+    assert isinstance(error, ProverToolError)
+    assert not isinstance(error, TransientDownloadError)
+    assert "exceeded the transfer deadline" in str(error)
+    assert hop.responses == 1, "the request is sent before the deadline"
+    assert hop.closed, "the failed hop must close its connection"
+    assert sock.shutdowns == [socket.SHUT_RDWR]
+
+
+def test_stream_reports_a_blocked_read_at_the_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A body read the watchdog cuts short is the transfer's deadline."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    released = threading.Event()
+    sock = FakeSocket(release=released)
+
+    class BlockingResponse(FakeResponse):
+        """A response whose body read waits for the socket shutdown."""
+
+        def read(self, amt: int | None = None) -> bytes:
+            """Block until the watchdog shuts the socket down, then fail."""
+            del amt
+            if not released.wait(5.0):
+                msg = "the watchdog never released the blocked read"
+                raise AssertionError(msg)
+            msg = "connection reset by peer"
+            raise OSError(msg)
+
+    hop = FakeHopConnection(sock=sock, response=BlockingResponse())
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+    deadline = download_transport.monotonic() + 0.2
+    response, handle = download_transport._open(
+        "https://example.test/asset.bin",
+        DownloadLimits(),
+        deadline,
+    )
+    try:
+        worker = HopWorker(released).run(
+            lambda: download_stream._stream(
+                response,
+                tmp_path / "asset.bin",
+                stream_limits(100, deadline),
+            ),
+        )
+    finally:
+        handle.close()
+
+    error = worker.error
+    assert isinstance(error, ProverToolError)
+    assert not isinstance(error, TransientDownloadError), (
+        "a read the deadline cut short must not be retried as a stream fault"
+    )
+    assert "transfer deadline" in str(error)
+    assert {
+        "event": "download.failed",
+        "reason": "deadline",
+        "written": 0,
+    } in events_from(caplog), "a late EOF or read must report the bytes written"
+
+
+def test_open_reads_through_the_socket_it_captured_before_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A response that clears `connection.sock` still bounds later reads."""
+    clock = FakeClock()
+    # The hop is opened on the transport's clock and the body read on the
+    # stream's, so both are driven by the same fake.
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+    sock = FakeSocket()
+    hop = FakeHopConnection(
+        sock=sock,
+        clock=clock,
+        response=FakeResponse(chunks=(b"payload",)),
+        clear_sock_on_response=True,
+    )
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+
+    response, handle = download_transport._open(
+        "https://example.test/asset.bin",
+        DownloadLimits(connect_timeout_seconds=60.0),
+        60.0,
+    )
+    try:
+        assert hop.sock is None, "the response must have cleared the raw socket"
+        clock.advance(10.0)
+        assert response.read(7) == b"payload"
+    finally:
+        handle.close()
+
+    assert sock.timeouts == [60.0, 50.0], (
+        "the captured socket must be re-armed from the time the read has left"
+    )
+
+
+def test_download_stops_each_hops_watchdog_before_closing_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every hop stops its watchdog before its connection closes."""
+    actions: list[str] = []
+    watchdogs: list[download_deadline._DeadlineWatchdog] = []
+    stopped: list[int] = []
+
+    class RecordingWatchdog(download_deadline._DeadlineWatchdog):
+        """Record the lifecycle of every hop's watchdog."""
+
+        def start(self) -> None:
+            """Record the start and keep the instance for the assertions."""
+            watchdogs.append(self)
+            actions.append("watchdog.start")
+            super().start()
+
+        def stop(self) -> None:
+            """Record the stop before stopping for real."""
+            stopped.append(id(self))
+            actions.append("watchdog.stop")
+            super().stop()
+
+    def record_close() -> None:
+        """Record that a hop closed its connection."""
+        actions.append("connection.close")
+
+    # `_open` resolves the watchdog from the transport's own globals, so the
+    # recording subclass must replace it there.
+    monkeypatch.setattr(download_transport, "_DeadlineWatchdog", RecordingWatchdog)
+    redirect = FakeHopConnection(
+        response=FakeResponse(
+            status=302,
+            headers={"Location": "https://example.test/final"},
+        ),
+        on_close=record_close,
+    )
+    body = FakeHopConnection(
+        response=FakeResponse(chunks=(b"payload",)),
+        on_close=record_close,
+    )
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(redirect, body),
+    )
+
+    download_transport._download(
+        download_request(
+            "https://example.test/start",
+            tmp_path / "asset.bin",
+            max_bytes=100,
+        ),
+        DownloadLimits(max_redirects=1),
+    )
+
+    assert actions == [
+        "watchdog.start",
+        "watchdog.stop",
+        "connection.close",
+        "watchdog.start",
+        "watchdog.stop",
+        "connection.close",
+    ], "a hop must stop its watchdog before it closes and before the next hop opens"
+    assert stopped == [id(watchdog) for watchdog in watchdogs], (
+        "a finished hop must not leave its watchdog running"
+    )
+    assert not any(watchdog.expired for watchdog in watchdogs), (
+        "a hop that met its deadline must not have expired"
+    )
+    assert redirect.closed, "the redirect hop must close"
+    assert body.closed, "the final hop must close"
+
+
+def test_watchdog_is_inert_for_an_unbounded_deadline() -> None:
+    """A non-finite deadline can never arrive, so no thread is started."""
+    watchdog = download_transport._DeadlineWatchdog(FakeSocket(), float("inf"))
+    watchdog.start()
+    try:
+        assert watchdog._thread is None, (
+            "an unbounded deadline must not start a watchdog thread"
+        )
+    finally:
+        watchdog.stop()
+    assert not watchdog.expired, "an unbounded watchdog can never expire"
+
+
 def test_download_complete_event_reports_bytes_and_elapsed_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Completion reports the transferred size and duration, not the asset."""
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
     payload = b"verified"
     response = FakeResponse(chunks=(payload,))
     connection = FakeConnection()
@@ -1236,7 +1769,7 @@ def test_download_reports_a_missing_redirect_location(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A redirect without a Location header reports that bounded reason."""
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
     connection = FakeConnection()
     response = FakeResponse(status=302)
     monkeypatch.setattr(
@@ -1282,7 +1815,7 @@ def test_download_reports_an_http_status_class(
     is_transient: bool,
 ) -> None:
     """A non-success response reports its status and whether it is transient."""
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_transport")
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
     connection = FakeConnection()
     response = FakeResponse(status=status)
     monkeypatch.setattr(

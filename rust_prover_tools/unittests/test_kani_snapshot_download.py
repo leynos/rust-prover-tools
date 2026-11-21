@@ -210,8 +210,28 @@ class _Response:
         return self._body
 
 
+class _Socket:
+    """A socket double that accepts the watchdog's operations."""
+
+    def settimeout(self, value: float) -> None:
+        """Accept a socket timeout."""
+        del value
+
+    def shutdown(self, how: int) -> None:
+        """Accept a shutdown request."""
+        del how
+
+
 class _Connection:
-    """A connection double that only needs to close."""
+    """A connection double that connects, holds a socket, and closes."""
+
+    def __init__(self) -> None:
+        """Start with no socket, as the transport sees it before connecting."""
+        self.sock: _Socket | None = None
+
+    def connect(self) -> None:
+        """Create the socket the transport captures and re-arms."""
+        self.sock = _Socket()
 
     def close(self) -> None:
         """Close the connection."""
@@ -222,6 +242,7 @@ class _ServingConnection(_Connection):
 
     def __init__(self, response: _Response) -> None:
         """Store the response this connection serves."""
+        super().__init__()
         self._response = response
 
     def request(self, method: str, url: str, *, headers: object) -> None:
