@@ -253,6 +253,15 @@ Plain-language terms used in this plan:
   exposes no chunk-level line hook, and the test parameterization suggestions
   would churn existing test conventions without changing behaviour. The full
   deterministic gate passes with 1,911 tests and 6 skips.
+- [x] (2026-11-21 23:30Z) Seventh CodeRabbit pass: 18 findings. Fixed the
+  standard-output collision in every mode, NFC identifier normalization, the
+  aligned original/masked attribute slices, nested `cfg_attr` delimiters and
+  conditional paths, caller target selectors, duplicate result kinds, the
+  solver-phase second banner, truncation-marker budgets, lexical symlink
+  resolution, builder launch errors, and failed-sink offsets. The three
+  documented skips remain the documentation loader, Cuprum's upstream
+  incomplete-line buffer, and test-style-only refactors. The full deterministic
+  gate passes with 1,922 tests and 6 skips.
 
 ## Surprises & discoveries
 
