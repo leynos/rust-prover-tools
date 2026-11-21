@@ -15,7 +15,11 @@ import bisect
 import re
 import typing as typ
 
-from rust_prover_tools.trust_audit.literals import decoded_literal_body_positions
+from rust_prover_tools.trust_audit.inline_modules import declared_module_aliases
+from rust_prover_tools.trust_audit.literals import (
+    decoded_literal_body_positions,
+    qualified_pattern,
+)
 from rust_prover_tools.trust_audit.model import TrustItem
 from rust_prover_tools.trust_audit.regions import verus_regions
 from rust_prover_tools.trust_audit.syntax import Kind, Token
@@ -57,7 +61,12 @@ class Context:
         """
         self.tokens = tokens
         self.vocabularies = vocabularies
-        self.module_names = module_names
+        # ``use m as n;`` makes ``n::a`` the same call as ``m::a`` when the
+        # file declares ``m``, so the alias is a module name for rule 3.
+        self.module_names = module_names | declared_module_aliases(
+            tokens,
+            module_names,
+        )
         self.words = frozenset(
             item for vocabulary in vocabularies for item in vocabulary.items
         )
@@ -97,7 +106,7 @@ class Context:
             self.words,
         )
         self.verus_regions = verus_regions(tokens)
-        self.qualified = _qualified_pattern(self.roots)
+        self.qualified = qualified_pattern(self.roots)
         self.items: list[TrustItem] = []
         self._reported: set[TrustItem] = set()
         self._procedural_macro = procedural_macro
@@ -234,25 +243,6 @@ class Context:
         newlines = _newline_positions(token.text)
         for start, item in sorted(found):
             self._record(_literal_item(item, token, positions[start], newlines))
-
-
-def _qualified_pattern(roots: frozenset[str]) -> re.Pattern[str] | None:
-    """Build the search for a qualified vocabulary path inside a literal.
-
-    A proc-macro crate's literal is text, so a generated ``kani::assume`` is
-    found by searching that text rather than by lexing it.  The roots are the
-    selected vocabularies' crate names, so the pattern follows the selection:
-    an audit of one prover does not report the other's qualified paths.
-
-    Returns
-    -------
-    re.Pattern[str] | None
-        The pattern, or ``None`` when no vocabulary was selected.
-    """
-    if not roots:
-        return None
-    alternatives = "|".join(re.escape(root) for root in sorted(roots))
-    return re.compile(rf"\b(?:{alternatives})\s*::\s*([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def _newline_positions(text: str) -> list[int]:

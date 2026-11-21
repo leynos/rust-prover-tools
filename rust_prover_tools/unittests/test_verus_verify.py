@@ -122,16 +122,14 @@ def test_no_solver_selection_leaves_the_environment_alone(
     monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
 
     verify_proof_files(
-        (pathlib.Path("first.rs"),),
+        (pathlib.Path("first.rs"), pathlib.Path("second.rs")),
         VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
     )
 
-    assert specs[0].env is None, (
-        "An unset selection must not replace or clear the child environment"
-    )
-    assert specs[0].env_mode is EnvMode.OVERLAY, (
-        "An unset selection must leave the inherited environment layered in place"
-    )
+    assert [(spec.argv[1], spec.env, spec.env_mode) for spec in specs] == [
+        ("first.rs", None, EnvMode.OVERLAY),
+        ("second.rs", None, EnvMode.OVERLAY),
+    ], "An unset selection must leave every child environment untouched"
 
 
 def test_verify_proof_files_emits_bounded_events(

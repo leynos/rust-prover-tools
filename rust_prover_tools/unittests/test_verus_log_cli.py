@@ -12,12 +12,17 @@ from rust_prover_tools.verus_log_cli import verus_analyse_log
 if typ.TYPE_CHECKING:
     import pytest
 
+#: The release whose fixed-detail logs these tests read.  It is named rather
+#: than taken from a tuple position, so adding a newer release cannot change
+#: what a fixed assertion is reading.
+CLI_RELEASE: typ.Final[str] = "0.2026.11.02.8bf68ee"
+
 FIXTURES: typ.Final[Path] = (
     Path(__file__).resolve().parents[2]
     / "tests"
     / "fixtures"
     / "verus_logs"
-    / SUPPORTED_VERUS_VERSIONS[0]
+    / CLI_RELEASE
 )
 
 
@@ -94,7 +99,7 @@ def test_an_invalid_log_file_is_an_input_error(
 
     status = verus_analyse_log(
         log=missing,
-        verus_release=SUPPORTED_VERUS_VERSIONS[0],
+        verus_release=CLI_RELEASE,
         repo_root=tmp_path,
     )
 
@@ -169,7 +174,7 @@ def test_the_json_form_is_stable_and_machine_readable(
     """The JSON object carries the schema, the decision and each failure."""
     status = run(
         "two_errors",
-        verus_release=SUPPORTED_VERUS_VERSIONS[0],
+        verus_release=CLI_RELEASE,
         output_format="json",
     )
     payload = json.loads(capsys.readouterr().out)
@@ -181,7 +186,7 @@ def test_the_json_form_is_stable_and_machine_readable(
         "run_mode": "full",
         "passed": False,
         "reason": "the log reports 2 failing functions",
-        "verus_release": SUPPORTED_VERUS_VERSIONS[0],
+        "verus_release": CLI_RELEASE,
         "failures": [
             {
                 "message": "postcondition not satisfied",
@@ -259,7 +264,7 @@ def test_a_structural_error_completes_as_a_tool_error(
 
     status = verus_analyse_log(
         log=log,
-        verus_release=SUPPORTED_VERUS_VERSIONS[0],
+        verus_release=CLI_RELEASE,
         repo_root=tmp_path,
     )
     captured = capsys.readouterr()
@@ -273,7 +278,7 @@ def test_a_named_supported_release_is_reported(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A release the parser is qualified against is named beside the outcome."""
-    release = SUPPORTED_VERUS_VERSIONS[0]
+    release = CLI_RELEASE
 
     status = run("verified", verus_release=release)
     captured = capsys.readouterr()
@@ -301,7 +306,7 @@ def test_the_consumer_pin_supplies_the_release(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Without a flag, the release comes from ``tools/verus/VERSION``."""
-    release = SUPPORTED_VERUS_VERSIONS[0]
+    release = CLI_RELEASE
     version_file = tmp_path / "tools" / "verus" / "VERSION"
     version_file.parent.mkdir(parents=True)
     version_file.write_text(f"{release}\n", encoding="utf-8")

@@ -263,7 +263,11 @@ def _solver_arguments(command: str) -> frozenset[str] | None:
         cannot be recovered; none of those shapes may be read as evidence that
         the checks were generated.
     """
-    framed = command.removeprefix(SOLVER_FRAME).removesuffix("`")
+    if not command.startswith(SOLVER_FRAME) or not command.endswith("`"):
+        # A capture that cut the echo mid-argument leaves a flag that is
+        # not a whole word, so none of its options can be read as fact.
+        return None
+    framed = command[len(SOLVER_FRAME) : -1]
     words = _rendered_words(framed)
     if words is None:
         return None

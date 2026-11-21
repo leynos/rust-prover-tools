@@ -854,11 +854,14 @@ names when the use is bare, is reached through `self::`, `crate::` or
 `super::`, or is qualified by a module the same file declares —
 `mod m { pub use kani::assume as a; } m::a(..)` reaches the binding the file
 shows. A module declared elsewhere is not shown, so its names are left alone,
-except that a name imported from the crate root — `use crate::k;` or
-`use crate::{k as kk};` — is treated as a possible crate alias because the
-declaration it names is outside the file. A crate alias re-exported by a module
-the file declares is followed (`use m::k as kk;`). A turbofish call such as
-`a::<u32, _>(..)` is a call on the renamed item, not a path through it.
+except that a name imported from the crate root or a parent — `use crate::k;`,
+`use crate::{k as kk};` or `use super::k;` — is treated as a possible crate
+alias because the declaration it names is outside the file. A module the file
+declares may itself be renamed (`use m as n;`), and its alias qualifies a
+renamed member just as its name does. A `use<…>` precise-capture bound is not
+an import. A crate alias re-exported by a module the file declares is followed
+(`use m::k as kk;`). A turbofish call such as `a::<u32, _>(..)` is a call on
+the renamed item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a

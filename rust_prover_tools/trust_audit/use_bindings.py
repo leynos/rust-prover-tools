@@ -225,7 +225,11 @@ def _plain_member(tokens: tuple[Token, ...], start: int, stop: int) -> str | Non
         return None
     for index in range(stop - 1, start - 1, -1):
         if tokens[index].kind is Kind.IDENT:
-            return tokens[index].text
+            member = tokens[index].text
+            # ``self`` in ``use kani::{self, assume};`` stands for the crate,
+            # not for a member.  Seeding it would shadow the local-qualifier
+            # dispatch and lose the member a later ``use self::…`` renames.
+            return None if member in LOCAL_QUALIFIERS else member
     return None
 
 

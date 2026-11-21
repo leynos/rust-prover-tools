@@ -286,3 +286,16 @@ def test_a_signal_terminated_run_is_not_a_verification_result() -> None:
     assert any(
         "terminated by signal 9" in sentence for sentence in result.disagreements
     )
+
+
+def test_a_signal_terminated_run_without_a_summary_is_not_accepted() -> None:
+    """A terminated invocation fails even when it printed no summary."""
+    result = verdict(VerusLog(), LogExpectations(exit_status=-9))
+
+    assert not result.meets
+    assert result.disagreements == (
+        (
+            "the invocation was terminated by signal 9; a run that did not "
+            "finish is not a verification result"
+        ),
+    )

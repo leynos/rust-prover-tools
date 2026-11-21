@@ -26,11 +26,18 @@ from rust_prover_tools.trust_audit.structure import (
     skip_visibility,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token
+from rust_prover_tools.trust_audit.use_paths import statement_end, use_aliases
+from rust_prover_tools.trust_audit.use_tree import begins_import, rooted_spans
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("InlineModules", "inline_module_names", "path_attribute")
+__all__ = (
+    "InlineModules",
+    "declared_module_aliases",
+    "inline_module_names",
+    "path_attribute",
+)
 
 # ``mod``, the module's name, and what follows it.
 DECLARATION_TOKENS = 3
@@ -186,3 +193,19 @@ def _refuse_conditional_path(tokens: tuple[Token, ...], mod_index: int) -> None:
         "the configuration"
     )
     raise TrustAuditError(msg)
+
+
+def declared_module_aliases(
+    tokens: tuple[Token, ...],
+    module_names: frozenset[str],
+) -> frozenset[str]:
+    """Return the local names that rename a module this file declares."""
+    aliases: set[str] = set()
+    for index, token in enumerate(tokens):
+        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
+            continue
+        end = statement_end(tokens, index + 1)
+        for root, start, stop in rooted_spans(tokens, index + 1, end):
+            if root in module_names:
+                aliases.update(use_aliases(tokens, start, stop))
+    return frozenset(aliases)

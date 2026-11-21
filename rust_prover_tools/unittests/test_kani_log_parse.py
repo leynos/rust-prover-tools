@@ -909,3 +909,13 @@ def test_a_non_cover_check_cannot_carry_a_cover_status() -> None:
         "Check 3: harnesses::verified.assertion.1\n\t - Status: SATISFIED",
     )
     assert "is not a cover but carries the cover status" in refused(text)
+
+
+def test_a_solver_echo_without_its_closing_backtick_is_unknown() -> None:
+    """Refuse a truncated echo rather than reading a cut-off flag as absent."""
+    truncated = HarnessBlock(
+        name="h::x",
+        solver_command="[Kani] Running: `cbmc --no-unwinding-assert",
+    )
+
+    assert unwinding_checks_enabled(truncated) is None

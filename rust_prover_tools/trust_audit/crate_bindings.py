@@ -105,13 +105,20 @@ def alias_bindings(tokens: tuple[Token, ...], root: str) -> frozenset[str]:
         names |= discovered
 
 
-def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return the local names a ``crate::`` import binds in this file.
+#: The qualifiers that name an item the scan cannot see: the crate root, the
+#: current module, or its parent.  A child module's ``use super::k;`` names an
+#: item declared in the parent, so the local name is a possible crate alias.
+_ITEM_QUALIFIERS = frozenset({"crate", "self", "super"})
 
-    A single-segment import from the crate root may name an alias the root
-    declares; its grouped form (``use crate::{k as kk, j};``) binds the same
-    names.  A deeper path names a member and is left to the member rules.  The
-    local spelling is what a qualified use would carry.
+
+def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
+    """Return the local names a qualified item import binds in this file.
+
+    A single-segment import from the crate root, the current module or a
+    parent may name an alias the scan cannot see; its grouped form
+    (``use crate::{k as kk, j};``) binds the same names.  ``super`` may repeat.
+    A deeper path names a member and is left to the member rules.  The local
+    spelling is what a qualified use would carry.
     """
     names: set[str] = set()
     for index, token in enumerate(tokens):
@@ -119,7 +126,7 @@ def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
             continue
         end = statement_end(tokens, index + 1)
         for root, start, stop in rooted_spans(tokens, index + 1, end):
-            if root == "crate":
+            if root in _ITEM_QUALIFIERS:
                 names.update(_crate_root_names(tokens, start, stop))
     return frozenset(names)
 
@@ -129,11 +136,16 @@ def _crate_root_names(
     start: int,
     stop: int,
 ) -> set[str]:
-    """Return the local names one ``crate::`` path binds."""
-    index = start + 1
-    if index >= stop or tokens[index].text != "::":
-        return set()
-    index += 1
+    """Return the local names one qualified item path binds."""
+    index = start
+    while index < stop and tokens[index].text == "::":
+        index += 1
+    while (
+        index + 1 < stop
+        and tokens[index].text in _ITEM_QUALIFIERS
+        and tokens[index + 1].text == "::"
+    ):
+        index += 2
     if index >= stop:
         return set()
     if tokens[index].text == "{":

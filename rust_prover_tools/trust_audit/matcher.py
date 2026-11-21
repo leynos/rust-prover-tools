@@ -228,7 +228,7 @@ def _metavariable_refusal(
             f"{token.column} reaches a trust item through the metavariable "
             f"'${token.text}', so the audit cannot tell which crate it names"
         )
-    if following == "(" and _is_trust_qualified(tokens, index, qualifiers):
+    if _is_trust_qualified(tokens, index, qualifiers):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} reaches a trust item through the metavariable "

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import typing as typ
 
 import pytest
@@ -33,6 +34,18 @@ def write(root: Path, files: cabc.Mapping[str, str]) -> None:
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
+
+
+def symlink(path: Path, target: Path) -> None:
+    """Create a symbolic link, skipping the test where the host refuses one.
+
+    An unprivileged Windows runner without Developer Mode raises ``OSError``
+    during setup; that is an environment limit, not an audit failure.
+    """
+    try:
+        path.symlink_to(target)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"symbolic links are unavailable: {error}")
 
 
 def audited(root: Path, *drivers: str) -> dict[str, list[str]]:
@@ -268,6 +281,7 @@ def test_an_integration_test_is_a_crate_root(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a backslash separates on Windows")
 def test_a_backslash_in_a_path_attribute_names_one_file(tmp_path: Path) -> None:
     r"""Read ``r"a\b.rs"`` as one filename rather than as a directory chain."""
     write(
@@ -397,7 +411,7 @@ def test_a_cyclic_path_through_a_symlink_terminates(tmp_path: Path) -> None:
     the second arrival is the same module.
     """
     write(tmp_path, {"src/lib.rs": '#[path = "alias.rs"]\nmod again;'})
-    (tmp_path / "src/alias.rs").symlink_to(tmp_path / "src/lib.rs")
+    symlink(tmp_path / "src/alias.rs", tmp_path / "src/lib.rs")
 
     audited = audit_tree(tmp_path, ["src/lib.rs"])
 
@@ -667,7 +681,7 @@ def test_a_manifest_symlinked_outside_the_root_is_refused(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     write(repo, {"src/lib.rs": "fn f() {}"})
-    (repo / "Cargo.toml").symlink_to(outside)
+    symlink(repo / "Cargo.toml", outside)
 
     with pytest.raises(TrustAuditError, match="resolves outside the repository"):
         audit_tree(repo, ["src/lib.rs"])
@@ -854,7 +868,7 @@ def test_a_driver_through_a_symlinked_directory_names_the_real_file(
             "src/entry.rs": "fn clean() {}",
         },
     )
-    (tmp_path / "src/link").symlink_to(tmp_path / "src/actual/nested")
+    symlink(tmp_path / "src/link", tmp_path / "src/actual/nested")
 
     result = audit_tree(tmp_path, ["src/link/../entry.rs"])
 
@@ -939,7 +953,7 @@ def test_a_symlinked_module_resolves_children_from_its_pathname(
             "shared/child.rs": "fn clean() {}",
         },
     )
-    (tmp_path / "src/alias.rs").symlink_to(tmp_path / "shared/module.rs")
+    symlink(tmp_path / "src/alias.rs", tmp_path / "shared/module.rs")
 
     result = audited(tmp_path, "src/lib.rs")
 
@@ -990,7 +1004,7 @@ def test_two_resolution_contexts_for_one_file_are_refused(
             "src/trusted.rs": "fn g() {}",
         },
     )
-    (tmp_path / "src/foo/alias.rs").symlink_to(tmp_path / "src/foo.rs")
+    symlink(tmp_path / "src/foo/alias.rs", tmp_path / "src/foo.rs")
 
     with pytest.raises(TrustAuditError, match="reached both as a file owning"):
         audit_tree(tmp_path, ["src/lib.rs"])

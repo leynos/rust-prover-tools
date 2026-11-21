@@ -612,7 +612,7 @@ def test_a_grouped_plain_import_seeds_every_member() -> None:
         ("any_where", 3),
         ("assume", 4),
         ("any_where", 4),
-    ]
+    ], "both unrenamed imports must survive their later aliases"
 
 
 def test_a_crate_alias_qualified_through_self_is_followed() -> None:
@@ -832,7 +832,48 @@ def test_a_metavariable_in_both_path_segments_is_refused() -> None:
 
 
 def test_a_precise_capture_bound_is_not_an_import() -> None:
-    """Leave ``use<kani>`` in an ``impl Trait`` type out of the import roots."""
-    source = "fn make<kani>() -> impl Sized + use<kani> { () }"
+    """Leave ``use<kani>`` in an ``impl Trait`` type out of the import roots.
 
-    assert items(source) == []
+    A bare ``assume`` is reported only when the file imports a trust root, so
+    this source detects the bound being mistaken for an import.  The control
+    shows the same bare call reported once a real import is present.
+    """
+    capture = "fn make<kani>() -> impl Sized + use<kani> { assume(true); }"
+    control = "use kani;\nfn make() -> impl Sized { assume(true); }"
+
+    assert items(capture) == [], "a capture bound is not an import"
+    assert items(control) == [("assume", 2)], "a real import enables the rule"
+
+
+def test_a_trust_qualified_metavariable_path_need_not_be_called() -> None:
+    """Refuse ``kani::$f`` even when it names an item rather than calling one."""
+    source = "macro_rules! get { ($f:ident) => { kani::$f }; }"
+
+    with pytest.raises(TrustAuditError, match="final path segment"):
+        items(source)
+
+
+def test_a_local_qualifier_import_is_not_a_plain_member() -> None:
+    """Do not seed ``self`` from ``use kani::{self, assume};``.
+
+    Seeding it would shadow the local-qualifier dispatch, so
+    ``use self::assume as a;`` would take the rename path with the item
+    ``self`` and lose Kani's ``assume``.
+    """
+    source = "use kani::{self, assume};\nuse self::assume as a;\nfn f() { a(true); }"
+
+    assert items(source) == [("assume", 1), ("assume", 2), ("assume", 3)]
+
+
+def test_a_declared_module_alias_qualifies_a_renamed_member() -> None:
+    """Follow ``use m as n;`` for a module the file declares."""
+    source = "mod m { pub use kani::assume as a; }\nuse m as n;\nfn f() { n::a(true); }"
+
+    assert items(source) == [("assume", 1), ("assume", 3)]
+
+
+def test_a_super_item_import_is_a_possible_alias() -> None:
+    """Treat a child module's ``use super::k;`` as a possible crate alias."""
+    source = "use super::k;\nfn f() { k::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]

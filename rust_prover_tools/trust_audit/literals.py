@@ -28,6 +28,7 @@ __all__ = (
     "decoded_literal_body",
     "decoded_literal_body_positions",
     "literal_body",
+    "qualified_pattern",
 )
 
 # A raw string's opening fence: `r"`, `r#"`, `br##"`, `cr"`, and so on.
@@ -377,3 +378,22 @@ def _scalar_character(digits: str) -> str:
         msg = f"\\u escape {digits} is not a Unicode scalar value"
         raise TrustAuditError(msg)
     return chr(code)
+
+
+def qualified_pattern(roots: frozenset[str]) -> re.Pattern[str] | None:
+    """Build the search for a qualified vocabulary path inside a literal.
+
+    A proc-macro crate's literal is text, so a generated ``kani::assume`` is
+    found by searching that text rather than by lexing it.  The roots are the
+    selected vocabularies' crate names, so the pattern follows the selection:
+    an audit of one prover does not report the other's qualified paths.
+
+    Returns
+    -------
+    re.Pattern[str] | None
+        The pattern, or ``None`` when no vocabulary was selected.
+    """
+    if not roots:
+        return None
+    alternatives = "|".join(re.escape(root) for root in sorted(roots))
+    return re.compile(rf"\b(?:{alternatives})\s*::\s*([A-Za-z_][A-Za-z0-9_]*)")
