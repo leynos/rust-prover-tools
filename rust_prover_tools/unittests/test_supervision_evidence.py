@@ -527,3 +527,36 @@ def test_jsonl_append_offset_adds_a_missing_newline(tmp_path: Path) -> None:
     assert jsonl_append_offset(path) == 2
     assert path.read_bytes() == b"x\n"
     assert jsonl_append_offset(path) == 2
+
+
+def test_truncation_preserves_the_invocation_identity() -> None:
+    """A shortened record still joins to its harness by the documented keys."""
+    payload: dict[str, object] = {
+        "schema": 1,
+        "record": "output",
+        "run_id": "r" * 16,
+        "package": "alpha",
+        "harness": "h" * 80,
+        "attempt": 1,
+        "text": "x" * 4000,
+    }
+
+    decoded = json.loads(fit_record(payload, 256))
+
+    assert decoded["record"] == "output"
+    assert decoded["run_id"] == "r" * 16
+    assert decoded["package"] == "alpha"
+    assert decoded["harness"] == "h" * 80
+
+
+def test_accounting_fields_must_be_arrays() -> None:
+    """A scalar in place of a drift list is not a valid report."""
+    document = report_document(_report())
+    document["accounting"] = {
+        "missing": None,
+        "duplicate": 0,
+        "unexpected": "none",
+    }
+
+    with pytest.raises(EvidenceFormatError, match="array"):
+        validate_report_document(document)

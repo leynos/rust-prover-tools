@@ -26,13 +26,16 @@ class MemorySink:
     ----------
     records : list[dict[str, object]]
         Every record written, in order.
-    text : str
-        The JSONL text written so far.
     """
 
     records: list[dict[str, object]] = dc.field(default_factory=list)
-    text: str = ""
+    _fragments: list[str] = dc.field(default_factory=list)
     _offset: int = 0
+
+    @property
+    def text(self) -> str:
+        """The JSONL text written so far."""
+        return "".join(self._fragments)
 
     def write(self, record: dict[str, object]) -> None:
         """Record one payload and its JSONL rendering."""
@@ -40,7 +43,7 @@ class MemorySink:
         normalised = typ.cast("dict[str, object]", normalise(payload))
         line = json.dumps(normalised, ensure_ascii=False)
         self.records.append(normalised)
-        self.text += line + "\n"
+        self._fragments.append(line + "\n")
         self._offset += len(line.encode("utf-8")) + 1
 
     def flush(self) -> None:

@@ -20,11 +20,17 @@ import enum
 import typing as typ
 
 from rust_prover_tools.kani_log.blocks import Issue, IssueKind
+from rust_prover_tools.kani_log.issues import (
+    late_harness_issue,
+    second_banner_issue,
+    structural_issue,
+)
 from rust_prover_tools.kani_log.model import (
     HarnessBlock,
     KaniLogFacts,
     ManualSummary,
 )
+from rust_prover_tools.kani_log.syntax import BANNER, HARNESS_START
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -208,3 +214,19 @@ class ReaderSnapshot:
             exit_code=self.exit_code,
             last_progress=self.last_progress,
         )
+
+
+def done_line(
+    text: str,
+    line_number: int,
+    record: cabc.Callable[[tuple[Issue, ...]], None],
+) -> None:
+    """Handle a line after the final manual summary, refusing a second report."""
+    if text == "Manual Harness Summary:":
+        record((
+            structural_issue(f"line {line_number}: a second manual harness summary"),
+        ))
+    elif HARNESS_START.match(text) is not None:
+        record((late_harness_issue(line_number),))
+    elif BANNER.match(text) is not None:
+        record((second_banner_issue(line_number),))

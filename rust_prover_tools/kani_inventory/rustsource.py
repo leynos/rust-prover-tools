@@ -121,6 +121,7 @@ def collect_proofs(
         Raised for an unreadable file, a missing or ambiguous module file, or
         a module file reachable twice.
     """
+    repository_root = repository_root.resolve()
     walk = _Walk(repository_root)
     root = root_file.resolve()
     _walk_file(

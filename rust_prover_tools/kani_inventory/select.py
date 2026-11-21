@@ -95,8 +95,12 @@ def select_harnesses(
         msg = f"the harness selection names a harness twice: {list(requested)}"
         raise SelectionError(msg)
     by_name = _index(inventory)
+    by_identity = {harness.identity: harness for harness in inventory.harnesses}
     chosen: list[InventoryHarness] = []
     for name in requested:
+        if name in by_identity:
+            chosen.append(by_identity[name])
+            continue
         matches = by_name.get(name, [])
         if not matches:
             msg = f"the inventory does not declare harness {name!r}"
@@ -120,10 +124,10 @@ def select_harnesses(
 
 
 def _index(inventory: HarnessInventory) -> dict[str, list[InventoryHarness]]:
-    """Index harnesses by pretty name, identity, and unique leaf name."""
+    """Index harnesses by pretty name and leaf name."""
     index: dict[str, list[InventoryHarness]] = {}
     for harness in inventory.harnesses:
-        keys = {harness.harness, harness.identity}
+        keys = {harness.harness}
         leaf = harness.harness.rsplit("::", 1)[-1]
         keys.add(leaf)
         for key in keys:

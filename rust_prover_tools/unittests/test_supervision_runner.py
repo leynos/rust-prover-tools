@@ -538,3 +538,51 @@ async def _diagnostic_failure_scenario(tmp_path: Path) -> None:
 
     document = json.loads(report_path.read_text(encoding="utf-8"))
     validate_report_document(document)
+
+
+class _FailOnHarnessFinish:
+    """A JSONL sink that fails when one harness closes."""
+
+    @property
+    def offset(self) -> int:
+        """Report no bytes, because this sink stores nothing."""
+        return 0
+
+    def write(self, record: dict[str, object]) -> None:
+        """Refuse a harness-finish record, as a broken pipe would."""
+        if record.get("record") == "harness-finish":
+            msg = "the harness sink failed"
+            raise OSError(msg)
+
+    def flush(self) -> None:
+        """Do nothing; writes fail synchronously."""
+
+
+def test_a_harness_finish_failure_still_publishes_the_report(
+    tmp_path: Path,
+) -> None:
+    """A completed result is not discarded when its live record fails."""
+    asyncio.run(_harness_finish_failure_scenario(tmp_path))
+
+
+async def _harness_finish_failure_scenario(tmp_path: Path) -> None:
+    """Run one passing harness whose finish record cannot be written."""
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(script=Script(exit_code=0))
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(human=NullSink(), jsonl=_FailOnHarnessFinish()),
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=10.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+
+    with pytest.raises(OSError, match="harness sink failed"):
+        await run_supervised((spec(),), config, environment)
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    assert len(document["results"]) == 1

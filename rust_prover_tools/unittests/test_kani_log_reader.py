@@ -210,3 +210,14 @@ def test_a_unicode_harness_name_is_selected() -> None:
     text = log_text("verified").replace("harnesses::verified", "proofs::vérifie")
 
     assert parse(text).harnesses == ("proofs::vérifie",)
+
+
+def test_a_block_after_the_final_summary_is_refused() -> None:
+    """The final summary cannot precede evidence it claims to summarise."""
+    text = "\n".join((
+        *lines_of("verified"),
+        "Checking harness harnesses::late...",
+    ))
+
+    with pytest.raises(KaniLogError, match="after the final manual summary"):
+        parse(text)

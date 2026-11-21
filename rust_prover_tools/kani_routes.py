@@ -13,6 +13,7 @@ from __future__ import annotations
 import dataclasses as dc
 import os
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.kani_inventory import InventoryHarness, compose_arguments
 from rust_prover_tools.kani_log import KaniGrammar, grammar_for
@@ -34,7 +35,6 @@ from rust_prover_tools.supervision import LaunchCommand
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.install_model import InstallHooks
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
@@ -45,6 +45,7 @@ __all__ = (
     "PreparedRoute",
     "SnapshotRoute",
     "prepare_route",
+    "route_working_directory",
 )
 
 
@@ -109,6 +110,25 @@ class PreparedRoute:
     grammar: KaniGrammar
     kind: str
     build: cabc.Callable[[InventoryHarness], LaunchCommand]
+
+
+def route_working_directory(route: KaniRoute) -> Path:
+    """Return the working directory the route will actually use.
+
+    Parameters
+    ----------
+    route : KaniRoute
+        Selected legacy or snapshot route.
+
+    Returns
+    -------
+    Path
+        The proof working directory. A snapshot route that names none uses the
+        process working directory, which is what its preparation will use.
+    """
+    if isinstance(route, LegacyRoute):
+        return route.cwd
+    return Path.cwd() if route.cwd is None else route.cwd
 
 
 def prepare_route(route: KaniRoute) -> PreparedRoute:

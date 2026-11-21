@@ -87,6 +87,7 @@ class _RunLedger:
     interrupted: bool = False
     interrupt_signal: int | None = None
     finished_at: dt.datetime | None = None
+    diagnostic_error: Exception | None = None
 
 
 @dc.dataclass(slots=True)
@@ -123,24 +124,27 @@ class SupervisedRun:
         if self.environment.interrupts is not None:
             self.environment.interrupts.bind(asyncio.get_running_loop())
         ledger = _RunLedger(expected=self.expected)
-        self._emit_start(started_at)
+        self._emit_start(started_at, ledger)
         await self._run_all(ledger)
         return self._finalize(ledger, started_at)
 
-    def _emit_start(self, started_at: dt.datetime) -> None:
-        """Write the run's opening evidence record."""
+    def _emit_start(self, started_at: dt.datetime, ledger: _RunLedger) -> None:
+        """Write the run's opening evidence record, retaining a sink failure."""
         packages = tuple(dict.fromkeys(spec.package for spec in self.expected))
-        self.environment.diagnostics.emit(
-            run_start_record(
-                RunStart(
-                    run_id=self.run_id,
-                    timestamp=started_at,
-                    packages=packages,
-                    harness_count=len(self.expected),
-                    config=self.config,
+        try:
+            self.environment.diagnostics.emit(
+                run_start_record(
+                    RunStart(
+                        run_id=self.run_id,
+                        timestamp=started_at,
+                        packages=packages,
+                        harness_count=len(self.expected),
+                        config=self.config,
+                    )
                 )
             )
-        )
+        except (OSError, ValueError) as error:
+            ledger.diagnostic_error = error
 
     async def _run_all(self, ledger: _RunLedger) -> None:
         """Run every expected identity, continuing past individual failures."""
@@ -154,13 +158,17 @@ class SupervisedRun:
 
     async def _run_one(self, spec: HarnessSpec, ledger: _RunLedger) -> HarnessResult:
         """Run and record one harness invocation."""
-        reference = self.environment.diagnostics.emit(
-            harness_start_record(
-                run_id=self.run_id,
-                spec=spec,
-                timestamp=self.environment.clock.now(),
+        reference = None
+        try:
+            reference = self.environment.diagnostics.emit(
+                harness_start_record(
+                    run_id=self.run_id,
+                    spec=spec,
+                    timestamp=self.environment.clock.now(),
+                )
             )
-        )
+        except (OSError, ValueError) as error:
+            ledger.diagnostic_error = error
         evidence, classification = await self._supervise(spec)
         if evidence.stop_reason is not StopReason.LAUNCH_FAILED:
             ledger.executed.append(spec.qualified)
@@ -168,9 +176,13 @@ class SupervisedRun:
             ledger.interrupted = True
             ledger.interrupt_signal = self._signum()
         result = result_for(evidence, classification, reference)
-        self.environment.diagnostics.emit(
-            harness_finish_record(run_id=self.run_id, result=result)
-        )
+        try:
+            self.environment.diagnostics.emit(
+                harness_finish_record(run_id=self.run_id, result=result)
+            )
+        except (OSError, ValueError) as error:
+            if ledger.diagnostic_error is None:
+                ledger.diagnostic_error = error
         return result
 
     async def _supervise(
@@ -226,7 +238,7 @@ class SupervisedRun:
                 finished_at=ledger.finished_at,
             )
         )
-        diagnostic_error: Exception | None = None
+        diagnostic_error = ledger.diagnostic_error
         try:
             self.environment.diagnostics.emit(
                 run_finish_record(
@@ -238,8 +250,10 @@ class SupervisedRun:
             self.environment.diagnostics.flush()
         except (OSError, ValueError) as error:
             # The report destination is independent of the live sinks. Publish
-            # the completed report first, then surface the evidence failure.
-            diagnostic_error = error
+            # the completed report first, then surface the first evidence
+            # failure, whether it happened during the run or at finalization.
+            if diagnostic_error is None:
+                diagnostic_error = error
         self._write_report(report)
         if diagnostic_error is not None:
             raise diagnostic_error

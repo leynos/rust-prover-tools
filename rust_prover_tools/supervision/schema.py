@@ -281,6 +281,10 @@ def _validate_accounting(accounting: object) -> None:
         frozenset({"missing", "duplicate", "unexpected"}),
         subject="the report accounting",
     )
+    for field in ("missing", "duplicate", "unexpected"):
+        if not isinstance(accounting[field], list):
+            msg = f"the report accounting {field} is not an array"
+            raise EvidenceFormatError(msg)
 
 
 def _validate_results(results: object) -> None:

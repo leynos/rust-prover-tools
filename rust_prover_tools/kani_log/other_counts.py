@@ -9,8 +9,15 @@ them into one total would let one kind mask another.
 from __future__ import annotations
 
 import re
+import typing as typ
 
-__all__ = ("parse_other_pairs",)
+from rust_prover_tools.kani_log.issues import Issue, IssueKind
+from rust_prover_tools.kani_log.syntax import OTHER_STATUS
+
+if typ.TYPE_CHECKING:
+    from rust_prover_tools.kani_log.model import HarnessBlock
+
+__all__ = ("parse_other_pairs", "reconcile_other")
 
 _PAIR = re.compile(r"\s*(\d+)\s+([a-z]+)\s*")
 
@@ -43,3 +50,23 @@ def parse_other_pairs(text: str | None) -> tuple[tuple[int, str], ...]:
             raise ValueError(msg)
         pairs.append((int(match[1]), match[2]))
     return tuple(pairs)
+
+
+def reconcile_other(block: HarnessBlock) -> list[Issue]:
+    """Check every parenthesized other-result pair against the checks."""
+    pairs = block.other_counts or (
+        ((block.other_count, block.other_kind),) if block.other_kind is not None else ()
+    )
+    reasons: list[Issue] = []
+    for count, kind in pairs:
+        status = OTHER_STATUS.get(kind, "")
+        observed = sum(1 for item in block.checks if item.status == status)
+        if count != observed:
+            reasons.append(
+                Issue(
+                    IssueKind.CONTRADICTION,
+                    f"the block for {block.name!r} counts {count} "
+                    f"{kind} results but lists {observed}",
+                )
+            )
+    return reasons

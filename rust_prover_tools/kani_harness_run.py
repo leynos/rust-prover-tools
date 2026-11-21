@@ -33,6 +33,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_diagnostics import open_diagnostics
 from rust_prover_tools.kani_harness_models import (
     KaniHarnessDependencies,
@@ -52,6 +53,7 @@ from rust_prover_tools.kani_routes import (
     LegacyRoute,
     SnapshotRoute,
     prepare_route,
+    route_working_directory,
 )
 from rust_prover_tools.supervision import (
     AsyncSleeper,
@@ -196,6 +198,14 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
+    root = options.repo_root.resolve()
+    route_cwd = route_working_directory(options.route).resolve()
+    if route_cwd != root and root not in route_cwd.parents:
+        msg = (
+            "the route working directory must be inside the repository root: "
+            f"{route_cwd} is outside {root}"
+        )
+        raise ProverToolError(msg)
     inventory = _inventory(options)
     selected = select_harnesses(inventory, options.harnesses)
     dependencies = options.dependencies or KaniHarnessDependencies()

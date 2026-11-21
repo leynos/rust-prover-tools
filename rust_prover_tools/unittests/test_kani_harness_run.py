@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessDependencies,
     KaniHarnessRun,
@@ -380,3 +381,21 @@ def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
     assert run.report.passed
     assert human.exists()
     assert jsonl.exists()
+
+
+def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
+    """Discovery and execution must use one workspace, not two."""
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    dependencies = KaniHarnessDependencies(prepare=lambda route: _prepared())
+    options = KaniHarnessRunOptions(
+        repo_root=repository,
+        route=LegacyRoute(installation=elsewhere, cwd=elsewhere),
+        inventory=_inventory("harnesses::a"),
+        dependencies=dependencies,
+    )
+
+    with pytest.raises(ProverToolError, match="inside the repository root"):
+        prepare_harnesses(options)

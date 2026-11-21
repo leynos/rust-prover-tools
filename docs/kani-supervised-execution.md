@@ -193,7 +193,9 @@ monitor task owns every timing decision: it samples resource use, emits
 heartbeats, checks the wall-clock budget, checks the host-memory floor, and
 requests the first stop that applies. Cancelling the launcher task makes Cuprum
 settle the owned group before its cancellation surfaces, so every descendant
-the verifier started is terminated with the child that started it.
+that remains in that group is terminated with the child that started it. A
+descendant that creates or joins another process group is outside this
+guarantee.
 
 A failure, timeout, or watchdog stop does not prevent later harnesses from
 running. Only an interruption stops the sequence; the active harness is

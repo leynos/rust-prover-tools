@@ -101,7 +101,15 @@ def fit_record(payload: dict[str, object], limit: int) -> str:
     line = json.dumps(payload, ensure_ascii=False)
     if len(line.encode("utf-8")) <= limit:
         return line
-    structural = {"schema", "record", "marker"}
+    structural = {
+        "schema",
+        "record",
+        "marker",
+        "run_id",
+        "package",
+        "harness",
+        "attempt",
+    }
     for budget in (4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 0):
         candidate = {
             key: value if key in structural else _bound_strings(value, budget)

@@ -35,6 +35,8 @@ _RAW_STRING = re.compile(r'r(?P<hashes>#*)"(?P<body>.*)"(?P=hashes)', re.DOTALL)
 _HEX_DIGITS = 2
 _MIN_CFG_ATTR_PARTS = 2
 _QUOTE_PAIR = 2
+_MAX_UNICODE_DIGITS = 6
+_MAX_CODE_POINT = 0x10FFFF
 _ESCAPES = {
     "\\": "\\",
     '"': '"',
@@ -114,8 +116,16 @@ def _rust_escape(text: str, index: int) -> tuple[str | None, int] | None:
     if escape == "u":
         return _unicode_escape(text, index + 2)
     if escape == "\n":
-        return None, index + 2
+        return None, _skip_continuation(text, index + 2)
     return None
+
+
+def _skip_continuation(text: str, start: int) -> int:
+    """Skip the whitespace Rust removes after an escaped newline."""
+    position = start
+    while position < len(text) and text[position].isspace():
+        position += 1
+    return position
 
 
 def _hex_escape(text: str, start: int) -> tuple[str, int] | None:
@@ -135,35 +145,50 @@ def _unicode_escape(text: str, start: int) -> tuple[str, int] | None:
     close = text.find("}", start + 1)
     if close < 0:
         return None
-    digits = text[start + 1 : close]
-    if not digits:
+    digits = text[start + 1 : close].replace("_", "")
+    if not digits or len(digits) > _MAX_UNICODE_DIGITS:
         return None
     if not all(char in string.hexdigits for char in digits):
         return None
-    return chr(int(digits, 16)), close + 1
+    value = int(digits, 16)
+    if value > _MAX_CODE_POINT:
+        return None
+    return chr(value), close + 1
 
 
 def cfg_attr_facts(masked: str) -> tuple[list[str], bool] | None:
     """Return proof attributes nested in ``cfg_attr`` and their conditionality."""
-    content = masked.strip()
-    prefix = "cfg_attr("
-    if not content.startswith(prefix) or not content.endswith(")"):
+    name, arguments = attribute_name(masked)
+    if name != "cfg_attr" or not arguments.startswith("("):
         return None
-    parts = _split_top_level(content[len(prefix) : -1])
+    if not arguments.endswith(")"):
+        return None
+    parts = _split_top_level(arguments[1:-1])
     if len(parts) < _MIN_CFG_ATTR_PARTS:
         return None
     predicate = normalise(parts[0])
     proofs: list[str] = []
-    conditional = False
+    conditional = predicate != "kani"
     for part in parts[1:]:
-        nested_name, _ = attribute_name(part)
-        if nested_name in PROOF_ATTRIBUTES:
-            proofs.append(nested_name)
-            if predicate != "kani":
-                conditional = True
-        elif nested_name == "cfg" and normalise(part) != "cfg(kani)":
-            conditional = True
+        nested = _nested_cfg_attr_facts(part)
+        if nested is None:
+            return None
+        nested_proofs, nested_conditional = nested
+        proofs.extend(nested_proofs)
+        conditional = conditional or nested_conditional
     return proofs, conditional
+
+
+def _nested_cfg_attr_facts(part: str) -> tuple[list[str], bool] | None:
+    """Return the facts one attribute inside a ``cfg_attr`` contributes."""
+    nested_name, _ = attribute_name(part)
+    if nested_name == "cfg_attr":
+        return cfg_attr_facts(part)
+    if nested_name in PROOF_ATTRIBUTES:
+        return [nested_name], False
+    if nested_name == "cfg" and normalise(part) != "cfg(kani)":
+        return [], True
+    return [], False
 
 
 def _split_top_level(content: str) -> list[str]:

@@ -11,7 +11,13 @@ from __future__ import annotations
 import enum
 import typing as typ
 
-__all__ = ("Issue", "IssueKind", "second_banner_issue", "structural_issue")
+__all__ = (
+    "Issue",
+    "IssueKind",
+    "late_harness_issue",
+    "second_banner_issue",
+    "structural_issue",
+)
 
 
 class IssueKind(enum.StrEnum):
@@ -49,4 +55,12 @@ def second_banner_issue(line_number: int) -> Issue:
     return Issue(
         IssueKind.STRUCTURAL,
         f"line {line_number}: a second Kani banner in one capture",
+    )
+
+
+def late_harness_issue(line_number: int) -> Issue:
+    """Return the refusal for a harness block after the final summary."""
+    return Issue(
+        IssueKind.STRUCTURAL,
+        f"line {line_number}: a harness block after the final manual summary",
     )

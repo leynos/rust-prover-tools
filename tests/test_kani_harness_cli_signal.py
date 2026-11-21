@@ -38,10 +38,17 @@ def test_binding_releases_a_waiter_on_a_signal() -> None:
     """The handler schedules the event on the bound loop."""
     interrupt = SignalInterrupt()
     loop = asyncio.new_event_loop()
+
+    async def scenario() -> None:
+        """Start a waiter, then deliver the signal that must release it."""
+        waiter = asyncio.create_task(interrupt.wait())
+        await asyncio.sleep(0)
+        interrupt._handle(signal.SIGINT, None)
+        await asyncio.wait_for(waiter, timeout=1)
+
     try:
         interrupt.bind(loop)
-        interrupt._handle(signal.SIGINT, None)
-        loop.run_until_complete(asyncio.wait_for(interrupt.wait(), timeout=1))
+        loop.run_until_complete(scenario())
     finally:
         loop.close()
 

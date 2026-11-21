@@ -1,11 +1,10 @@
 """Walk one Kani log line by line with the grammar in ``syntax``.
 
-The reader records a ``KaniLogError`` reason wherever the next line is not
-one the grammar accounts for. Recording rather than raising lets a supervisor
-keep the facts it already has when a proof is stopped mid-report; `finish`
-raises the first reason, so a complete call still fails closed. The state
-machine is derived from Combobulate's reader at commit ``9dd6e3c`` and is used
-under the ISC licence in ``ATTRIBUTION.md``.
+The reader records a ``KaniLogError`` reason wherever a line is not one the
+grammar accounts for. Recording rather than raising keeps facts available when
+a proof is stopped mid-report; `finish` still fails closed. The state machine
+is derived from Combobulate's reader at commit ``9dd6e3c`` under the ISC
+licence in ``ATTRIBUTION.md``.
 
 Examples
 --------
@@ -20,11 +19,12 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.kani_log.blocks import BlockCursor, Issue
-from rust_prover_tools.kani_log.budget import IssueBudget
-from rust_prover_tools.kani_log.issues import (
-    second_banner_issue as _second_banner,
+from rust_prover_tools.kani_log.budget import (
+    MAX_RETAINED_RECORDS,
+    IssueBudget,
+    retention_issue,
 )
-from rust_prover_tools.kani_log.issues import structural_issue as _structural
+from rust_prover_tools.kani_log.issues import second_banner_issue, structural_issue
 from rust_prover_tools.kani_log.model import (
     HarnessBlock,
     KaniLog,
@@ -35,6 +35,7 @@ from rust_prover_tools.kani_log.registry import grammar_for
 from rust_prover_tools.kani_log.state import (
     ReaderSnapshot,
     State,
+    done_line,
     incomplete_issue,
 )
 from rust_prover_tools.kani_log.summary import reconcile_report
@@ -72,10 +73,9 @@ __all__ = ("KaniLogReader",)
 class KaniLogReader:
     """An incremental reader for one Kani 0.67.0 log.
 
-    Feed decoded lines in arrival order, then call `finish`. Facts about a
-    partially received log remain readable through `facts`, which never raises
-    for an incomplete log, so a supervisor can attribute the last evidence to a
-    harness that was stopped before it reported.
+    Feed decoded lines, then call `finish`. `facts` never raises for an
+    incomplete log, so a supervisor can attribute the last evidence to a
+    stopped harness.
     """
 
     def __init__(self) -> None:
@@ -84,6 +84,9 @@ class KaniLogReader:
         self._line_number = 0
         self._banner: str | None = None
         self._blocks: list[HarnessBlock] = []
+        self._blocks_exhausted = False
+        self._manual_exhausted = False
+        self._unsupported_exhausted = False
         self._cursor = BlockCursor()
         self._manual: ManualSummary | None = None
         self._manual_failed: list[str] = []
@@ -106,12 +109,8 @@ class KaniLogReader:
         """Consume one decoded output line.
 
         A standard-error line before the banner is Cargo preamble, not a
-        malformed log, because Cuprum interleaves the two streams.
-
-        Raises
-        ------
-        UnsupportedKaniGrammarError
-            Raised as soon as a banner names an unregistered release.
+        malformed log, because Cuprum interleaves the streams. An unregistered
+        banner raises `UnsupportedKaniGrammarError` immediately.
         """
         self._line_number += 1
         if self._state is State.BEFORE_BANNER:
@@ -127,19 +126,20 @@ class KaniLogReader:
         Raises
         ------
         KaniLogError
-            Raised for the first structural, contradiction, summary, or
-            truncation reason recorded while reading.
+            The first structural, contradiction, summary, or truncation reason.
         """
         self._exit_code = exit_code
         if self._banner is None:
-            self._record((_structural("the log does not begin with a Kani banner"),))
-            raise self._first_error()
+            self._budget.record((
+                structural_issue("the log does not begin with a Kani banner"),
+            ))
+            raise KaniLogError(self._budget.issues[0].message)
         if self._state not in {State.BLOCK, State.RESULTS, State.SUMMARY}:
             self._close_block()
         self._finish_incomplete()
         if self._budget.issues:
-            raise self._first_error()
-        self._record(
+            raise KaniLogError(self._budget.issues[0].message)
+        self._budget.record(
             reconcile_report(
                 self._blocks,
                 self._manual,
@@ -147,7 +147,7 @@ class KaniLogReader:
             )
         )
         if self._budget.issues:
-            raise self._first_error()
+            raise KaniLogError(self._budget.issues[0].message)
         return KaniLog(
             self._banner,
             "inventory" if self._is_list else "regular",
@@ -184,11 +184,13 @@ class KaniLogReader:
             grammar_for(match["version"])
             self._banner = match["version"]
             self._state = State.BETWEEN
-            self._progress(text)
+            self._last_progress = text
             return
         if stream == "stderr" or not text.strip():
             return
-        self._record((_structural("the log does not begin with a Kani banner"),))
+        self._budget.record((
+            structural_issue("the log does not begin with a Kani banner"),
+        ))
         self._state = State.DONE
 
     def _between_line(self, text: str) -> None:
@@ -199,11 +201,11 @@ class KaniLogReader:
             self._state = State.UNSUPPORTED
         elif text.startswith(LIST_WRITTEN):
             self._is_list = True
-            self._progress(text)
+            self._last_progress = text
         elif (match := HARNESS_START.match(text)) is not None:
             self._begin_block(match["name"])
         elif BANNER.match(text) is not None:
-            self._record((_second_banner(self._line_number),))
+            self._budget.record((second_banner_issue(self._line_number),))
 
     def _block_line(self, text: str) -> None:
         """Consume a line inside a harness block."""
@@ -218,8 +220,8 @@ class KaniLogReader:
         if self._cursor.needs_summary:
             # The solver's transcript sits between the header and the report.
             return
-        self._record((
-            _structural(
+        self._budget.record((
+            structural_issue(
                 f"line {self._line_number}: unrecognised line in the block for "
                 f"{self._cursor.block.name!r}: {text!r}"
             ),
@@ -230,17 +232,17 @@ class KaniLogReader:
         if text == "RESULTS:":
             self._cursor.block.has_results = True
             self._state = State.RESULTS
-            self._progress(text)
+            self._last_progress = text
             return True
         if text == "SUMMARY:":
             self._state = State.SUMMARY
-            self._progress(text)
+            self._last_progress = text
             return True
         if VERIFICATION_TIME.match(text):
             self._cursor.block.seen_verification_time = True
             self._close_block()
             self._state = State.BETWEEN
-            self._progress(text)
+            self._last_progress = text
             return True
         if text == "Manual Harness Summary:":
             self._close_block()
@@ -253,8 +255,8 @@ class KaniLogReader:
         match = VERIFICATION.match(text)
         if match is None:
             return False
-        self._record(self._cursor.add_verdict(match["verdict"], match["note"]))
-        self._progress(text)
+        self._budget.record(self._cursor.add_verdict(match["verdict"], match["note"]))
+        self._last_progress = text
         return True
 
     def _block_marker(self, text: str) -> bool:
@@ -274,40 +276,40 @@ class KaniLogReader:
     def _results_line(self, text: str) -> None:
         """Consume one line of the ``RESULTS:`` section."""
         if (match := CHECK.match(text)) is not None:
-            self._record(self._cursor.flush_check())
+            self._budget.record(self._cursor.flush_check())
             self._cursor.begin_check(match["identifier"])
-            self._progress(text)
+            self._last_progress = text
             return
         if (field := FIELD.match(text)) is not None:
             refusal = self._cursor.add_check_field(field["key"], field["value"])
             if refusal is not None:
-                self._record((
-                    _structural(f"line {self._line_number}: {refusal}: {text!r}"),
+                self._budget.record((
+                    structural_issue(f"line {self._line_number}: {refusal}: {text!r}"),
                 ))
             return
         if not text.strip():
             return
-        self._record(self._cursor.flush_check())
+        self._budget.record(self._cursor.flush_check())
         self._state = State.BLOCK
         self._block_line(text)
 
     def _summary_line(self, text: str) -> None:
         """Consume one line of the ``SUMMARY:`` section."""
         if (total := TOTAL.match(text)) is not None:
-            self._record(self._cursor.add_total(total))
-            self._progress(text)
+            self._budget.record(self._cursor.add_total(total))
+            self._last_progress = text
         elif (cover := COVER.match(text)) is not None:
-            self._record(self._cursor.add_cover(cover))
-            self._progress(text)
+            self._budget.record(self._cursor.add_cover(cover))
+            self._last_progress = text
         elif (message := FAILED_CHECK.match(text)) is not None:
             self._cursor.add_failure(message["message"])
-            self._progress(text)
+            self._last_progress = text
         elif VERIFICATION.match(text) or text == UNSUPPORTED_REACHABLE:
             self._state = State.BLOCK
             self._block_line(text)
         elif text.strip():
-            self._record((
-                _structural(
+            self._budget.record((
+                structural_issue(
                     f"line {self._line_number}: unrecognised summary line for "
                     f"{self._cursor.block.name!r}: {text!r}"
                 ),
@@ -316,8 +318,12 @@ class KaniLogReader:
     def _manual_line(self, text: str) -> None:
         """Consume one line of the final manual harness summary."""
         if (failure := FAILED_FOR.match(text)) is not None:
-            self._manual_failed.append(failure["name"])
-            self._progress(text)
+            if len(self._manual_failed) < MAX_RETAINED_RECORDS:
+                self._manual_failed.append(failure["name"])
+            elif not self._manual_exhausted:
+                self._manual_exhausted = True
+                self._budget.record((retention_issue("manual failure name"),))
+            self._last_progress = text
             return
         if (complete := COMPLETE.match(text)) is not None:
             self._manual = ManualSummary(
@@ -327,11 +333,11 @@ class KaniLogReader:
                 tuple(self._manual_failed),
             )
             self._state = State.DONE
-            self._progress(text)
+            self._last_progress = text
             return
         if text.strip():
-            self._record((
-                _structural(
+            self._budget.record((
+                structural_issue(
                     f"line {self._line_number}: unrecognised manual summary "
                     f"line: {text!r}"
                 ),
@@ -340,7 +346,11 @@ class KaniLogReader:
     def _unsupported_line(self, text: str) -> None:
         """Consume one entry of the pre-flight unsupported-construct list."""
         if (entry := UNSUPPORTED_ENTRY.match(text)) is not None:
-            self._unsupported.append(entry["name"])
+            if len(self._unsupported) < MAX_RETAINED_RECORDS:
+                self._unsupported.append(entry["name"])
+            elif not self._unsupported_exhausted:
+                self._unsupported_exhausted = True
+                self._budget.record((retention_issue("unsupported construct"),))
             return
         if text.strip():
             self._state = State.BETWEEN
@@ -348,35 +358,30 @@ class KaniLogReader:
 
     def _done_line(self, text: str) -> None:
         """Ignore chatter after the summary, but refuse a second report."""
-        if text == "Manual Harness Summary:":
-            self._record((
-                _structural(
-                    f"line {self._line_number}: a second manual harness summary"
-                ),
-            ))
-        elif (match := HARNESS_START.match(text)) is not None:
-            self._begin_block(match["name"])
-        elif BANNER.match(text) is not None:
-            self._record((_second_banner(self._line_number),))
+        done_line(text, self._line_number, self._budget.record)
 
     def _begin_block(self, name: str) -> None:
         """Start a new harness block at ``name``."""
         self._cursor.start(name)
-        self._blocks.append(self._cursor.block)
+        if len(self._blocks) < MAX_RETAINED_RECORDS:
+            self._blocks.append(self._cursor.block)
+        elif not self._blocks_exhausted:
+            self._blocks_exhausted = True
+            self._budget.record((retention_issue("harness block"),))
         self._state = State.BLOCK
-        self._progress(f"Checking harness {name}...")
+        self._last_progress = f"Checking harness {name}..."
 
     def _begin_manual(self) -> None:
         """Start the final manual harness summary."""
         self._manual_failed = []
         self._state = State.MANUAL
-        self._progress("Manual Harness Summary:")
+        self._last_progress = "Manual Harness Summary:"
 
     def _close_block(self) -> None:
         """Reconcile the current block and detach it."""
         if not self._cursor.started:
             return
-        self._record(self._cursor.finish())
+        self._budget.record(self._cursor.finish())
         self._cursor.start("")
 
     def _finish_incomplete(self) -> None:
@@ -385,15 +390,7 @@ class KaniLogReader:
             self._state = State.BETWEEN
         issue = incomplete_issue(self._state, self._cursor.block.name)
         if issue is not None:
-            self._record((issue,))
-
-    def _record(self, issues: cabc.Sequence[Issue]) -> None:
-        """Record classified issues within the retention budget."""
-        self._budget.record(issues)
-
-    def _first_error(self) -> KaniLogError:
-        """Return the first recorded reason as the typed parser error."""
-        return KaniLogError(self._budget.issues[0].message)
+            self._budget.record((issue,))
 
     def _progress(self, text: str) -> None:
         """Remember the last structurally recognised report line."""

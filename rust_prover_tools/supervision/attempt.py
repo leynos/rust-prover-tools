@@ -141,17 +141,27 @@ class AttemptSupervisor:
         monitor = asyncio.get_running_loop().create_task(
             self._monitor(running, started_at, started_monotonic)
         )
+        monitor_failure: BaseException | None = None
         try:
             await asyncio.wait({done, monitor}, return_when=asyncio.FIRST_COMPLETED)
             if monitor.done():
-                # Surface a monitor failure instead of letting its cleanup
-                # cancellation hide it behind the child's cancellation.
-                await monitor
-            result = await done
+                # A monitor failure explains why the child was not stopped.
+                # Cancel and join the child first, then surface it. If both
+                # tasks fail, the monitor failure takes precedence.
+                monitor_failure = monitor.exception()
+                done.cancel()
+            try:
+                result = await done
+            except asyncio.CancelledError:
+                if monitor_failure is None:
+                    raise
+                raise monitor_failure from None
+            if monitor_failure is not None:
+                raise monitor_failure
         finally:
             monitor.cancel()
             done.cancel()
-            for task in (monitor, done):
+            for task in (done, monitor):
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)

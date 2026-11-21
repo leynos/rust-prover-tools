@@ -222,3 +222,16 @@ def test_a_duplicate_package_restriction_is_refused() -> None:
     """Naming one package twice is a request error, not a duplicate model."""
     with pytest.raises(InventoryDiscoveryError, match="twice"):
         restrict_inventory(_inventory(), ("alpha", "alpha"))
+
+
+def test_a_qualified_identity_wins_over_an_alias() -> None:
+    """One harness's pretty name cannot shadow another's identity."""
+    inventory = HarnessInventory((
+        PackageInventory("p", (_harness("x", package="p", target="p"),)),
+        PackageInventory("q", (_harness("p::x", package="q", target="q"),)),
+    ))
+
+    (chosen,) = select_harnesses(inventory, ("p::x",))
+
+    assert chosen.package == "p"
+    assert chosen.harness == "x"

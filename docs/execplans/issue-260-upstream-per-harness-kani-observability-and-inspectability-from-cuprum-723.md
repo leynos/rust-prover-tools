@@ -224,6 +224,15 @@ Plain-language terms used in this plan:
   errors, hard-link destination aliases rejected, and caller-supplied `--tests`
   forbidden. Each change has a focused regression test; the full deterministic
   gate is re-run before the draft is marked ready.
+- [x] (2026-11-21 21:37Z) Fourth CodeRabbit pass: 17 actionable findings,
+  all fixed with regression tests. The pass froze the snapshot proof
+  environment with `EnvMode.REPLACE`, corrected child-module resolution for
+  explicitly located files, added `cfg_attr` and hashed raw-string support, and
+  tightened JSONL boundaries, schema typing, report publication, and
+  destination encoding. CI also exposed that the fifteen parser corpus logs
+  were excluded by the global `*.log` ignore; the fixture directory is now an
+  explicit exception and the corpus is tracked. The full deterministic gate
+  passes with 1,886 tests and 6 skips.
 
 ## Surprises & discoveries
 
@@ -561,7 +570,10 @@ status, in the documented precedence order.
 ### Invariants and lemmas
 
 - `INV-BOUNDED`: parsing and evidence retain at most a configured number of
-  bytes per line and per stream tail; no component retains a whole proof log.
+  bytes per line and per stream tail, and bounded prefixes of retained record
+  collections (issues, blocks, checks, and failures). The one exception is
+  Cuprum 0.2.0b2's line-drain buffer, which can retain an unterminated line
+  before the bounded hook receives it; no component retains a whole proof log.
 - `INV-EXACT`: a harness is `passed` only when exactly one selection record
   matches the requested pretty name exactly, the verdict is successful, the
   parser reconciled the whole log, and the child exited zero.
@@ -855,9 +867,9 @@ JSONL and report schemas. Update `docs/users-guide.md`,
   and pass deterministic tests plus the real-process witness. Acceptance
   evidence: runner tests for every status, stop reason, continuation, and
   interruption, and resource tests for every unavailable branch. Conformance:
-  no library signal handler; no new dependency; bounded memory. Recovery:
-  revert the supervision package. Remaining: Kani classification and route
-  wiring. Compatibility: none.
+  no library signal handler; no new dependency; bounded retention subject to
+  the documented Cuprum drain exception. Recovery: revert the supervision
+  package. Remaining: Kani classification and route wiring. Compatibility: none.
 - `EP-M3`: inventory discovery, strict JSON, selection, and argv composition
   exist and pass their tests. Acceptance evidence: the fixture workspace tests
   and the conflict matrix. Conformance: no hard-coded package or harness name.

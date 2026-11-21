@@ -18,14 +18,18 @@ from __future__ import annotations
 
 import typing as typ
 
+from rust_prover_tools.kani_log.budget import (
+    MAX_RETAINED_RECORDS,
+    retention_issue,
+)
 from rust_prover_tools.kani_log.issues import Issue, IssueKind
 from rust_prover_tools.kani_log.model import HarnessBlock
 from rust_prover_tools.kani_log.other_counts import parse_other_pairs
+from rust_prover_tools.kani_log.reconciliation import reconcile
 from rust_prover_tools.kani_log.syntax import (
     CHECK_FIELDS,
     CHECK_STATUSES,
     FAILED_LOCATION,
-    OTHER_STATUS,
     FailedCheck,
     PropertyResult,
 )
@@ -52,6 +56,9 @@ class BlockCursor:
         self._check_id: str | None = None
         self._check_values: dict[str, str] = {}
         self._awaiting_failure: str | None = None
+        self._identifiers: set[str] = set()
+        self._checks_truncated = False
+        self._failures_truncated = False
 
     @property
     def started(self) -> bool:
@@ -64,6 +71,9 @@ class BlockCursor:
         self._check_id = None
         self._check_values = {}
         self._awaiting_failure = None
+        self._identifiers = set()
+        self._checks_truncated = False
+        self._failures_truncated = False
 
     @property
     def needs_summary(self) -> bool:
@@ -100,27 +110,47 @@ class BlockCursor:
         identifier, values = self._check_id, self._check_values
         self._check_id, self._check_values = None, {}
         missing = [key for key in CHECK_FIELDS if key not in values]
+        refusal = self._check_refusal(identifier, values, missing)
+        if refusal is not None:
+            return [refusal]
+        return self._retain_property(identifier, values)
+
+    def _check_refusal(
+        self,
+        identifier: str,
+        values: dict[str, str],
+        missing: list[str],
+    ) -> Issue | None:
+        """Return why a completed check cannot be retained, if it cannot."""
         if missing:
-            return [
-                Issue(
-                    IssueKind.STRUCTURAL,
-                    f"check {identifier!r} is missing {', '.join(missing)}",
-                )
-            ]
+            return Issue(
+                IssueKind.STRUCTURAL,
+                f"check {identifier!r} is missing {', '.join(missing)}",
+            )
         if values["Status"] not in CHECK_STATUSES:
-            return [
-                Issue(
-                    IssueKind.STRUCTURAL,
-                    f"check {identifier!r} has unknown status {values['Status']!r}",
-                )
-            ]
-        if any(item.identifier == identifier for item in self.block.properties):
-            return [
-                Issue(
-                    IssueKind.STRUCTURAL,
-                    f"check {identifier!r} is reported more than once",
-                )
-            ]
+            return Issue(
+                IssueKind.STRUCTURAL,
+                f"check {identifier!r} has unknown status {values['Status']!r}",
+            )
+        if identifier in self._identifiers:
+            return Issue(
+                IssueKind.STRUCTURAL,
+                f"check {identifier!r} is reported more than once",
+            )
+        return None
+
+    def _retain_property(
+        self,
+        identifier: str,
+        values: dict[str, str],
+    ) -> list[Issue]:
+        """Retain one unique property within the block's budget."""
+        if len(self.block.properties) >= MAX_RETAINED_RECORDS:
+            if self._checks_truncated:
+                return []
+            self._checks_truncated = True
+            return [retention_issue("check")]
+        self._identifiers.add(identifier)
         self.block.properties.append(
             PropertyResult(
                 identifier=identifier,
@@ -152,11 +182,9 @@ class BlockCursor:
         match = FAILED_LOCATION.match(text)
         self._awaiting_failure = None
         if match is None:
-            self.block.failures.append(FailedCheck(message, None, None))
+            self._retain_failure(FailedCheck(message, None, None))
             return False
-        self.block.failures.append(
-            FailedCheck(message, match["path"], int(match["line"]))
-        )
+        self._retain_failure(FailedCheck(message, match["path"], int(match["line"])))
         return True
 
     def add_total(self, match: re.Match[str]) -> list[Issue]:
@@ -223,7 +251,7 @@ class BlockCursor:
             # explanation the verifier produced.
             message = self._awaiting_failure
             self._awaiting_failure = None
-            self.block.failures.append(FailedCheck(message, None, None))
+            self._retain_failure(FailedCheck(message, None, None))
         reasons = self.flush_check()
         if self.block.verdict is None:
             reasons.append(
@@ -239,160 +267,13 @@ class BlockCursor:
             # has no results, no summary, and no verification time. Its verdict
             # alone is the fact.
             return reasons
-        return [*reasons, *self._reconcile()]
+        if self._failures_truncated:
+            reasons.append(retention_issue("failure"))
+        return [*reasons, *reconcile(self.block)]
 
-    def _reconcile(self) -> list[Issue]:
-        """Check the block's counts against the checks and failures it lists."""
-        if not self.block.seen_verification_time:
-            return [
-                Issue(
-                    IssueKind.TRUNCATION,
-                    f"the log is truncated: the block for {self.block.name!r} has "
-                    "no verification time",
-                )
-            ]
-        if self.block.failed_count is None or self.block.total_count is None:
-            return [
-                Issue(
-                    IssueKind.STRUCTURAL,
-                    f"the block for {self.block.name!r} has no summary",
-                )
-            ]
-        return [
-            *self._reconcile_checks(),
-            *self._reconcile_failures(),
-            *self._reconcile_covers(),
-            *self._reconcile_other(),
-        ]
-
-    def _reconcile_checks(self) -> list[Issue]:
-        """Check the failure count against the listed checks."""
-        name = self.block.name
-        checks = self.block.checks
-        reasons: list[Issue] = []
-        if len(checks) != self.block.total_count:
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} counts {self.block.total_count} "
-                    f"checks but lists {len(checks)}",
-                )
-            )
-        failed = sum(1 for item in checks if item.status == "FAILURE")
-        if failed != self.block.failed_count:
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} counts {self.block.failed_count} "
-                    f"failures but lists {failed}",
-                )
-            )
-        if self._unexpected_failure(failed):
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} reports SUCCESSFUL but lists "
-                    f"{failed} failed check(s)",
-                )
-            )
-        return reasons
-
-    def _unexpected_failure(self, failed: int) -> bool:
-        """Whether a successful verdict contradicts a non-panic failure."""
-        if self.block.verdict != "SUCCESSFUL":
-            return False
-        return bool(failed) and not self.block.panics_as_expected
-
-    def _reconcile_failures(self) -> list[Issue]:
-        """Check the failure explanations against the failure count.
-
-        Every failed check is explained once. A ``File:`` line is retained
-        when Kani prints one, but a failure without a location is accepted:
-        Kani omits the location when its trace or source fields are absent.
-        Requiring a location would reject valid failed proofs; the count still
-        makes deleting a ``Failed Checks:`` line detectable.
-        """
-        name = self.block.name
-        reasons: list[Issue] = []
-        if len(self.block.failures) != self.block.failed_count:
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} counts {self.block.failed_count} "
-                    f"failures but explains {len(self.block.failures)}",
-                )
-            )
-        return reasons
-
-    def _reconcile_covers(self) -> list[Issue]:
-        """Check the cover counts against the listed witnesses."""
-        name = self.block.name
-        covers = self.block.covers
-        reasons: list[Issue] = []
-        if self.block.covered_total is None and covers:
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} lists {len(covers)} covers but has "
-                    "no cover count",
-                )
-            )
-        if (
-            self.block.covered_total is not None
-            and len(covers) != self.block.covered_total
-        ):
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} counts {self.block.covered_total} "
-                    f"covers but lists {len(covers)}",
-                )
-            )
-        satisfied = sum(1 for item in covers if item.status == "SATISFIED")
-        if (
-            self.block.covered_satisfied is not None
-            and satisfied != self.block.covered_satisfied
-        ):
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} counts "
-                    f"{self.block.covered_satisfied} satisfied covers but lists "
-                    f"{satisfied}",
-                )
-            )
-        unreachable = sum(1 for item in covers if item.status == "UNREACHABLE")
-        if (
-            self.block.covered_unreachable is not None
-            and self.block.covered_unreachable != unreachable
-        ):
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} counts "
-                    f"{self.block.covered_unreachable} unreachable covers but "
-                    f"lists {unreachable}",
-                )
-            )
-        return reasons
-
-    def _reconcile_other(self) -> list[Issue]:
-        """Check every parenthesized other-result pair against the checks."""
-        pairs = self.block.other_counts or (
-            ((self.block.other_count, self.block.other_kind),)
-            if self.block.other_kind is not None
-            else ()
-        )
-        reasons: list[Issue] = []
-        for count, kind in pairs:
-            status = OTHER_STATUS.get(kind, "")
-            observed = sum(1 for item in self.block.checks if item.status == status)
-            if count != observed:
-                reasons.append(
-                    Issue(
-                        IssueKind.CONTRADICTION,
-                        f"the block for {self.block.name!r} counts {count} "
-                        f"{kind} results but lists {observed}",
-                    )
-                )
-        return reasons
+    def _retain_failure(self, failure: FailedCheck) -> None:
+        """Retain one failure within the block's budget."""
+        if len(self.block.failures) < MAX_RETAINED_RECORDS:
+            self.block.failures.append(failure)
+        else:
+            self._failures_truncated = True

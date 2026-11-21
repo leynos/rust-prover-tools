@@ -16,10 +16,18 @@ from rust_prover_tools.kani_log.issues import Issue, IssueKind
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("MAX_RETAINED_ISSUES", "IssueBudget")
+__all__ = (
+    "MAX_RETAINED_ISSUES",
+    "MAX_RETAINED_RECORDS",
+    "IssueBudget",
+    "retention_issue",
+)
 
 #: Retained issues per attempt.
 MAX_RETAINED_ISSUES: typ.Final[int] = 256
+
+#: Retained blocks, checks, failures, and manual failure names per attempt.
+MAX_RETAINED_RECORDS: typ.Final[int] = 10_000
 
 
 class IssueBudget:
@@ -55,3 +63,11 @@ class IssueBudget:
                         f"{MAX_RETAINED_ISSUES}",
                     )
                 )
+
+
+def retention_issue(subject: str) -> Issue:
+    """Return the refusal for a retained collection that hit its budget."""
+    return Issue(
+        IssueKind.TRUNCATION,
+        f"{subject} retention is truncated at {MAX_RETAINED_RECORDS}",
+    )

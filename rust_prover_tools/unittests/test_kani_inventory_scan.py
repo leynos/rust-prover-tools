@@ -489,3 +489,78 @@ def test_a_path_module_resolves_children_beside_its_file(
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "proofs::child::h"
     ]
+
+
+def test_a_relative_repository_root_still_yields_relative_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A relative root is normalised before source paths are derived."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    (proof,) = collect_proofs(Path("src/lib.rs"), Path())
+
+    assert proof.source == "src/lib.rs"
+
+
+def test_cfg_attr_accepts_whitespace_before_its_group(tmp_path: Path) -> None:
+    """`cfg_attr (predicate, ...)` is the same attribute."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[cfg_attr (kani, kani::proof)]\nfn spaced() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["spaced"]
+
+
+def test_a_nested_cfg_attr_proof_is_discovered(tmp_path: Path) -> None:
+    """An all-`kani` chain is unconditional; a foreign predicate is not."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[cfg_attr(kani, cfg_attr(kani, kani::proof))]\nfn nested() {}\n"
+        '#[cfg_attr(feature = "x", cfg_attr(kani, kani::proof))]\n'
+        "fn gated() {}\n",
+        encoding="utf-8",
+    )
+
+    assert [
+        (proof.pretty_name, proof.conditional)
+        for proof in collect_proofs(root, tmp_path)
+    ] == [("nested", False), ("gated", True)]
+
+
+def test_a_path_string_continuation_drops_indentation(tmp_path: Path) -> None:
+    """A backslash-newline continuation removes the following whitespace."""
+    (tmp_path / "src" / "sub").mkdir(parents=True)
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[path = "sub/\\\n    proofs.rs"]\nmod proofs;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "sub" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::h"
+    ]
+
+
+def test_a_unicode_escape_with_underscores_names_the_file(tmp_path: Path) -> None:
+    r"""Rust permits separators inside a `\u{...}` escape."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[path = "\\u{70_72}oofs.rs"]\nmod proofs;\n', encoding="utf-8")
+    (tmp_path / "src" / "灲oofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::h"
+    ]
