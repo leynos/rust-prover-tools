@@ -17,12 +17,11 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.trust_audit.syntax import Kind, Token
+from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
     member_aliases,
     rooted_spans,
-    statement_end,
-    use_roots,
 )
 
 if typ.TYPE_CHECKING:

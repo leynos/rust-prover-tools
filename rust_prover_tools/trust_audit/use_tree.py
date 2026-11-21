@@ -12,9 +12,12 @@ Three forms change what a name refers to:
 - ``use kani::*;`` binds whatever the crate exports, and is treated the same
   way as the named form for the fail-closed reason the matcher states.
 
-The helpers here are deliberately narrow: they locate the statement, its root,
-its aliases and the member renames inside it. `use_bindings` turns those facts
-into the local names an import binds, and
+The helpers here answer the file-level questions: which crates a file imports,
+and which leaf paths and member renames a statement holds. The smaller
+questions about one statement - where it ends, whether it opens a group, what
+it renames the crate to, which members its brace splits into - live in
+`rust_prover_tools.trust_audit.use_paths`. `use_bindings` turns both sets of
+facts into the local names an import binds, and
 `rust_prover_tools.trust_audit.matcher` owns the vocabulary that decides which
 of them matter.
 """
@@ -25,6 +28,13 @@ import typing as typ
 
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_alias import crate_alias_indices
+from rust_prover_tools.trust_audit.use_paths import (
+    is_grouped,
+    statement_end,
+    top_level_members,
+    use_root,
+    use_roots,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -35,10 +45,6 @@ __all__ = (
     "imported_roots",
     "member_aliases",
     "rooted_spans",
-    "statement_end",
-    "use_aliases",
-    "use_root",
-    "use_roots",
 )
 
 #: The path qualifiers that name a binding in this file rather than another
@@ -150,8 +156,8 @@ def rooted_spans(
         the tokens of that path.
 
     """
-    if _is_grouped(tokens, start, end):
-        for member_start, member_end in _top_level_members(tokens, start, end):
+    if is_grouped(tokens, start, end):
+        for member_start, member_end in top_level_members(tokens, start, end):
             yield from rooted_spans(tokens, member_start, member_end)
         return
     root = use_root(tokens, start)
