@@ -117,6 +117,26 @@ def module_target(
     resolves it; otherwise the module is searched for beneath its owner. A
     module that resolves to no file is a structural failure: the crate would not
     compile, and the audit would report a clean scan of code it never read.
+
+    Parameters
+    ----------
+    root : Path
+        Repository root; the target must resolve beneath it.
+    module : Module
+        The file that declares the module.
+    reference : ModuleReference
+        The declaration's name, path attribute and inline chain.
+
+    Returns
+    -------
+    Module
+        The resolved target, its owner and the directory its own children
+        resolve from.
+
+    Raises
+    ------
+    TrustAuditError
+        If the target resolves outside the root or to no file.
     """
     candidates = _module_candidates(module, reference)
     # Containment is checked before existence so an escaping `#[path]` is
@@ -160,6 +180,23 @@ def physical_relative(root: pathlib.Path, relative: str) -> str:
     different file from ``src/trusted.rs``; the containment and existence
     checks already used the resolved path, so the reported name must be the
     same one.
+
+    Parameters
+    ----------
+    root : Path
+        Repository root that bounds the path.
+    relative : str
+        Repository-relative path as the compiler spelled it.
+
+    Returns
+    -------
+    str
+        The physical file's repository-relative POSIX path.
+
+    Raises
+    ------
+    TrustAuditError
+        If ``relative`` is absolute or resolves outside ``root``.
     """
     resolved = resolve_repository_path(root, relative)
     return resolved.relative_to(root.resolve()).as_posix()
@@ -271,7 +308,18 @@ def _inline_directory(
 
 
 def parent_directory(relative: str) -> str:
-    """Return the directory holding a repository-relative file."""
+    """Return the directory holding a repository-relative file.
+
+    Parameters
+    ----------
+    relative : str
+        Repository-relative path.
+
+    Returns
+    -------
+    str
+        The path's parent in POSIX form; ``.`` for a top-level file.
+    """
     return pathlib.PurePosixPath(relative).parent.as_posix()
 
 

@@ -71,7 +71,7 @@ def stands(fact: facts.HarnessFact) -> bool:
     excused = fact.status in STANDING or (
         fact.status == facts.FAILURE and fact.should_panic and fact.note
     )
-    return excused and fact.cover != facts.UNREACHABLE
+    return excused and fact.extra != facts.FAILURE and fact.cover != facts.UNREACHABLE
 
 
 def claims_stand(combination: cabc.Sequence[facts.HarnessFact]) -> bool:

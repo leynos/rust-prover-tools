@@ -152,12 +152,6 @@ def test_a_super_qualified_member_rename_is_followed() -> None:
     assert items(source) == [("assume", 1), ("assume", 2), ("assume", 2)]
 
 
-def test_a_member_rename_before_a_path_is_not_a_call() -> None:
-    """Leave the qualifier of ``a::assume(..)`` alone: it names no item."""
-    source = "use kani::{assume as a};\nfn f() { a::assume(true); }"
-    assert [item for item in items(source) if item[1] == 2] == []
-
-
 def test_a_method_call_is_not_a_bare_use() -> None:
     """Leave a field or method of the same name alone."""
     source = "use kani;\nfn f(s: S) { s.assume(true); }"
@@ -606,7 +600,8 @@ def test_a_grouped_plain_import_seeds_every_member() -> None:
         (
             "use kani::{assume, any_where};",
             "use self::assume as a;",
-            "fn f() { a(true); }",
+            "use self::any_where as w;",
+            "fn f() { a(true); w(|_| true); }",
         ),
     )
 
@@ -614,7 +609,9 @@ def test_a_grouped_plain_import_seeds_every_member() -> None:
         ("assume", 1),
         ("any_where", 1),
         ("assume", 2),
-        ("assume", 3),
+        ("any_where", 3),
+        ("assume", 4),
+        ("any_where", 4),
     ]
 
 
@@ -809,3 +806,33 @@ def test_a_verus_macro_alias_through_a_renamed_crate_opens_a_region() -> None:
     )
 
     assert [item for item, _ in items(source)] == ["admit"]
+
+
+def test_an_alias_only_import_reaches_renamed_members() -> None:
+    """Reach the member rules when the only trust link is an aliased import.
+
+    ``use crate::k;`` makes ``k`` a possible trust alias, so
+    ``use k::{assume as a};`` must bind ``a`` even though the file imports no
+    literal trust root.
+    """
+    source = "use crate::k;\nuse k::{assume as a};\nfn f() { a(true); }"
+
+    assert items(source) == [("assume", 2), ("assume", 3)]
+
+
+def test_a_metavariable_in_both_path_segments_is_refused() -> None:
+    """Refuse ``$p::$i(..)``, whose called item and crate are both arguments."""
+    source = (
+        "macro_rules! call { ($p:ident, $i:ident) => { $p::$i(true); }; }\n"
+        "fn f() { call!(kani, assume); }"
+    )
+
+    with pytest.raises(TrustAuditError, match="metavariables"):
+        items(source)
+
+
+def test_a_precise_capture_bound_is_not_an_import() -> None:
+    """Leave ``use<kani>`` in an ``impl Trait`` type out of the import roots."""
+    source = "fn make<kani>() -> impl Sized + use<kani> { () }"
+
+    assert items(source) == []

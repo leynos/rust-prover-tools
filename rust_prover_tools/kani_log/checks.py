@@ -44,6 +44,8 @@ __all__ = ("check",)
 
 #: The shortest description that can carry a pair of framing quotes.
 _FRAMED_LENGTH = 2
+#: Statuses Kani applies only to cover properties.
+_COVER_ONLY_STATUSES = frozenset({"SATISFIED", "UNSATISFIABLE"})
 
 
 def check(reader: Reader, match: re.Match[str]) -> PropertyResult:
@@ -97,11 +99,18 @@ def check(reader: Reader, match: re.Match[str]) -> PropertyResult:
             f"status {values['Status']!r}"
         )
         raise KaniLogError(msg)
-    return PropertyResult(
+    result = PropertyResult(
         identifier=match["identifier"],
         status=values["Status"],
         description=_unquote(values["Description"]),
     )
+    if not result.is_cover and result.status in _COVER_ONLY_STATUSES:
+        msg = (
+            f"{reader.where()}: check {result.identifier!r} is not a cover but "
+            f"carries the cover status {result.status!r}"
+        )
+        raise KaniLogError(msg)
+    return result
 
 
 def _joined_description(reader: Reader, value: str) -> str:
@@ -222,6 +231,8 @@ def _blank_closes_entry(reader: Reader) -> bool:
         return True
     if following == "RESULTS:":
         return _starts_results(reader, offset + 1)
+    if following == "SUMMARY:":
+        return _starts_summary(reader, offset + 1)
     return following in _ENTRY_LINES or any(
         pattern.match(following) is not None for pattern in _ENTRY_HEADS
     )
@@ -232,6 +243,20 @@ def _starts_results(reader: Reader, offset: int) -> bool:
     while (following := reader.peek_at(offset)) is not None and not following.strip():
         offset += 1
     return following is not None and CHECK.match(following) is not None
+
+
+def _starts_summary(reader: Reader, offset: int) -> bool:
+    """Report whether a real summary section follows the ``SUMMARY:`` marker.
+
+    Kani prints its counts as `` ** …`` lines and then the verdict, so a
+    marker followed by anything else is description content that happens to
+    spell the word.
+    """
+    while (following := reader.peek_at(offset)) is not None and not following.strip():
+        offset += 1
+    if following is None:
+        return True
+    return following.startswith(" **") or VERIFICATION.match(following) is not None
 
 
 def _unquote(value: str) -> str:

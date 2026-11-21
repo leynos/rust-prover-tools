@@ -243,8 +243,8 @@ supports. In decreasing precedence:
    undecided. A certified expected panic explains an unreachable check, so it
    does not turn the warning into this outcome.
 4. `undetermined` — a check the solver left undecided anywhere in the call
-   tree, or an unreachable cover this harness owns or CBMC printed without an
-   owner.
+   tree, or an unreachable check — cover or assertion — this harness owns or
+   CBMC printed without an owner.
 5. `skipped` — a declared claim never reported a block, or the manifest
    declares no claim at all.
 6. `verified` — the manifest declares at least one claim, every declared claim
@@ -770,6 +770,10 @@ The command exits `0` when the analysis passed and any full-run requirement
 holds, `2` when it completed but did not pass, and `1` when the log could not
 be read, the expectation could not be parsed, or the named release is not one
 the parser is qualified against.
+
+In the JSON form, `passed` reports the analysis alone. `--require-full` is
+applied to the exit status after the payload is written, so a consumer that
+requires a full run must also read `run_mode` (or the exit status).
 
 ### Trust audit
 

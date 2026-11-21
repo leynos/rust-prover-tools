@@ -71,7 +71,12 @@ def consume_quote_literal(cursor: Cursor) -> str | None:
         # `r#"…"#` ends at `"#`, and `r##"…"##` at `"##`.
         fence = f'"{matched[1]}'
         cursor.take(matched.end() - start)
-        cursor.skip_until(fence, "raw string")
+        cursor.skip_until(
+            fence,
+            "raw string",
+            line=cursor.line_before,
+            column=cursor.column_before,
+        )
         return cursor.text[start : cursor.index]
     # `PREFIXED_QUOTE` matches the prefix *and* the opening quote, so its whole
     # match is the opening. Measuring the `b`/`c` alone and adding one would
@@ -81,12 +86,29 @@ def consume_quote_literal(cursor: Cursor) -> str | None:
     if opening or cursor.starts('"'):
         what = "byte or C string" if opening else "string"
         cursor.take(len(opening[0]) if opening else 1)
-        consume_escaped_body(cursor, '"', what)
+        consume_escaped_body(
+            cursor,
+            '"',
+            what,
+            line=cursor.line_before,
+            column=cursor.column_before,
+        )
         return cursor.text[start : cursor.index]
     return None
 
 
-def consume_escaped_body(cursor: Cursor, terminator: str, what: str) -> str:
+# A caller supplies the literal form and, when it already consumed the
+# opener, the position to report; one keyword per fact keeps the call site
+# self-describing.
+# pylint: disable-next=too-many-arguments
+def consume_escaped_body(  # ruff: ignore[too-many-arguments]
+    cursor: Cursor,
+    terminator: str,
+    what: str,
+    *,
+    line: int | None = None,
+    column: int | None = None,
+) -> str:
     r"""Consume through the closing quote and return the body, escapes included.
 
     A backslash escapes exactly one following character, which keeps ``"a\\""``
@@ -97,7 +119,9 @@ def consume_escaped_body(cursor: Cursor, terminator: str, what: str) -> str:
     end is reached the cursor sits at EOF, and reporting that position would
     point at the end of the file instead of the mistake.
     """
-    start, start_line, start_column = cursor.index, cursor.line, cursor.column
+    start = cursor.index
+    start_line = cursor.line if line is None else line
+    start_column = cursor.column if column is None else column
     while not cursor.at_end:
         if cursor.starts("\\"):
             cursor.take(2)

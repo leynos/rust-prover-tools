@@ -194,31 +194,48 @@ def _refuse_metavariable_invocations(
         token = tokens[index]
         if token.kind is not Kind.IDENT or token.text == "crate":
             continue
-        if index + 2 >= len(tokens):
-            continue
-        following = tokens[index + 1].text
-        if following == "!" and tokens[index + 2].text in _MACRO_DELIMITERS:
-            msg = (
-                f"the macro_rules! expansion at line {token.line}, column "
-                f"{token.column} invokes a macro through the metavariable "
-                f"'${token.text}', so the audit cannot tell which macro runs"
-            )
-            raise TrustAuditError(msg)
-        if following == "::" and tokens[index + 2].text in words:
-            msg = (
-                f"the macro_rules! expansion at line {token.line}, column "
-                f"{token.column} reaches a trust item through the metavariable "
-                f"'${token.text}', so the audit cannot tell which crate it names"
-            )
-            raise TrustAuditError(msg)
-        if following == "(" and _is_trust_qualified(tokens, index, qualifiers):
-            msg = (
-                f"the macro_rules! expansion at line {token.line}, column "
-                f"{token.column} reaches a trust item through the metavariable "
-                f"'${token.text}' as its final path segment, so the audit "
-                "cannot tell which item is called"
-            )
-            raise TrustAuditError(msg)
+        refusal = _metavariable_refusal(tokens, index, words, qualifiers)
+        if refusal is not None:
+            raise TrustAuditError(refusal)
+
+
+def _metavariable_refusal(
+    tokens: tuple[Token, ...],
+    index: int,
+    words: frozenset[str],
+    qualifiers: frozenset[str],
+) -> str | None:
+    """Return the diagnostic for a hidden trust use, or ``None`` when clear."""
+    if index + 2 >= len(tokens):
+        return None
+    token = tokens[index]
+    following = tokens[index + 1].text
+    if following == "!" and tokens[index + 2].text in _MACRO_DELIMITERS:
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} invokes a macro through the metavariable "
+            f"'${token.text}', so the audit cannot tell which macro runs"
+        )
+    if following == "::" and tokens[index + 2].text == "$":
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a path whose segments are both "
+            "metavariables, so the audit cannot tell which crate or item it names"
+        )
+    if following == "::" and tokens[index + 2].text in words:
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a trust item through the metavariable "
+            f"'${token.text}', so the audit cannot tell which crate it names"
+        )
+    if following == "(" and _is_trust_qualified(tokens, index, qualifiers):
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a trust item through the metavariable "
+            f"'${token.text}' as its final path segment, so the audit cannot "
+            "tell which item is called"
+        )
+    return None
 
 
 def _is_trust_qualified(

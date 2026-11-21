@@ -41,6 +41,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "LOCAL_QUALIFIERS",
+    "begins_import",
     "file_roots",
     "imported_roots",
     "member_aliases",
@@ -51,6 +52,19 @@ __all__ = (
 #: module: ``self`` for the current one, ``crate`` for the root, ``super`` for
 #: the parent.
 LOCAL_QUALIFIERS = frozenset({"self", "crate", "super"})
+
+
+def begins_import(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether the ``use`` token at ``index`` opens an import.
+
+    ``use<kani>`` in an ``impl Trait`` type is a precise-capture bound, not an
+    import: treating it as one would make ``kani`` an import root and switch
+    the bare-word rule on for a file that never imported anything.
+    """
+    if tokens[index].text != "use":
+        return False
+    return index + 1 >= len(tokens) or tokens[index + 1].text != "<"
+
 
 # ``extern``, ``crate``: the two words that open a crate declaration.
 _EXTERN_CRATE_KEYWORDS = ("extern", "crate")
@@ -109,7 +123,7 @@ def file_roots(tokens: tuple[Token, ...]) -> frozenset[str]:
         declared = _extern_crate_root(tokens, index)
         if declared is not None:
             found.add(declared)
-        elif token.text == "use":
+        elif begins_import(tokens, index):
             end = statement_end(tokens, index + 1)
             found.update(root for root, _ in use_roots(tokens, index + 1, end))
     return frozenset(found)

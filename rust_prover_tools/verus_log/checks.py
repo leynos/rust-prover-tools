@@ -183,6 +183,12 @@ def _status_disagreements(
     """
     if expected.exit_status is None or log.summary is None:
         return
+    if expected.exit_status < 0:
+        yield (
+            f"the invocation was terminated by signal {-expected.exit_status}; "
+            "a run that did not finish is not a verification result"
+        )
+        return
     reported_failure = log.summary.errors > 0
     exited_failing = expected.exit_status != CLEAN_STATUS
     if reported_failure and not exited_failing:

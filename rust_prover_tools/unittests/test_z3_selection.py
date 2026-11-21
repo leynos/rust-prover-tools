@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -65,9 +66,11 @@ def test_a_command_name_is_looked_up_on_the_path(
     located = tmp_path / "bin" / "z3"
     located.parent.mkdir()
     located.write_text("", encoding="utf-8")
-    monkeypatch.setattr(selection_module.shutil, "which", lambda _name: str(located))
+    which = mock.Mock(return_value=str(located))
+    monkeypatch.setattr(selection_module.shutil, "which", which)
 
     assert resolve_z3("z3", repo_root=tmp_path) == located.resolve()
+    which.assert_called_once_with("z3")
 
 
 @conftest.SKIP_CHDIR_UNDER_MUTMUT
@@ -87,9 +90,11 @@ def test_a_bare_command_name_ignores_a_same_named_working_directory_file(
     located.parent.mkdir()
     located.write_text("", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(selection_module.shutil, "which", lambda _name: str(located))
+    which = mock.Mock(return_value=str(located))
+    monkeypatch.setattr(selection_module.shutil, "which", which)
 
     assert resolve_z3("z3", repo_root=tmp_path) == located.resolve()
+    which.assert_called_once_with("z3")
 
 
 def test_an_unknown_command_name_is_refused(

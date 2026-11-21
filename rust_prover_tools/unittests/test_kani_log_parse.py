@@ -886,3 +886,26 @@ def test_an_expected_panic_note_without_a_failed_check_is_refused() -> None:
     )
 
     assert "expected-panic note but no check failed" in refused(text)
+
+
+def test_a_description_holding_a_summary_marker_is_read_in_full() -> None:
+    """Keep ``SUMMARY:`` as description content unless a summary follows.
+
+    A real summary begins with its `` ** …`` counts or the verdict, so a marker
+    followed by ordinary text stays inside the description.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: "first"\n\nSUMMARY:\nand second"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == 'first"\n\nSUMMARY:\nand second'
+
+
+def test_a_non_cover_check_cannot_carry_a_cover_status() -> None:
+    """Refuse a status Kani applies only to cover properties."""
+    text = log_text("verified").replace(
+        "Check 3: harnesses::verified.assertion.1\n\t - Status: SUCCESS",
+        "Check 3: harnesses::verified.assertion.1\n\t - Status: SATISFIED",
+    )
+    assert "is not a cover but carries the cover status" in refused(text)

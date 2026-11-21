@@ -32,6 +32,7 @@ from rust_prover_tools.trust_audit.use_paths import (
 )
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
+    begins_import,
     member_aliases,
     rooted_spans,
 )
@@ -131,7 +132,7 @@ def _binding_round(
     discovered: dict[str, set[str]] = {}
     scope = _Scope(roots, bindings)
     for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or token.text != "use":
+        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue
         end = statement_end(tokens, index + 1)
         for span in rooted_spans(tokens, index + 1, end):

@@ -70,7 +70,6 @@ class Context:
         self.roots = frozenset(
             root for vocabulary in vocabularies for root in vocabulary.roots
         )
-        self.imported_roots = imported_roots(tokens, self.roots)
         # A trust root may be in scope under another name. ``use kani as k;``
         # makes ``k::assume`` the same call as ``kani::assume``, and a scan that
         # matched only the literal root would report nothing for the file.  Each
@@ -80,6 +79,13 @@ class Context:
         }
         all_root_names = frozenset(
             name for names in self.root_names.values() for name in names
+        )
+        # The aliases count as import roots here: a file whose only link to a
+        # trust root is ``use crate::k;`` must still reach the member rules,
+        # and that link is visible only through the alias set.
+        self.imported_roots = imported_roots(
+            tokens,
+            self.roots | all_root_names,
         )
         # A renamed member is the same request for trust under another name:
         # after ``use kani::{assume as a};`` a bare ``a(..)`` is Kani's call.

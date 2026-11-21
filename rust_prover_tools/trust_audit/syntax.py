@@ -255,10 +255,17 @@ def _skip_character_literal_or_lifetime(cursor: Cursor) -> bool:
     """
     if not cursor.starts("'"):
         return False
+    cursor.line_before, cursor.column_before = cursor.line, cursor.column
     following = cursor.text[cursor.index + 1 : cursor.index + 2]
     if following == "\\":
         cursor.take(1)
-        consume_escaped_body(cursor, "'", "character literal")
+        consume_escaped_body(
+            cursor,
+            "'",
+            "character literal",
+            line=cursor.line_before,
+            column=cursor.column_before,
+        )
         return True
     if len(cursor.text) >= cursor.index + 3 and cursor.text[cursor.index + 2] == "'":
         cursor.take(3)

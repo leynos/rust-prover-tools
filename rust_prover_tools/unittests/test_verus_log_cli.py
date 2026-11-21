@@ -105,7 +105,11 @@ def test_an_invalid_log_file_is_an_input_error(
 def test_a_malformed_expectation_is_an_input_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A region that cannot be parsed is rejected before the log is read."""
+    """A region that cannot be parsed is rejected before analysis.
+
+    The command reads the log first and then parses the expectation, so a
+    malformed region fails before any analysis but after the read.
+    """
     status = run("postcondition", expect_failure="postcondition.rs:4-1")
     captured = capsys.readouterr()
 
@@ -357,3 +361,19 @@ def test_without_a_pin_or_a_flag_the_release_stays_unnamed(
 
     assert status == 0
     assert payload["verus_release"] is None
+
+
+def test_the_json_form_reports_the_analysis_before_the_full_run_gate(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``passed`` describes the analysis; ``--require-full`` decides the exit.
+
+    A consumer that requires the whole crate must read ``run_mode`` or the
+    exit status, because the payload is written before the gate is applied.
+    """
+    status = run("selected_function", require_full=True, output_format="json")
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 2
+    assert payload["run_mode"] == "partial"
+    assert payload["passed"] is True

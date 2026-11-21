@@ -159,8 +159,11 @@ def kani_analyse_log(  # ruff: ignore[too-many-arguments] - one keyword per CLI 
     -------
     int
         ``0`` when the analysis passed and any profile requirement holds,
-        ``2`` when it completed but did not pass, and ``1`` when an input could
-        not be read or validated.
+        ``2`` when it completed but did not pass or passed while
+        ``require_full_profile`` rejected its run mode, and ``1`` when an
+        input could not be read or validated.  The JSON ``passed`` field
+        reports the analysis alone, so a consumer requiring the full profile
+        must also read ``run_mode`` or the exit status.
 
     Notes
     -----

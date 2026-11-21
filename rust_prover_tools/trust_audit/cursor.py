@@ -52,10 +52,38 @@ class Cursor:
         self.index += count
         return chunk
 
-    def skip_until(self, terminator: str, what: str) -> None:
-        """Consume through ``terminator``; refuse to continue if it is absent."""
+    def skip_until(
+        self,
+        terminator: str,
+        what: str,
+        *,
+        line: int | None = None,
+        column: int | None = None,
+    ) -> None:
+        """Consume through ``terminator``; refuse to continue if it is absent.
+
+        Parameters
+        ----------
+        terminator : str
+            The fence that closes the literal.
+        what : str
+            The literal form, named in the diagnostic.
+        line : int | None
+            The literal's opening line, reported when the fence is absent.  A
+            caller that has already consumed the opener passes it so the
+            diagnostic names the mistake rather than the end of the file.
+        column : int | None
+            The literal's opening column, for the same reason.
+
+        Raises
+        ------
+        TrustAuditError
+            If the terminator does not appear later in the source.
+        """
         end = self.text.find(terminator, self.index)
         if end < 0:
-            msg = f"unterminated {what} at line {self.line}, column {self.column}"
+            start_line = self.line if line is None else line
+            start_column = self.column if column is None else column
+            msg = f"unterminated {what} at line {start_line}, column {start_column}"
             raise TrustAuditError(msg)
         self.take(end + len(terminator) - self.index)

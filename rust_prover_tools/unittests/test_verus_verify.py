@@ -102,10 +102,10 @@ def test_a_qualified_solver_is_bound_for_every_invocation(
         ),
     )
 
-    assert [(spec.env, spec.env_mode) for spec in specs] == [
-        ({"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
-        ({"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
-    ], "Every invocation in the batch should carry the same solver binding"
+    assert [(spec.argv[1], spec.env, spec.env_mode) for spec in specs] == [
+        ("first.rs", {"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
+        ("second.rs", {"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
+    ], "Every proof path must run under the same solver binding"
 
 
 def test_no_solver_selection_leaves_the_environment_alone(

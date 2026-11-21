@@ -23,6 +23,7 @@ from rust_prover_tools.trust_audit.use_paths import (
 )
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
+    begins_import,
     member_aliases,
     rooted_spans,
 )
@@ -114,7 +115,7 @@ def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
     """
     names: set[str] = set()
     for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or token.text != "use":
+        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue
         end = statement_end(tokens, index + 1)
         for root, start, stop in rooted_spans(tokens, index + 1, end):
@@ -206,7 +207,7 @@ def _alias_round(
             if crate in names:
                 discovered.add(alias)
             continue
-        if token.text != "use":
+        if not begins_import(tokens, index):
             continue
         end = statement_end(tokens, index + 1)
         discovered.update(

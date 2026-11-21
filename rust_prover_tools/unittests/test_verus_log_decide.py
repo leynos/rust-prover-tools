@@ -130,9 +130,14 @@ def test_a_negative_control_failing_elsewhere_does_not_pass() -> None:
 
 
 def test_a_negative_control_must_see_exactly_one_failure() -> None:
-    """Two located failures mean the run broke more than the seeded fault."""
+    """Two located failures mean the run broke more than the seeded fault.
+
+    The summary counts one failing function here, so only the diagnostic-count
+    rule can reject the control; the separate summary-count test below covers
+    the other direction.
+    """
     log = VerusLog(
-        VerusSummary(0, 2),
+        VerusSummary(0, 1),
         (
             VerusFailure("postcondition not satisfied", "proofs/mutant.rs", 8, 13),
             VerusFailure("assertion failed", "proofs/mutant.rs", 20, 5),

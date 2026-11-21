@@ -109,9 +109,9 @@ def test_every_committed_log_is_recorded(version: str) -> None:
     deleted log, would otherwise pass unnoticed: the parametrized tests only
     read the logs that were discovered.
     """
-    assert _log_names(FIXTURES / version) == tuple(
-        sorted(corpus.expected_for(version)["logs"]),
-    )
+    recorded = corpus.expected_for(version)["logs"]
+    assert recorded, f"{version} records no captured log"
+    assert _log_names(FIXTURES / version) == tuple(sorted(recorded))
 
 
 def test_a_span_is_found_past_a_summary_the_capture_interleaved() -> None:
@@ -250,8 +250,9 @@ def test_chatter_around_a_summary_changes_nothing(
 ) -> None:
     """Lines the grammar does not name are skipped wherever they appear.
 
-    Chatter is kept outside the pair of the diagnostic and its span: rustc
-    prints those on consecutive lines, and a capture never separates them.
+    The property inserts chatter outside the pair of the diagnostic and its
+    span.  A capture that splits that pair is a separate case with its own
+    test; this generator does not claim it cannot happen.
     """
     head = ["error: postcondition not satisfied", "  --> proofs/mutant.rs:8:13"]
     inserted = [*(chatter for _ in range(before)), *head]

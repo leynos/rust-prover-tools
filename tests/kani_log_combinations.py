@@ -79,6 +79,11 @@ def claim_variants(name: str = "h::c") -> tuple[HarnessFact, ...]:
     failures_with_witnesses = tuple(
         HarnessFact(name, CLAIM, FAILURE, cover) for cover in COVER_STATUSES[1:]
     )
+    # A secondary failed check denies a claim whose primary class succeeded.
+    secondary_failure = (HarnessFact(name, CLAIM, SUCCESS, extra=FAILURE),)
+    # An unwinding failure can also occur with the checks enabled; the default
+    # disabled variant exercises the focused run-mode fallback instead.
+    enabled_unwind = (HarnessFact(name, CLAIM, UNWIND_FAILURE, unwinding_checks=True),)
     panics = tuple(
         HarnessFact(name, CLAIM, FAILURE, should_panic=True, note=note)
         for note in (True, False)
@@ -86,12 +91,20 @@ def claim_variants(name: str = "h::c") -> tuple[HarnessFact, ...]:
     absent = tuple(
         HarnessFact(name, CLAIM, ABSENT, cover) for cover in (NOTHING, SATISFIED)
     )
-    return outcomes + witnesses + failures_with_witnesses + panics + absent
+    return (
+        outcomes
+        + witnesses
+        + failures_with_witnesses
+        + secondary_failure
+        + enabled_unwind
+        + panics
+        + absent
+    )
 
 
 def control_variants(name: str = "h::k") -> tuple[HarnessFact, ...]:
     """Return one fact per decision-relevant class of negative control."""
-    return tuple(
+    variants = [
         HarnessFact(name, CONTROL, status)
         for status in (
             SUCCESS,
@@ -102,7 +115,11 @@ def control_variants(name: str = "h::k") -> tuple[HarnessFact, ...]:
             ABSENT,
             UNWIND_FAILURE,
         )
+    ]
+    variants.append(
+        HarnessFact(name, CONTROL, UNWIND_FAILURE, unwinding_checks=True),
     )
+    return tuple(variants)
 
 
 def undeclared_variant(name: str = "h::u") -> HarnessFact:

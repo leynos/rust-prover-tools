@@ -69,6 +69,7 @@ def test_a_wrong_error_count_is_reported() -> None:
 
     result = verdict(log, LogExpectations(errors=1))
 
+    assert not result.meets
     assert result.disagreements == (
         "the log reported 2 failing functions, not the expected 1",
     )
@@ -81,6 +82,7 @@ def test_an_expected_count_on_a_tool_error_is_reported() -> None:
         LogExpectations(verified=1, exit_status=1),
     )
 
+    assert not result.meets
     assert result.disagreements == ("the log reached no verification result to count",)
 
 
@@ -115,6 +117,7 @@ def test_a_declared_region_is_not_met_by_a_failure_outside_it() -> None:
         LogExpectations(failure=parse_expectation("mutant.rs:5-12")),
     )
 
+    assert not result.meets
     assert result.disagreements == (
         "no diagnostic fell inside the declared region mutant.rs:5-12",
     )
@@ -135,6 +138,7 @@ def test_a_declared_region_demands_exactly_one_failure() -> None:
         LogExpectations(errors=2, failure=parse_expectation("mutant.rs:5-12")),
     )
 
+    assert not result.meets
     assert any(
         "expects one diagnostic" in sentence for sentence in result.disagreements
     )
@@ -256,3 +260,29 @@ def test_the_corpus_run_meets_its_recorded_counts() -> None:
     )
 
     assert result.meets, result.disagreements
+
+
+def test_a_signal_terminated_run_is_not_a_verification_result() -> None:
+    """A negative exit status means the process was interrupted, not proved.
+
+    The batch runner classifies a negative status as a signal; the check must
+    not let it satisfy a failing summary's status comparison.
+    """
+    log = VerusLog(
+        VerusSummary(1, 1),
+        (VerusFailure("postcondition not satisfied", "mutant.rs", 8, 13),),
+    )
+
+    result = verdict(
+        log,
+        LogExpectations(
+            errors=1,
+            failure=parse_expectation("mutant.rs:5-12"),
+            exit_status=-9,
+        ),
+    )
+
+    assert not result.meets
+    assert any(
+        "terminated by signal 9" in sentence for sentence in result.disagreements
+    )
