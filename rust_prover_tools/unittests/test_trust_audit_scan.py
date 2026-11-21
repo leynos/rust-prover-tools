@@ -877,3 +877,55 @@ def test_a_super_item_import_is_a_possible_alias() -> None:
     source = "use super::k;\nfn f() { k::assume(true); }"
 
     assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_renamed_item_wins_over_the_vocabulary_word_it_reuses() -> None:
+    """Report the bound item, not the literal word borrowed for its alias.
+
+    ``use kani::assume as any_where;`` makes ``any_where(true)`` a call to
+    Kani's ``assume``; reporting the word ``any_where`` would name a different
+    surface.
+    """
+    source = "use kani::assume as any_where;\nfn f() { any_where(true); }"
+
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
+def test_a_repetition_wrapped_metavariable_trust_path_is_refused() -> None:
+    """Refuse ``kani::$($f)*(..)``, whose item the arguments decide."""
+    source = "macro_rules! call { ($f:ident) => { kani::$($f)*(true) }; }"
+
+    with pytest.raises(TrustAuditError, match="repetition-wrapped"):
+        items(source)
+
+
+def test_a_character_literal_suffix_is_not_an_identifier() -> None:
+    """Consume a character literal's suffix, as Rust does for its token."""
+    words = [
+        token.text
+        for token in tokenize("let _ = 'x'suffix; let y = 1;")
+        if token.kind == "ident"
+    ]
+
+    assert words == ["let", "_", "let", "y"]
+
+
+def test_a_grouped_self_import_reaches_a_crate_alias() -> None:
+    """Read ``use self::{k::assume as a};`` through a known crate alias."""
+    source = "use kani as k;\nuse self::{k::assume as a};\nfn f() { a(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume", "assume"]
+
+
+def test_a_grouped_self_import_reaches_a_member_binding() -> None:
+    """Read ``use self::{assume as a};`` through a known member binding."""
+    source = "use kani::assume;\nuse self::{assume as a};\nfn f() { a(true); }"
+
+    assert [item for item, _ in items(source)][-1] == "assume"
+
+
+def test_a_root_alias_and_a_member_alias_of_one_name_both_survive() -> None:
+    """Merge both readings when one local name denotes two bindings."""
+    source = "use kani as x;\nuse kani::assume as x;\nuse x as y;\nfn f() { y(true); }"
+
+    assert "assume" in [item for item, _ in items(source)]

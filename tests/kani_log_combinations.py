@@ -70,14 +70,16 @@ def claim_variants(name: str = "h::c") -> tuple[HarnessFact, ...]:
         )
     )
     witnesses = tuple(
-        HarnessFact(name, CLAIM, SUCCESS, cover) for cover in COVER_STATUSES[1:]
+        HarnessFact(name, CLAIM, SUCCESS, cover)
+        for cover in (*COVER_STATUSES[1:], UNDETERMINED)
     )
     # A failed assertion and a cover can sit in the same harness.  The witness
     # variants above all succeed, and the failure variants carry no cover, so
     # without these the interaction between a disproof and a witness is never
     # enumerated.
     failures_with_witnesses = tuple(
-        HarnessFact(name, CLAIM, FAILURE, cover) for cover in COVER_STATUSES[1:]
+        HarnessFact(name, CLAIM, FAILURE, cover)
+        for cover in (*COVER_STATUSES[1:], UNDETERMINED)
     )
     # A secondary failed check denies a claim whose primary class succeeded.
     secondary_failure = (HarnessFact(name, CLAIM, SUCCESS, extra=FAILURE),)

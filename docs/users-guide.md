@@ -157,9 +157,14 @@ that order:
 <!-- tested-example: kani-log-capture -->
 
 ```bash
-prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" --cwd "$PWD" \
-  --extra-arg=--verbose >kani.out 2>kani.err
+if prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" --cwd "$PWD" \
+  --extra-arg=--verbose >kani.out 2>kani.err; then
+  kani_status=0
+else
+  kani_status=$?
+fi
 cat kani.out kani.err >kani.log
+# kani_status is the verifier's own status; the analysis reports its own below.
 ```
 
 Merging the streams with `2>&1` can interleave build chatter inside a report

@@ -281,9 +281,9 @@ def test_a_relative_pinned_install_dir_is_resolved_before_probing(
 ) -> None:
     """Probe the pinned file, not whatever ``PATH`` calls ``z3``.
 
-    A relative install directory would otherwise yield a bare ``z3`` argv,
-    which the probe resolves through ``PATH``; the qualified selection would
-    then name one binary while recording the version of another.
+    The relative install directory ``z3`` would otherwise yield the relative
+    argv ``z3/z3``; the test requires the resolved absolute path instead, so
+    the qualified selection names the binary that was actually probed.
     """
     install_dir = tmp_path / "z3"
     install_dir.mkdir()

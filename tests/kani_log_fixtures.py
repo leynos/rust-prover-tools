@@ -299,6 +299,8 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
         covered_total=len(covers) or None,
         covered_unreachable=sum(1 for item in covers if item.status == UNREACHABLE)
         or None,
+        covered_undetermined=sum(1 for item in covers if item.status == UNDETERMINED)
+        or None,
         verdict=fact.verdict,
         panics_as_expected=fact.should_panic and fact.note,
         solver_command=ENABLED_SOLVER if fact.unwinding_checks else DISABLED_SOLVER,

@@ -140,6 +140,13 @@ class Context:
             self._report(token.text, token)
         self._report_if_imported(index, token)
 
+    def _names_member(self, index: int, token: Token) -> bool:
+        """Report whether this token reaches an item a local import bound."""
+        items = self.member_names.get(token.text)
+        if items is None or not _is_member_use(self.tokens, index):
+            return False
+        return _is_member_position(self.tokens, index, self.module_names)
+
     def _report_if_imported(self, index: int, token: Token) -> None:
         """Apply rule 3: a bare word in a file that imports from a trust root.
 
@@ -155,15 +162,16 @@ class Context:
         """
         if not self.imported_roots:
             return
+        # A local spelling may be both a vocabulary word and a rename.  The
+        # binding says which item the call reaches, so it is read first:
+        # ``use kani::assume as any_where;`` must report ``assume``, not the
+        # word ``any_where`` the author borrowed for the alias.
+        if self._names_member(index, token):
+            for item in sorted(self.member_names[token.text]):
+                self._report(item, token)
+            return
         if _is_bare_use(self.tokens, index) and token.text in self.words:
             self._report(token.text, token)
-            return
-        items = self.member_names.get(token.text)
-        if items is None or not _is_member_use(self.tokens, index):
-            return
-        if _is_member_position(self.tokens, index, self.module_names):
-            for item in sorted(items):
-                self._report(item, token)
 
     def _is_rooted_path(self, index: int) -> bool:
         """Report whether this token ends a path rooted at a selected crate.
@@ -286,7 +294,10 @@ def _is_bare_use(tokens: tuple[Token, ...], index: int) -> bool:
     """
     if not index:
         return True
-    return tokens[index - 1].text not in {"::", "."}
+    # A name after ``as`` is the local alias being defined, not a use of the
+    # item: ``use kani::assume as any_where;`` must not report the borrowed
+    # spelling as Kani's ``any_where``.
+    return tokens[index - 1].text not in {"::", ".", "as"}
 
 
 def _member_names(

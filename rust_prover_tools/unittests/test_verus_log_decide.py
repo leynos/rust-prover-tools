@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
@@ -9,6 +11,7 @@ from hypothesis import strategies as st
 from rust_prover_tools.verus_log import (
     FULL_RUN,
     PARTIAL_RUN,
+    SUPPORTED_VERUS_VERSIONS,
     FailureExpectation,
     VerusAnalysis,
     VerusFailure,
@@ -19,6 +22,7 @@ from rust_prover_tools.verus_log import (
     analyse_verus_log,
     from_verus_log_error,
     parse_expectation,
+    parse_verus_log,
 )
 from tests import verus_log_corpus as corpus
 
@@ -30,11 +34,21 @@ FAILED = VerusLog(
 )
 
 
-@pytest.mark.parametrize("name", corpus.log_names())
-def test_every_committed_log_decides_as_recorded(name: str) -> None:
-    """Each corpus log decides as the released report it was captured from."""
-    recorded = corpus.recorded(name)
-    analysis = corpus.analysis_for(name)
+DECISION_CASES: typ.Final[tuple[tuple[str, str], ...]] = tuple(
+    (version, name)
+    for version in SUPPORTED_VERUS_VERSIONS
+    for name in sorted(corpus.expected_for(version)["logs"])
+)
+
+
+@pytest.mark.parametrize(("version", "name"), DECISION_CASES)
+def test_every_committed_log_decides_as_recorded(version: str, name: str) -> None:
+    """Each corpus log decides as its own release records."""
+    recorded = corpus.expected_for(version)["logs"][name]
+    log = parse_verus_log(
+        (corpus.CORPUS_ROOT / version / f"{name}.log").read_text(encoding="utf-8"),
+    )
+    analysis = analyse_verus_log(log)
 
     assert analysis.outcome.value == recorded["outcome"]
     assert analysis.run_mode == recorded["run_mode"]

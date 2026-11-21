@@ -93,12 +93,7 @@ def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
     # type, and the ``proc-macro`` flag is only consulted when it is absent.
     crate_types = _manifest_value(library, "crate-type", "crate_type")
     if crate_types is not None:
-        if isinstance(crate_types, str):
-            return crate_types == "proc-macro"
-        if isinstance(crate_types, list):
-            return "proc-macro" in crate_types
-        msg = f"{manifest} sets [lib] crate-type to an unexpected value"
-        raise TrustAuditError(msg)
+        return _declares_crate_type(manifest, crate_types)
     flag = _manifest_value(library, "proc-macro", "proc_macro")
     if flag is None:
         return False
@@ -106,6 +101,19 @@ def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
         msg = f"{manifest} sets [lib] proc-macro to a non-boolean value"
         raise TrustAuditError(msg)
     return flag
+
+
+def _declares_crate_type(manifest: pathlib.Path, crate_types: object) -> bool:
+    """Report whether a ``crate-type`` value names a proc-macro library."""
+    if isinstance(crate_types, str):
+        return crate_types == "proc-macro"
+    if isinstance(crate_types, list):
+        if not all(isinstance(item, str) for item in crate_types):
+            msg = f"{manifest} sets [lib] crate-type to a non-string entry"
+            raise TrustAuditError(msg)
+        return "proc-macro" in crate_types
+    msg = f"{manifest} sets [lib] crate-type to an unexpected value"
+    raise TrustAuditError(msg)
 
 
 def _manifest_value(

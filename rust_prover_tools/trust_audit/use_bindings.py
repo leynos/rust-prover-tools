@@ -28,6 +28,7 @@ from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import (
     statement_end,
     top_level_members,
+    use_root,
     use_roots,
 )
 from rust_prover_tools.trust_audit.use_tree import (
@@ -156,13 +157,17 @@ def _span_bindings(
     ``super::`` from a nested module.
     """
     root, start, stop = span
+    discovered: dict[str, set[str]] = {}
     if root in scope.roots:
-        return _member_bindings(tokens, start, stop)
+        _merge(discovered, _member_bindings(tokens, start, stop))
     if root in scope.bindings:
-        return _renamed_bindings(tokens, start, stop, scope.bindings[root])
+        _merge(
+            discovered,
+            _renamed_bindings(tokens, start, stop, scope.bindings[root]),
+        )
     if root in LOCAL_QUALIFIERS:
-        return _requalified_bindings(tokens, start, stop, scope)
-    return {}
+        _merge(discovered, _requalified_bindings(tokens, start, stop, scope))
+    return discovered
 
 
 def _member_bindings(
@@ -264,6 +269,9 @@ def _requalified_bindings(
     left alone.
     """
     discovered: dict[str, set[str]] = {}
+    qualified_start = _after_qualifiers(tokens, start, stop)
+    if qualified_start < stop and tokens[qualified_start].text == "{":
+        return _grouped_requalified_bindings(tokens, qualified_start, scope)
     qualified = _qualified_root_member(tokens, start, stop)
     if qualified is not None:
         member_index, member = qualified
@@ -287,13 +295,48 @@ def _qualified_root_member(
     is valid Rust — so every leading qualifier is skipped.  A path that stops
     at a qualifier names no member.
     """
-    index = start
-    while index < stop and tokens[index].text == "::":
-        index += 1
-    while index + 1 < stop and tokens[index + 1].text == "::":
-        if tokens[index].text not in LOCAL_QUALIFIERS:
-            break
-        index += 2
+    index = _after_qualifiers(tokens, start, stop)
     if index >= stop or tokens[index].kind is not Kind.IDENT:
         return None
     return index, tokens[index].text
+
+
+def _after_qualifiers(tokens: tuple[Token, ...], start: int, stop: int) -> int:
+    """Return the index after every leading local qualifier."""
+    index = start
+    while index < stop and tokens[index].text == "::":
+        index += 1
+    while (
+        index + 1 < stop
+        and tokens[index].text in LOCAL_QUALIFIERS
+        and tokens[index + 1].text == "::"
+    ):
+        index += 2
+    return index
+
+
+def _grouped_requalified_bindings(
+    tokens: tuple[Token, ...],
+    opener: int,
+    scope: _Scope,
+) -> dict[str, set[str]]:
+    """Bind each member of ``self::{…}`` as if the qualifiers prefixed it."""
+    closing = matching(tokens, opener, "{", "}")
+    discovered: dict[str, set[str]] = {}
+    for member_start, member_end in top_level_members(tokens, opener, closing + 1):
+        root = use_root(tokens, member_start, member_end)
+        if root is None:
+            continue
+        if root in scope.roots:
+            _merge(discovered, _member_bindings(tokens, member_start, member_end))
+        elif root in scope.bindings:
+            _merge(
+                discovered,
+                _renamed_bindings(
+                    tokens,
+                    member_start,
+                    member_end,
+                    scope.bindings[root],
+                ),
+            )
+    return discovered

@@ -78,12 +78,16 @@ def test_failure_message_quotes_unsafe_paths(tmp_path: pathlib.Path) -> None:
     )
 
 
-def test_a_qualified_solver_is_bound_for_every_invocation(
+@pytest.mark.parametrize("use_solver", [True, False], ids=["selected", "unselected"])
+def test_solver_binding_reaches_every_invocation(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    use_solver: bool,
 ) -> None:
-    """A selected solver reaches the child as ``VERUS_Z3_PATH``."""
+    """A selected solver is bound for every proof; no selection touches nothing."""
     solver = tmp_path / "z3"
+    solver.write_text("", encoding="utf-8")
     specs: list[CommandSpec] = []
 
     def fake_run_command(spec: CommandSpec) -> CommandResult:
@@ -92,44 +96,26 @@ def test_a_qualified_solver_is_bound_for_every_invocation(
         return CommandResult(stdout="", stderr="", exit_code=0)
 
     monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
-
-    verify_proof_files(
-        (pathlib.Path("first.rs"), pathlib.Path("second.rs")),
+    settings = (
         VerusRunSettings(
             pathlib.Path("/bin/verus"),
             "toolchain",
             z3_path=solver,
-        ),
+        )
+        if use_solver
+        else VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain")
     )
-
-    assert [(spec.argv[1], spec.env, spec.env_mode) for spec in specs] == [
-        ("first.rs", {"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
-        ("second.rs", {"VERUS_Z3_PATH": str(solver)}, EnvMode.OVERLAY),
-    ], "Every proof path must run under the same solver binding"
-
-
-def test_no_solver_selection_leaves_the_environment_alone(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Without a selection the child inherits the environment unchanged."""
-    specs: list[CommandSpec] = []
-
-    def fake_run_command(spec: CommandSpec) -> CommandResult:
-        """Record the invocation and report success."""
-        specs.append(spec)
-        return CommandResult(stdout="", stderr="", exit_code=0)
-
-    monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
+    expected_env = {"VERUS_Z3_PATH": str(solver)} if use_solver else None
 
     verify_proof_files(
         (pathlib.Path("first.rs"), pathlib.Path("second.rs")),
-        VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain"),
+        settings,
     )
 
     assert [(spec.argv[1], spec.env, spec.env_mode) for spec in specs] == [
-        ("first.rs", None, EnvMode.OVERLAY),
-        ("second.rs", None, EnvMode.OVERLAY),
-    ], "An unset selection must leave every child environment untouched"
+        ("first.rs", expected_env, EnvMode.OVERLAY),
+        ("second.rs", expected_env, EnvMode.OVERLAY),
+    ], "every proof path must run under the same solver policy"
 
 
 def test_verify_proof_files_emits_bounded_events(

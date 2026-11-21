@@ -266,9 +266,11 @@ def _skip_character_literal_or_lifetime(cursor: Cursor) -> bool:
             line=cursor.line_before,
             column=cursor.column_before,
         )
+        _skip_literal_suffix(cursor)
         return True
     if len(cursor.text) >= cursor.index + 3 and cursor.text[cursor.index + 2] == "'":
         cursor.take(3)
+        _skip_literal_suffix(cursor)
         return True
     cursor.take(1)
     length = _identifier_length(cursor.text, cursor.index)

@@ -41,6 +41,7 @@ from rust_prover_tools.trust_audit.modules import (
     inline_module_names,
     module_references,
 )
+from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
 from rust_prover_tools.trust_audit.use_bindings import member_bindings
 from rust_prover_tools.trust_audit.use_tree import file_roots
@@ -58,6 +59,9 @@ _MACRO_DELIMITERS = frozenset({"(", "[", "{"})
 # The qualifier, its ``::``, and the metavariable marker before a final path
 # segment: the three tokens that say where a hidden path is rooted.
 _TRUST_PATH_SEGMENTS = 3
+# The qualifier, ``::``, the repetition marker, its ``(`` and the inner
+# ``$``: the five tokens before a repetition-wrapped metavariable.
+_REPETITION_SEGMENTS = 5
 
 
 def scan(
@@ -206,23 +210,22 @@ def _metavariable_refusal(
     qualifiers: frozenset[str],
 ) -> str | None:
     """Return the diagnostic for a hidden trust use, or ``None`` when clear."""
-    if index + 2 >= len(tokens):
-        return None
     token = tokens[index]
-    following = tokens[index + 1].text
-    if following == "!" and tokens[index + 2].text in _MACRO_DELIMITERS:
+    following = tokens[index + 1].text if index + 1 < len(tokens) else ""
+    second = tokens[index + 2].text if index + 2 < len(tokens) else ""
+    if following == "!" and second in _MACRO_DELIMITERS:
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} invokes a macro through the metavariable "
             f"'${token.text}', so the audit cannot tell which macro runs"
         )
-    if following == "::" and tokens[index + 2].text == "$":
+    if following == "::" and second == "$":
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} reaches a path whose segments are both "
             "metavariables, so the audit cannot tell which crate or item it names"
         )
-    if following == "::" and tokens[index + 2].text in words:
+    if following == "::" and second in words:
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} reaches a trust item through the metavariable "
@@ -235,7 +238,38 @@ def _metavariable_refusal(
             f"'${token.text}' as its final path segment, so the audit cannot "
             "tell which item is called"
         )
+    if _is_repetition_wrapped_trust_path(tokens, index, qualifiers):
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a trust item through a repetition-wrapped "
+            f"metavariable '${token.text}', so the audit cannot tell which item "
+            "is called"
+        )
     return None
+
+
+def _is_repetition_wrapped_trust_path(
+    tokens: tuple[Token, ...],
+    index: int,
+    qualifiers: frozenset[str],
+) -> bool:
+    """Report whether a repetition group ends a trust-qualified path.
+
+    ``kani::$($f)*(..)`` puts the group between ``::`` and the metavariable,
+    so the direct-segment check cannot see it.  The group must still name a
+    trust item through its metavariable.
+    """
+    if index < _REPETITION_SEGMENTS or tokens[index - 1].text != "$":
+        return False
+    if tokens[index - 2].text != "(" or tokens[index - 3].text != "$":
+        return False
+    if tokens[index - 4].text != "::" or tokens[index - 5].text not in qualifiers:
+        return False
+    closing = matching(tokens, index - 2, "(", ")")
+    following = closing + 1
+    if following < len(tokens) and tokens[following].text == ",":
+        following += 1
+    return following < len(tokens) and tokens[following].text in {"*", "+", "?"}
 
 
 def _is_trust_qualified(

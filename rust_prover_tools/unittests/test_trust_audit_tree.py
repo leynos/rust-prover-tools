@@ -81,19 +81,14 @@ def test_a_path_attribute_is_found_past_a_visibility_modifier() -> None:
     assert references(source) == [("x", "other.rs", ())]
 
 
-def test_a_path_attribute_is_found_past_another_attribute() -> None:
-    """Keep walking the attribute run when an earlier one is not ``#[path]``."""
-    source = '#[cfg(test)]\n#[path = "other.rs"]\nmod x;'
-    assert references(source) == [("x", "other.rs", ())]
-
-
 @pytest.mark.parametrize(
     "source",
     [
         '#[path = "other.rs"]\n#[allow(dead_code)]\nmod x;',
         '#[allow(dead_code)]\n#[path = "other.rs"]\nmod x;',
+        '#[path = "other.rs"]\n#[cfg(test)]\nmod x;',
     ],
-    ids=["path-first", "unrelated-first"],
+    ids=["path-first", "unrelated-first", "cfg-after-path"],
 )
 def test_a_path_attribute_is_found_past_an_unrelated_attribute(
     source: str,
@@ -851,6 +846,10 @@ def test_a_macro_expansion_with_no_invocation_compiles_no_file(
     assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows normalizes link/.. before resolving the link",
+)
 def test_a_driver_through_a_symlinked_directory_names_the_real_file(
     tmp_path: Path,
 ) -> None:
@@ -1033,3 +1032,18 @@ def test_a_policy_upgrade_reaches_child_modules(tmp_path: Path) -> None:
     result = audited(tmp_path, "proc/src/lib.rs", "plain/src/lib.rs")
 
     assert result["shared/child.rs"] == ["assume"]
+
+
+def test_a_non_string_crate_type_entry_is_refused(tmp_path: Path) -> None:
+    """Refuse a manifest whose ``crate-type`` list is not all strings."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            "[lib]\ncrate-type = [7]\n",
+            "src/lib.rs": "fn f() {}",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="non-string entry"):
+        audit_tree(tmp_path, ["src/lib.rs"])

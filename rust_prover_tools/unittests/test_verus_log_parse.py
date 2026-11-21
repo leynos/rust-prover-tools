@@ -14,6 +14,7 @@ from rust_prover_tools.verus_log import (
     SUPPORTED_VERUS_VERSIONS,
     VerusFailure,
     VerusLogError,
+    VerusSummary,
     parse_verus_log,
 )
 from tests import verus_log_corpus as corpus
@@ -274,11 +275,22 @@ def test_the_summary_is_found_before_or_after_the_diagnostic(chatter: str) -> No
     summary = "verification results:: 1 verified, 1 errors"
     diagnostic = ("error: postcondition not satisfied", "  --> proofs/mutant.rs:8:13")
 
+    expected_summary = VerusSummary(1, 1)
+    expected_failure = VerusFailure(
+        "postcondition not satisfied",
+        "proofs/mutant.rs",
+        8,
+        13,
+    )
     first = parse_verus_log("\n".join((summary, chatter, *diagnostic)))
     second = parse_verus_log("\n".join((*diagnostic, chatter, summary)))
 
-    assert first.summary == second.summary
-    assert first.failures == second.failures
+    assert first.summary == expected_summary, "the summary-first capture lost facts"
+    assert second.summary == expected_summary, "the diagnostic-first capture lost facts"
+    assert first.failures == (expected_failure,), "summary-first lost the diagnostic"
+    assert second.failures == (expected_failure,), (
+        "diagnostic-first lost the diagnostic"
+    )
 
 
 def test_a_clean_summary_beside_an_error_trailer_is_refused() -> None:

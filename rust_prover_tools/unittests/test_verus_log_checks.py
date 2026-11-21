@@ -102,7 +102,7 @@ def test_a_declared_region_is_met_by_the_single_failure_inside_it() -> None:
         ),
     )
 
-    assert result.meets
+    assert result.meets, result.disagreements
 
 
 def test_a_declared_region_is_not_met_by_a_failure_outside_it() -> None:
