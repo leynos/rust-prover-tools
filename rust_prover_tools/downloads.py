@@ -57,9 +57,11 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "DEFAULT_DOWNLOAD_LIMITS",
+    "BoundedAsset",
     "DownloadLimits",
     "PinnedAsset",
     "download_pinned",
+    "download_unverified",
     "sha256_file",
 )
 
@@ -85,6 +87,21 @@ class PinnedAsset:
     name: str
     url: str
     sha256: str
+    max_bytes: int
+
+
+@dc.dataclass(frozen=True, slots=True)
+class BoundedAsset:
+    """A release asset with a size ceiling but no pre-known digest.
+
+    Some release files authenticate themselves: a checksums document is
+    verified against the manifest it describes, and a build attestation is
+    verified cryptographically. Neither can be pinned before it is read, so
+    the only bound available at download time is its size.
+    """
+
+    name: str
+    url: str
     max_bytes: int
 
 
@@ -133,9 +150,47 @@ def download_pinned(
     pending = destination.with_name(f"{destination.name}.download")
     with _pending_download(pending):
         _download_verified(asset, pending, limits, url_policy=url_policy)
-        _publish_verified(asset, pending, destination)
+        _publish_verified(asset.name, pending, destination)
     log_event(_LOGGER, "download.verified")
     return destination
+
+
+def download_unverified(
+    asset: BoundedAsset,
+    destination: Path,
+    limits: DownloadLimits = DEFAULT_DOWNLOAD_LIMITS,
+    *,
+    url_policy: UrlPolicy | None = None,
+) -> str:
+    """Download one bounded asset and report the SHA-256 digest it served.
+
+    The digest is an observation, not a verification: this function never
+    compares it with a pinned value, so the returned bytes are untrusted until
+    the caller authenticates them against its own evidence, such as a checksum
+    list that must agree with a pinned manifest. Use `download_asset` when the
+    expected digest is known up front. An existing destination is reused only
+    when it already fits the size ceiling, so its digest describes whatever
+    that file contains.
+    """
+    _ensure_parent_directory(destination)
+    if _is_regular_file(destination) and _fits(destination, asset.max_bytes):
+        return sha256_file(destination)
+    pending = destination.with_name(f"{destination.name}.download")
+    with _pending_download(pending):
+        _download(
+            _DownloadRequest(
+                url=asset.url,
+                destination=pending,
+                max_bytes=asset.max_bytes,
+                asset_name=asset.name,
+                url_policy=url_policy,
+            ),
+            limits,
+        )
+        digest = sha256_file(pending)
+        _publish_verified(asset.name, pending, destination)
+    log_event(_LOGGER, "download.unverified")
+    return digest
 
 
 @contextlib.contextmanager
@@ -201,6 +256,15 @@ def _is_regular_file(path: Path) -> bool:
     return stat.S_ISREG(status.st_mode)
 
 
+def _fits(path: Path, max_bytes: int) -> bool:
+    """Return whether an existing file can be reused under a size ceiling."""
+    try:
+        return path.stat().st_size <= max_bytes
+    except OSError as exc:
+        msg = f"failed to inspect download cache '{path}': {exc}"
+        raise ProverToolError(msg) from exc
+
+
 def _download_verified(
     asset: PinnedAsset,
     pending: Path,
@@ -234,13 +298,13 @@ def _download_verified(
         raise ProverToolError(msg)
 
 
-def _publish_verified(asset: PinnedAsset, pending: Path, destination: Path) -> None:
+def _publish_verified(name: str, pending: Path, destination: Path) -> None:
     """Atomically move a verified pending file to its final path."""
     try:
         pending.replace(destination)
     except OSError as exc:
         log_event(_LOGGER, "download.failed", reason="store_error")
-        msg = f"failed to store {asset.name} at '{destination}': {exc}"
+        msg = f"failed to store {name} at '{destination}': {exc}"
         raise ProverToolError(msg) from exc
 
 

@@ -1,0 +1,108 @@
+# serializer version: 1
+# name: test_the_rendered_assembly_input_is_stable
+  '''
+  {
+    "backend": {
+      "revision": "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
+      "solvers": [
+        {
+          "name": "cbmc",
+          "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+          "version": "6.11.0"
+        }
+      ],
+      "version": "0.68.0"
+    },
+    "build": {
+      "lock_digests": {
+        "Cargo.lock": "8888888888888888888888888888888888888888888888888888888888888888"
+      },
+      "recipe_digest": "f47a382f49921612b7f09f1a9ad0ccaa2a4a733494018a25c31156d25494647c",
+      "submodules": [
+        {
+          "commit": "b250680abd40ff1aaa07081d0497dc2755ed112e",
+          "path": "charon"
+        },
+        {
+          "commit": "cd36c699f3cb3d531289aadee26c45c1306edcfc",
+          "path": "firecracker"
+        },
+        {
+          "commit": "a33d369b98a50fd9290fd6586832c969035bdec0",
+          "path": "tests/perf/s2n-quic"
+        }
+      ]
+    },
+    "builder_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "cache": {
+      "key": "kani-nightly-2026-08-21",
+      "outcome": "miss"
+    },
+    "launcher_package_version": "0.68.0",
+    "prerequisites": [
+      {
+        "name": "cbmc",
+        "sha256": "de9fa1cc4cf51c493e708a1c7608b192ad4956717b684d9c4501e22fd22d88a0",
+        "source": "https://github.com/diffblue/cbmc/releases/download/cbmc-6.11.0/ubuntu-22.04-cbmc-6.11.0-Linux.deb",
+        "version": "6.11.0"
+      },
+      {
+        "name": "kissat",
+        "sha256": "4b41edf12ffa5f8e8b1986e5ad3e0bedb4d34b0ed3ecc7c13362bc7ba0aba66b",
+        "source": "https://github.com/arminbiere/kissat/archive/refs/tags/rel-4.0.1.tar.gz",
+        "version": "4.0.1"
+      }
+    ],
+    "resources": {
+      "disk_high_water_bytes": 8000000000,
+      "wall_seconds": 1800.0
+    },
+    "runtime": {
+      "cpu_baseline": "x86-64",
+      "dynamic_loader": "/lib64/ld-linux-x86-64.so.2",
+      "glibc_baseline": "2.35",
+      "shared_libraries": [
+        "libc.so.6",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libstdc++.so.6"
+      ]
+    },
+    "schema_version": 1,
+    "tag": "kani-snapshot-2026-09-0d2328a93f0e-r1",
+    "toolchain": {
+      "channel_metadata_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "components": [
+        {
+          "name": "rust-src",
+          "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "size": 4096,
+          "url": "https://static.rust-lang.org/dist/nightly-2026-08-21/rust-src.tar.gz",
+          "version": "nightly-2026-08-21"
+        }
+      ],
+      "identifier": "nightly-2026-08-21",
+      "kani_compiler": "kani-compiler 0.68.0",
+      "libraries": [
+        {
+          "path": "lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd.so",
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "rustc_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "rustc_vv": "rustc 1.100.0-nightly (8925ea358 2026-08-20)",
+      "rustup_components_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "upstream_commit": "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
+    "workflow": {
+      "event": "schedule",
+      "path": ".github/workflows/kani-monthly.yml",
+      "ref": "refs/heads/main",
+      "run_attempt": 1,
+      "run_id": 12345,
+      "run_url": "https://github.com/leynos/rust-prover-tools/actions/runs/12345"
+    }
+  }
+  
+  '''
+# ---

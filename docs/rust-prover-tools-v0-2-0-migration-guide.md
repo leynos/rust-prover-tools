@@ -19,6 +19,7 @@ In 0.2.0, `kani exec` classifies the key by its position. A string
 `profile.<name>.codegen-backend` selection is accepted, then pinned to LLVM in
 the child environment only:
 
+<!-- tested-example: migration-codegen-backend-override -->
 ```plaintext
 CARGO_PROFILE_<NAME>_CODEGEN_BACKEND=llvm
 ```
@@ -36,6 +37,7 @@ unlocks the profile option and selects no profile, so it needs no override.
 A repository that selects a development backend in `.cargo/config.toml` is
 accepted as written:
 
+<!-- tested-example: migration-accepted-cargo-config -->
 ```toml
 [unstable]
 codegen-backend = true
@@ -68,6 +70,7 @@ before execution with a message naming the file and the key.
 Run the repository's proof once through the public command, from the proof
 package rather than through `--manifest-path`:
 
+<!-- tested-example: migration-verify-kani-exec -->
 ```bash
 prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
   --cwd "$PWD" --extra-arg=list
@@ -108,20 +111,22 @@ defaults of any existing command, so existing Kani users need not migrate.
 Adopt it only when a repository wants a reviewed, immutable Kani build rather
 than the pinned legacy release:
 
+<!-- tested-example: migration-snapshot-consumer -->
 ```bash
-prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+prover-tools kani snapshot install
 prover-tools kani snapshot check
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
 ```
 
-`snapshot install` verifies the reviewed pin, the manifest bytes, the
-attestation bundle and every payload digest before running the packaged
-launcher's `setup`. `snapshot check` revalidates the active generation without
-running setup, and `kani run` executes the validated identity. Installation
-requires a local `--asset-dir`; the commands never fall back to the legacy
-release installer or a source build. The
-[users' guide](users-guide.md#kani-snapshot-commands) documents the pin,
-manifest and attestation requirements.
+`snapshot install` downloads the release the reviewed pin names, verifies the
+reviewed pin, the manifest bytes, the attestation bundle and every payload
+digest, and only then runs the packaged launcher's `setup`. Add
+`--asset-dir dist/kani-snapshot` to install from a local directory instead,
+which suits offline reproduction. `snapshot check` revalidates the active
+generation without running setup, and `kani run` executes the validated
+identity. The commands never fall back to the legacy release installer or a
+source build. The [users' guide](users-guide.md#kani-snapshot-commands)
+documents the pin, manifest and attestation requirements.
 
 No action is needed for existing `kani exec` callers. Repositories that relied
 on the old `cargo install` route only for `kani install` should either accept

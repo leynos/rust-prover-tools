@@ -101,7 +101,8 @@ def install_snapshot(
     Parameters
     ----------
     options : InstallOptions
-        Reviewed pin, local asset transport and budgets.
+        Reviewed pin, optional local asset override and budgets. Without an
+        override the assets come from the public release the pin names.
     hooks : InstallHooks | None
         External setup, probe and attestation operations. Defaults to the
         packaged launcher, the live compiler and `gh`.
@@ -122,12 +123,6 @@ def install_snapshot(
     """
     with operation_span(_LOGGER, "kani.snapshot.install") as span:
         chosen = InstallHooks() if hooks is None else hooks
-        if options.assets_dir is None:
-            msg = (
-                "snapshot installation requires --asset-dir until the producer "
-                "release transport is available"
-            )
-            raise ProverToolError(msg)
         deadline = Deadline(time.monotonic() + options.deadline_seconds)
         deadline.check("installation start")
         layout = deadline.supervise(

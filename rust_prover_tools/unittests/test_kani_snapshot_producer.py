@@ -60,6 +60,9 @@ from rust_prover_tools.kani_snapshot.producer.resolution import (
     resolve_manual_commit,
     select_newest_candidate,
 )
+from rust_prover_tools.kani_snapshot.producer.upstream_evidence import (
+    project_check_run,
+)
 from rust_prover_tools.kani_snapshot.producer.upstream_metadata import (
     missing_licence_evidence,
     parse_crate_version,
@@ -1233,6 +1236,43 @@ def test_candidate_parser_refuses_a_malformed_check_run() -> None:
         candidate_from_api(
             release, tag_ref, [{"id": 1, "name": "x", "conclusion": None}]
         )
+
+
+def _projectable_check_run() -> dict[str, object]:
+    """Return one complete check run the projector can accept."""
+    return {
+        "id": 1,
+        "name": "lint-test",
+        "status": "completed",
+        "conclusion": "success",
+        "started_at": "2026-09-16T00:00:00Z",
+        "head_sha": PINNED_UPSTREAM_COMMIT,
+        "html_url": "https://github.com/owner/repo/actions/runs/1",
+    }
+
+
+def test_a_check_run_without_a_started_at_is_refused() -> None:
+    """An omitted timestamp is refused rather than recorded as a queued run.
+
+    Projecting with `dict.get` would insert `started_at: null`, turning a
+    malformed response into well-formed evidence. Resolution treats a null
+    timestamp as the newest possible run, so a failure that should have been
+    superseded would silently outrank the run that replaced it.
+    """
+    run = _projectable_check_run()
+    del run["started_at"]
+
+    with pytest.raises(ProverToolError, match="started_at"):
+        project_check_run(PINNED_UPSTREAM_COMMIT, run, 0)
+
+
+def test_a_check_run_that_explicitly_reports_no_start_is_kept() -> None:
+    """The API's own null is evidence: a run that has not started yet."""
+    run = {**_projectable_check_run(), "started_at": None}
+
+    projected = project_check_run(PINNED_UPSTREAM_COMMIT, run, 0)
+
+    assert projected["started_at"] is None, "an explicit null was not preserved"
 
 
 def test_candidate_parser_refuses_a_tag_ref_for_another_tag() -> None:

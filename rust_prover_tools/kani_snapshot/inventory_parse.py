@@ -37,7 +37,7 @@ from rust_prover_tools.kani_snapshot.validation import (
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ("load_inventory", "parse_inventory")
+__all__ = ("load_inventory", "normalize_inventory_path", "parse_inventory")
 
 INVENTORY_KEYS: typ.Final[frozenset[str]] = frozenset({"schema_version", "entries"})
 _COMMON_KEYS: typ.Final[frozenset[str]] = frozenset({"path", "kind", "mode"})
@@ -123,13 +123,36 @@ def _parse_entry(raw: object, index: int) -> InventoryEntry:
     )
 
 
+def normalize_inventory_path(path: str) -> str:
+    """Normalize a member path with the grammar the inventory consumer uses.
+
+    The producer records paths and the consumer reads them, so both call this
+    one function. A name the filesystem allows but the grammar rejects, such
+    as one containing a backslash, is refused before either side records it.
+
+    Parameters
+    ----------
+    path : str
+        Recorded or about-to-be-recorded member path.
+
+    Returns
+    -------
+    str
+        Path with empty and `.` components removed.
+
+    Raises
+    ------
+    ProverToolError
+        Raised for an empty or over-long path, a NUL or backslash, an absolute
+        path, a drive prefix or a parent component.
+    """
+    return normalize_member_path(path, max_length=MAX_INVENTORY_PATH_LENGTH)
+
+
 def _entry_path(entry: dict[str, object], field: str) -> str:
     """Normalize a recorded path, reporting archive-grammar failures."""
     try:
-        return normalize_member_path(
-            require_text(entry["path"], f"{field} path"),
-            max_length=MAX_INVENTORY_PATH_LENGTH,
-        )
+        return normalize_inventory_path(require_text(entry["path"], f"{field} path"))
     except ProverToolError as exc:
         msg = f"snapshot {field} path is invalid: {exc}"
         raise ProverToolError(msg) from exc
@@ -163,7 +186,7 @@ def _entry_target(entry: dict[str, object], kind: str, field: str) -> str | None
     if kind == KIND_SYMLINK:
         return target
     try:
-        return normalize_member_path(target, max_length=MAX_INVENTORY_PATH_LENGTH)
+        return normalize_inventory_path(target)
     except ProverToolError as exc:
         msg = f"snapshot {field} hard link target is invalid: {target!r}: {exc}"
         raise ProverToolError(msg) from exc

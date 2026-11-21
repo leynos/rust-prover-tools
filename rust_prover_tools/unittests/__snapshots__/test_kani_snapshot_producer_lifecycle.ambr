@@ -1,0 +1,83 @@
+# serializer version: 1
+# name: test_the_rendered_plan_is_stable
+  '''
+  {
+    "builder_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "bundle_asset": "kani-0.68.0-x86_64-unknown-linux-gnu.tar.gz",
+    "commands": [
+      [
+        "rustup",
+        "toolchain",
+        "install",
+        "nightly-2026-08-21",
+        "--profile",
+        "minimal",
+        "--component",
+        "llvm-tools,rustc-dev,rust-src,rustfmt"
+      ],
+      [
+        "cargo",
+        "bundle",
+        "--",
+        "0.68.0"
+      ],
+      [
+        "cargo",
+        "package",
+        "--package",
+        "kani-verifier"
+      ],
+      [
+        "tar",
+        "-xzf",
+        "target/package/kani-verifier-0.68.0.crate",
+        "-C",
+        "target/package"
+      ],
+      [
+        "cargo",
+        "install",
+        "--locked",
+        "--path",
+        "target/package/kani-verifier-0.68.0",
+        "--root",
+        "target/launcher-prefix"
+      ]
+    ],
+    "launcher_asset": "kani-0.68.0-launcher-x86_64-unknown-linux-gnu.tar.gz",
+    "recipe_digest": "f47a382f49921612b7f09f1a9ad0ccaa2a4a733494018a25c31156d25494647c",
+    "schema_version": 1,
+    "tag": "kani-snapshot-2026-09-0d2328a93f0e-r1",
+    "target": "x86_64-unknown-linux-gnu",
+    "upstream_commit": "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
+    "workflow": {
+      "event": "schedule",
+      "path": ".github/workflows/kani-monthly.yml",
+      "ref": "refs/heads/main",
+      "run_attempt": 1,
+      "run_id": 12345,
+      "run_url": "https://github.com/leynos/rust-prover-tools/actions/runs/12345"
+    }
+  }
+  
+  '''
+# ---
+# name: test_the_rendered_resolution_is_stable
+  '''
+  {
+    "route": "scheduled",
+    "schema_version": 1,
+    "upstream_commit": "0d2328a93f0e0ff66132d6bfa1a7d884877cf862",
+    "upstream_tag": "kani-0.68.0",
+    "workflow": {
+      "event": "schedule",
+      "path": ".github/workflows/kani-monthly.yml",
+      "ref": "refs/heads/main",
+      "run_attempt": 1,
+      "run_id": 12345,
+      "run_url": "https://github.com/leynos/rust-prover-tools/actions/runs/12345"
+    }
+  }
+  
+  '''
+# ---

@@ -16,6 +16,7 @@ from cuprum.context import UNSET, EnvMode
 
 from rust_prover_tools.commands import (
     CommandSpec,
+    CommandTimeoutError,
     TailCapture,
     command_line,
     run_checked,
@@ -213,6 +214,17 @@ def test_run_command_enforces_a_timeout() -> None:
             )
         )
     assert time.monotonic() - started < 10, "timeout did not interrupt the command"
+
+
+def test_run_command_raises_a_distinct_command_timeout_error() -> None:
+    """A retrying caller can catch a timeout without masking other failures."""
+    with pytest.raises(CommandTimeoutError, match=r"timed out after 0\.1 seconds"):
+        run_command(
+            CommandSpec(
+                (sys.executable, "-I", "-c", "import time; time.sleep(30)"),
+                timeout_seconds=0.1,
+            )
+        )
 
 
 def _run_with_budget(

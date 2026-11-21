@@ -17,7 +17,10 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot import install_copy, install_transport
+from rust_prover_tools.kani_snapshot import (
+    install_copy,
+    install_sender,
+)
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.install import (
     check_active_snapshot,
@@ -54,7 +57,7 @@ def _install_and_stall_during_staging(
     transfer rather than a stall before any byte is written. A caller-supplied
     probe can force the repair path before staging begins.
     """
-    real_copy = install_transport._copy_local
+    real_copy = install_sender.copy_local
 
     def stall(
         source: Path,
@@ -81,7 +84,7 @@ def _install_and_stall_during_staging(
     # which is what makes this substitution visible without editing production
     # code. Assignment through `vars` keeps the test seam's looser signature
     # out of the module's checked surface.
-    vars(install_transport)["_copy_local"] = stall
+    vars(install_sender)["copy_local"] = stall
     install_snapshot(install_options(case), install_hooks(case, probe=probe))
 
 

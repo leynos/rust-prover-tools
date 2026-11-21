@@ -1,9 +1,10 @@
-"""Bounded local transport staging and archive/inventory agreement.
+"""Bounded transport staging and archive/inventory agreement.
 
-Every release file is copied into the identity's private downloads directory
-through an exclusive pending file, under the reviewed manifest's size rule,
-before any other byte is trusted. The backend archive must then match the
-published inventory structurally, so setup consumes exactly the described tree.
+Every release file reaches the identity's private downloads directory through
+an exclusive pending file, under the reviewed manifest's size rule or the
+release's own digest, before any other byte is trusted. The backend archive
+must then match the published inventory structurally, so setup consumes
+exactly the described tree.
 """
 
 from __future__ import annotations
@@ -29,28 +30,18 @@ from rust_prover_tools.kani_snapshot.cleanup import (
     new_staging_directory,
     sweep_deferred_staging,
 )
-from rust_prover_tools.kani_snapshot.install_copy import (
-    TransportFile,
-    TransportLimit,
-)
-from rust_prover_tools.kani_snapshot.install_copy import (
-    copy_local as _copy_local,
-)
-from rust_prover_tools.kani_snapshot.install_copy import (
-    transport_file as _transport_file,
-)
 from rust_prover_tools.kani_snapshot.install_model import (
     ATTESTATION_ASSET_NAME,
     ATTESTATION_MAX_BYTES,
     CHECKSUMS_ASSET_NAME,
     CHECKSUMS_MAX_BYTES,
     MANIFEST_ASSET_NAME,
-    MANIFEST_MAX_BYTES,
     ClaimedBudget,
     InstallBudget,
     InstallHooks,
     InstallOptions,
 )
+from rust_prover_tools.kani_snapshot.install_sender import Sender, sender_for
 from rust_prover_tools.kani_snapshot.integrity import (
     verify_asset,
     verify_checksums,
@@ -80,10 +71,6 @@ if typ.TYPE_CHECKING:
 __all__ = ("asset_by_role", "bundle_policy", "stage_assets")
 
 _LOGGER = logging.getLogger(__name__)
-
-#: Design envelopes for one compressed payload and for the inventory document.
-PAYLOAD_MAX_BYTES: typ.Final[int] = 2 * 1024 * 1024 * 1024
-INVENTORY_MAX_BYTES: typ.Final[int] = 64 * 1024 * 1024
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -126,7 +113,8 @@ def stage_assets(
     Parameters
     ----------
     options : InstallOptions
-        Reviewed pin and local asset directory.
+        Reviewed pin, and the local asset directory when one overrides the
+        release transport.
     layout : SnapshotLayout
         Identity whose private downloads directory receives the files.
     hooks : InstallHooks
@@ -143,17 +131,13 @@ def stage_assets(
     Raises
     ------
     ProverToolError
-        Raised when the transport is absent or any file fails its digest,
+        Raised when the transport is unusable or any file fails its digest,
         size, checksum, attestation or structural agreement.
     """
-    source = options.assets_dir
-    if source is None:
-        msg = "snapshot installation requires --asset-dir until remote transport exists"
-        raise ProverToolError(msg)
-    # A hung probe must not hold the identity lock, and abandoning a read is safe.
-    if not budget.supervise("asset directory check", source.is_dir):
-        msg = f"snapshot asset directory does not exist: {source}"
-        raise ProverToolError(msg)
+    sender = sender_for(options)
+    # A hung source must not hold the identity lock; abandoning a read that
+    # mutates nothing is safe.
+    budget.supervise("asset directory check", sender.check_source)
     sweep_deferred_staging(layout.identity_dir, budget)
     staging = new_staging_directory(layout.identity_dir, budget)
     # Supervised work is abandoned, not stopped; this budget holds the claim for it.
@@ -162,13 +146,7 @@ def stage_assets(
     try:
         manifest_path = claimed.supervise(
             "transport staging",
-            functools.partial(
-                _copy_local,
-                source,
-                staging,
-                _transport_file(MANIFEST_ASSET_NAME, MANIFEST_MAX_BYTES),
-                checkpoints.staging,
-            ),
+            functools.partial(sender.manifest, staging, checkpoints.staging),
         )
         budget.check("manifest verification")
         # Reading the staged manifest is blocking work on a shared budget;
@@ -184,20 +162,20 @@ def stage_assets(
         attestation = claimed.supervise(
             "transport staging",
             functools.partial(
-                _copy_local,
-                source,
+                sender.fixed,
+                ATTESTATION_ASSET_NAME,
+                ATTESTATION_MAX_BYTES,
                 staging,
-                _transport_file(ATTESTATION_ASSET_NAME, ATTESTATION_MAX_BYTES),
                 checkpoints.staging,
             ),
         )
         checksums = claimed.supervise(
             "transport staging",
             functools.partial(
-                _copy_local,
-                source,
+                sender.fixed,
+                CHECKSUMS_ASSET_NAME,
+                CHECKSUMS_MAX_BYTES,
                 staging,
-                _transport_file(CHECKSUMS_ASSET_NAME, CHECKSUMS_MAX_BYTES),
                 checkpoints.staging,
             ),
         )
@@ -220,7 +198,7 @@ def stage_assets(
             timeout_seconds=budget.remaining(),
         )
         budget.check("payload verification")
-        names = _stage_payloads(source, staging, parsed.manifest, claimed)
+        names = _stage_payloads(sender, staging, parsed.manifest, claimed)
         claimed.supervise(
             "archive structure validation",
             functools.partial(
@@ -279,22 +257,21 @@ def bundle_policy(version: str) -> ArchivePolicy:
 
 
 def _stage_payloads(
-    source: Path,
+    sender: Sender,
     staging: Path,
     manifest: SnapshotManifest,
     budget: InstallBudget,
 ) -> tuple[str, ...]:
-    """Copy and verify every manifest payload, naming what was published."""
+    """Stage and verify every manifest payload, naming what was published."""
     checkpoints = _Checkpoints.for_budget(budget)
     names = [MANIFEST_ASSET_NAME, ATTESTATION_ASSET_NAME, CHECKSUMS_ASSET_NAME]
     for asset in manifest.assets:
         path = budget.supervise(
             "payload staging",
             functools.partial(
-                _copy_asset,
-                source,
-                staging,
+                sender.payload,
                 asset,
+                staging,
                 checkpoints.payload,
             ),
         )
@@ -309,29 +286,6 @@ def _stage_payloads(
         )
         names.append(asset.name)
     return tuple(names)
-
-
-def _copy_asset(
-    source: Path,
-    staging: Path,
-    asset: AssetRecord,
-    checkpoint: Progress | None = None,
-) -> Path:
-    """Copy one manifest payload under its design envelope.
-
-    The declared size is exact but not the only bound: the inventory document
-    and every payload also have ceilings a compromised manifest cannot raise.
-    """
-    envelope = INVENTORY_MAX_BYTES if asset.role == "inventory" else PAYLOAD_MAX_BYTES
-    return _copy_local(
-        source,
-        staging,
-        TransportFile(
-            name=asset.name,
-            limit=TransportLimit(min(asset.size, envelope), exact_size=asset.size),
-        ),
-        checkpoint,
-    )
 
 
 def _verify_bundle_structures(

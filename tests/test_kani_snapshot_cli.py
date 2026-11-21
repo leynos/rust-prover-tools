@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import typing as typ
 
 import pytest
@@ -9,11 +10,28 @@ import pytest
 from rust_prover_tools import kani_snapshot_cli
 from rust_prover_tools.cli import app
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.install_model import MANIFEST_ASSET_NAME
+from tests.documentation_examples import load_examples
 from tests.kani_snapshot_fixtures import make_pin, pin_bytes
+
+#: The identifier the migration guide gives its snapshot consumer example.
+_SNAPSHOT_EXAMPLE = "migration-snapshot-consumer"
+
+#: The migration guide an installing reader follows.
+_MIGRATION_GUIDE = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "docs"
+    / "rust-prover-tools-v0-2-0-migration-guide.md"
+)
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
 
+    from rust_prover_tools.downloads import PinnedAsset
+    from rust_prover_tools.kani_snapshot.download import (
+        DownloadSettings,
+        ReleaseUrlPolicy,
+    )
     from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 
 
@@ -22,6 +40,34 @@ def _write_pin(tmp_path: Path) -> Path:
     path = tmp_path / "snapshot.toml"
     path.write_bytes(pin_bytes(make_pin()))
     return path
+
+
+def _refuse_downloads(
+    monkeypatch: pytest.MonkeyPatch,
+    requested: list[str],
+) -> None:
+    """Fail the first release download and record which asset was asked for.
+
+    Intercepting the transfer proves the command selected the release
+    transport and named the asset it wanted, without reaching the network.
+    """
+
+    def refuse(
+        asset: PinnedAsset,
+        destination: Path,
+        policy: ReleaseUrlPolicy,
+        settings: DownloadSettings,
+    ) -> Path:
+        """Record the requested asset and report an unreachable release."""
+        del destination, settings
+        requested.append(asset.name)
+        msg = f"release unavailable: {policy.asset_url()}"
+        raise ProverToolError(msg)
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_snapshot.install_sender.download_asset",
+        refuse,
+    )
 
 
 def test_check_reports_a_missing_installation(
@@ -47,12 +93,21 @@ def test_check_reports_a_missing_installation(
     assert "not installed" in captured.err, "stderr did not report the empty cache"
 
 
-def test_install_without_assets_reports_the_missing_transport(
+def test_install_without_assets_fetches_the_release_the_pin_names(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Installation without a local asset directory fails clearly."""
+    """The default transport downloads the reviewed release, not a local flag.
+
+    Only the very first download is intercepted: it proves the CLI selected the
+    release transport and asked it for the manifest, and keeps the test away
+    from the network. A refusal that asked for `--asset-dir` would mean the
+    documented default path is missing.
+    """
     pin = _write_pin(tmp_path)
+    requested: list[str] = []
+    _refuse_downloads(monkeypatch, requested)
     status = app(
         [
             "kani",
@@ -66,8 +121,52 @@ def test_install_without_assets_reports_the_missing_transport(
         exit_on_error=False,
     )
     captured = capsys.readouterr()
-    assert status == 1, "a missing transport must exit with status 1"
-    assert "--asset-dir" in captured.err, "stderr did not name the missing flag"
+    assert status == 1, "an unreachable release must exit with status 1"
+    assert requested == [MANIFEST_ASSET_NAME], "the manifest was not requested"
+    assert "--asset-dir" not in captured.err, "the default transport was refused"
+    assert make_pin().tag in captured.err, "stderr did not name the release"
+
+
+def test_the_documented_snapshot_install_command_uses_the_release_transport(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The migration guide's install line is the command that actually runs.
+
+    The line is read from the shipped guide and executed as the CLI's
+    arguments, so a document that drifts from the accepted spelling fails
+    here rather than at a reader's terminal. Only the first download is
+    intercepted: it proves the documented default is the release transport,
+    not the offline `--asset-dir` alternative.
+    """
+    pin = _write_pin(tmp_path)
+    example = load_examples(
+        _MIGRATION_GUIDE.read_text(encoding="utf-8"), source=str(_MIGRATION_GUIDE)
+    )[_SNAPSHOT_EXAMPLE]
+    install = next(
+        line.split()[1:]
+        for line in example.body.splitlines()
+        if line.strip().endswith("snapshot install")
+    )
+    requested: list[str] = []
+    _refuse_downloads(monkeypatch, requested)
+
+    status = app(
+        [
+            *install,
+            "--pin",
+            str(pin),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+        ],
+        exit_on_error=False,
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1, "an unreachable release must exit with status 1"
+    assert requested == [MANIFEST_ASSET_NAME], "the documented command fetched nothing"
+    assert "--asset-dir" not in captured.err, "the documented default was refused"
 
 
 #: Forwarded spellings that would replace the pinned backend, with the phrase

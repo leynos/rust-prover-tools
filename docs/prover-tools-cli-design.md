@@ -537,8 +537,8 @@ Install and check resolve the pin to `tools/kani/snapshot.toml` and the cache to
 sub-applications disable Cyclopts' `INPUT_*` configuration, keeping a generic
 workflow input from redirecting a reviewed pin or cache.
 
-Installation currently requires `--asset-dir`. The release download transport
-and the publication workflow are later milestones; until they land, a pin can
-be consumed only from release files that were obtained and reviewed separately.
-The [execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
+Installation downloads the release its reviewed pin names, and `--asset-dir`
+selects a local directory instead for an offline or pre-publication transfer.
+Both transports run the same verification; only the byte source changes. The
+[execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
 implementation acceptance from a separately authorized first publication.
