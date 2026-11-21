@@ -151,6 +151,22 @@ lowering the level of the relevant `rust_prover_tools` module logger.
 `docs/prover-tools-cli-design.md` owns the system-design record for the event
 vocabulary.
 
+The producer entrypoint is the one place that opts in. `_configure_logging` in
+`rust_prover_tools.kani_snapshot.orchestrator.entrypoint` attaches a standard
+error handler to the `rust_prover_tools` logger at DEBUG before dispatch, and
+its formatter renders each event's `event_data` beside the event name as
+`key=value` pairs. A hosted job therefore shows the decision sequence, the
+transient retries and the operation's ending without a local rerun; the handler
+belongs to the CLI entrypoint, not to a library import, so embedding the
+package does not reconfigure a host application's logging. The events a
+publication job emits are `kani.snapshot.publish.start`, `.decision` (`step`,
+`action`), `.deferred` (`step`), `.transient` (`action`), and `.complete` or
+`.failed` (`span_id`, `outcome`, `elapsed_seconds`, and `reason` on failure);
+the `gh` transport adds `kani.snapshot.gh.failed` (`kind`, `exit_code`) and
+`kani.snapshot.gh.absent`. A failure that carried a decided outcome reports it,
+so a budget that ran out reads `outcome=not_converged` rather than only the
+exception's class.
+
 A process or storage boundary that should be timed uses
 `operation_span(logger, event, **fields)` from the same module. It emits
 `event.start` and a matching `event.complete` or `event.failed`; the closing
@@ -917,6 +933,16 @@ owns the resolve job and the workflow identity it first binds to a document; and
 `release_evidence` derives the complete asset set one publication must serve,
 including the checksums and attestation the manifest does not name.
 
+Three helpers on those paths carry their own contract.
+`documents.write_document` writes and renames a job document so a reader never
+sees a partial one. `inventory_parse.normalize_inventory_path` applies the one
+path grammar both the producer and the consumer use, removing empty and `.`
+components and refusing a name either side could not record, which is what
+makes a comparison between a tarball member and an extracted tree meaningful.
+`producer.commands.launcher_extract_command` derives the argument vector that
+unpacks a packaged launcher crate beside its crate file, so the producer
+validates and the consumer verifies the same spelling.
+
 The package boundary is defined by effects, not by the shape of the data it
 reads. `resolution` converts GitHub API payloads, `upstream_metadata` converts
 upstream files and `commands` derives argument vectors; all three are pure
@@ -1110,9 +1136,17 @@ Run them together with actionlint:
 make workflow-check
 ```
 
-`ACTIONLINT` is overridable for a host that installs it elsewhere. actionlint
-lints `.github/workflows/*.yml` only; it cannot lint a composite action, so
-`tests/test_python_release_contract.py` reads
+actionlint is a required host tool for `make actionlint`, `make workflow-check`
+and `make all`. The repository pins 1.7.12: CI downloads the Linux AMD64
+release archive for that version and verifies it against a pinned SHA-256
+checksum before installing it (`.github/workflows/ci.yml`, the "Install
+actionlint" step). A developer host must provide an `actionlint` of the same
+version on `PATH`, either from its package manager or by the same
+download-and-verify route. `ACTIONLINT` overrides the binary the Makefile
+invokes, for a host that installs it elsewhere, and `ensure_tool` fails with
+`'<path>' is required, but not installed` when the resolved binary is absent.
+actionlint lints `.github/workflows/*.yml` only; it cannot lint a composite
+action, so `tests/test_python_release_contract.py` reads
 `.github/actions/pure-python-wheel/action.yml` directly.
 
 ### Documented examples

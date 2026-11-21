@@ -69,10 +69,16 @@ class OperationSpan:
     fields : dict[str, object]
         Additional bounded fields merged into the completion event only, for
         facts such as a cache hit that are unknown when the span starts.
+    finished : bool
+        Whether `finish` decided an outcome. An operation that decides how it
+        ended and then raises still reports that outcome, so a documented
+        ending such as ``not_converged`` is not replaced by the exception's
+        class alone.
     """
 
     outcome: str = "complete"
     fields: dict[str, object] = dc.field(default_factory=dict)
+    finished: bool = False
 
     def finish(self, outcome: str, **fields: object) -> None:
         """Record the final outcome and any extra completion fields.
@@ -86,6 +92,7 @@ class OperationSpan:
         """
         self.outcome = outcome
         self.fields.update(fields)
+        self.finished = True
 
 
 def _elapsed_seconds(started: float) -> float:
@@ -105,7 +112,8 @@ def operation_span(
     ``elapsed_seconds``, so a collector can join the pair on the event prefix
     and treat it as a timed span without a tracing dependency. A failure closes
     the span with the exception's class name rather than its message, because a
-    message can embed a path.
+    message can embed a path; an outcome the body had already decided is
+    reported beside it.
 
     Every event also carries a process-local ``span_id``. Concurrent spans of
     the same operation would otherwise be indistinguishable once their events
@@ -145,6 +153,10 @@ def operation_span(
             "reason": type(exc).__name__,
             "elapsed_seconds": _elapsed_seconds(started),
         }
+        if span.finished:
+            # The body had already decided how the operation ended, and that
+            # decision is the diagnostic detail a reader needs most.
+            failed["outcome"] = span.outcome
         log_event(logger, f"{event}.failed", **failed)
         raise
     complete = {

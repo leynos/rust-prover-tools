@@ -452,6 +452,23 @@ Terms used here:
   `ReleaseTransientError` first, and the withdrawn-recheck sentence omitted the
   verified no-op that a recheck reports when another actor has published the
   matching release.
+- 21 November 2026: closed the two pre-merge warnings raised with the same
+  review. Observability failed because the library installs no handlers: every
+  event existed at DEBUG and reached nobody, so a hosted job showed only the
+  final error. `entrypoint._configure_logging` now attaches a stderr handler
+  before dispatch, its formatter renders `event_data` as `key=value` pairs, and
+  the handler resolves `sys.stderr` at emit time so a redirected stream is
+  still written to. `OperationSpan` gained a `finished` flag so a body that
+  decided its outcome and then raised reports that outcome: a budget that ran
+  out now reads `outcome=not_converged` beside `reason=ProverToolError`. Four
+  tests drive publication through `main` against in-memory release APIs and
+  assert the transient, decision and failure events on standard error.
+  Developer Documentation failed because the guide never said actionlint is a
+  host requirement: it now states the pinned version, the CI checksum check,
+  the developer install route, the `ACTIONLINT` override and the `ensure_tool`
+  failure, and names `write_document`, `normalize_inventory_path` and
+  `launcher_extract_command`. The PR description's entrypoint path was also
+  wrong (`producer.entrypoint`); it now reads `orchestrator.entrypoint`.
 
 ## Surprises & discoveries
 

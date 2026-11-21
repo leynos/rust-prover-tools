@@ -14,6 +14,7 @@ failing closed over convenience. The operations themselves live in
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import typing as typ
 
@@ -133,8 +134,79 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: What writing to a standard error that has gone away can raise. Named
+#: because the pylint gate parses this module with Python 3.12, where a bare
+#: `except OSError, ValueError:` is a syntax error rather than a tuple.
+_STREAM_GONE = (OSError, ValueError)
+
+
+class _StderrEvents(logging.Handler):
+    """The entrypoint's own event handler, distinguishable from a host's.
+
+    A named type rather than a marker attribute: `_configure_logging` can then
+    tell whether the handler is already installed without inspecting private
+    attributes it does not own.
+
+    The stream is resolved at emit time rather than held from construction.
+    A process that redirects standard error after importing this module — a
+    test runner capturing output, for one — would otherwise leave the handler
+    writing to a stream nobody reads.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Write one formatted record to the current standard error."""
+        try:
+            sys.stderr.write(f"{self.format(record)}\n")
+        except _STREAM_GONE:  # pragma: no cover - stream already closed
+            self.handleError(record)
+
+
+class _EventFormatter(logging.Formatter):
+    """Render an event's bounded fields beside its name.
+
+    The record's message is the event name; its fields live in `event_data`,
+    and a run log that showed only the name would still hide the step, the
+    action and the outcome a maintainer needs. Fields are appended in the
+    order they were recorded, as ``key=value`` pairs.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Return the event name followed by its recorded fields."""
+        rendered = super().format(record)
+        event_data = getattr(record, "event_data", None)
+        if not isinstance(event_data, dict):
+            return rendered
+        fields = " ".join(
+            f"{key}={value}" for key, value in event_data.items() if key != "event"
+        )
+        return f"{rendered} {fields}".rstrip()
+
+
+def _configure_logging() -> None:
+    """Send the library's structured events to standard error.
+
+    The library installs no handlers, so a hosted job would otherwise report
+    only the final error: a transient retry, a state transition or the ending
+    of a publication would never reach the run log. The handler belongs to this
+    CLI entrypoint rather than to a library import, so embedding the package
+    does not silently reconfigure the host application's logging.
+
+    The level is DEBUG because `log_event` emits at debug level. Attaching the
+    handler is idempotent: `main` runs once per subcommand process, but a test
+    or an embedding caller may invoke it more than once.
+    """
+    logger = logging.getLogger("rust_prover_tools")
+    if any(isinstance(handler, _StderrEvents) for handler in logger.handlers):
+        return
+    handler = _StderrEvents()
+    handler.setFormatter(_EventFormatter("%(levelname)s %(name)s %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+
+
 def main(argv: cabc.Sequence[str] | None = None) -> int:
     """Run one producer operation and report a user-facing failure."""
+    _configure_logging()
     namespace = build_parser().parse_args(argv)
     try:
         return typ.cast("cabc.Callable[[argparse.Namespace], int]", namespace.handler)(
