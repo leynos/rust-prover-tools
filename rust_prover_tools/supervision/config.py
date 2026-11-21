@@ -15,9 +15,11 @@ from __future__ import annotations
 import dataclasses as dc
 import math
 import typing as typ
-from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
 
 from rust_prover_tools.supervision.sinks import MIN_LINE_BYTES
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 __all__ = (
     "DEFAULT_HEARTBEAT_SECONDS",
