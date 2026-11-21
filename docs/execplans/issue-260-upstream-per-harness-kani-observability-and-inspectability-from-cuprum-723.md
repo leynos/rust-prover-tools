@@ -196,11 +196,16 @@ Plain-language terms used in this plan:
   complete pass, 1 otherwise, and `128 + signal` on interruption. Help
   snapshots and injected contract tests cover the surface. The full gate passes
   with 1,779 tests and 6 skips.
-- [x] (2026-11-21 21:30Z) CodeRabbit review and remediation. Three local
-  review passes were run after the deterministic gates; all actionable
-  findings were fixed with regression tests. The one residual finding is the
-  Cuprum 0.2.0b2 newline-free line accumulation, which cannot be bounded
-  through the pinned public API and is documented as a limitation.
+- [x] (2026-11-21 19:30Z) CodeRabbit review and remediation. Three local
+  review passes were run after the deterministic gates; every actionable
+  finding was fixed with a regression test or a cited, tested design record.
+  The third pass added the bounded parser issue budget, distinct-destination
+  validation, the prepare/execute split that keeps handlers off discovery and
+  qualification, structured CLI option groups with no pylint suppressions,
+  heartbeat recognized-progress precedence, and the alpha-only snapshot release
+  note. The one residual limitation is the Cuprum 0.2.0b2 newline-free line
+  accumulation, which cannot be bounded through the pinned public API and is
+  documented as a limitation.
 - [x] (2026-11-21 21:35Z) Posted the parser coordination comment on #250,
   naming `rust_prover_tools/kani_log/` as the landed parser layer, the open
   manifest and `decide()` work, and the captures 0.68.0 will need.
@@ -294,12 +299,13 @@ Plain-language terms used in this plan:
   samples, heartbeats, deadline checks, and watchdog decisions; independent
   intervals keep the configuration honest. Date/Author: 2026-11-21,
   implementation agent.
-- D8. Decision: the human sink defaults to standard error and the JSONL sink is
-  off unless a path or stream is configured; the report is returned and written
-  only when a path is configured. Rationale: diagnostics belong on standard
-  error so standard output stays suitable for the final table and machine
-  consumption; library consumers retain control of destinations. Date/Author:
-  2026-11-21, implementation agent.
+- D8. Decision: the CLI's human sink defaults to standard output; standard
+  error is reserved for adapter diagnostics and expected errors; the JSONL sink
+  is off unless a path or stream is configured, and the report is returned and
+  written only when a path is configured. Rationale: live human evidence
+  belongs in the flushed job log, alongside the final table, while standard
+  error stays a clean diagnostic channel; library consumers retain control of
+  destinations. Date/Author: 2026-11-21, implementation agent.
 - D9. Decision: the inventory scanner recognizes `#[kani::proof]` and
   `#[kani::proof_for_contract]`, and marks a harness `conditional` when any
   enclosing `cfg` attribute is anything other than `cfg(kani)`. Rationale:
@@ -314,18 +320,16 @@ Plain-language terms used in this plan:
   existing route tests and callers are unaffected. Date/Author: 2026-11-21,
   implementation agent.
 - D15. Decision: accept a Kani failure explanation without a source location,
-  while still requiring one explanation per counted failure.
-  Rationale: Kani 0.67.0 may omit the optional trace location, but the verdict
-  still reports the proof as failed; rejecting the log would turn a valid
-  failure into a tool error. The count reconciliation still makes a deleted
-  explanation detectable.
+  while still requiring one explanation per counted failure. Rationale: Kani
+  0.67.0 may omit the optional trace location, but the verdict still reports
+  the proof as failed; rejecting the log would turn a valid failure into a tool
+  error. The count reconciliation still makes a deleted explanation detectable.
   Date/Author: 2026-11-21, implementation agent.
 - D16. Decision: a successful Kani classification requires an explicit zero
-  exit status; an absent status is an error.
-  Rationale: only a supervisor stop or a launch failure can leave a child
-  without a status, and both are classified earlier. Treating an impossible
-  absence as success would weaken the exact-success rule.
-  Date/Author: 2026-11-21, implementation agent.
+  exit status; an absent status is an error. Rationale: only a supervisor stop
+  or a launch failure can leave a child without a status, and both are
+  classified earlier. Treating an impossible absence as success would weaken
+  the exact-success rule. Date/Author: 2026-11-21, implementation agent.
 - D13. Decision: a JSONL record that exceeds its byte budget is shortened by
   bounding its string fields before serialization, with a minimal valid
   `truncated` record as the last resort. Rationale: cutting a serialized line
@@ -347,6 +351,26 @@ Plain-language terms used in this plan:
   inspection use the standard library. Rationale: the capability needs no
   third-party runtime package, and the repository's gates already cover the
   standard library. Date/Author: 2026-11-21, implementation agent.
+- D17. Decision: `DiagnosticSinks` and the CLI reject two destinations that
+  resolve to one file. Rationale: human and JSONL records have different
+  grammars, so sharing an append handle produces a file that is neither, and
+  JSONL offsets silently stop matching; the report's atomic write would destroy
+  evidence at the same path. Paths are resolved first so symlink aliases cannot
+  evade the check. Date/Author: 2026-11-21, implementation agent.
+- D18. Decision: discovery, selection, and route qualification are a separate
+  `prepare_harnesses` phase from `execute_harnesses`. Rationale: the CLI's
+  handlers can stop a supervised child but cannot stop Cargo metadata or a
+  probe, which run synchronously; installing handlers only around execution
+  leaves SIGINT and SIGTERM at their prompt default dispositions during
+  preparation instead of recording a signal that cannot take effect. The
+  combined `run_harnesses` remains the one-call API. Date/Author: 2026-11-21,
+  implementation agent.
+- D19. Decision: the reader retains at most `MAX_RETAINED_ISSUES` refusals
+  plus one exhaustion sentinel. Rationale: `finish` raises the first retained
+  issue, so a bounded prefix preserves every refusal decision while a noisy
+  harness cannot size the attempt's memory; the sentinel keeps exhaustion
+  distinguishable from a quiet report. Date/Author: 2026-11-21, implementation
+  agent.
 
 ## Outcomes & retrospective
 
@@ -384,9 +408,9 @@ supervisor, and the run orchestrator. The production defaults remain the source
 plan's 1,200 seconds, 5 seconds, and 1,024 MiB.
 
 The final change exceeds the initial file and code budgets. The issue's five
-tasks include the full fifteen-log parser corpus, two route integrations, a
-new CLI surface, and the schema reference; the user's instruction authorized
-that full scope. The overage is recorded here rather than treated as a silent
+tasks include the full fifteen-log parser corpus, two route integrations, a new
+CLI surface, and the schema reference; the user's instruction authorized that
+full scope. The overage is recorded here rather than treated as a silent
 tolerance breach.
 
 All six milestones are implemented. The acceptance evidence is:

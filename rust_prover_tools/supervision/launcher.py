@@ -47,6 +47,7 @@ from cuprum import (
     RunOutputOptions,
     sh,
 )
+from cuprum.context import EnvMode
 
 from rust_prover_tools.supervision.models import (
     LaunchResult,
@@ -88,13 +89,19 @@ class LaunchCommand:
     cwd : Path | None
         Working directory for the child.
     env : cabc.Mapping[str, str | UnsetType] | None
-        Environment overlay for the child. Wrapper values and removal markers
-        are retained verbatim.
+        Environment for the child. Wrapper values and removal markers are
+        retained verbatim.
+    env_mode : cuprum.EnvMode
+        How `env` relates to the child's inherited environment. A supervised
+        legacy route uses `REPLACE` so a later host change cannot reach a
+        derived command; a snapshot route keeps the overlay its removal
+        markers require.
     """
 
     argv: tuple[str, ...]
     cwd: Path | None = None
     env: cabc.Mapping[str, str | UnsetType] | None = None
+    env_mode: EnvMode = EnvMode.OVERLAY
 
 
 type CommandBuilder = cabc.Callable[[HarnessSpec], LaunchCommand]
@@ -277,6 +284,7 @@ class CuprumHarnessLauncher:
         cmd = sh.make(program, catalogue=catalogue)(*command.argv[1:])
         context = ExecutionContext(
             env=command.env,
+            env_mode=command.env_mode,
             cwd=command.cwd,
             process_group=ProcessGroupPolicy.OWN_GROUP,
         )

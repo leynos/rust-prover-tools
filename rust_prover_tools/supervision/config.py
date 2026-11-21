@@ -13,6 +13,7 @@ proof starts rather than silently disabling a watchdog.
 from __future__ import annotations
 
 import dataclasses as dc
+import math
 import typing as typ
 from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
 
@@ -25,6 +26,7 @@ __all__ = (
     "DEFAULT_WATCHDOG_THRESHOLD_BYTES",
     "DiagnosticSinks",
     "SupervisionConfig",
+    "require_distinct_destinations",
 )
 
 #: Twenty minutes, from the Cuprum source plan's proposed starting setting.
@@ -41,6 +43,52 @@ DEFAULT_HEARTBEAT_SECONDS: typ.Final[float] = 15.0
 
 #: Bound for one human or JSONL diagnostic line, in bytes.
 DEFAULT_MAX_LINE_BYTES: typ.Final[int] = 8 * 1024
+
+
+def require_distinct_destinations(
+    *,
+    human_path: Path | None = None,
+    jsonl_path: Path | None = None,
+    report_path: Path | None = None,
+) -> None:
+    """Refuse destinations that name one file under two roles.
+
+    Human and JSONL records have different grammars, so appending both to one
+    file produces a file that is neither. The report is written atomically and
+    would replace whatever evidence already occupies its path. Paths are
+    resolved first, so a relative spelling, a symlink, or a symlinked parent
+    cannot disguise an alias.
+
+    Parameters
+    ----------
+    human_path : Path | None
+        Human evidence destination, or `None` when it is disabled.
+    jsonl_path : Path | None
+        Versioned JSONL destination, or `None` when it is disabled.
+    report_path : Path | None
+        Final report destination, or `None` when it is disabled.
+
+    Raises
+    ------
+    ValueError
+        Two supplied destinations resolve to the same file.
+    """
+    seen: dict[Path, str] = {}
+    for name, path in (
+        ("human_path", human_path),
+        ("jsonl_path", jsonl_path),
+        ("report_path", report_path),
+    ):
+        if path is None:
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            msg = (
+                "diagnostic destinations must be distinct: "
+                f"{seen[resolved]} and {name} both name {resolved}"
+            )
+            raise ValueError(msg)
+        seen[resolved] = name
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -62,6 +110,14 @@ class DiagnosticSinks:
     human_path: Path | None = None
     jsonl_path: Path | None = None
     report_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse two records that would append to one file."""
+        require_distinct_destinations(
+            human_path=self.human_path,
+            jsonl_path=self.jsonl_path,
+            report_path=self.report_path,
+        )
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -104,8 +160,8 @@ class SupervisionConfig:
             ("sample_interval_seconds", self.sample_interval_seconds),
             ("heartbeat_interval_seconds", self.heartbeat_interval_seconds),
         ):
-            if not value > 0:
-                msg = f"{name} must be positive, got {value!r}"
+            if not math.isfinite(value) or not value > 0:
+                msg = f"{name} must be finite and positive, got {value!r}"
                 raise ValueError(msg)
         if self.watchdog_threshold_bytes is not None and (
             self.watchdog_threshold_bytes < 0

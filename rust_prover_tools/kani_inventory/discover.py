@@ -150,8 +150,10 @@ def _target(document: object) -> CargoTarget | None:
     kinds = root.get("kind")
     if not isinstance(kinds, list):
         return None
+    library_kinds = {"lib", "rlib", "dylib", "staticlib", "cdylib"}
+    normalised = {"lib" if value in library_kinds else value for value in kinds}
     kind = next(
-        (value for value in _VERIFIABLE_KINDS if value in kinds),
+        (value for value in _VERIFIABLE_KINDS if value in normalised),
         None,
     )
     if kind is None:

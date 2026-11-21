@@ -34,8 +34,12 @@ import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.kani_diagnostics import open_diagnostics
+from rust_prover_tools.kani_harness_models import (
+    KaniHarnessDependencies,
+    KaniHarnessPreparation,
+    KaniHarnessRunOptions,
+)
 from rust_prover_tools.kani_inventory import (
-    CargoPackage,
     HarnessInventory,
     InventoryHarness,
     discover_inventory,
@@ -46,7 +50,6 @@ from rust_prover_tools.kani_inventory import (
 from rust_prover_tools.kani_routes import (
     KaniRoute,
     LegacyRoute,
-    PreparedRoute,
     SnapshotRoute,
     prepare_route,
 )
@@ -68,105 +71,21 @@ from rust_prover_tools.supervision.kani import KaniAdapter
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     from rust_prover_tools.supervision import HarnessSpec
-    from rust_prover_tools.supervision.protocols import (
-        CgroupReader,
-        Clock,
-        HarnessLauncher,
-        InterruptSource,
-        ResourceProbe,
-        Sleeper,
-    )
 
 __all__ = (
     "KaniHarnessDependencies",
+    "KaniHarnessPreparation",
     "KaniHarnessRun",
     "KaniHarnessRunOptions",
     "KaniRoute",
     "LegacyRoute",
     "SnapshotRoute",
+    "execute_harnesses",
+    "prepare_harnesses",
     "run_harnesses",
 )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class KaniHarnessDependencies:
-    """Production dependencies a caller may override.
-
-    Attributes
-    ----------
-    clock : Clock | None
-        Time sources; defaults to `SystemClock`.
-    launcher : HarnessLauncher | None
-        Process boundary; defaults to the Cuprum launcher.
-    probe : ResourceProbe | None
-        Resource sampler; defaults to the Linux procfs probe.
-    cgroup : CgroupReader | None
-        Shared cgroup reader; defaults to cgroup v2 discovery.
-    sleeper : Sleeper | None
-        Monitor pause; defaults to the asyncio sleeper.
-    diagnostics : Diagnostics | None
-        Live evidence sinks; defaults to the configured paths.
-    interrupts : InterruptSource | None
-        Signal source. The library installs none of its own.
-    prepare : cabc.Callable[[KaniRoute], PreparedRoute] | None
-        Route qualifier. `None` uses the production qualifier; a test can
-        supply a prepared base without a real installation.
-    """
-
-    clock: Clock | None = None
-    launcher: HarnessLauncher | None = None
-    probe: ResourceProbe | None = None
-    cgroup: CgroupReader | None = None
-    sleeper: Sleeper | None = None
-    diagnostics: Diagnostics | None = None
-    interrupts: InterruptSource | None = None
-    prepare: cabc.Callable[[KaniRoute], PreparedRoute] | None = None
-
-
-@dc.dataclass(frozen=True, slots=True)
-class KaniHarnessRunOptions:
-    """One supervised Kani run.
-
-    Attributes
-    ----------
-    repo_root : Path
-        Repository or workspace root.
-    packages : tuple[str, ...]
-        Packages to discover. An empty tuple selects every package.
-    harnesses : tuple[str, ...]
-        Pretty names to run. An empty tuple selects every discovered harness.
-    route : KaniRoute
-        Qualified legacy release or immutable snapshot.
-    inventory : HarnessInventory | None
-        Authoritative inventory, overriding discovery.
-    inventory_path : Path | None
-        Path to an authoritative version-1 inventory document.
-    config : SupervisionConfig
-        Per-harness policy and report destination.
-    metadata : cabc.Sequence[CargoPackage] | None
-        Pre-read Cargo metadata, for tests.
-    dependencies : KaniHarnessDependencies | None
-        Overridden production dependencies.
-    """
-
-    repo_root: Path
-    route: KaniRoute
-    packages: tuple[str, ...] = ()
-    harnesses: tuple[str, ...] = ()
-    inventory: HarnessInventory | None = None
-    inventory_path: Path | None = None
-    config: SupervisionConfig = dc.field(default_factory=SupervisionConfig)
-    metadata: cabc.Sequence[CargoPackage] | None = None
-    dependencies: KaniHarnessDependencies | None = None
-
-    def __post_init__(self) -> None:
-        """Refuse two authoritative inventories or an unusable route."""
-        if self.inventory is not None and self.inventory_path is not None:
-            msg = "provide either inventory or inventory_path, not both"
-            raise ValueError(msg)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -216,6 +135,11 @@ class KaniHarnessRun:
 def run_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
     """Discover or load, select, and supervise Kani harnesses.
 
+    This is preparation followed by execution, with no suspension point in
+    between. An application that installs its own signal handlers should call
+    `prepare_harnesses` and `execute_harnesses` separately, so the handlers
+    cover only the phase whose in-flight children they can stop.
+
     Parameters
     ----------
     options : KaniHarnessRunOptions
@@ -239,25 +163,95 @@ def run_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
+    return execute_harnesses(
+        prepare_harnesses(options),
+        options.config,
+        options.dependencies,
+    )
+
+
+def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+    """Discover or load, select, and qualify one route without running it.
+
+    Parameters
+    ----------
+    options : KaniHarnessRunOptions
+        Repository, selection, and route. The policy is not used.
+
+    Returns
+    -------
+    KaniHarnessPreparation
+        The inventory, selection, qualified route, and exact commands.
+
+    Raises
+    ------
+    InventoryDiscoveryError
+        Raised when discovery cannot produce a complete inventory.
+    InventoryFormatError
+        Raised when a supplied inventory document is invalid.
+    SelectionError
+        Raised when the harness selection is ambiguous or overridden.
+    ProverToolError
+        Raised when the route cannot be qualified.
+    UnsupportedKaniGrammarError
+        Raised when the route's Kani release has no registered grammar.
+    """
     inventory = _inventory(options)
     selected = select_harnesses(inventory, options.harnesses)
     dependencies = options.dependencies or KaniHarnessDependencies()
     qualifier = dependencies.prepare or prepare_route
     prepared = qualifier(options.route)
-    commands = _command_map(selected, prepared.build)
-    with open_diagnostics(options.config, dependencies.diagnostics) as diagnostics:
-        environment = _environment(options, prepared, commands, diagnostics)
+    return KaniHarnessPreparation(
+        inventory=inventory,
+        selected=selected,
+        prepared=prepared,
+        commands=_command_map(selected, prepared.build),
+    )
+
+
+def execute_harnesses(
+    preparation: KaniHarnessPreparation,
+    config: SupervisionConfig,
+    dependencies: KaniHarnessDependencies | None = None,
+    *,
+    diagnostics: Diagnostics | None = None,
+) -> KaniHarnessRun:
+    """Supervise the harnesses selected by `prepare_harnesses`.
+
+    Parameters
+    ----------
+    preparation : KaniHarnessPreparation
+        Completed discovery, selection, and route qualification.
+    config : SupervisionConfig
+        Per-harness policy and configured evidence destinations.
+    dependencies : KaniHarnessDependencies | None
+        Overridden production dependencies. `None` uses the defaults.
+    diagnostics : Diagnostics | None
+        Caller-owned sinks, which override the configured destinations. The
+        caller retains ownership and must flush and close them.
+
+    Returns
+    -------
+    KaniHarnessRun
+        The typed report and the inventory it was selected from.
+    """
+    dependencies = dependencies or KaniHarnessDependencies()
+    with open_diagnostics(
+        config,
+        diagnostics or dependencies.diagnostics,
+    ) as opened:
+        environment = _environment(preparation, dependencies, opened)
         report = run_supervised_sync(
-            tuple(harness.to_spec() for harness in selected),
-            options.config,
+            tuple(harness.to_spec() for harness in preparation.selected),
+            config,
             environment,
         )
     return KaniHarnessRun(
         report=report,
-        inventory=inventory,
-        selected=selected,
-        backend_version=prepared.grammar.version,
-        route_kind=prepared.kind,
+        inventory=preparation.inventory,
+        selected=preparation.selected,
+        backend_version=preparation.prepared.grammar.version,
+        route_kind=preparation.prepared.kind,
     )
 
 
@@ -287,13 +281,11 @@ def _command_map(
 
 
 def _environment(
-    options: KaniHarnessRunOptions,
-    prepared: PreparedRoute,
-    commands: cabc.Mapping[str, LaunchCommand],
+    preparation: KaniHarnessPreparation,
+    dependencies: KaniHarnessDependencies,
     diagnostics: Diagnostics,
 ) -> RunEnvironment:
     """Build the supervision environment around the prepared route."""
-    dependencies = options.dependencies or KaniHarnessDependencies()
     clock = dependencies.clock or SystemClock()
     launcher = dependencies.launcher or CuprumHarnessLauncher(
         clock=clock.now,
@@ -302,7 +294,7 @@ def _environment(
 
     def build(spec: HarnessSpec) -> LaunchCommand:
         """Return the command composed for this exact identity."""
-        return commands[spec.qualified]
+        return preparation.commands[spec.qualified]
 
     return RunEnvironment(
         clock=clock,
@@ -311,7 +303,7 @@ def _environment(
         cgroup=dependencies.cgroup or CgroupV2Reader(),
         diagnostics=diagnostics,
         build=build,
-        adapter=KaniAdapter(version=prepared.grammar.version),
+        adapter=KaniAdapter(version=preparation.prepared.grammar.version),
         sleeper=dependencies.sleeper or AsyncSleeper(),
         interrupts=dependencies.interrupts,
     )

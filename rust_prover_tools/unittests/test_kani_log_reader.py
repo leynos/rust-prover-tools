@@ -9,6 +9,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from rust_prover_tools.kani_log import (
+    MAX_RETAINED_ISSUES,
     KaniLog,
     KaniLogError,
     KaniLogReader,
@@ -129,7 +130,8 @@ def _chatter() -> st.SearchStrategy[str]:
     """Generate a line that cannot be mistaken for report structure."""
     return st.text(min_size=1, max_size=40).filter(
         lambda line: (
-            line.strip()
+            line.splitlines() == [line]
+            and line.strip()
             and not line.startswith(REPORT_PREFIXES)
             and not line.startswith("\t")
         )
@@ -166,3 +168,27 @@ def test_a_verdict_without_the_note_is_not_an_expected_panic() -> None:
     assert block.succeeded
     assert not block.panics_as_expected
     assert VERIFICATION in log_text("verified")
+
+
+def test_retained_issues_are_bounded_without_losing_the_report() -> None:
+    """A noisy harness cannot grow the parser state without bound."""
+    lines = lines_of("verified")
+    reader = KaniLogReader()
+    reader.feed_line("stdout", lines[0])
+    reader.feed_line(
+        "stdout",
+        next(line for line in lines if line.startswith(HARNESS_START)),
+    )
+    reader.feed_line("stdout", "RESULTS:")
+    for index in range(MAX_RETAINED_ISSUES + 10):
+        reader.feed_line("stdout", f"unexplained build chatter {index}")
+
+    issues = reader.retained_issues
+    facts = reader.facts
+
+    assert len(issues) == MAX_RETAINED_ISSUES + 1
+    assert "dropped" in issues[-1].message
+    assert facts.banner_version == "0.67.0"
+    assert facts.selection_records == ("harnesses::verified",)
+    with pytest.raises(KaniLogError, match="unrecognised line"):
+        reader.finish(0)

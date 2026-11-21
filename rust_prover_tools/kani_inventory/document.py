@@ -143,7 +143,8 @@ def inventory_from_document(document: object) -> HarnessInventory:
     """
     root = _object(document, "the inventory")
     _exact_keys(root, {"schema", "packages"}, "the inventory")
-    if root["schema"] != SCHEMA_VERSION:
+    schema = _integer(root["schema"], "the inventory schema")
+    if schema != SCHEMA_VERSION:
         msg = f"the inventory has schema {root['schema']!r}, not {SCHEMA_VERSION}"
         raise InventoryFormatError(msg)
     entries = _array(root["packages"], "the inventory packages")

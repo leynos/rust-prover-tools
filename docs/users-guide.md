@@ -368,12 +368,15 @@ output.
 `prover-tools kani harnesses run` executes one exact invocation per selected
 harness. Select exactly one route: `--installation PATH` with the required
 `--cwd PATH`, for a qualified Kani release root, or `--snapshot-pin PATH` with
-an optional `--cache-dir PATH`, for a reviewed snapshot. Every harness runs as
-its own `--package PACKAGE --harness NAME --exact` invocation in an owned
-process group. A failed, timed-out, or watchdog-stopped harness does not
-prevent later harnesses from running. The command exits zero only for a
-complete passing run, one for any other completed run or expected error, and
-`128 + signal` when a signal interrupted the run after its report was finalized.
+an optional `--cache-dir PATH`, for a reviewed snapshot. The snapshot route
+accepts only a snapshot that reports Kani 0.67.0, the single registered
+grammar; the current snapshot recipe builds 0.68.0, whose banner the supervised
+run refuses until a 0.68.0 grammar is registered. Every harness runs as its own
+`--package PACKAGE --harness NAME --exact` invocation in an owned process
+group. A failed, timed-out, or watchdog-stopped harness does not prevent later
+harnesses from running. The command exits zero only for a complete passing run,
+one for any other completed run or expected error, and `128 + signal` when a
+signal interrupted the run after its report was finalized.
 
 The defaults below are policy, and every one is configurable:
 
@@ -409,9 +412,13 @@ include compilation; and cgroup values belong to the supervisor's cgroup, which
 is normally shared with the rest of the job, so they are not exclusive
 per-harness peaks.
 
-The CLI installs SIGINT and SIGTERM handlers only for the duration of a run and
-restores the previous handlers afterwards. The library installs no handlers, so
-an embedding application keeps its own signal policy.
+The CLI installs SIGINT and SIGTERM handlers only for the duration of the
+execution phase and restores the previous handlers afterwards. Discovery and
+route qualification run before those handlers exist, so a signal during
+preparation ends the run immediately instead of being recorded for a phase that
+has not started. The library installs no handlers, so an embedding application
+keeps its own signal policy; `prepare_harnesses` and `execute_harnesses` expose
+the same phase boundary to that application.
 
 `--extra-arg` is repeatable and passes proof-affecting verifier arguments
 verbatim, such as `--unwind` or `-Z`. An argument that would override selection

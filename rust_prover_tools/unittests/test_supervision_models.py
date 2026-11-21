@@ -8,6 +8,7 @@ import pytest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 from rust_prover_tools.supervision import (
     DEFAULT_SAMPLE_INTERVAL_SECONDS,
@@ -131,3 +132,32 @@ def test_the_memory_watchdog_stop_is_not_a_kernel_oom_claim() -> None:
         "interrupted",
         "launch-failed",
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [float("inf"), float("-inf"), float("nan")],
+)
+def test_non_finite_timing_values_are_refused(value: float) -> None:
+    """A non-finite budget cannot produce valid JSON or a meaningful deadline."""
+    with pytest.raises(ValueError, match="finite"):
+        SupervisionConfig(timeout_seconds=value)
+
+
+def test_one_file_cannot_hold_two_diagnostic_grammars(tmp_path: Path) -> None:
+    """Human and JSONL records in one file are neither format."""
+    shared = tmp_path / "evidence"
+
+    with pytest.raises(ValueError, match="distinct"):
+        DiagnosticSinks(human_path=shared, jsonl_path=shared)
+
+
+def test_a_symlink_alias_is_not_a_distinct_destination(tmp_path: Path) -> None:
+    """Resolved paths, not spellings, decide whether two roles collide."""
+    target = tmp_path / "evidence"
+    target.touch()
+    alias = tmp_path / "alias"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="distinct"):
+        DiagnosticSinks(jsonl_path=target, report_path=alias)

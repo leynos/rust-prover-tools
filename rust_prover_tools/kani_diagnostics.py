@@ -29,7 +29,23 @@ def open_diagnostics(
     config: SupervisionConfig,
     provided: Diagnostics | None,
 ) -> cabc.Generator[Diagnostics]:
-    """Yield the configured diagnostics, closing any files this call opened."""
+    """Yield the configured diagnostics, closing any files this call opened.
+
+    Parameters
+    ----------
+    config : SupervisionConfig
+        Policy whose sink destinations and line bound are used.
+    provided : Diagnostics | None
+        Caller-owned diagnostics. When supplied, they override the configured
+        destinations and remain owned by the caller; this manager neither
+        closes nor flushes streams it did not open.
+
+    Yields
+    ------
+    Diagnostics
+        The provided object unchanged, or sinks opened for the configured
+        destinations for the duration of the context.
+    """
     if provided is not None:
         yield provided
         return

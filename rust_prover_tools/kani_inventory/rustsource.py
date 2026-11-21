@@ -191,7 +191,8 @@ def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> Non
                     module,
                     module_path=(*module.module_path, item.name),
                     conditional=item.conditional,
-                    path_root=module.path_root / (item.path_attribute or item.name),
+                    directory=module.directory / item.name,
+                    path_root=module.directory / (item.path_attribute or item.name),
                 ),
                 item.items,
             )

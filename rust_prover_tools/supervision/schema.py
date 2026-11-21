@@ -80,10 +80,12 @@ def _measurement_keys(document: object, *, subject: str) -> None:
         raise EvidenceFormatError(msg)
     keys = set(document)
     if keys == {"value"}:
-        if not isinstance(document["value"], int) or isinstance(
-            document["value"], bool
-        ):
+        value = document["value"]
+        if not isinstance(value, int) or isinstance(value, bool):
             msg = f"{subject}.value is not an integer"
+            raise EvidenceFormatError(msg)
+        if value < 0:
+            msg = f"{subject}.value is negative"
             raise EvidenceFormatError(msg)
         return
     if keys == {"unavailable_reason"}:
@@ -211,6 +213,9 @@ def _validate_record_measurements(
         for field in ("peak_group_rss", "min_host_available", "host_total"):
             decode_measurement(document[field], subject=f"{subject}.{field}")
         _validate_cgroup(document["cgroup"], subject=f"{subject}.cgroup")
+        return
+    if kind == "run-finish":
+        _validate_accounting(document["accounting"])
         return
     for field in ("group_rss", "host_available", "host_total"):
         if field in document:

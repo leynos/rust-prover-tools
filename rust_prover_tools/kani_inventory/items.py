@@ -12,6 +12,7 @@ everything nested inside it as conditional.
 
 from __future__ import annotations
 
+import ast
 import dataclasses as dc
 import re
 
@@ -107,9 +108,10 @@ class _AttributeFacts:
     path: str | None = None
     conditional: bool = False
 
-    def record(self, content: str) -> None:
+    def record(self, original: str, masked: str) -> None:
         """Record one attribute's facts, ignoring inner attributes."""
-        name, _ = _attribute_name(content)
+        name, _ = _attribute_name(masked)
+        content = original
         if name in _PROOF_ATTRIBUTES:
             self.proof.append(name)
         value = _path_value(content)
@@ -266,7 +268,10 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
             break
         end = _matching(masked, bracket, "[", "]")
         if not inner:
-            facts.record(source.original[bracket + 1 : end - 1].strip())
+            facts.record(
+                source.original[bracket + 1 : end - 1].strip(),
+                masked[bracket + 1 : end - 1].strip(),
+            )
         position = _skip_space(masked, end)
     return _Attributes(tuple(facts.proof), facts.path, facts.conditional), position
 
@@ -297,9 +302,15 @@ def _attribute_name(content: str) -> tuple[str, str]:
 
 
 def _path_value(content: str) -> str | None:
-    """Extract the double-quoted value of a ``path = "..."`` attribute."""
-    match = re.match(r'path\s*=\s*"([^"]+)"$', content)
-    return None if match is None else match[1]
+    """Extract the string value of a ``path = ...`` attribute."""
+    if "=" not in content:
+        return None
+    _, _, value = content.partition("=")
+    try:
+        parsed = ast.literal_eval(value.strip())
+    except SyntaxError, ValueError:
+        return None
+    return parsed if isinstance(parsed, str) else None
 
 
 def _starts_string(masked: str, position: int) -> bool:
@@ -315,7 +326,7 @@ def _skip_modifiers(masked: str, position: int) -> int:
             return position
         value = word.text
         if value == "pub":
-            position = word.end
+            position = _skip_space(masked, word.end)
             if position < len(masked) and masked[position] == "(":
                 position = _matching(masked, position, "(", ")")
         elif value in {"unsafe", "async", "const", "default", "extern"}:

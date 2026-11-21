@@ -18,7 +18,6 @@ import typing as typ
 from functools import partial
 
 from rust_prover_tools import kani_release
-from rust_prover_tools.commands import CommandSpec
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 from rust_prover_tools.kani_exec_routing import admission_chain
 from rust_prover_tools.kani_release import (
@@ -33,6 +32,8 @@ from rust_prover_tools.kani_release_config import checked_resolve
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
+
+    from rust_prover_tools.commands import CommandSpec
 
 __all__ = (
     "QualifiedKaniCommand",
@@ -185,7 +186,9 @@ def _qualify(
 
 def _checked_identity(spec: CommandSpec, argv: tuple[str, ...], expected: str) -> None:
     """Query a selected tool without masking nonzero status or identity drift."""
-    result = kani_release.run_command(CommandSpec(argv, cwd=spec.cwd, env=spec.env))
+    # Derive the probe from the qualified base so cwd, environment, and the
+    # environment mode are exactly those the proof command will use.
+    result = kani_release.run_command(dc.replace(spec, argv=argv))
     if result.exit_code != 0:
         raise CommandFailedError(argv[0], result.exit_code, result.stderr)
     if result.stdout.strip() != expected:
@@ -199,7 +202,7 @@ def _checked_identity(spec: CommandSpec, argv: tuple[str, ...], expected: str) -
 def _checked_verifier(spec: CommandSpec) -> None:
     """Accept only the qualified stable driver's complete version response."""
     version = kani_release.run_command(
-        CommandSpec((spec.argv[0], "kani", "--version"), cwd=spec.cwd, env=spec.env)
+        dc.replace(spec, argv=(spec.argv[0], "kani", "--version"))
     )
     if version.exit_code != 0:
         raise CommandFailedError(spec.argv[0], version.exit_code, version.stderr)

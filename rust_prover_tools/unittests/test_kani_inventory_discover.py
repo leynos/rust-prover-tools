@@ -151,6 +151,32 @@ def test_discovery_reads_cargo_metadata(cmd_mox: CmdMox) -> None:
     assert "alpha::harnesses::verified" in inventory.identities()
 
 
+def test_an_rlib_library_target_is_verifiable(cmd_mox: CmdMox) -> None:
+    """Cargo reports a crate-type rlib library as an rlib target."""
+    document = {
+        "packages": [
+            {
+                "name": "alpha",
+                "manifest_path": str(_WORKSPACE / "alpha" / "Cargo.toml"),
+                "targets": [
+                    {
+                        "name": "alpha",
+                        "kind": ["rlib"],
+                        "src_path": str(_WORKSPACE / "alpha" / "src" / "lib.rs"),
+                    }
+                ],
+            }
+        ]
+    }
+    cmd_mox.mock("cargo").with_args(
+        "metadata", "--no-deps", "--format-version", "1"
+    ).returns(stdout=json.dumps(document))
+
+    inventory = discover_inventory(_WORKSPACE, ("alpha",))
+
+    assert "alpha::harnesses::verified" in inventory.identities()
+
+
 def test_a_failed_metadata_call_is_refused(cmd_mox: CmdMox) -> None:
     """A Cargo failure names the status and the diagnostic."""
     cmd_mox.mock("cargo").with_args(
@@ -207,7 +233,7 @@ def test_a_missing_key_is_refused() -> None:
         inventory_from_document(document)
 
 
-@pytest.mark.parametrize("schema", [0, 2, "1", None])
+@pytest.mark.parametrize("schema", [0, 2, True, 1.0, "1", None])
 def test_an_unknown_schema_version_is_refused(schema: object) -> None:
     """The reader names the version it accepts."""
     document = inventory_document(_one_package())

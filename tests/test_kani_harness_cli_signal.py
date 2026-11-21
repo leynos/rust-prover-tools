@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import signal
 import typing as typ
 
 from rust_prover_tools.kani_harness_cli import SignalInterrupt
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from pathlib import Path
+
     import pytest
+
+    from rust_prover_tools.kani_harness_run import (
+        KaniHarnessDependencies,
+        KaniHarnessPreparation,
+        KaniHarnessRun,
+        KaniHarnessRunOptions,
+    )
+    from rust_prover_tools.supervision import Diagnostics, SupervisionConfig
 
 
 def test_a_signal_before_binding_is_already_recorded() -> None:
@@ -70,3 +82,151 @@ def test_the_first_signal_wins(monkeypatch: pytest.MonkeyPatch) -> None:
         interrupt._handle(signal.SIGTERM, None)
 
     assert interrupt.signum == signal.SIGINT
+
+
+def test_the_cli_installs_handlers_only_for_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery and qualification keep the application's signal policy."""
+    from rust_prover_tools.cli import app
+    from tests.kani_harness_cli_support import inventory_file
+    from tests.kani_harness_cli_support import run as make_run
+
+    state: list[str] = []
+
+    class _FakeInterrupt:
+        """Record when the CLI believes a handler is installed."""
+
+        @contextlib.contextmanager
+        def installed(self) -> cabc.Generator[None]:
+            """Mark the execution phase as guarded."""
+            state.append("installed")
+            try:
+                yield
+            finally:
+                state.append("restored")
+
+    def fake_prepare(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+        """Refuse to be called with handlers already installed."""
+        del options
+        assert not state
+        return typ.cast("KaniHarnessPreparation", object())
+
+    def fake_execute(
+        preparation: KaniHarnessPreparation,
+        config: SupervisionConfig,
+        dependencies: KaniHarnessDependencies | None = None,
+        *,
+        diagnostics: Diagnostics | None = None,
+    ) -> KaniHarnessRun:
+        """Require the execution phase to be guarded."""
+        del preparation, config, dependencies, diagnostics
+        assert state == ["installed"]
+        return make_run()
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.SignalInterrupt", _FakeInterrupt
+    )
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.prepare_harnesses", fake_prepare
+    )
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.execute_harnesses", fake_execute
+    )
+
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--inventory",
+        str(inventory_file(tmp_path)),
+    ])
+
+    assert status == 0
+    assert state == ["installed", "restored"]
+
+
+def test_a_signal_during_inventory_discovery_ends_the_cli(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery interrupted by SIGINT ends the run before execution."""
+    evidence = tmp_path / "evidence.jsonl"
+
+    def interrupted(
+        root: Path,
+        packages: tuple[str, ...],
+        *,
+        metadata: object = None,
+    ) -> object:
+        """Stand in for discovery interrupted by SIGINT."""
+        del root, packages, metadata
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_run.discover_inventory", interrupted
+    )
+
+    status = _run_cli(tmp_path, evidence, use_inventory=False)
+
+    _assert_interrupted(status, evidence, capsys)
+
+
+def test_a_signal_during_route_qualification_ends_the_cli(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qualification interrupted by SIGINT ends the run before execution."""
+    evidence = tmp_path / "evidence.jsonl"
+
+    def interrupted(route: object) -> object:
+        """Stand in for qualification interrupted by SIGINT."""
+        del route
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("rust_prover_tools.kani_harness_run.prepare_route", interrupted)
+
+    status = _run_cli(tmp_path, evidence, use_inventory=True)
+
+    _assert_interrupted(status, evidence, capsys)
+
+
+def _assert_interrupted(
+    status: int,
+    evidence: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Require the interruption status and an untouched evidence path."""
+    assert status == 128 + signal.SIGINT
+    assert not evidence.exists()
+    assert "interrupted" in capsys.readouterr().err
+
+
+def _run_cli(tmp_path: Path, evidence: Path, *, use_inventory: bool) -> int:
+    """Run a CLI command whose preparation phase the test interrupts."""
+    from rust_prover_tools.cli import app
+    from tests.kani_harness_cli_support import inventory_file
+
+    arguments = [
+        "kani",
+        "harnesses",
+        "run",
+        "--repo-root",
+        str(tmp_path),
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--jsonl",
+        str(evidence),
+    ]
+    if use_inventory:
+        arguments.extend(("--inventory", str(inventory_file(tmp_path))))
+    return app(arguments)

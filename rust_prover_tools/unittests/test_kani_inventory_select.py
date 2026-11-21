@@ -95,6 +95,12 @@ def test_a_duplicate_request_is_refused() -> None:
         select_harnesses(_inventory(), ("harnesses::a", "harnesses::a"))
 
 
+def test_two_spellings_of_one_harness_are_refused() -> None:
+    """A pretty name and its qualified form select the same harness."""
+    with pytest.raises(SelectionError, match="more than one spelling"):
+        select_harnesses(_inventory(), ("harnesses::a", "alpha::harnesses::a"))
+
+
 def test_the_composed_arguments_put_the_selector_first() -> None:
     """The selector, the output arguments, and the caller's arguments in order."""
     arguments = compose_arguments(_harness("harnesses::a"), KANI_067)
@@ -138,6 +144,7 @@ def test_proof_affecting_arguments_are_preserved() -> None:
     )
 
 
+@pytest.mark.parametrize("prefix", [(), ("--",)])
 @pytest.mark.parametrize(
     "conflict",
     [
@@ -158,14 +165,17 @@ def test_proof_affecting_arguments_are_preserved() -> None:
         ("-q",),
     ],
 )
-def test_every_conflicting_spelling_is_refused(conflict: tuple[str, ...]) -> None:
+def test_every_conflicting_spelling_is_refused(
+    prefix: tuple[str, ...], conflict: tuple[str, ...]
+) -> None:
     """A caller argument cannot override the selection or the parsed output."""
-    found = conflicting_options(conflict, KANI_067)
+    arguments = (*prefix, *conflict)
+    found = conflicting_options(arguments, KANI_067)
     assert found
     assert found[0] == conflict[0]
 
     with pytest.raises(SelectionError, match="override"):
-        compose_arguments(_harness("harnesses::a"), KANI_067, conflict)
+        compose_arguments(_harness("harnesses::a"), KANI_067, arguments)
 
 
 def test_a_conflict_before_the_separator_is_refused() -> None:

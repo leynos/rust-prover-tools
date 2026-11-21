@@ -272,3 +272,80 @@ def test_an_inline_path_override_roots_its_children(tmp_path: Path) -> None:
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "thread::local_data::tls"
     ]
+
+
+def test_a_raw_path_attribute_value_is_accepted(tmp_path: Path) -> None:
+    """`#[path = r"..."]` is a string value like an ordinary literal."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[path = r"alternate.rs"]\nmod proofs;\n', encoding="utf-8")
+    (tmp_path / "src" / "alternate.rs").write_text(
+        "#[kani::proof]\nfn via_raw() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::via_raw"
+    ]
+
+
+def test_a_comment_inside_an_attribute_is_tolerated(tmp_path: Path) -> None:
+    """A block comment inside an attribute is whitespace, not a name."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[kani /* note */ :: proof]\nfn commented() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "commented"
+    ]
+
+
+def test_visibility_with_whitespace_before_its_restriction_is_skipped(
+    tmp_path: Path,
+) -> None:
+    """`pub (crate)` is the same visibility as `pub(crate)`."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[kani::proof]\npub (crate) fn restricted() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "restricted"
+    ]
+
+
+def test_a_plain_child_of_an_inline_module_is_under_its_name(
+    tmp_path: Path,
+) -> None:
+    """An inline module advances the directory for its plain children."""
+    (tmp_path / "src" / "outer").mkdir(parents=True)
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("mod outer { mod proofs; }\n", encoding="utf-8")
+    (tmp_path / "src" / "outer" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "outer::proofs::h"
+    ]
+
+
+def test_an_inline_path_in_a_non_mod_rs_file_uses_its_child_directory(
+    tmp_path: Path,
+) -> None:
+    """`foo.rs` inline `#[path]` starts under `foo/`."""
+    (tmp_path / "src" / "foo" / "inline").mkdir(parents=True)
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("mod foo;\n", encoding="utf-8")
+    (tmp_path / "src" / "foo.rs").write_text(
+        'mod inline { #[path = "proofs.rs"] mod proofs; }\n', encoding="utf-8"
+    )
+    (tmp_path / "src" / "foo" / "inline" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "foo::inline::proofs::h"
+    ]

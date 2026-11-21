@@ -260,3 +260,59 @@ def test_an_empty_environment_is_not_replaced_by_the_host(
             KaniExecOptions(installed_release, tmp_path, ()),
             {},
         )
+
+
+def test_the_supervised_legacy_build_freezes_replacement_environment(
+    installed_release: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A derived legacy command replaces, rather than overlays, its environment."""
+    from cuprum.context import EnvMode
+
+    from rust_prover_tools.kani_inventory import InventoryHarness
+    from rust_prover_tools.kani_routes import LegacyRoute, prepare_route
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_release.run_command",
+        _identity_runner([]),
+    )
+    prepared = prepare_route(LegacyRoute(installation=installed_release, cwd=tmp_path))
+    harness = InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness="harness",
+        source="src/lib.rs",
+        line=1,
+    )
+
+    command = prepared.build(harness)
+
+    assert command.env_mode is EnvMode.REPLACE
+
+
+def test_identity_probes_preserve_the_prepared_environment_mode(
+    installed_release: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The probes inspect the same environment as the proof command."""
+    from cuprum.context import EnvMode
+
+    specs: list[CommandSpec] = []
+
+    def run(spec: CommandSpec) -> CommandResult:
+        """Record each probe specification and answer it as qualified."""
+        specs.append(spec)
+        return _identity_runner([])(spec)
+
+    monkeypatch.setattr("rust_prover_tools.kani_release.run_command", run)
+
+    qualify_kani_installation(
+        KaniExecOptions(installed_release, tmp_path, ()),
+        {"HOME": str(tmp_path)},
+    )
+
+    assert specs
+    assert all(spec.env_mode is EnvMode.REPLACE for spec in specs)

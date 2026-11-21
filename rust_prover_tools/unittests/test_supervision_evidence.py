@@ -31,6 +31,7 @@ from rust_prover_tools.supervision import (
     SupervisionConfig,
     bounded_text,
     decode_jsonl,
+    decode_measurement,
     render_table,
     report_document,
     utc_text,
@@ -431,3 +432,35 @@ def test_open_diagnostics_keeps_appended_offsets(tmp_path: Path) -> None:
 
     assert reference is not None
     assert reference.offset == 100
+
+
+def test_a_run_finish_record_with_malformed_accounting_is_refused() -> None:
+    """The nested accounting object obeys its documented key set."""
+    sink = MemorySink()
+    record = run_finish_record(
+        run_id="run-1", timestamp=VirtualClock().now(), report=_report()
+    )
+    record["accounting"] = {}
+    sink.write(record)
+
+    with pytest.raises(EvidenceFormatError, match="missing"):
+        decode_jsonl(sink.text)
+
+
+def test_a_negative_measurement_is_refused() -> None:
+    """A byte measurement cannot be negative."""
+    with pytest.raises(EvidenceFormatError, match="negative"):
+        decode_measurement({"value": -1})
+
+
+def test_the_fallback_keeps_the_original_kind_when_it_fits() -> None:
+    """A bounded fallback keeps the lost record's kind when the budget allows."""
+    handle = io.StringIO()
+    sink = JsonlSink(handle, max_line_bytes=100)
+
+    sink.write(_record(run_id="x" * 10_000))
+
+    record = decode_jsonl(handle.getvalue())[0]
+    assert len(handle.getvalue().encode("utf-8")) <= 100
+    if record["record"] == "truncated":
+        assert record.get("original_kind") == "run-start"

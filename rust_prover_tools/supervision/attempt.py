@@ -149,8 +149,9 @@ class AttemptSupervisor:
                 await monitor
             result = await done
         finally:
+            monitor.cancel()
+            done.cancel()
             for task in (monitor, done):
-                task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
@@ -254,10 +255,10 @@ class AttemptSupervisor:
             started_at=started_at,
             started_monotonic=started_monotonic,
         )
+        recorded = False
         if elapsed >= self._next_sample:
             self._next_sample += self.config.sample_interval_seconds
-            self._samples.append(sample)
-            self.diagnostics.emit(sample_record(run_id=self.run_id, sample=sample))
+            recorded = True
         if elapsed >= self._next_heartbeat:
             self._next_heartbeat += self.config.heartbeat_interval_seconds
             self.diagnostics.emit(
@@ -265,7 +266,7 @@ class AttemptSupervisor:
                     run_id=self.run_id,
                     sample=sample,
                     idle_seconds=self._idle_seconds(elapsed),
-                    last_progress=self._last_output,
+                    last_progress=self._recognised_progress(),
                 )
             )
         verdict = first_stop(
@@ -278,12 +279,19 @@ class AttemptSupervisor:
                 threshold_bytes=self.config.watchdog_threshold_bytes,
             ),
         )
+        if recorded or verdict.reason is not None:
+            self._retain_sample(sample)
         if verdict.reason is None:
             return False
         self._stop_reason = verdict.reason
         self._stop_detail = verdict.detail
         running.stop(verdict.reason)
         return True
+
+    def _retain_sample(self, sample: ResourceSample) -> None:
+        """Keep and emit one sample, including a watchdog-triggering sample."""
+        self._samples.append(sample)
+        self.diagnostics.emit(sample_record(run_id=self.run_id, sample=sample))
 
     def _recognised_progress(self) -> str | None:
         """Return the adapter's last recognised progress line, if any."""

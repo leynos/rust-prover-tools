@@ -69,6 +69,8 @@
   │                            `installation`.                                   │
   │ --snapshot-pin PATH        Reviewed snapshot pin, for the snapshot route.    │
   │ --cache-dir PATH           Snapshot cache root.                              │
+  │ --extra-arg STR...         Additional verifier arguments, preserved          │
+  │   --empty-extra-arg        verbatim.                                         │
   │ --timeout-seconds FLOAT    Wall-clock budget per harness. [default: 1200.0]  │
   │ --sample-interval-seconds  Resource sampling interval. [default: 5.0]        │
   │   FLOAT                                                                      │
@@ -81,8 +83,6 @@
   │                            output.                                           │
   │ --jsonl PATH               Append versioned JSONL evidence here.             │
   │ --report PATH              Write the final JSON report here.                 │
-  │ --extra-arg STR...         Additional verifier arguments, preserved          │
-  │   --empty-extra-arg        verbatim.                                         │
   ╰──────────────────────────────────────────────────────────────────────────────╯
   
   '''

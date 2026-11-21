@@ -106,14 +106,13 @@ def test_run_passing_returns_zero_and_prints_the_table(
     output = capsys.readouterr().out
     assert "PACKAGE" in output
     assert "harnesses::verified" in output
-    options = captured[0]
+    options = captured[0].options
     assert isinstance(options.route, LegacyRoute)
     assert options.route.arguments == ("--unwind", "2")
     assert options.packages == ("alpha",)
     assert options.harnesses == ("harnesses::verified",)
     assert options.config.sinks.report_path == tmp_path / "report.json"
-    assert options.dependencies is not None
-    assert options.dependencies.interrupts is not None
+    assert captured[0].dependencies.interrupts is not None
 
 
 def test_run_snapshot_route_is_selected(
@@ -134,7 +133,9 @@ def test_run_snapshot_route_is_selected(
         manifest_sha256="c" * 64,
     )
     captured = capture_run(monkeypatch, run())
-    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.load_pin", lambda path: pin)
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli_options.load_pin", lambda path: pin
+    )
 
     status = app([
         "kani",
@@ -149,7 +150,7 @@ def test_run_snapshot_route_is_selected(
     ])
 
     assert status == 0
-    route = captured[0].route
+    route = captured[0].options.route
     assert isinstance(route, SnapshotRoute)
     assert route.pin is pin
     assert route.cache_home == tmp_path / "cache"
@@ -213,7 +214,7 @@ def test_run_expected_error_returns_one(
         del options
         raise SelectionError("conflict")
 
-    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.run_harnesses", fail)
+    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.prepare_harnesses", fail)
 
     status = app([
         "kani",
@@ -287,7 +288,34 @@ def test_a_jsonl_append_keeps_absolute_offsets(
     ])
 
     assert status == 0
-    assert captured[0].dependencies is not None
     diagnostics = captured[0].dependencies.diagnostics
     assert diagnostics is not None
     assert diagnostics.jsonl.offset == len("existing-record\n")
+
+
+def test_shared_human_and_jsonl_destinations_are_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The CLI rejects the collision before opening either handle."""
+    shared = tmp_path / "evidence.jsonl"
+
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--inventory",
+        str(inventory_file(tmp_path)),
+        "--human",
+        str(shared),
+        "--jsonl",
+        str(shared),
+    ])
+
+    assert status == 1
+    assert "distinct" in capsys.readouterr().err
+    assert not shared.exists()

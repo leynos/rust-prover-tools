@@ -58,6 +58,12 @@ prover-tools kani harnesses run --repo-root . \
   --package cuprum-native-io
 ```
 
+The snapshot route accepts only a snapshot that reports Kani 0.67.0, because
+that release is the one registered grammar. The current snapshot recipe builds
+the released `kani-0.68.0` tag, whose banner the parser refuses; that snapshot
+is not usable with this command until a 0.68.0 grammar is registered. Use the
+installed-release route above for a 0.67.0 release.
+
 The `run` command exits zero only for a complete passing run, one for any other
 completed run or expected error, and `128 + signal` when a signal interrupted
 the run after its report was finalized.
@@ -403,6 +409,22 @@ qualifies one route, runs the generic supervisor, and returns a
 `KaniHarnessRun` with the typed `report`, the `inventory`, the `selected`
 harnesses, the `backend_version`, and a `table`. Async callers may use
 `run_supervised` with a `RunEnvironment` instead.
+
+An application that owns its signal policy can split the two phases.
+`prepare_harnesses` performs discovery, selection, and route qualification
+without starting a prover or opening an evidence file. `execute_harnesses` runs
+only that prepared selection, so handlers cover exactly the phase whose
+children they can stop:
+
+```python
+prepared = prepare_harnesses(options)
+with application_signal_policy():
+    run = execute_harnesses(prepared, options.config)
+```
+
+`DiagnosticSinks` refuses two roles that resolve to the same file, so human and
+JSONL records can never share one append handle. Every destination in the CLI
+is checked under the same rule before either file is opened.
 
 Every dependency can be overridden through `KaniHarnessDependencies`: clock,
 launcher, resource probe, cgroup reader, sleeper, diagnostics, interrupt

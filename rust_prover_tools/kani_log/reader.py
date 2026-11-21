@@ -21,6 +21,7 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.kani_log.blocks import BlockCursor, Issue, IssueKind
+from rust_prover_tools.kani_log.budget import IssueBudget
 from rust_prover_tools.kani_log.model import (
     HarnessBlock,
     KaniLog,
@@ -85,7 +86,7 @@ class KaniLogReader:
         self._manual_failed: list[str] = []
         self._unsupported: list[str] = []
         self._is_list = False
-        self._issues: list[Issue] = []
+        self._budget = IssueBudget()
         self._last_progress: str | None = None
         self._exit_code: int | None = None
         self._handlers: dict[State, cabc.Callable[[str], None]] = {
@@ -133,7 +134,7 @@ class KaniLogReader:
         if self._state not in {State.BLOCK, State.RESULTS, State.SUMMARY}:
             self._close_block()
         self._finish_incomplete()
-        if self._issues:
+        if self._budget.issues:
             raise self._first_error()
         self._record(
             reconcile_report(
@@ -142,7 +143,7 @@ class KaniLogReader:
                 is_inventory=self._is_list,
             )
         )
-        if self._issues:
+        if self._budget.issues:
             raise self._first_error()
         return KaniLog(
             self._banner,
@@ -154,6 +155,11 @@ class KaniLogReader:
         )
 
     @property
+    def retained_issues(self) -> tuple[Issue, ...]:
+        """The recorded refusals, bounded by `MAX_RETAINED_ISSUES`."""
+        return self._budget.issues
+
+    @property
     def facts(self) -> KaniLogFacts:
         """The facts available so far, without raising for truncation."""
         return ReaderSnapshot(
@@ -163,7 +169,7 @@ class KaniLogReader:
             manual=self._manual,
             unsupported=tuple(self._unsupported),
             is_list=self._is_list,
-            issues=tuple(self._issues),
+            issues=self._budget.issues,
             last_progress=self._last_progress,
             exit_code=self._exit_code,
         ).facts()
@@ -375,12 +381,12 @@ class KaniLogReader:
             self._record((issue,))
 
     def _record(self, issues: cabc.Sequence[Issue]) -> None:
-        """Record every classified issue."""
-        self._issues.extend(issues)
+        """Record classified issues within the retention budget."""
+        self._budget.record(issues)
 
     def _first_error(self) -> KaniLogError:
         """Return the first recorded reason as the typed parser error."""
-        return KaniLogError(self._issues[0].message)
+        return KaniLogError(self._budget.issues[0].message)
 
     def _progress(self, text: str) -> None:
         """Remember the last structurally recognised report line."""

@@ -108,6 +108,13 @@ def select_harnesses(
             )
             raise SelectionError(msg)
         chosen.append(matches[0])
+    identities = [harness.identity for harness in chosen]
+    if len(set(identities)) != len(identities):
+        msg = (
+            "the harness selection names one harness through more than one "
+            f"spelling: {identities}"
+        )
+        raise SelectionError(msg)
     return tuple(chosen)
 
 

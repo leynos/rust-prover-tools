@@ -10,8 +10,11 @@ if typ.TYPE_CHECKING:
 
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessDependencies,
+    KaniHarnessPreparation,
     KaniHarnessRun,
     KaniHarnessRunOptions,
+    execute_harnesses,
+    prepare_harnesses,
     run_harnesses,
 )
 from rust_prover_tools.kani_inventory import (
@@ -68,6 +71,7 @@ __all__ = [
     "InventoryFormatError",
     "InventoryHarness",
     "KaniHarnessDependencies",
+    "KaniHarnessPreparation",
     "KaniHarnessRun",
     "KaniHarnessRunOptions",
     "KaniLog",
@@ -86,10 +90,12 @@ __all__ = [
     "UnsupportedKaniGrammarError",
     "compose_arguments",
     "discover_inventory",
+    "execute_harnesses",
     "hello",
     "inventory_document",
     "load_inventory",
     "parse",
+    "prepare_harnesses",
     "render_table",
     "restrict_inventory",
     "run_harnesses",

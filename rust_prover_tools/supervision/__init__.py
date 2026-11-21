@@ -48,6 +48,7 @@ from rust_prover_tools.supervision.config import (
     DEFAULT_WATCHDOG_THRESHOLD_BYTES,
     DiagnosticSinks,
     SupervisionConfig,
+    require_distinct_destinations,
 )
 from rust_prover_tools.supervision.formatting import (
     JSONL_SCHEMA_VERSION,
@@ -196,6 +197,7 @@ __all__ = [
     "render_human",
     "render_table",
     "report_document",
+    "require_distinct_destinations",
     "run_supervised",
     "run_supervised_sync",
     "sum_group_rss",
