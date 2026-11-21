@@ -130,8 +130,9 @@ Feature modules should own workflow behaviour:
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified
   store, with HTTPS URL policy in `rust_prover_tools.download_url`, connection
-  and redirect policy in `rust_prover_tools.download_transport`, and body
-  limits in `rust_prover_tools.download_stream`.
+  and redirect policy in `rust_prover_tools.download_transport`, body limits in
+  `rust_prover_tools.download_stream`, and the shared deadline budget and
+  watchdog in `rust_prover_tools.download_deadline`.
 - `rust_prover_tools.platforms` and `rust_prover_tools.path_resolution` for the
   shared host check and CLI path resolution.
 - `rust_prover_tools.observability` for the shared opt-in event helper.
@@ -223,6 +224,48 @@ stream whose final flush would report 120.
 with leading spaces or tabs. It extracts `<name>` before the trailing
 `RUSTUP_TOOLCHAIN` override message emitted by official Verus releases, so
 callers receive the toolchain identifier.
+
+### Download deadline
+
+One monotonic deadline, created in `download_transport._download` before the
+first connection, covers every redirect hop. `download_deadline` owns the
+budget and the enforcement:
+
+- `_hop_timeout` reads the clock once, refuses a hop with no time left, and
+  otherwise returns the smaller of the hop limit and the time remaining. One
+  reading is deliberate: a guard and a separate budget reading could straddle
+  the deadline and hand the socket a zero timeout, which makes it non-blocking
+  instead of failing.
+- `_open` connects explicitly rather than letting `request()` connect lazily,
+  then calls `_arm_socket` so the send runs under the time the connect phase
+  and TLS handshake left. A socket timeout bounds one blocking call, not a
+  sequence of them, so without the re-arm a hop could spend a fresh budget on
+  the send after already spending one connecting.
+- `_DeadlineWatchdog` captures the socket when it is armed and shuts it down
+  at the deadline from a daemon thread. The capture happens before
+  `getresponse()`, which clears `connection.sock` for a response the connection
+  cannot reuse. An unbounded deadline starts no thread at all.
+- `_HopHandle.close()` stops the watchdog and then closes the connection, in
+  that order and under `try`/`finally`, so a finished hop cannot shut down a
+  later hop's socket and a failed stop cannot leak the connection.
+
+Connect, re-arm, send and response acquisition share one `try`. Any failure
+stops a started watchdog and closes the connection before re-raising. An
+`OSError` or `HTTPException` is converted to the base deadline error, with a
+`deadline` event, when the watchdog expired or the clock has reached the
+deadline; otherwise it stays a transient `transport_error` so a bounded retry
+can still run. `download_stream._copy_body` applies the same rule to a body
+read, including an EOF at or after the deadline, because a socket the watchdog
+shut down reads as end of stream.
+
+The deadline is not a hard wall-clock bound. DNS resolution has no socket
+timeout; the standard library applies one connect budget to every resolved
+address in turn, and the initial TLS handshake, which `connect()` performs
+before the watchdog is armed, reuses that budget. Local file I/O while the body
+is written is not supervised either. Digest verification runs after `_download`
+returns and is bounded only by the byte ceiling already enforced on the
+download; publication has no time bound at all; and a retry is bounded by its
+attempt count and backoff rather than by the transfer's deadline.
 
 ## External commands
 
