@@ -54,7 +54,13 @@ the same module.
 
 `rust_prover_tools.z3` installs the pinned Z3 solver used by Verus. It
 downloads the official release archive, extracts only the pinned `z3` binary,
-and records a version marker so later runs reuse the installation.
+and records a marker that binds the pinned version to the extracted binary's
+SHA-256; the digest is computed while the member is streamed to disk. Reuse
+rehashes the installed binary and accepts it only when the digest matches.
+Marker parsing is strict: the file must be a JSON object with exactly the
+`version` and `sha256` keys, both strings, the current version, and a
+64-character lowercase hexadecimal digest. Any other content, including a
+version-only marker from an earlier release, is a cache miss.
 
 `rust_prover_tools.binary_assets` is the manifest of pinned release artefacts:
 names, HTTPS URLs, SHA-256 digests, per-asset byte ceilings, archive members,

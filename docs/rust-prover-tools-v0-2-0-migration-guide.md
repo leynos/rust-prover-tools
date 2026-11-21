@@ -89,10 +89,11 @@ set. A version without a pinned prebuilt manifest is refused with a message
 that names `--compile`.
 
 The new `prover-tools z3 install` command downloads the pinned Z3 release used
-by Verus, verifies its digest, extracts only `bin/z3`, and records a version
-marker so later runs reuse the installation. `--install-dir` and `--cache-dir`
-select the binary and archive locations; `Z3_INSTALL_DIR`, `Z3_CACHE_DIR`, and
-their `INPUT_`-prefixed forms provide the same bindings.
+by Verus, verifies its digest, extracts only `bin/z3`, and records a marker
+binding the version to the extracted binary's SHA-256 so later runs rehash the
+solver before reusing it. `--install-dir` and `--cache-dir` select the binary
+and archive locations; `Z3_INSTALL_DIR`, `Z3_CACHE_DIR`, and their
+`INPUT_`-prefixed forms provide the same bindings.
 
 Every archive now goes through the shared bounded HTTPS downloader. It accepts
 only `https`, follows a capped number of re-validated redirects, rejects an
