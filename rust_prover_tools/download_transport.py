@@ -232,6 +232,12 @@ def _open(
             },
         )
         response = connection.getresponse()
+        # The watchdog can shut the socket down while the headers are parsed
+        # and still leave a complete header block, so a hop that ran out of
+        # time here would otherwise be reported by its status instead of the
+        # deadline. `handed_over` stays false, so the hop still closes.
+        if _deadline_reached(watchdog, deadline):
+            _raise_deadline(url)
         hop = _HopHandle(watchdog, connection)
         handed_over = True
         return (

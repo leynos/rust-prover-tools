@@ -59,6 +59,10 @@ class HTTPResponseLike(typ.Protocol):
         """Read up to `amt` response bytes."""
         ...
 
+    def isclosed(self) -> bool:
+        """Report whether the response has released its socket."""
+        ...
+
 
 class _TimeoutSocket(typ.Protocol):
     """The socket operation needed to bound a response read."""
@@ -105,9 +109,21 @@ class _DeadlineResponse:
         """Forward a header lookup to the wrapped response."""
         return self.response.getheader(name, default)
 
+    def isclosed(self) -> bool:
+        """Forward the finished check to the wrapped response."""
+        return self.response.isclosed()
+
     def read(self, amt: int | None = None) -> bytes:
-        """Read body bytes, bounding the wait by the remaining deadline."""
-        if self.sock is not None:
+        """Read body bytes, bounding the wait by the remaining deadline.
+
+        A finished response is not re-armed. `http.client` closes the
+        response's file when the declared length is exhausted, and for a
+        `Connection: close` response that also closes the socket the transport
+        captured, so arming it again would raise `OSError` on the read that
+        just wants to observe EOF. A finished response cannot block, so there
+        is nothing left to bound.
+        """
+        if self.sock is not None and not self.response.isclosed():
             remaining = self.deadline - monotonic()
             if remaining > 0:
                 # The connection's original timeout may outlast the deadline.
@@ -234,7 +250,10 @@ def _copy_body(
             _raise_deadline(limits, written, cause=exc)
         if not chunk:
             # A socket shut down at the deadline reads as EOF, so the deadline
-            # is checked again before a short body is accepted as complete.
+            # is checked again before a short body is accepted as complete. A
+            # chunk from a call that began before the deadline is kept and
+            # written: the failure is reported before the next read, and the
+            # caller discards the partial file.
             _require_time_left(limits, written)
             return written
         written += len(chunk)

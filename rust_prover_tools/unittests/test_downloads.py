@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import http.client
+import http.server
 import logging
 import pathlib
 import socket
 import threading
+import time
 import typing as typ
 
 import pytest
@@ -98,6 +102,30 @@ class FakeClock:
         self.now += seconds
 
 
+class GatedClock:
+    """A real clock that stands still until a blocked phase starts.
+
+    A hop reads its budget before the fake call blocks, so a real clock could
+    expire during a scheduling stall and fail the test before the watchdog is
+    armed. Until `started` is set this clock reports the instant the deadline
+    was measured against; after it, real time, so the watchdog still waits out
+    the budget in real seconds and the bounded joins stay guards rather than
+    the deadline mechanism.
+    """
+
+    def __init__(self, budget: float = 0.2) -> None:
+        """Freeze the clock and measure `budget` against the frozen instant."""
+        self.started = threading.Event()
+        self._origin = time.monotonic()
+        self.deadline = self._origin + budget
+
+    def monotonic(self) -> float:
+        """Report the frozen origin until the gate opens, then real time."""
+        if self.started.is_set():
+            return time.monotonic()
+        return self._origin
+
+
 class FakeResponse:
     """A response object that satisfies the downloader protocol."""
 
@@ -123,6 +151,10 @@ class FakeResponse:
     ) -> str | None:
         """Return a canned header."""
         return self.headers.get(name, default)
+
+    def isclosed(self) -> bool:
+        """Report whether the canned body has reached its end."""
+        return self.read_count >= len(self.chunks)
 
     def read(self, amt: int | None = None) -> bytes:
         """Return the next canned chunk, or an empty chunk at EOF."""
@@ -309,7 +341,7 @@ class HopWorker:
 
     def _run(self) -> None:
         """Call the action and keep whatever it returned or raised."""
-        assert self._action is not None
+        assert self._action is not None, "the worker must be given an action"
         try:
             self.value = self._action()
         except BaseException as exc:  # ruff: ignore[blind-except] - reported to the test
@@ -1347,11 +1379,14 @@ def test_open_reports_a_blocked_request_at_the_deadline(
 ) -> None:
     """A send the watchdog shuts down surfaces as the transfer's deadline."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
+    clock = GatedClock()
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
     released = threading.Event()
     sock = FakeSocket(release=released)
 
     def block_until_shutdown() -> None:
         """Block until the watchdog shuts the socket down, then fail."""
+        clock.started.set()
         if not released.wait(5.0):
             msg = "the watchdog never released the blocked send"
             raise AssertionError(msg)
@@ -1364,7 +1399,7 @@ def test_open_reports_a_blocked_request_at_the_deadline(
         "HTTPSConnection",
         HopFactory(hop),
     )
-    deadline = download_transport.monotonic() + 0.2
+    deadline = clock.deadline
 
     worker = HopWorker(released).run(
         lambda: download_transport._open(
@@ -1379,7 +1414,9 @@ def test_open_reports_a_blocked_request_at_the_deadline(
     assert not isinstance(error, TransientDownloadError), (
         "a send the deadline cut short must not be retried as a transport fault"
     )
-    assert "exceeded the transfer deadline" in str(error)
+    assert "exceeded the transfer deadline" in str(error), (
+        "a blocked send must report the transfer deadline"
+    )
     assert isinstance(error.__cause__, OSError), (
         "the socket failure the watchdog caused must be chained"
     )
@@ -1398,11 +1435,14 @@ def test_open_reports_a_blocked_response_at_the_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A response the watchdog cuts short surfaces as the deadline."""
+    clock = GatedClock()
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
     released = threading.Event()
     sock = FakeSocket(release=released)
 
     def block_until_shutdown() -> None:
         """Block until the watchdog shuts the socket down, then fail."""
+        clock.started.set()
         if not released.wait(5.0):
             msg = "the watchdog never released the blocked response"
             raise AssertionError(msg)
@@ -1415,7 +1455,7 @@ def test_open_reports_a_blocked_response_at_the_deadline(
         "HTTPSConnection",
         HopFactory(hop),
     )
-    deadline = download_transport.monotonic() + 0.2
+    deadline = clock.deadline
 
     worker = HopWorker(released).run(
         lambda: download_transport._open(
@@ -1426,12 +1466,20 @@ def test_open_reports_a_blocked_response_at_the_deadline(
     )
 
     error = worker.error
-    assert isinstance(error, ProverToolError)
-    assert not isinstance(error, TransientDownloadError)
-    assert "exceeded the transfer deadline" in str(error)
+    assert isinstance(error, ProverToolError), (
+        "a blocked response must fail the download"
+    )
+    assert not isinstance(error, TransientDownloadError), (
+        "a response the deadline cut short must not be retried"
+    )
+    assert "exceeded the transfer deadline" in str(error), (
+        "a blocked response must report the transfer deadline"
+    )
     assert hop.responses == 1, "the request is sent before the deadline"
     assert hop.closed, "the failed hop must close its connection"
-    assert sock.shutdowns == [socket.SHUT_RDWR]
+    assert sock.shutdowns == [socket.SHUT_RDWR], (
+        "the watchdog must shut the socket down at the deadline"
+    )
 
 
 def test_stream_reports_a_blocked_read_at_the_deadline(
@@ -1441,6 +1489,10 @@ def test_stream_reports_a_blocked_read_at_the_deadline(
 ) -> None:
     """A body read the watchdog cuts short is the transfer's deadline."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    clock = GatedClock()
+    # `download_stream` keeps the real clock, which shares `GatedClock`'s time
+    # base, so the body read and the watchdog agree on the deadline.
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
     released = threading.Event()
     sock = FakeSocket(release=released)
 
@@ -1450,6 +1502,7 @@ def test_stream_reports_a_blocked_read_at_the_deadline(
         def read(self, amt: int | None = None) -> bytes:
             """Block until the watchdog shuts the socket down, then fail."""
             del amt
+            clock.started.set()
             if not released.wait(5.0):
                 msg = "the watchdog never released the blocked read"
                 raise AssertionError(msg)
@@ -1462,7 +1515,7 @@ def test_stream_reports_a_blocked_read_at_the_deadline(
         "HTTPSConnection",
         HopFactory(hop),
     )
-    deadline = download_transport.monotonic() + 0.2
+    deadline = clock.deadline
     response, handle = download_transport._open(
         "https://example.test/asset.bin",
         DownloadLimits(),
@@ -1480,11 +1533,13 @@ def test_stream_reports_a_blocked_read_at_the_deadline(
         handle.close()
 
     error = worker.error
-    assert isinstance(error, ProverToolError)
+    assert isinstance(error, ProverToolError), "a blocked read must fail the download"
     assert not isinstance(error, TransientDownloadError), (
         "a read the deadline cut short must not be retried as a stream fault"
     )
-    assert "transfer deadline" in str(error)
+    assert "transfer deadline" in str(error), (
+        "a blocked read must report the transfer deadline"
+    )
     assert {
         "event": "download.failed",
         "reason": "deadline",
@@ -1522,7 +1577,9 @@ def test_open_reads_through_the_socket_it_captured_before_the_response(
     try:
         assert hop.sock is None, "the response must have cleared the raw socket"
         clock.advance(10.0)
-        assert response.read(7) == b"payload"
+        assert response.read(7) == b"payload", (
+            "the captured socket must still serve the body"
+        )
     finally:
         handle.close()
 
@@ -1863,3 +1920,77 @@ def test_download_pinned_reports_an_unreadable_cache_entry(
         download_pinned(asset, destination)
 
     assert not calls, "an unreadable cache entry must not trigger a download"
+
+
+@contextlib.contextmanager
+def closing_http_server(payload: bytes) -> cabc.Generator[int]:
+    """Serve one `Connection: close` response with `payload` over loopback.
+
+    Yields
+    ------
+    int
+        The loopback port the server listens on.
+    """
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        """Answer every GET with the scripted body and a close."""
+
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self) -> None:
+            """Send the payload and announce that the connection closes."""
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(
+            self,
+            format: str,  # ruff: ignore[builtin-argument-shadowing]
+            *args: object,
+        ) -> None:
+            """Silence the server's stderr access log."""
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+def test_deadline_response_reads_to_eof_after_the_connection_closes() -> None:
+    """A close-delimited body reaches EOF without re-arming a closed socket.
+
+    `http.client` releases the socket once the declared length is exhausted,
+    and a `Connection: close` response also closed it when the headers were
+    read. The next body read only observes EOF, so arming the captured socket
+    then would raise `OSError: Bad file descriptor` and the complete body would
+    be reported as a transient failure instead of reaching digest verification.
+    """
+    payload = b"verified"
+    with closing_http_server(payload) as port:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+        connection.connect()
+        sock = typ.cast("download_stream._TimeoutSocket", connection.sock)
+        connection.request("GET", "/", headers={})
+        raw = connection.getresponse()
+        response = download_stream._DeadlineResponse(
+            raw,
+            deadline=time.monotonic() + 60.0,
+            read_timeout_seconds=15.0,
+            sock=sock,
+        )
+        try:
+            chunks = []
+            while chunk := response.read(64 * 1024):
+                chunks.append(chunk)
+        finally:
+            connection.close()
+
+    assert b"".join(chunks) == payload, "the whole body must survive EOF"
+    assert raw.isclosed(), "the read that consumed the length closed the response"

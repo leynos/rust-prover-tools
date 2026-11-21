@@ -44,6 +44,10 @@ class ChunkResponse:
         del name
         return default
 
+    def isclosed(self) -> bool:
+        """Report whether the generated body has reached its end."""
+        return self._index >= len(self._chunks)
+
     def read(self, amt: int | None = None) -> bytes:
         """Return the next chunk, or an empty chunk at end of body."""
         del amt
@@ -64,6 +68,10 @@ class RedirectResponse:
         if name == "Location":
             return "https://example.test/next"
         return default
+
+    def isclosed(self) -> bool:
+        """Report a redirect as finished; it has no body to read."""
+        return True
 
     def read(self, amt: int | None = None) -> bytes:
         """Return an empty body; a redirect has none to copy."""
