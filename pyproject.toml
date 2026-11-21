@@ -97,6 +97,8 @@ extend-ignore = [
 "**/__init__.py" = ["non-empty-init-module"]
 "rust_prover_tools/cli.py" = ["too-many-arguments", "too-many-positional-arguments"]
 "**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
+# Shared test doubles: test code that pytest does not collect by name.
+"rust_prover_tools/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments"]
 "tests/steps/*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 
 [tool.ruff.lint.flake8-import-conventions]
