@@ -149,8 +149,9 @@ Feature modules should own workflow behaviour:
 - `rust_prover_tools.verus_log` for Verus transcript parsing and decisions.
   `syntax` owns the grammar and the releases it was qualified against, `model`
   holds the parsed facts, `reader` scans a merged capture, `expectation` reads
-  a negative-control region, and `decide` maps the facts to an outcome and run
-  mode.
+  a negative-control region, `decide` maps the facts to an outcome and run
+  mode, and `checks` holds a run to the counts, failure region and exit status
+  a qualification caller declared.
 - `rust_prover_tools.trust_audit` for the Rust trust audit. `vocabulary`
   defines one frozen record per prover and selects the records a caller asks
   for; `syntax` lexes Rust so trivia is never read as code; `structure`,

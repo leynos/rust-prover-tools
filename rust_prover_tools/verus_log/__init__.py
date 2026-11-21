@@ -13,6 +13,9 @@ into a decision:
   a negative control cannot pass by failing somewhere else.
 - :mod:`.decide` maps a parsed log, and any declared expectation, to an
   outcome and a run mode.
+- :mod:`.checks` holds a run to the counts, failure region and exit status a
+  qualification caller declared, which is what a seeded-mutant run needs: it is
+  *meant* to fail, so its outcome cannot be the pass criterion.
 
 The grammar is qualified against :data:`SUPPORTED_VERUS_VERSIONS`; the corpus
 under ``tests/fixtures/verus_logs`` records the runs it was read from.
@@ -26,6 +29,11 @@ True
 
 from __future__ import annotations
 
+from rust_prover_tools.verus_log.checks import (
+    LogExpectations,
+    LogVerdict,
+    check_verus_log,
+)
 from rust_prover_tools.verus_log.decide import (
     FULL_RUN,
     PARTIAL_RUN,
@@ -50,6 +58,8 @@ __all__ = (
     "PARTIAL_RUN",
     "SUPPORTED_VERUS_VERSIONS",
     "FailureExpectation",
+    "LogExpectations",
+    "LogVerdict",
     "VerusAnalysis",
     "VerusFailure",
     "VerusLog",
@@ -57,6 +67,7 @@ __all__ = (
     "VerusOutcome",
     "VerusSummary",
     "analyse_verus_log",
+    "check_verus_log",
     "from_verus_log_error",
     "parse_expectation",
     "parse_verus_log",

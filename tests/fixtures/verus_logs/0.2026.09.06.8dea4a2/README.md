@@ -54,7 +54,7 @@ where the later release prints
 ``error: `--verify-function` option requires
 `--verify-only-module` or `--verify-root` ``.
 The grammar accepts both spellings, and this corpus is why: before it was
-added, the capitalised line was skipped as chatter and the run was reported as
+added, the capitalized line was skipped as chatter and the run was reported as
 a tool error with no reason.
 
 ## Regenerating the corpus

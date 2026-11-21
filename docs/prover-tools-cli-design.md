@@ -595,6 +595,25 @@ record the new commit in each corpus README.
 The ticket names the components and requires a neutral result summary. The
 choices below are plan decisions: they meet the ticket without widening it.
 
+### Ticket requirements and plan decisions
+
+The ticket requires four components --- the Kani log parser, the Kani outcome
+decision, the Rust trust audit and Verus run analysis --- adopted from the
+named commit and working against the provers the shared installer installs,
+with no digest coupling. It excludes the evidence gate, approval, admission
+levels, the exception register, schema-bound records, provenance and structural
+digests.
+
+The plan decided the rest: that each component is a separate analysis command
+rather than an inline change to a runner; that outcomes use neutral names; that
+each corpus is version-indexed under `tests/fixtures/`; that the trust
+vocabulary is prover-defined and selectable; that the Verus parser is a new
+design rather than a port; that a `kani list`-driven manifest is deferred
+behind a user-written manifest; and that both analysis commands use the 0/1/2
+status contract. Each decision is recorded in the section that implements it.
+Each keeps the work inside the ticket's scope rather than widening it; none is
+a ticket requirement disguised as a preference.
+
 ### Separate analysis commands
 
 `kani exec`, `kani run` and `verus run` keep their live-stream, fail-fast,
@@ -822,6 +841,24 @@ newest capture. Their transcripts agree except for the driver's option-error
 spelling, which the grammar accepts in both forms; the older form is
 capitalized and was previously skipped as chatter, hiding the only diagnostic a
 refused invocation prints.
+
+### Qualification checks
+
+A seeded-mutant or wiring-probe run is _meant_ to fail, so an outcome of
+`errors` cannot be its pass criterion. `check_verus_log` answers the narrower
+question a qualification run asks: did the run report the counts, the failure
+and the exit status it was expected to? It takes a `LogExpectations` value with
+optional verified and error counts, an optional `FailureExpectation`, and an
+optional exit status, and returns a frozen `LogVerdict` carrying one sentence
+per disagreement. An undeclared fact is not checked, so a caller states only
+what it knows.
+
+The exit-status check exists because the two facts must tell the same story:
+Verus exits non-zero exactly when its summary reports errors. A clean summary
+captured beside a non-zero status lost something, and a failing summary beside
+status zero is a run nobody saw fail. That check replaces combobulate's private
+`_reports_summary` and `_fails_at_mutant` helpers with one reusable record; the
+project-specific declaration-region discovery those helpers used is not ported.
 
 ### Solver selection for Verus runs
 
