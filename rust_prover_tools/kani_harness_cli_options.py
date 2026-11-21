@@ -28,6 +28,7 @@ from rust_prover_tools.supervision import (
     JsonlSink,
     NullSink,
     SupervisionConfig,
+    jsonl_append_offset,
     require_distinct_destinations,
 )
 
@@ -257,16 +258,16 @@ def open_run_diagnostics(
     if human is not None:
         human.parent.mkdir(parents=True, exist_ok=True)
         human_sink = HumanSink(
-            stack.enter_context(human.open("a", encoding="utf-8")),
+            stack.enter_context(human.open("a", encoding="utf-8", newline="")),
             max_line_bytes=config.max_line_bytes,
         )
     jsonl = destinations.jsonl
     jsonl_sink: JsonlSink | NullSink = NullSink()
     if jsonl is not None:
         jsonl.parent.mkdir(parents=True, exist_ok=True)
-        existing = jsonl.stat().st_size if jsonl.exists() else 0
+        existing = jsonl_append_offset(jsonl)
         jsonl_sink = JsonlSink(
-            stack.enter_context(jsonl.open("a", encoding="utf-8")),
+            stack.enter_context(jsonl.open("a", encoding="utf-8", newline="")),
             path=jsonl,
             max_line_bytes=config.max_line_bytes,
             start_offset=existing,

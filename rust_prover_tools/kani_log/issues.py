@@ -11,7 +11,7 @@ from __future__ import annotations
 import enum
 import typing as typ
 
-__all__ = ("Issue", "IssueKind")
+__all__ = ("Issue", "IssueKind", "second_banner_issue", "structural_issue")
 
 
 class IssueKind(enum.StrEnum):
@@ -37,3 +37,16 @@ class Issue(typ.NamedTuple):
 
     kind: IssueKind
     message: str
+
+
+def structural_issue(message: str) -> Issue:
+    """Return a structural refusal."""
+    return Issue(IssueKind.STRUCTURAL, message)
+
+
+def second_banner_issue(line_number: int) -> Issue:
+    """Return the refusal for a second invocation in one capture."""
+    return Issue(
+        IssueKind.STRUCTURAL,
+        f"line {line_number}: a second Kani banner in one capture",
+    )

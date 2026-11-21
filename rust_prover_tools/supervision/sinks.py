@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import os
 import typing as typ
 
 from rust_prover_tools.supervision.formatting import (
@@ -43,6 +44,7 @@ __all__ = (
     "Sink",
     "bounded_text",
     "fit_record",
+    "jsonl_append_offset",
     "render_human",
     "utc_text",
 )
@@ -64,6 +66,42 @@ class Sink(typ.Protocol):
     def offset(self) -> int:
         """The number of bytes written so far."""
         ...
+
+
+def jsonl_append_offset(path: Path) -> int:
+    """Return the append offset, adding a line boundary when one is missing.
+
+    A destination that does not end with a newline would make the next record
+    share its last line. The inserted byte is included in the returned offset
+    so diagnostic references still name the next record exactly.
+
+    Parameters
+    ----------
+    path : Path
+        Existing JSONL destination, or a path that does not yet exist.
+
+    Returns
+    -------
+    int
+        Byte offset at which the next record begins.
+
+    Raises
+    ------
+    OSError
+        The destination exists but cannot be read or repaired.
+    """
+    if not path.exists():
+        return 0
+    size = path.stat().st_size
+    if size == 0:
+        return 0
+    with path.open("rb") as reader:
+        reader.seek(-1, os.SEEK_END)
+        if reader.read(1) == b"\n":
+            return size
+    with path.open("ab") as writer:
+        writer.write(b"\n")
+    return size + 1
 
 
 class JsonlSink:
@@ -100,6 +138,11 @@ class JsonlSink:
         if max_line_bytes < MIN_LINE_BYTES:
             msg = "max_line_bytes must be at least 64"
             raise ValueError(msg)
+        encoding = getattr(handle, "encoding", None)
+        normalised = None if encoding is None else encoding.lower().replace("_", "-")
+        if normalised not in {None, "utf-8", "utf8"}:
+            msg = f"JsonlSink requires a UTF-8 stream, not {encoding!r}"
+            raise ValueError(msg)
         self._handle = handle
         self.path = path
         self._limit = max_line_bytes
@@ -112,6 +155,12 @@ class JsonlSink:
         ----------
         record : dict[str, object]
             Record fields. The schema version is added when absent.
+
+        Notes
+        -----
+        The stream must be UTF-8 and must not translate newlines. Files opened
+        by this package use ``encoding="utf-8", newline=""``; a caller that
+        supplies another stream is responsible for the same contract.
         """
         payload = {
             "schema": JSONL_SCHEMA_VERSION,
@@ -120,7 +169,9 @@ class JsonlSink:
         line = fit_record(payload, self._limit)
         self._handle.write(line + "\n")
         self._handle.flush()
-        self._offset += len(line.encode("utf-8")) + 1
+        # The handle contract is UTF-8 without newline translation, so the
+        # emitted bytes are the encoded line plus one newline byte.
+        self._offset += len((line + "\n").encode("utf-8"))
 
     def flush(self) -> None:
         """Flush everything written so far."""
@@ -150,6 +201,9 @@ class HumanSink:
         max_line_bytes : int
             Bound for one line, in bytes.
         """
+        if max_line_bytes < MIN_LINE_BYTES:
+            msg = f"max_line_bytes must be at least {MIN_LINE_BYTES}"
+            raise ValueError(msg)
         self._handle = handle
         self._limit = max_line_bytes
         self._offset = 0

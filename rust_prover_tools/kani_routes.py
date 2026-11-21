@@ -169,6 +169,7 @@ def _prepare_snapshot(route: SnapshotRoute) -> PreparedRoute:
             argv=command.argv,
             cwd=command.cwd,
             env=command.env,
+            env_mode=command.env_mode,
         )
 
     return PreparedRoute(grammar=grammar, kind="snapshot", build=build)

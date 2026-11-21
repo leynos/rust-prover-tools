@@ -150,6 +150,17 @@ def _validate_cgroup(document: object, *, subject: str) -> None:
             decode_measurement(memory[field], subject=f"{subject}.{side}.{field}")
 
 
+def _require_schema(document: dict[str, object], subject: str) -> None:
+    """Require an exact integer schema version, not a bool or float."""
+    value = document.get("schema")
+    if not isinstance(value, int) or isinstance(value, bool):
+        msg = f"{subject} has a non-integer schema {value!r}"
+        raise EvidenceFormatError(msg)
+    if value != _SCHEMA_VERSION:
+        msg = f"{subject} has schema {value!r}"
+        raise EvidenceFormatError(msg)
+
+
 def decode_jsonl(text: str) -> tuple[dict[str, object], ...]:
     """Validate and return every record in one JSONL document.
 
@@ -186,9 +197,7 @@ def _decode_record(line: str, number: int) -> dict[str, object]:
     if not isinstance(document, dict):
         msg = f"record {number} is not an object"
         raise EvidenceFormatError(msg)
-    if document.get("schema") != _SCHEMA_VERSION:
-        msg = f"record {number} has schema {document.get('schema')!r}"
-        raise EvidenceFormatError(msg)
+    _require_schema(document, f"record {number}")
     kind = document.get("record")
     if not isinstance(kind, str) or kind not in JSONL_FIELDS:
         msg = f"record {number} has unknown kind {kind!r}"
@@ -239,9 +248,7 @@ def validate_report_document(document: object) -> None:
     if not isinstance(document, dict):
         msg = "the report is not an object"
         raise EvidenceFormatError(msg)
-    if document.get("schema") != _SCHEMA_VERSION:
-        msg = f"the report has schema {document.get('schema')!r}"
-        raise EvidenceFormatError(msg)
+    _require_schema(document, "the report")
     _require_exact(document, REPORT_FIELDS, subject="the report")
     _validate_expected(document["expected"])
     _validate_accounting(document["accounting"])

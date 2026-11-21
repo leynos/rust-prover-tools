@@ -257,3 +257,14 @@ def test_a_non_linux_host_is_refused() -> None:
         pytest.raises(NotImplementedError, match="Linux"),
     ):
         ensure_linux()
+
+
+def test_the_probe_refuses_a_non_linux_platform() -> None:
+    """Construction is where an unsupported platform is named."""
+    from unittest import mock
+
+    with (
+        mock.patch("sys.platform", "darwin"),
+        pytest.raises(NotImplementedError, match="Linux"),
+    ):
+        ProcfsResourceProbe(clock=VirtualClock())

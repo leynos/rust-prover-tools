@@ -214,6 +214,10 @@ class ProcfsResourceProbe:
     proc: Path | None = None
     meminfo: Path | None = None
 
+    def __post_init__(self) -> None:
+        """Refuse a platform whose process and memory interfaces do not exist."""
+        ensure_linux()
+
     def sample(
         self,
         spec: HarnessSpec,

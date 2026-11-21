@@ -211,7 +211,15 @@ def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> Non
 def _child_module(walk: _Walk, parent: _Module, item: ModItem) -> _Module:
     """Resolve one ``mod`` declaration to the module it introduces."""
     child = _module_file(parent, item)
-    directory = child.parent if child.name == "mod.rs" else child.parent / child.stem
+    # A `#[path]` module is located explicitly, so its children resolve beside
+    # the selected file, exactly as they do for mod.rs. A conventionally
+    # located non-mod-rs file keeps the directory named after its stem.
+    explicitly_located = item.path_attribute is not None
+    directory = (
+        child.parent
+        if child.name == "mod.rs" or explicitly_located
+        else child.parent / child.stem
+    )
     return _Module(
         path=child,
         module_path=(*parent.module_path, item.name),

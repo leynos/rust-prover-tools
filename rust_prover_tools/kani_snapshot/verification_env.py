@@ -33,7 +33,7 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
 
-__all__ = ("proof_environment",)
+__all__ = ("frozen_proof_environment", "proof_environment")
 
 
 def proof_environment(
@@ -91,3 +91,43 @@ def _text_environment(
 ) -> dict[str, str]:
     """Return only the inherited values that are real strings."""
     return {name: value for name, value in base.items() if isinstance(value, str)}
+
+
+def frozen_proof_environment(
+    runtime: SnapshotRuntime,
+    base: cabc.Mapping[str, str | UnsetType],
+    *,
+    cwd: Path,
+) -> dict[str, str]:
+    """Materialize the complete child environment qualified at preparation.
+
+    Parameters
+    ----------
+    runtime : SnapshotRuntime
+        Generation whose private homes and toolchain the proof must use.
+    base : Mapping[str, str | UnsetType]
+        Inherited environment, including any admission wrappers.
+    cwd : Path
+        Proof working directory whose Cargo configuration is discovered.
+
+    Returns
+    -------
+    dict[str, str]
+        Every inherited string value, with the proof overlay applied and every
+        removal marker dropped. The result is launched with
+        ``EnvMode.REPLACE`` so a host change after preparation cannot reach the
+        child.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the repository's Cargo configuration or the inherited
+        compiler selection cannot be proved safe.
+    """
+    frozen = {name: value for name, value in base.items() if isinstance(value, str)}
+    for name, value in proof_environment(runtime, base, cwd=cwd).items():
+        if isinstance(value, str):
+            frozen[name] = value
+        else:
+            frozen.pop(name, None)
+    return frozen

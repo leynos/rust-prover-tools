@@ -1,12 +1,11 @@
 """Walk one Kani log line by line with the grammar in ``syntax``.
 
-The reader records a
-:class:`~rust_prover_tools.kani_log.syntax.KaniLogError` reason wherever the
-next line is not one the grammar accounts for. Recording rather than raising
-lets a supervisor keep the facts it already has when a proof is stopped
-mid-report; `finish` raises the first reason, so a complete call still fails
-closed. The state machine is derived from Combobulate's reader at commit
-``9dd6e3c`` and is used under the ISC licence in ``ATTRIBUTION.md``.
+The reader records a ``KaniLogError`` reason wherever the next line is not
+one the grammar accounts for. Recording rather than raising lets a supervisor
+keep the facts it already has when a proof is stopped mid-report; `finish`
+raises the first reason, so a complete call still fails closed. The state
+machine is derived from Combobulate's reader at commit ``9dd6e3c`` and is used
+under the ISC licence in ``ATTRIBUTION.md``.
 
 Examples
 --------
@@ -20,8 +19,12 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.kani_log.blocks import BlockCursor, Issue, IssueKind
+from rust_prover_tools.kani_log.blocks import BlockCursor, Issue
 from rust_prover_tools.kani_log.budget import IssueBudget
+from rust_prover_tools.kani_log.issues import (
+    second_banner_issue as _second_banner,
+)
+from rust_prover_tools.kani_log.issues import structural_issue as _structural
 from rust_prover_tools.kani_log.model import (
     HarnessBlock,
     KaniLog,
@@ -199,6 +202,8 @@ class KaniLogReader:
             self._progress(text)
         elif (match := HARNESS_START.match(text)) is not None:
             self._begin_block(match["name"])
+        elif BANNER.match(text) is not None:
+            self._record((_second_banner(self._line_number),))
 
     def _block_line(self, text: str) -> None:
         """Consume a line inside a harness block."""
@@ -351,6 +356,8 @@ class KaniLogReader:
             ))
         elif (match := HARNESS_START.match(text)) is not None:
             self._begin_block(match["name"])
+        elif BANNER.match(text) is not None:
+            self._record((_second_banner(self._line_number),))
 
     def _begin_block(self, name: str) -> None:
         """Start a new harness block at ``name``."""
@@ -391,8 +398,3 @@ class KaniLogReader:
     def _progress(self, text: str) -> None:
         """Remember the last structurally recognised report line."""
         self._last_progress = text
-
-
-def _structural(message: str) -> Issue:
-    """Wrap a structural refusal as a classified issue."""
-    return Issue(IssueKind.STRUCTURAL, message)

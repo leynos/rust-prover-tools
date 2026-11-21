@@ -191,8 +191,12 @@ def test_the_snapshot_route_resolves_one_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two harness commands share one activation read and one environment."""
+    from cuprum.context import EnvMode
+
     options, hooks = installed_snapshot
     from rust_prover_tools.kani_snapshot import run as snapshot_run
+
+    monkeypatch.setenv("RPT_FROZEN_HOST", "1")
 
     counted = mock.Mock(wraps=snapshot_run.check_active_snapshot)
     monkeypatch.setattr(snapshot_run, "check_active_snapshot", counted)
@@ -218,6 +222,11 @@ def test_the_snapshot_route_resolves_one_generation(
     assert counted.call_count == 1, "the active pointer was read more than once"
     assert first.argv[0] == second.argv[0] == str(prepared.runtime.launcher)
     assert first.env is second.env, "the proof environment was rebuilt"
+    assert first.env_mode is EnvMode.REPLACE
+    assert first.env is not None
+    assert first.env["RPT_FROZEN_HOST"] == "1"
+    monkeypatch.setenv("RPT_LATER_HOST", "2")
+    assert "RPT_LATER_HOST" not in first.env
 
 
 def test_an_explicit_empty_environment_is_not_replaced(

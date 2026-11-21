@@ -21,6 +21,8 @@ import os
 import typing as typ
 from pathlib import Path
 
+from cuprum.context import EnvMode
+
 from rust_prover_tools.commands import (
     CommandResult,
     CommandSpec,
@@ -36,7 +38,9 @@ from rust_prover_tools.kani_snapshot.install import (
     InstallOptions,
     check_active_snapshot,
 )
-from rust_prover_tools.kani_snapshot.verification_env import proof_environment
+from rust_prover_tools.kani_snapshot.verification_env import (
+    frozen_proof_environment,
+)
 from rust_prover_tools.observability import operation_span
 
 if typ.TYPE_CHECKING:
@@ -153,6 +157,7 @@ class QualifiedSnapshotProof:
             (*self.base_argv, *arguments),
             cwd=self.cwd,
             env=self.environment,
+            env_mode=EnvMode.REPLACE,
             echo=output.echo,
             capture=output.capture,
             on_line=output.on_line,
@@ -218,7 +223,7 @@ def prepare_snapshot_proof(
     return QualifiedSnapshotProof(
         runtime=runtime,
         cwd=working_directory,
-        environment=proof_environment(
+        environment=frozen_proof_environment(
             runtime,
             base,
             cwd=working_directory,

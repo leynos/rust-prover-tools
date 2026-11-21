@@ -16,6 +16,7 @@ from rust_prover_tools.supervision import (
     JsonlSink,
     NullSink,
     SupervisionConfig,
+    jsonl_append_offset,
 )
 
 if typ.TYPE_CHECKING:
@@ -72,7 +73,7 @@ def _human_sink(
     if path is None:
         return NullSink()
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = stack.enter_context(path.open("a", encoding="utf-8"))
+    handle = stack.enter_context(path.open("a", encoding="utf-8", newline=""))
     return HumanSink(handle, max_line_bytes=config.max_line_bytes)
 
 
@@ -85,8 +86,8 @@ def _jsonl_sink(
     if path is None:
         return NullSink()
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = path.stat().st_size if path.exists() else 0
-    handle = stack.enter_context(path.open("a", encoding="utf-8"))
+    existing = jsonl_append_offset(path)
+    handle = stack.enter_context(path.open("a", encoding="utf-8", newline=""))
     return JsonlSink(
         handle,
         path=path,

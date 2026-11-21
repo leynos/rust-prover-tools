@@ -32,6 +32,7 @@ from rust_prover_tools.supervision import (
     bounded_text,
     decode_jsonl,
     decode_measurement,
+    fit_record,
     render_table,
     report_document,
     utc_text,
@@ -419,8 +420,8 @@ def test_the_table_names_every_result_and_the_limits() -> None:
     assert any("outcome=passed" in line for line in lines)
 
 
-def test_open_diagnostics_keeps_appended_offsets(tmp_path: Path) -> None:
-    """The library's own append path starts its offset at the file size."""
+def test_open_diagnostics_starts_at_a_line_boundary(tmp_path: Path) -> None:
+    """A file without a final newline gains one before the next record."""
     from rust_prover_tools.kani_diagnostics import open_diagnostics
 
     path = tmp_path / "evidence.jsonl"
@@ -431,7 +432,8 @@ def test_open_diagnostics_keeps_appended_offsets(tmp_path: Path) -> None:
         reference = diagnostics.emit(_record())
 
     assert reference is not None
-    assert reference.offset == 100
+    assert reference.offset == 101
+    assert path.read_text(encoding="utf-8").splitlines()[0] == "x" * 100
 
 
 def test_a_run_finish_record_with_malformed_accounting_is_refused() -> None:
@@ -464,3 +466,64 @@ def test_the_fallback_keeps_the_original_kind_when_it_fits() -> None:
     assert len(handle.getvalue().encode("utf-8")) <= 100
     if record["record"] == "truncated":
         assert record.get("original_kind") == "run-start"
+
+
+def test_truncation_preserves_the_record_kind() -> None:
+    """A shortened record keeps the field the reader dispatches on."""
+    payload: dict[str, object] = {
+        "schema": 1,
+        "record": "run-start",
+        "run_id": "r" * 16,
+        "packages": [f"package-{index:04d}" for index in range(100)],
+    }
+
+    line = fit_record(payload, 2200)
+
+    decoded = json.loads(line)
+    assert decoded["record"] == "run-start"
+    assert len(line.encode("utf-8")) <= 2200
+
+
+@pytest.mark.parametrize("schema", [True, 1.0, "1", None])
+def test_a_jsonl_schema_must_be_an_exact_integer(schema: object) -> None:
+    """A bool or float comparing equal to 1 is not the versioned schema."""
+    sink = MemorySink()
+    sink.write(_record(schema=schema))
+
+    with pytest.raises(EvidenceFormatError):
+        decode_jsonl(sink.text)
+
+
+def test_a_report_schema_must_be_an_exact_integer() -> None:
+    """The report reader applies the same strict version check."""
+    document = report_document(_report())
+    document["schema"] = True
+
+    with pytest.raises(EvidenceFormatError):
+        validate_report_document(document)
+
+
+def test_a_human_budget_below_the_marker_is_refused() -> None:
+    """A human line cannot be bounded below its truncation marker."""
+    with pytest.raises(ValueError, match="at least"):
+        HumanSink(io.StringIO(), max_line_bytes=1)
+
+
+def test_a_non_utf8_jsonl_stream_is_refused() -> None:
+    """Offsets are byte offsets only for the documented UTF-8 contract."""
+    handle = io.TextIOWrapper(io.BytesIO(), encoding="utf-16")
+
+    with pytest.raises(ValueError, match="UTF-8"):
+        JsonlSink(handle)
+
+
+def test_jsonl_append_offset_adds_a_missing_newline(tmp_path: Path) -> None:
+    """A destination without a final newline gains one before appending."""
+    from rust_prover_tools.supervision import jsonl_append_offset
+
+    path = tmp_path / "evidence.jsonl"
+    path.write_text("x", encoding="utf-8")
+
+    assert jsonl_append_offset(path) == 2
+    assert path.read_bytes() == b"x\n"
+    assert jsonl_append_offset(path) == 2

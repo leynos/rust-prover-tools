@@ -192,3 +192,21 @@ def test_retained_issues_are_bounded_without_losing_the_report() -> None:
     assert facts.selection_records == ("harnesses::verified",)
     with pytest.raises(KaniLogError, match="unrecognised line"):
         reader.finish(0)
+
+
+def test_a_second_banner_after_the_summary_is_refused() -> None:
+    """A capture cannot contain a second, partial invocation."""
+    text = "\n".join((
+        *lines_of("verified"),
+        "Kani Rust Verifier 0.68.0 (cargo plugin)",
+    ))
+
+    with pytest.raises(KaniLogError, match="second Kani banner"):
+        parse(text)
+
+
+def test_a_unicode_harness_name_is_selected() -> None:
+    """Kani prints a Unicode pretty name unchanged."""
+    text = log_text("verified").replace("harnesses::verified", "proofs::vérifie")
+
+    assert parse(text).harnesses == ("proofs::vérifie",)

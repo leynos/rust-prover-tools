@@ -226,15 +226,23 @@ class SupervisedRun:
                 finished_at=ledger.finished_at,
             )
         )
-        self.environment.diagnostics.emit(
-            run_finish_record(
-                run_id=self.run_id,
-                timestamp=ledger.finished_at,
-                report=report,
+        diagnostic_error: Exception | None = None
+        try:
+            self.environment.diagnostics.emit(
+                run_finish_record(
+                    run_id=self.run_id,
+                    timestamp=ledger.finished_at,
+                    report=report,
+                )
             )
-        )
-        self.environment.diagnostics.flush()
+            self.environment.diagnostics.flush()
+        except (OSError, ValueError) as error:
+            # The report destination is independent of the live sinks. Publish
+            # the completed report first, then surface the evidence failure.
+            diagnostic_error = error
         self._write_report(report)
+        if diagnostic_error is not None:
+            raise diagnostic_error
         return report
 
     def _write_report(self, report: RunReport) -> None:

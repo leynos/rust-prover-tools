@@ -9,7 +9,10 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
-from rust_prover_tools.kani_snapshot.verification_env import proof_environment
+from rust_prover_tools.kani_snapshot.verification_env import (
+    frozen_proof_environment,
+    proof_environment,
+)
 from tests.kani_snapshot_bundles import TOOLCHAIN, VERSION
 from tests.kani_snapshot_fixtures import make_pin
 
@@ -148,3 +151,24 @@ def test_proof_environment_rejects_a_malformed_admission_wrapper(
         proof_environment(
             _runtime(tmp_path), _base(tmp_path, RUSTC_WRAPPER=""), cwd=cwd
         )
+
+
+def test_a_frozen_environment_keeps_host_values_and_drops_markers(
+    tmp_path: Path,
+) -> None:
+    """The launch mapping is complete, so no host value arrives later."""
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    base = _base(
+        tmp_path,
+        RPT_HOST_ONLY="kept",
+        RUSTC="/host/rustc",
+        RUSTC_WRAPPER="/usr/bin/build-limits-rustc",
+    )
+
+    env = frozen_proof_environment(_runtime(tmp_path), base, cwd=cwd)
+
+    assert env["RPT_HOST_ONLY"] == "kept"
+    assert env["RUSTC_WRAPPER"] == "/usr/bin/build-limits-rustc"
+    assert "RUSTC" not in env, "a removal marker leaked into the launch mapping"
+    assert all(isinstance(value, str) for value in env.values())

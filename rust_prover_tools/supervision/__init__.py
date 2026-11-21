@@ -124,6 +124,7 @@ from rust_prover_tools.supervision.sinks import (
     HumanSink,
     JsonlSink,
     NullSink,
+    jsonl_append_offset,
 )
 from rust_prover_tools.supervision.watchdog import (
     SampleVerdict,
@@ -190,6 +191,7 @@ __all__ = [
     "ensure_linux",
     "fit_record",
     "identity_key",
+    "jsonl_append_offset",
     "new_run_id",
     "read_meminfo",
     "render_human",

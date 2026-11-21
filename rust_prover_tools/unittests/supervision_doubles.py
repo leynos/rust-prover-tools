@@ -208,6 +208,7 @@ class ScriptedLauncher:
         on_line: cabc.Callable[[object], None],
     ) -> LaunchResult:
         """Emit the scripted output and settle, or wait to be stopped."""
+        started = self.clock.monotonic() if self.clock is not None else 0.0
         for index, (stream, text) in enumerate(script.lines):
             if self.clock is not None:
                 self.clock.advance(self.seconds_per_line)
@@ -218,7 +219,11 @@ class ScriptedLauncher:
                     timestamp_utc=(
                         self.clock.now() if self.clock is not None else _EPOCH
                     ),
-                    elapsed_seconds=float(index),
+                    elapsed_seconds=(
+                        self.clock.monotonic() - started
+                        if self.clock is not None
+                        else float(index)
+                    ),
                 )
             )
         if script.block:

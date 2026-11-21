@@ -5,7 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS (implementation complete; review and delivery pending)
+Status: IN PROGRESS (implementation complete; draft PR #266 open, review in
+progress)
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -942,9 +943,10 @@ Quality criteria:
 All discovery, parsing, and reporting steps are read-only or write to explicit
 paths. A run writes its JSONL append-only and its report atomically (write a
 temporary file beside the destination and rename it). Re-running the same
-command overwrites the report and truncates the JSONL at the start of a new
-run. Reverting a milestone means reverting its files together; no persistent
-state or migration is involved.
+command overwrites the report and appends to the JSONL, so earlier records
+remain and diagnostic offsets continue from the existing file size. Reverting a
+milestone means reverting its files together; no persistent state or migration
+is involved.
 
 ## Artefacts and notes
 

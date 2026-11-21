@@ -418,3 +418,74 @@ def test_a_comment_inside_cfg_kani_stays_unconditional(tmp_path: Path) -> None:
     (proof,) = collect_proofs(root, tmp_path)
 
     assert not proof.conditional
+
+
+def test_a_hashed_raw_path_value_is_accepted(tmp_path: Path) -> None:
+    """`r#"..."#` is a Rust string literal with hashes around the quotes."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[path = r#"alternate.rs"#]\nmod proofs;\n', encoding="utf-8")
+    (tmp_path / "src" / "alternate.rs").write_text(
+        "#[kani::proof]\nfn via_raw() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::via_raw"
+    ]
+
+
+def test_an_unsupported_path_value_is_refused(tmp_path: Path) -> None:
+    """A byte string cannot name a module, so it is not silently ignored."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[path = b"alternate.rs"]\nmod proofs;\n', encoding="utf-8")
+
+    with pytest.raises(InventoryDiscoveryError, match="string literal"):
+        collect_proofs(root, tmp_path)
+
+
+def test_whitespace_between_attribute_tokens_is_tolerated(
+    tmp_path: Path,
+) -> None:
+    """`# [ ... ]` is an attribute, while an inner group is not code."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "# ! [kani::proof]\nfn inner() {}\n# [kani::proof]\nfn outer() {}\n",
+        encoding="utf-8",
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["outer"]
+
+
+def test_a_proof_nested_in_cfg_attr_is_discovered(tmp_path: Path) -> None:
+    """`cfg_attr` expands its attribute when the predicate holds."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[cfg_attr(kani, kani::proof)]\nfn gated() {}\n"
+        '#[cfg_attr(feature = "extra", kani::proof)]\nfn later() {}\n',
+        encoding="utf-8",
+    )
+
+    assert [
+        (proof.pretty_name, proof.conditional)
+        for proof in collect_proofs(root, tmp_path)
+    ] == [("gated", False), ("later", True)]
+
+
+def test_a_path_module_resolves_children_beside_its_file(
+    tmp_path: Path,
+) -> None:
+    """`mod child;` in an explicitly located file resolves beside that file."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[path = "alternate.rs"]\nmod proofs;\n', encoding="utf-8")
+    (tmp_path / "src" / "alternate.rs").write_text("mod child;\n", encoding="utf-8")
+    (tmp_path / "src" / "child.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::child::h"
+    ]

@@ -114,6 +114,13 @@ class BlockCursor:
                     f"check {identifier!r} has unknown status {values['Status']!r}",
                 )
             ]
+        if any(item.identifier == identifier for item in self.block.properties):
+            return [
+                Issue(
+                    IssueKind.STRUCTURAL,
+                    f"check {identifier!r} is reported more than once",
+                )
+            ]
         self.block.properties.append(
             PropertyResult(
                 identifier=identifier,
@@ -299,11 +306,11 @@ class BlockCursor:
     def _reconcile_failures(self) -> list[Issue]:
         """Check the failure explanations against the failure count.
 
-        Every failed check is explained once, and the explanation carries the
-        source location Kani attributes it to. Requiring both makes deleting a
-        ``Failed Checks:`` line, or the ``File:`` line beneath it, a structural
-        error rather than a quiet loss of the one fact a record could not
-        invent.
+        Every failed check is explained once. A ``File:`` line is retained
+        when Kani prints one, but a failure without a location is accepted:
+        Kani omits the location when its trace or source fields are absent.
+        Requiring a location would reject valid failed proofs; the count still
+        makes deleting a ``Failed Checks:`` line detectable.
         """
         name = self.block.name
         reasons: list[Issue] = []

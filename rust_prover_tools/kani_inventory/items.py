@@ -12,11 +12,19 @@ everything nested inside it as conditional.
 
 from __future__ import annotations
 
-import ast
 import dataclasses as dc
 import re
 
+from rust_prover_tools.kani_inventory.attribute_values import (
+    DEPTH_DELTAS,
+    PROOF_ATTRIBUTES,
+    attribute_name,
+    cfg_attr_facts,
+    normalise,
+    path_value,
+)
 from rust_prover_tools.kani_inventory.masking import Identifier, identifier
+from rust_prover_tools.kani_inventory.models import InventoryDiscoveryError
 
 __all__ = (
     "InlineModItem",
@@ -30,14 +38,13 @@ __all__ = (
 #: A Rust identifier start is any Unicode letter or an underscore; the rest
 #: are Unicode word characters. Raw identifiers are normalised separately.
 _IDENTIFIER = re.compile(r"[^\W\d]\w*")
-_PROOF_ATTRIBUTES = frozenset({"kani::proof", "kani::proof_for_contract"})
-_DEPTH_DELTAS = {
-    "{": (1, 0, 0),
-    "}": (-1, 0, 0),
-    "(": (0, 1, 0),
-    ")": (0, -1, 0),
-    "[": (0, 0, 1),
-    "]": (0, 0, -1),
+_ESCAPES = {
+    "\\": "\\",
+    '"': '"',
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "0": "\0",
 }
 
 
@@ -110,17 +117,29 @@ class _AttributeFacts:
 
     def record(self, original: str, masked: str) -> None:
         """Record one attribute's facts, ignoring inner attributes."""
-        name, _ = _attribute_name(masked)
-        if name in _PROOF_ATTRIBUTES:
+        name, _ = attribute_name(masked)
+        if name in PROOF_ATTRIBUTES:
             self.proof.append(name)
         if name == "path":
             # Only `#[path = "..."]` names a module file; a string-valued
             # attribute such as `#[doc = "..."]` must not redirect discovery.
-            value = _path_value(original)
-            if value is not None:
-                self.path = value
-        if name == "cfg" and _normalise(masked) != "cfg(kani)":
+            value = path_value(original)
+            if value is None:
+                msg = (
+                    "the #[path] attribute "
+                    f"{original.strip()!r} is not a supported string literal"
+                )
+                raise InventoryDiscoveryError(msg)
+            self.path = value
+        if name == "cfg" and normalise(masked) != "cfg(kani)":
             self.conditional = True
+        if name == "cfg_attr":
+            nested = cfg_attr_facts(masked)
+            if nested is not None:
+                proofs, conditional = nested
+                self.proof.extend(proofs)
+                if conditional:
+                    self.conditional = True
 
 
 def parse_level(
@@ -264,8 +283,11 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
     facts = _AttributeFacts()
     masked = source.masked
     while position < len(masked) and masked.startswith("#", position):
-        inner = masked.startswith("#!", position)
-        bracket = position + (2 if inner else 1)
+        inner = False
+        bracket = _skip_space(masked, position + 1)
+        if bracket < len(masked) and masked[bracket] == "!":
+            inner = True
+            bracket = _skip_space(masked, bracket + 1)
         if bracket >= len(masked) or masked[bracket] != "[":
             break
         end = _matching(masked, bracket, "[", "]")
@@ -276,43 +298,6 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
             )
         position = _skip_space(masked, end)
     return _Attributes(tuple(facts.proof), facts.path, facts.conditional), position
-
-
-def _normalise(content: str) -> str:
-    """Remove whitespace so equivalent attribute spellings compare equal."""
-    return re.sub(r"\s+", "", content)
-
-
-def _attribute_name(content: str) -> tuple[str, str]:
-    """Return an attribute's path and its argument text.
-
-    Rust attributes are token sequences, not fixed spellings: whitespace may
-    surround ``::`` and a path may carry arguments. The path is everything
-    before the first top-level ``(`` or ``=``, with all whitespace removed.
-    """
-    depth = 0
-    for index, char in enumerate(content):
-        if char == "(" and depth == 0:
-            return _normalise(content[:index]), content[index:]
-        if char == "=" and depth == 0:
-            return _normalise(content[:index]), content[index:]
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth = max(0, depth - 1)
-    return _normalise(content), ""
-
-
-def _path_value(content: str) -> str | None:
-    """Extract the string value of a ``path = ...`` attribute."""
-    if "=" not in content:
-        return None
-    _, _, value = content.partition("=")
-    try:
-        parsed = ast.literal_eval(value.strip())
-    except (SyntaxError, ValueError):  # fmt: skip
-        return None
-    return parsed if isinstance(parsed, str) else None
 
 
 def _starts_string(masked: str, position: int) -> bool:
@@ -361,7 +346,7 @@ def _find_top_level(masked: str, position: int) -> tuple[int, str]:
         char = masked[position]
         if braces == parens == brackets == 0 and char in {";", "{"}:
             return position, char
-        delta = _DEPTH_DELTAS.get(char)
+        delta = DEPTH_DELTAS.get(char)
         if delta is not None:
             braces = max(0, braces + delta[0])
             parens = max(0, parens + delta[1])

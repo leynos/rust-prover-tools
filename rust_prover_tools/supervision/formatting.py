@@ -101,8 +101,12 @@ def fit_record(payload: dict[str, object], limit: int) -> str:
     line = json.dumps(payload, ensure_ascii=False)
     if len(line.encode("utf-8")) <= limit:
         return line
+    structural = {"schema", "record", "marker"}
     for budget in (4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 0):
-        candidate = typ.cast("dict[str, object]", _bound_strings(payload, budget))
+        candidate = {
+            key: value if key in structural else _bound_strings(value, budget)
+            for key, value in payload.items()
+        }
         line = json.dumps(candidate, ensure_ascii=False)
         if len(line.encode("utf-8")) <= limit:
             return line

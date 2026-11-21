@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
+import json
 import typing as typ
 
 import pytest
@@ -14,12 +15,15 @@ from rust_prover_tools.supervision import (
     HarnessSpec,
     Measurement,
     MemorySink,
+    NullSink,
     OutputLine,
     ResourceSample,
     RunOutcome,
     StopReason,
     run_supervised,
+    validate_report_document,
 )
+from rust_prover_tools.supervision.config import DiagnosticSinks
 from rust_prover_tools.supervision.run_finalize import ReportInput, assemble_report
 from rust_prover_tools.unittests.supervision_doubles import (
     Script,
@@ -33,6 +37,7 @@ from rust_prover_tools.unittests.supervision_doubles import (
 
 if typ.TYPE_CHECKING:
     import datetime as dt
+    from pathlib import Path
 
     from rust_prover_tools.supervision import (
         AttemptEvidence,
@@ -486,3 +491,50 @@ async def test_a_heartbeat_prefers_recognised_progress_over_later_noise() -> Non
 
     heartbeats = [record for record in jsonl.records if record["record"] == "heartbeat"]
     assert heartbeats[-1]["last_progress"] == "VERIFICATION: SUCCESSFUL"
+
+
+class _FailOnRunFinish:
+    """A JSONL sink that fails only when the run closes."""
+
+    @property
+    def offset(self) -> int:
+        """Report no bytes, because this sink stores nothing."""
+        return 0
+
+    def write(self, record: dict[str, object]) -> None:
+        """Refuse the closing record, as a full disk would."""
+        if record.get("record") == "run-finish":
+            msg = "the evidence destination is full"
+            raise OSError(msg)
+
+    def flush(self) -> None:
+        """Do nothing; writes already flush or fail synchronously."""
+
+
+def test_a_diagnostic_failure_still_publishes_the_report(
+    tmp_path: Path,
+) -> None:
+    """The report destination does not depend on the live sinks."""
+    asyncio.run(_diagnostic_failure_scenario(tmp_path))
+
+
+async def _diagnostic_failure_scenario(tmp_path: Path) -> None:
+    """Run one passing harness whose JSONL sink fails at finalization."""
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(script=Script(exit_code=0))
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(human=NullSink(), jsonl=_FailOnRunFinish()),
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=10.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+
+    with pytest.raises(OSError, match="full"):
+        await run_supervised((spec(),), config, environment)
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)

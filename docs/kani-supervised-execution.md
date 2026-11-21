@@ -103,13 +103,16 @@ untouched because they are code.
 
 The scan understands exactly what discovery needs:
 
-- `#[kani::proof]` and `#[kani::proof_for_contract]`;
+- `#[kani::proof]` and `#[kani::proof_for_contract]`, directly or through a
+  `cfg_attr` that is conditional unless its predicate is exactly `kani`;
 - inline modules, which extend the module path;
 - `mod name;` declarations, resolved by the Rust 2018 rules: a module declared
   in `lib.rs`, `main.rs`, or a `mod.rs` file looks beside that file, and a
   module declared in `foo.rs` looks under `foo/`;
-- `#[path = "..."]` registration, resolved against the declaring file's
-  directory (and, inside an inline module, under the inline module's name);
+- `#[path = "..."]` registration with an ordinary, raw, or hashed raw string
+  value, resolved against the declaring file's directory (and, inside an inline
+  module, under the inline module's name); a module loaded through it resolves
+  its own children beside the selected file;
 - `cfg` attributes, which are recorded but never evaluated.
 
 A proof gated by `cfg(kani)` is the normal Kani activation and is listed
