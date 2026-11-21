@@ -372,9 +372,11 @@ def _diagnostics(
     jsonl_sink: JsonlSink | NullSink = NullSink()
     if jsonl is not None:
         jsonl.parent.mkdir(parents=True, exist_ok=True)
+        existing = jsonl.stat().st_size if jsonl.exists() else 0
         jsonl_sink = JsonlSink(
             stack.enter_context(jsonl.open("a", encoding="utf-8")),
             path=jsonl,
             max_line_bytes=config.max_line_bytes,
+            start_offset=existing,
         )
     return Diagnostics(human=human_sink, jsonl=jsonl_sink)

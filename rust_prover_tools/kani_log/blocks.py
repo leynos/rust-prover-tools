@@ -21,9 +21,9 @@ Examples
 
 from __future__ import annotations
 
-import enum
 import typing as typ
 
+from rust_prover_tools.kani_log.issues import Issue, IssueKind
 from rust_prover_tools.kani_log.model import HarnessBlock
 from rust_prover_tools.kani_log.syntax import (
     CHECK_FIELDS,
@@ -38,31 +38,6 @@ __all__ = ("BlockCursor", "Issue", "IssueKind")
 
 if typ.TYPE_CHECKING:
     import re
-
-
-class IssueKind(enum.StrEnum):
-    """The class of a refusal the reader records."""
-
-    STRUCTURAL = "structural"
-    CONTRADICTION = "contradiction"
-    TRUNCATION = "truncation"
-    SUMMARY = "summary"
-
-
-class Issue(typ.NamedTuple):
-    """One recorded refusal, classified by the evidence it concerns.
-
-    Attributes
-    ----------
-    kind : IssueKind
-        Whether the refusal concerns report structure, a contradictory count,
-        or a truncated report.
-    message : str
-        Sentence a log producer can act on.
-    """
-
-    kind: IssueKind
-    message: str
 
 
 class BlockCursor:
@@ -290,7 +265,21 @@ class BlockCursor:
                     f"failures but lists {failed}",
                 )
             )
+        if self._unexpected_failure(failed):
+            reasons.append(
+                Issue(
+                    IssueKind.CONTRADICTION,
+                    f"the block for {name!r} reports SUCCESSFUL but lists "
+                    f"{failed} failed check(s)",
+                )
+            )
         return reasons
+
+    def _unexpected_failure(self, failed: int) -> bool:
+        """Whether a successful verdict contradicts a non-panic failure."""
+        if self.block.verdict != "SUCCESSFUL":
+            return False
+        return bool(failed) and not self.block.panics_as_expected
 
     def _reconcile_failures(self) -> list[Issue]:
         """Check the failure explanations against the failure count.
@@ -380,9 +369,11 @@ class BlockCursor:
 
     def _reconcile_other(self) -> list[Issue]:
         """Check the parenthesized other-result count against the checks."""
-        status = OTHER_STATUS.get(typ.cast("str", self.block.other_kind), "")
+        if self.block.other_kind is None:
+            return []
+        status = OTHER_STATUS.get(self.block.other_kind, "")
         observed = sum(1 for item in self.block.checks if item.status == status)
-        if self.block.other_count not in {0, observed}:
+        if self.block.other_count != observed:
             return [
                 Issue(
                     IssueKind.CONTRADICTION,

@@ -49,6 +49,15 @@ from rust_prover_tools.supervision.config import (
     DiagnosticSinks,
     SupervisionConfig,
 )
+from rust_prover_tools.supervision.formatting import (
+    JSONL_SCHEMA_VERSION,
+    MIN_LINE_BYTES,
+    TRUNCATION_MARKER,
+    bounded_text,
+    fit_record,
+    utc_text,
+)
+from rust_prover_tools.supervision.human import render_human
 from rust_prover_tools.supervision.launcher import (
     CommandBuilder,
     CuprumHarnessLauncher,
@@ -111,13 +120,10 @@ from rust_prover_tools.supervision.schema import (
     validate_report_document,
 )
 from rust_prover_tools.supervision.sinks import (
-    JSONL_SCHEMA_VERSION,
     Diagnostics,
     HumanSink,
     JsonlSink,
     NullSink,
-    bounded_text,
-    utc_text,
 )
 from rust_prover_tools.supervision.watchdog import (
     SampleVerdict,
@@ -132,9 +138,11 @@ __all__ = [
     "DEFAULT_WATCHDOG_THRESHOLD_BYTES",
     "JSONL_FIELDS",
     "JSONL_SCHEMA_VERSION",
+    "MIN_LINE_BYTES",
     "REPORT_FIELDS",
     "REPORT_NOTES",
     "REPORT_SCHEMA_VERSION",
+    "TRUNCATION_MARKER",
     "AsyncSleeper",
     "AttemptEvidence",
     "AttemptOutcome",
@@ -181,9 +189,11 @@ __all__ = [
     "decode_jsonl",
     "decode_measurement",
     "ensure_linux",
+    "fit_record",
     "identity_key",
     "new_run_id",
     "read_meminfo",
+    "render_human",
     "render_table",
     "report_document",
     "run_supervised",

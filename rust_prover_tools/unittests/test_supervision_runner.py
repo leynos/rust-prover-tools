@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import typing as typ
+
+import pytest
 
 from rust_prover_tools.supervision import (
     Diagnostics,
     ExecutionStatus,
+    HarnessSpec,
     Measurement,
     MemorySink,
+    ResourceSample,
     RunOutcome,
     StopReason,
     run_supervised,
@@ -20,8 +25,13 @@ from rust_prover_tools.unittests.supervision_doubles import (
     ScriptedProbe,
     StepInterrupts,
     VirtualClock,
+    VirtualSleeper,
     spec,
 )
+
+if typ.TYPE_CHECKING:
+    import datetime as dt
+
 from rust_prover_tools.unittests.supervision_runner_support import (
     async_test as _async_test,
 )
@@ -235,3 +245,87 @@ async def test_a_launch_failure_is_an_error_not_a_proof_failure() -> None:
 
     assert report.results[0].stop_reason is StopReason.LAUNCH_FAILED
     assert report.results[0].status is ExecutionStatus.ERROR
+
+
+class _ProbeFailedError(RuntimeError):
+    """The test probe failed while sampling."""
+
+    def __init__(self) -> None:
+        """Record the failure."""
+        super().__init__("probe failed")
+
+
+class _ExplodingProbe:
+    """A probe whose first sample fails, to prove the monitor surfaces it."""
+
+    def sample(
+        self,
+        spec: HarnessSpec,
+        *,
+        group_id: int | None,
+        started_at: dt.datetime,
+        started_monotonic: float,
+    ) -> ResourceSample:
+        """Raise instead of measuring."""
+        del spec, group_id, started_at, started_monotonic
+        raise _ProbeFailedError
+
+
+@_async_test
+async def test_the_monitor_samples_at_the_configured_interval() -> None:
+    """Sample and heartbeat thresholds are elapsed times, not sleep durations."""
+    clock = VirtualClock()
+    sleeper = VirtualSleeper(clock)
+    probe = ScriptedProbe()
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True), clock=clock),
+        clock,
+        probe=probe,
+        sleeper=sleeper,
+    )
+
+    await run_supervised(
+        (spec(),),
+        _config(
+            timeout_seconds=6.0,
+            sample_interval_seconds=2.0,
+            heartbeat_interval_seconds=2.0,
+        ),
+        environment,
+    )
+
+    assert sleeper.calls[:3] == [2.0, 2.0, 2.0]
+    assert len(probe.samples) >= 3
+
+
+@_async_test
+async def test_a_monitor_failure_is_not_hidden_by_cancellation() -> None:
+    """A failing sample raises instead of returning a silent cancellation."""
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True)),
+        VirtualClock(),
+        probe=_ExplodingProbe(),
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        await run_supervised(
+            (spec(),),
+            _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+            environment,
+        )
+
+
+@_async_test
+async def test_a_launch_failure_is_not_counted_as_executed() -> None:
+    """A child that never started is missing work, not a completed harness."""
+    environment = _environment(
+        ScriptedLauncher(script=Script(launch_error="missing")),
+        VirtualClock(),
+        statuses={spec().qualified: ExecutionStatus.ERROR},
+    )
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert not report.results[0].executed
+    assert not report.is_complete
+    assert spec().qualified in report.accounting.missing

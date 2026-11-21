@@ -53,6 +53,7 @@ from rust_prover_tools.supervision.models import (
     OutputLine,
     StopReason,
 )
+from rust_prover_tools.supervision.sinks import bounded_text
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -316,11 +317,8 @@ class CuprumHarnessLauncher:
 
 
 def _bounded(text: str, limit: int) -> str:
-    """Return `text` cut to at most `limit` encoded bytes."""
-    raw = text.encode("utf-8")
-    if len(raw) <= limit:
-        return text
-    return raw[:limit].decode("utf-8", errors="ignore")
+    """Return `text` cut to at most `limit` bytes with an explicit marker."""
+    return bounded_text(text, limit)
 
 
 def _exit_status(code: int) -> LaunchResult:

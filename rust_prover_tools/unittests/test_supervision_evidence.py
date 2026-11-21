@@ -11,6 +11,7 @@ import pytest
 from rust_prover_tools.supervision import (
     REPORT_NOTES,
     Diagnostics,
+    DiagnosticSinks,
     EvidenceFormatError,
     ExecutionStatus,
     HarnessResult,
@@ -88,18 +89,89 @@ def test_bounded_text_leaves_a_short_line_alone() -> None:
     assert bounded_text("short", 20) == "short"
 
 
+class _FlushRecorder(io.StringIO):
+    """A text stream that counts flushes."""
+
+    def __init__(self) -> None:
+        """Create a recorder that has flushed nothing yet."""
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self) -> None:
+        """Count the flush and defer to the base implementation."""
+        self.flushes += 1
+        super().flush()
+
+
 def test_the_jsonl_sink_writes_a_versioned_flushed_record() -> None:
     """Every record carries the schema and is flushed before returning."""
-    handle = io.StringIO()
+    handle = _FlushRecorder()
     sink = JsonlSink(handle)
 
     sink.write(_record())
 
     assert handle.getvalue().endswith("\n")
+    assert handle.flushes >= 1, "the record was not flushed"
     document = json.loads(handle.getvalue())
     assert document["schema"] == 1
     assert document["record"] == "run-start"
     assert sink.offset == len(handle.getvalue().encode("utf-8"))
+
+
+def test_an_oversized_record_remains_valid_json() -> None:
+    """Truncation shortens fields rather than cutting the JSON line."""
+    handle = io.StringIO()
+    sink = JsonlSink(handle, max_line_bytes=256)
+
+    sink.write(_record(run_id="x" * 10_000))
+
+    records = decode_jsonl(handle.getvalue())
+    assert len(records) == 1
+    assert records[0]["record"] in {"run-start", "truncated"}
+    if records[0]["record"] == "run-start":
+        assert "…[truncated]" in str(records[0]["run_id"])
+    else:
+        assert records[0]["marker"] == "…[truncated]"
+
+
+def test_an_appended_sink_keeps_absolute_offsets() -> None:
+    """A diagnostic reference names the file offset, not the run offset."""
+    handle = io.StringIO()
+    sink = JsonlSink(handle, start_offset=4096)
+
+    sink.write(_record())
+
+    assert sink.offset == 4096 + len(handle.getvalue().encode("utf-8"))
+
+
+def test_u2028_inside_a_record_does_not_split_it() -> None:
+    """JSONL records are separated by LF, not every Unicode line boundary."""
+    sink = MemorySink()
+    output: dict[str, object] = {
+        "record": "output",
+        "run_id": "run-1",
+        "package": "example",
+        "harness": "h::x",
+        "attempt": 1,
+        "timestamp": "2026-11-21T12:00:00.000Z",
+        "elapsed_seconds": 0.0,
+        "stream": "stdout",
+        "text": "before\u2028after",
+    }
+    sink.write(output)
+
+    assert len(decode_jsonl(sink.text)) == 1
+
+
+def test_a_finish_record_with_an_empty_measurement_is_refused() -> None:
+    """The finish-record measurements are validated like every other record."""
+    sink = MemorySink()
+    record = harness_finish_record(run_id="run-1", result=_result())
+    record["peak_group_rss"] = {}
+    sink.write(record)
+
+    with pytest.raises(EvidenceFormatError, match="neither"):
+        decode_jsonl(sink.text)
 
 
 def test_the_human_sink_renders_a_readable_line() -> None:
@@ -113,6 +185,19 @@ def test_the_human_sink_renders_a_readable_line() -> None:
     assert "run run-1 start" in line
     assert "timeout=1.0s" in line
     assert "watchdog=1024MiB" in line
+
+
+def test_a_closed_human_reader_does_not_fail_the_final_flush() -> None:
+    """Undeliverable human output must not prevent report finalization."""
+
+    class _Closed(io.StringIO):
+        """A text stream whose reader has gone away."""
+
+        def flush(self) -> None:
+            """Refuse the flush, as a closed pipe does."""
+            raise BrokenPipeError
+
+    HumanSink(_Closed()).flush()
 
 
 def test_the_human_sink_survives_a_closed_reader() -> None:
@@ -309,3 +394,18 @@ def test_the_table_names_every_result_and_the_limits() -> None:
     assert any("harnesses::verified" in line for line in lines)
     assert any(line.startswith("note:") for line in lines)
     assert any("outcome=passed" in line for line in lines)
+
+
+def test_open_diagnostics_keeps_appended_offsets(tmp_path: Path) -> None:
+    """The library's own append path starts its offset at the file size."""
+    from rust_prover_tools.kani_diagnostics import open_diagnostics
+
+    path = tmp_path / "evidence.jsonl"
+    path.write_text("x" * 100, encoding="utf-8")
+    config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
+
+    with open_diagnostics(config, None) as diagnostics:
+        reference = diagnostics.emit(_record())
+
+    assert reference is not None
+    assert reference.offset == 100

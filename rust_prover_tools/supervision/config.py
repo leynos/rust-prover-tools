@@ -16,6 +16,8 @@ import dataclasses as dc
 import typing as typ
 from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
 
+from rust_prover_tools.supervision.sinks import MIN_LINE_BYTES
+
 __all__ = (
     "DEFAULT_HEARTBEAT_SECONDS",
     "DEFAULT_SAMPLE_INTERVAL_SECONDS",
@@ -110,8 +112,8 @@ class SupervisionConfig:
         ):
             msg = "watchdog_threshold_bytes must not be negative"
             raise ValueError(msg)
-        if self.max_line_bytes <= 0:
-            msg = "max_line_bytes must be positive"
+        if self.max_line_bytes < MIN_LINE_BYTES:
+            msg = f"max_line_bytes must be at least {MIN_LINE_BYTES}"
             raise ValueError(msg)
         if self.tail_bytes <= 0:
             msg = "tail_bytes must be positive"

@@ -131,8 +131,12 @@ def assert_matches_expected(name: str, log: KaniLog) -> None:
         "unsupported constructs mismatch"
     )
     _assert_manual(entry, log)
+    expected_blocks = entry.get("blocks", [])
+    assert [block.name for block in log.blocks] == [
+        expected["name"] for expected in expected_blocks
+    ], "block sequence mismatch"
     blocks = {block.name: block for block in log.blocks}
-    for expected in entry.get("blocks", []):
+    for expected in expected_blocks:
         got = blocks.get(expected["name"])
         assert got is not None, f"missing block {expected['name']}"
         _assert_block(expected, got)

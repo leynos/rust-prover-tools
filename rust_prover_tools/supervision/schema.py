@@ -1,12 +1,8 @@
 """Validate the versioned JSONL and report schemas strictly.
 
-A schema that is documented but not enforced drifts. These readers reject an
-unknown key, a missing key, an unknown record kind, an unknown schema version,
-and a measurement that is neither available nor explained. Every refusal names
-the record and the offending field, because the reader is usually a test or a
-consumer diagnosing a producer rather than a human reading the JSON.
-
-The schema itself is documented in ``docs/kani-supervised-execution.md``.
+The readers reject an unknown or missing key, an unknown record kind or
+schema version, and a measurement that is neither available nor explained.
+The schema is documented in ``docs/kani-supervised-execution.md``.
 """
 
 from __future__ import annotations
@@ -16,6 +12,12 @@ import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+from rust_prover_tools.supervision.schema_fields import (
+    JSONL_FIELDS,
+    REPORT_FIELDS,
+    REPORT_RESULT_FIELDS,
+)
 
 __all__ = (
     "JSONL_FIELDS",
@@ -28,144 +30,6 @@ __all__ = (
 
 #: Schema version the readers accept.
 _SCHEMA_VERSION = 1
-
-#: Required and permitted keys for one JSONL record of each kind.
-JSONL_FIELDS: typ.Final[dict[str, frozenset[str]]] = {
-    "run-start": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "timestamp",
-        "packages",
-        "harness_count",
-        "timeout_seconds",
-        "sample_interval_seconds",
-        "heartbeat_interval_seconds",
-        "watchdog_mib",
-    }),
-    "harness-start": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "package",
-        "harness",
-        "attempt",
-        "timestamp",
-        "elapsed_seconds",
-    }),
-    "output": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "package",
-        "harness",
-        "attempt",
-        "timestamp",
-        "elapsed_seconds",
-        "stream",
-        "text",
-    }),
-    "heartbeat": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "package",
-        "harness",
-        "attempt",
-        "timestamp",
-        "elapsed_seconds",
-        "idle_seconds",
-        "group_rss",
-        "host_available",
-        "last_progress",
-    }),
-    "sample": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "package",
-        "harness",
-        "attempt",
-        "timestamp",
-        "elapsed_seconds",
-        "group_rss",
-        "host_available",
-        "host_total",
-    }),
-    "harness-finish": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "package",
-        "harness",
-        "attempt",
-        "timestamp",
-        "status",
-        "stop_reason",
-        "exit_code",
-        "signal_number",
-        "proof_verdict",
-        "duration_seconds",
-        "peak_group_rss",
-        "min_host_available",
-        "host_total",
-        "cgroup",
-        "last_output",
-        "last_progress",
-        "detail",
-    }),
-    "run-finish": frozenset({
-        "schema",
-        "record",
-        "run_id",
-        "timestamp",
-        "outcome",
-        "complete",
-        "interrupted",
-        "interrupt_signal",
-        "accounting",
-    }),
-}
-
-_REPORT_RESULT_FIELDS: typ.Final[frozenset[str]] = frozenset({
-    "package",
-    "harness",
-    "attempt",
-    "executed",
-    "status",
-    "stop_reason",
-    "exit_code",
-    "signal_number",
-    "proof_verdict",
-    "started_at",
-    "finished_at",
-    "duration_seconds",
-    "peak_group_rss",
-    "min_host_available",
-    "host_total",
-    "cgroup",
-    "last_output",
-    "last_progress",
-    "diagnostic",
-    "detail",
-})
-
-#: Required and permitted top-level keys of the final report.
-REPORT_FIELDS: typ.Final[frozenset[str]] = frozenset({
-    "schema",
-    "run_id",
-    "started_at",
-    "finished_at",
-    "outcome",
-    "complete",
-    "passed",
-    "interrupted",
-    "interrupt_signal",
-    "expected",
-    "accounting",
-    "results",
-    "notes",
-})
 
 
 class EvidenceFormatError(ValueError):
@@ -283,7 +147,7 @@ def decode_jsonl(text: str) -> tuple[dict[str, object], ...]:
         record whose keys differ from the documented set.
     """
     records: list[dict[str, object]] = []
-    for number, line in enumerate(text.splitlines(), start=1):
+    for number, line in enumerate(text.split("\n"), start=1):
         if line.strip():
             records.append(_decode_record(line, number))
     return tuple(records)
@@ -307,10 +171,25 @@ def _decode_record(line: str, number: int) -> dict[str, object]:
         msg = f"record {number} has unknown kind {kind!r}"
         raise EvidenceFormatError(msg)
     _require_exact(document, JSONL_FIELDS[kind], subject=f"record {number}")
+    _validate_record_measurements(kind, document, subject=f"record {number}")
+    return typ.cast("dict[str, object]", document)
+
+
+def _validate_record_measurements(
+    kind: str,
+    document: dict[str, object],
+    *,
+    subject: str,
+) -> None:
+    """Validate the measurements and cgroup evidence one record kind carries."""
+    if kind == "harness-finish":
+        for field in ("peak_group_rss", "min_host_available", "host_total"):
+            decode_measurement(document[field], subject=f"{subject}.{field}")
+        _validate_cgroup(document["cgroup"], subject=f"{subject}.cgroup")
+        return
     for field in ("group_rss", "host_available", "host_total"):
         if field in document:
-            decode_measurement(document[field], subject=f"record {number}.{field}")
-    return typ.cast("dict[str, object]", document)
+            decode_measurement(document[field], subject=f"{subject}.{field}")
 
 
 def validate_report_document(document: object) -> None:
@@ -376,7 +255,7 @@ def _validate_results(results: object) -> None:
         if not isinstance(result, dict):
             msg = f"result {index} is not an object"
             raise EvidenceFormatError(msg)
-        _require_exact(result, _REPORT_RESULT_FIELDS, subject=f"result {index}")
+        _require_exact(result, REPORT_RESULT_FIELDS, subject=f"result {index}")
         for field in ("peak_group_rss", "min_host_available", "host_total"):
             decode_measurement(result[field], subject=f"result {index}.{field}")
         _validate_cgroup(result["cgroup"], subject=f"result {index}.cgroup")

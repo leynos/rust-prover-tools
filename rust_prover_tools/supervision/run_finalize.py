@@ -17,6 +17,7 @@ from rust_prover_tools.supervision.models import (
     HarnessSpec,
     Measurement,
     ProofVerdict,
+    StopReason,
 )
 from rust_prover_tools.supervision.results import (
     HarnessClassification,
@@ -134,7 +135,7 @@ def result_for(
         last_progress=classification.last_progress,
         diagnostic=diagnostic,
         detail=classification.detail or evidence.stop_detail,
-        executed=True,
+        executed=evidence.stop_reason is not StopReason.LAUNCH_FAILED,
     )
 
 

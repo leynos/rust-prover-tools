@@ -153,3 +153,122 @@ def test_a_non_kani_cfg_propagates_to_nested_inline_proofs(tmp_path: Path) -> No
     assert [(proof.pretty_name, proof.conditional) for proof in proofs] == [
         ("gated::inner::nested", True)
     ]
+
+
+def test_a_parameterized_contract_proof_is_recognised(tmp_path: Path) -> None:
+    """A contract proof carries its contracted function as an argument."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[kani::proof_for_contract(check)]\nfn contract() {}\n",
+        encoding="utf-8",
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "contract"
+    ]
+
+
+def test_whitespace_inside_an_attribute_path_is_tolerated(tmp_path: Path) -> None:
+    """Attributes are token sequences, not fixed spellings."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("#[kani :: proof]\nfn spaced() {}\n", encoding="utf-8")
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["spaced"]
+
+
+def test_a_raw_identifier_is_normalised(tmp_path: Path) -> None:
+    """The r# prefix is not part of a function's name."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("#[kani::proof]\nfn r#match() {}\n", encoding="utf-8")
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["match"]
+
+
+def test_a_unicode_identifier_is_recognised(tmp_path: Path) -> None:
+    """Rust identifiers are Unicode, not ASCII-only."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("#[kani::proof]\nfn vérifier() {}\n", encoding="utf-8")
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "vérifier"
+    ]
+
+
+def test_a_raw_c_string_is_masked(tmp_path: Path) -> None:
+    """A raw C string cannot expose a proof that is only its text."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        'const C: &CStr = cr#"text " ; #[kani::proof] fn fake() {} "#;\n'
+        "#[kani::proof]\nfn real() {}\n",
+        encoding="utf-8",
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["real"]
+
+
+def test_an_explicit_path_is_relative_to_the_source_directory(
+    tmp_path: Path,
+) -> None:
+    """`#[path]` in foo.rs resolves beside foo.rs, not under foo/."""
+    (tmp_path / "src" / "foo").mkdir(parents=True)
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("mod foo;\n", encoding="utf-8")
+    (tmp_path / "src" / "foo.rs").write_text(
+        '#[path = "proofs.rs"]\nmod proofs;\nmod bar;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn via_path() {}\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "foo" / "bar.rs").write_text(
+        "#[kani::proof]\nfn via_child() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "foo::proofs::via_path",
+        "foo::bar::via_child",
+    ]
+
+
+def test_one_file_reached_through_two_paths_keeps_both_identities(
+    tmp_path: Path,
+) -> None:
+    """A shared source file may be two modules, not a cycle."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[path = "shared.rs"]\nmod a;\n#[path = "shared.rs"]\nmod b;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "shared.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "a::h",
+        "b::h",
+    ]
+
+
+def test_an_inline_path_override_roots_its_children(tmp_path: Path) -> None:
+    """An inline module's `#[path]` roots the modules nested inside it."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[path = "thread_files"]\nmod thread {\n'
+        '    #[path = "tls.rs"]\n    mod local_data;\n}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "thread_files").mkdir()
+    (tmp_path / "src" / "thread_files" / "tls.rs").write_text(
+        "#[kani::proof]\nfn tls() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "thread::local_data::tls"
+    ]

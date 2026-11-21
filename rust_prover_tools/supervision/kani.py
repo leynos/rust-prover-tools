@@ -106,7 +106,7 @@ class KaniAdapter:
     ) -> HarnessClassification:
         """Classify one settled attempt under the documented precedence."""
         kani = typ.cast("KaniObserver", observer)
-        stopped = _stop_status(evidence)
+        stopped = _stop_status(evidence, kani)
         if stopped is not None:
             return stopped
         if evidence.launch_error is not None:
@@ -174,7 +174,10 @@ class KaniAdapter:
         )
 
 
-def _stop_status(evidence: AttemptEvidence) -> HarnessClassification | None:
+def _stop_status(
+    evidence: AttemptEvidence,
+    observer: KaniObserver,
+) -> HarnessClassification | None:
     """Return the classification a supervisor stop implies, if any."""
     status = {
         StopReason.TIMEOUT: ExecutionStatus.TIMED_OUT,
@@ -186,7 +189,11 @@ def _stop_status(evidence: AttemptEvidence) -> HarnessClassification | None:
     detail = evidence.stop_detail or evidence.stop_reason.value
     if evidence.os_reported_oom_kill is not None:
         detail = f"{detail}; oom_kill_delta={evidence.os_reported_oom_kill}"
-    return _classification(status, detail=detail)
+    return _classification(
+        status,
+        detail=detail,
+        progress=observer.last_progress,
+    )
 
 
 def _selection_status(

@@ -15,8 +15,9 @@ from __future__ import annotations
 import dataclasses as dc
 import re
 
+from rust_prover_tools.kani_inventory.masking import Identifier, identifier
+
 __all__ = (
-    "IDENT",
     "InlineModItem",
     "Item",
     "ModItem",
@@ -25,7 +26,9 @@ __all__ = (
     "parse_level",
 )
 
-IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: A Rust identifier start is any Unicode letter or an underscore; the rest
+#: are Unicode word characters. Raw identifiers are normalised separately.
+_IDENTIFIER = re.compile(r"[^\W\d]\w*")
 _PROOF_ATTRIBUTES = frozenset({"kani::proof", "kani::proof_for_contract"})
 _DEPTH_DELTAS = {
     "{": (1, 0, 0),
@@ -81,6 +84,7 @@ class InlineModItem:
     line: int
     conditional: bool
     items: tuple[Item, ...]
+    path_attribute: str | None = None
 
 
 type Item = ProofItem | ModItem | InlineModItem
@@ -93,6 +97,26 @@ class _Attributes:
     proof: tuple[str, ...] = ()
     path: str | None = None
     conditional: bool = False
+
+
+@dc.dataclass(slots=True)
+class _AttributeFacts:
+    """The accumulating facts of one item's attribute groups."""
+
+    proof: list[str] = dc.field(default_factory=list)
+    path: str | None = None
+    conditional: bool = False
+
+    def record(self, content: str) -> None:
+        """Record one attribute's facts, ignoring inner attributes."""
+        name, _ = _attribute_name(content)
+        if name in _PROOF_ATTRIBUTES:
+            self.proof.append(name)
+        value = _path_value(content)
+        if value is not None:
+            self.path = value
+        if name == "cfg" and _normalise(content) != "cfg(kani)":
+            self.conditional = True
 
 
 def parse_level(
@@ -130,7 +154,7 @@ def parse_level(
         if after >= end:
             break
         keyword_at = _skip_modifiers(source.masked, after)
-        word = IDENT.match(source.masked, keyword_at)
+        word = identifier(source.masked, keyword_at)
         if word is None:
             position = _skip_item(source.masked, after)
             continue
@@ -155,13 +179,13 @@ def _skip_space(masked: str, position: int) -> int:
 def _parse_item(
     source: Source,
     after: int,
-    word: re.Match[str],
+    word: Identifier,
     attributes: _Attributes,
 ) -> tuple[Item | None, int]:
     """Parse one item selected by its leading keyword."""
-    if word.group() == "mod":
-        return _parse_mod(source, _skip_space(source.masked, word.end()), attributes)
-    if word.group() == "fn":
+    if not word.is_raw and word.text == "mod":
+        return _parse_mod(source, _skip_space(source.masked, word.end), attributes)
+    if not word.is_raw and word.text == "fn":
         return _parse_fn(source, word, attributes)
     return None, _skip_item(source.masked, after)
 
@@ -172,11 +196,11 @@ def _parse_mod(
     attributes: _Attributes,
 ) -> tuple[Item | None, int]:
     """Parse a ``mod name;`` or ``mod name { ... }`` declaration."""
-    name_match = IDENT.match(source.masked, position)
+    name_match = identifier(source.masked, position)
     if name_match is None:
         return None, _skip_item(source.masked, position)
-    name = name_match.group()
-    after = _skip_space(source.masked, name_match.end())
+    name = name_match.text
+    after = _skip_space(source.masked, name_match.end)
     if after < len(source.masked) and source.masked[after] == "{":
         body_end = _matching(source.masked, after, "{", "}")
         children = parse_level(
@@ -188,16 +212,17 @@ def _parse_mod(
         return (
             InlineModItem(
                 name,
-                _line_of(source.original, name_match.start()),
+                _line_of(source.original, position),
                 attributes.conditional,
                 children,
+                attributes.path,
             ),
             body_end,
         )
     return (
         ModItem(
             name=name,
-            line=_line_of(source.original, name_match.start()),
+            line=_line_of(source.original, position),
             path_attribute=attributes.path,
             conditional=attributes.conditional,
         ),
@@ -207,22 +232,22 @@ def _parse_mod(
 
 def _parse_fn(
     source: Source,
-    word: re.Match[str],
+    word: Identifier,
     attributes: _Attributes,
 ) -> tuple[Item | None, int]:
     """Parse a function, recording it when a proof attribute selects it."""
-    after = _skip_space(source.masked, word.end())
-    name_match = IDENT.match(source.masked, after)
+    after = _skip_space(source.masked, word.end)
+    name_match = identifier(source.masked, after)
     position = _skip_item(
         source.masked,
-        after if name_match is None else name_match.end(),
+        after if name_match is None else name_match.end,
     )
     if name_match is None or not attributes.proof:
         return None, position
     return (
         ProofItem(
-            function=name_match.group(),
-            line=_line_of(source.original, name_match.start()),
+            function=name_match.text,
+            line=_line_of(source.original, after),
             attributes=attributes.proof,
             conditional=attributes.conditional,
         ),
@@ -232,9 +257,7 @@ def _parse_fn(
 
 def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
     """Parse every attribute group starting at `position`."""
-    proof: list[str] = []
-    path: str | None = None
-    conditional = False
+    facts = _AttributeFacts()
     masked = source.masked
     while position < len(masked) and masked.startswith("#", position):
         inner = masked.startswith("#!", position)
@@ -242,22 +265,35 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         if bracket >= len(masked) or masked[bracket] != "[":
             break
         end = _matching(masked, bracket, "[", "]")
-        content = source.original[bracket + 1 : end - 1].strip()
         if not inner:
-            if content in _PROOF_ATTRIBUTES:
-                proof.append(content)
-            value = _path_value(content)
-            if value is not None:
-                path = value
-            if content.startswith("cfg(") and _normalise(content) != "cfg(kani)":
-                conditional = True
+            facts.record(source.original[bracket + 1 : end - 1].strip())
         position = _skip_space(masked, end)
-    return _Attributes(tuple(proof), path, conditional), position
+    return _Attributes(tuple(facts.proof), facts.path, facts.conditional), position
 
 
 def _normalise(content: str) -> str:
-    """Remove whitespace so equivalent cfg spellings compare equal."""
+    """Remove whitespace so equivalent attribute spellings compare equal."""
     return re.sub(r"\s+", "", content)
+
+
+def _attribute_name(content: str) -> tuple[str, str]:
+    """Return an attribute's path and its argument text.
+
+    Rust attributes are token sequences, not fixed spellings: whitespace may
+    surround ``::`` and a path may carry arguments. The path is everything
+    before the first top-level ``(`` or ``=``, with all whitespace removed.
+    """
+    depth = 0
+    for index, char in enumerate(content):
+        if char == "(" and depth == 0:
+            return _normalise(content[:index]), content[index:]
+        if char == "=" and depth == 0:
+            return _normalise(content[:index]), content[index:]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+    return _normalise(content), ""
 
 
 def _path_value(content: str) -> str | None:
@@ -274,16 +310,16 @@ def _starts_string(masked: str, position: int) -> bool:
 def _skip_modifiers(masked: str, position: int) -> int:
     """Skip visibility and item qualifiers before a keyword."""
     while position < len(masked):
-        word = IDENT.match(masked, position)
-        if word is None:
+        word = identifier(masked, position)
+        if word is None or word.is_raw:
             return position
-        value = word.group()
+        value = word.text
         if value == "pub":
-            position = word.end()
+            position = word.end
             if position < len(masked) and masked[position] == "(":
                 position = _matching(masked, position, "(", ")")
         elif value in {"unsafe", "async", "const", "default", "extern"}:
-            position = word.end()
+            position = word.end
             if value == "extern" and _starts_string(masked, position):
                 position += 1
         else:

@@ -72,13 +72,19 @@ class SourceProof:
 
 @dc.dataclass(frozen=True, slots=True)
 class _Module:
-    """One file or inline module being walked."""
+    """One file or inline module being walked.
+
+    ``directory`` resolves an unannotated child module, while ``path_root``
+    resolves an explicit ``#[path]``. They differ for a non-mod-rs file: a
+    child of ``foo.rs`` lives under ``foo/``, but ``#[path]`` is relative to
+    the directory holding ``foo.rs``.
+    """
 
     path: Path
     module_path: tuple[str, ...]
     conditional: bool
-    is_crate_root: bool
     source_relative: str
+    directory: Path
     path_root: Path
 
 
@@ -87,7 +93,7 @@ class _Walk:
     """The accumulating state of one crate-root walk."""
 
     repository_root: Path
-    visited: set[Path] = dc.field(default_factory=set)
+    active: set[Path] = dc.field(default_factory=set)
     proofs: list[SourceProof] = dc.field(default_factory=list)
 
 
@@ -123,19 +129,12 @@ def collect_proofs(
             path=root,
             module_path=(),
             conditional=False,
-            is_crate_root=True,
             source_relative=_relative(root, repository_root),
-            path_root=_path_root(root, is_crate_root=True),
+            directory=root.parent,
+            path_root=root.parent,
         ),
     )
     return tuple(walk.proofs)
-
-
-def _path_root(source: Path, *, is_crate_root: bool) -> Path:
-    """Return the directory a ``#[path]`` attribute resolves against."""
-    if is_crate_root or source.name == "mod.rs":
-        return source.parent
-    return source.parent / source.stem
 
 
 def _relative(path: Path, repository_root: Path) -> str:
@@ -149,23 +148,26 @@ def _relative(path: Path, repository_root: Path) -> str:
 def _walk_file(walk: _Walk, module: _Module) -> None:
     """Walk one module file, following its declarations."""
     resolved = module.path.resolve()
-    if resolved in walk.visited:
-        msg = f"module file is reachable twice or forms a cycle: {resolved}"
+    if resolved in walk.active:
+        msg = f"module file forms a cycle: {resolved}"
         raise InventoryDiscoveryError(msg)
-    walk.visited.add(resolved)
+    walk.active.add(resolved)
     try:
-        original = resolved.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as error:
-        msg = f"module file cannot be read: {resolved}: {error}"
-        raise InventoryDiscoveryError(msg) from error
-    source = Source(original=original, masked=mask_source(original))
-    items = parse_level(
-        source,
-        0,
-        len(original),
-        conditional=module.conditional,
-    )
-    _walk_items(walk, module, items)
+        try:
+            original = resolved.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            msg = f"module file cannot be read: {resolved}: {error}"
+            raise InventoryDiscoveryError(msg) from error
+        source = Source(original=original, masked=mask_source(original))
+        items = parse_level(
+            source,
+            0,
+            len(original),
+            conditional=module.conditional,
+        )
+        _walk_items(walk, module, items)
+    finally:
+        walk.active.discard(resolved)
 
 
 def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> None:
@@ -189,8 +191,7 @@ def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> Non
                     module,
                     module_path=(*module.module_path, item.name),
                     conditional=item.conditional,
-                    is_crate_root=False,
-                    path_root=module.path_root / item.name,
+                    path_root=module.path_root / (item.path_attribute or item.name),
                 ),
                 item.items,
             )
@@ -201,13 +202,14 @@ def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> Non
 def _child_module(walk: _Walk, parent: _Module, item: ModItem) -> _Module:
     """Resolve one ``mod`` declaration to the module it introduces."""
     child = _module_file(parent, item)
+    directory = child.parent if child.name == "mod.rs" else child.parent / child.stem
     return _Module(
         path=child,
         module_path=(*parent.module_path, item.name),
         conditional=item.conditional,
-        is_crate_root=False,
         source_relative=_relative(child, walk.repository_root),
-        path_root=_path_root(child, is_crate_root=False),
+        directory=directory,
+        path_root=child.parent,
     )
 
 
@@ -222,8 +224,8 @@ def _module_file(parent: _Module, item: ModItem) -> Path:
             )
             raise InventoryDiscoveryError(msg)
         return candidate
-    plain = parent.path_root / f"{item.name}.rs"
-    nested = parent.path_root / item.name / "mod.rs"
+    plain = parent.directory / f"{item.name}.rs"
+    nested = parent.directory / item.name / "mod.rs"
     plain_exists, nested_exists = plain.is_file(), nested.is_file()
     if plain_exists and nested_exists:
         msg = (

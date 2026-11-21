@@ -226,16 +226,26 @@ Two destinations receive the same records:
   to `--human PATH`;
 - versioned JSONL, flushed per line, written to `--jsonl PATH`.
 
-Both are bounded: one human line and one JSONL record are cut to the configured
-`max_line_bytes` with an explicit truncation marker. Nothing retains the whole
-proof log. Each harness result carries a diagnostic reference to the byte
-offset where that harness's JSONL evidence begins.
+Both are bounded. A human line is cut to the configured `max_line_bytes` with
+an explicit truncation marker. A JSONL record that exceeds the budget is not
+cut mid-JSON: its large string values are shortened until the serialized object
+fits, and the shortened values carry the marker, so every emitted line remains
+valid JSON. If even that cannot fit, a minimal `truncated` record states the
+original kind and the marker. Nothing retains the whole proof log. Each harness
+result carries a diagnostic reference to the absolute byte offset where that
+harness's JSONL evidence begins, including when the file is appended to across
+runs.
 
 Cuprum mirrors an echoed line through a 64 KiB default bound
 (`max_echo_line_bytes`). Supervision does not echo; it observes decoded lines
-and forwards at most 8 KiB of each. A child that writes a single line with no
-terminator delays delivery of that line until it ends, so a very long
-newline-free line remains a limitation of line-oriented observation.
+and forwards at most 8 KiB of each with an explicit marker. Cuprum 0.2.0b2
+accumulates a line with no terminator in its own drain buffer before invoking
+the line hook, and its public options expose no chunk-level line bound.
+Supervision therefore cannot bound that single pathological line; the forwarded
+line, the sinks, and the report remain bounded, and a child that writes one
+newline-free line delays delivery until the line ends. This is a documented
+residual limitation of line-oriented observation, not of the supervisor's
+record handling.
 
 ### JSONL records, version 1
 
@@ -412,7 +422,7 @@ class HarnessAdapter(Protocol):
 The observer receives every decoded line as it arrives and accumulates whatever
 facts the classifier needs, bounded by the adapter. The classifier receives the
 supervisor's termination evidence and returns a status, a proof verdict, a
-bounded detail, and the last recognised progress line.
+bounded detail, and the last recognized progress line.
 
 `KaniAdapter` is the reference implementation. It checks the registered grammar
 before observation, feeds the shared 0.67.0 reader, and applies the precedence

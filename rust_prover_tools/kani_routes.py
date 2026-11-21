@@ -120,7 +120,7 @@ def prepare_route(route: KaniRoute) -> PreparedRoute:
 
 def _prepare_legacy(route: LegacyRoute) -> PreparedRoute:
     """Qualify the legacy release, its identities, and its environment."""
-    environment = dict(route.environment or os.environ)
+    environment = dict(os.environ if route.environment is None else route.environment)
     qualified = qualify_kani_installation(
         KaniExecOptions(route.installation, route.cwd, ()),
         environment,

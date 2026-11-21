@@ -201,9 +201,9 @@ Plain-language terms used in this plan:
   version-1 inventory, JSONL, and report schemas; configuration; discovery;
   outcome precedence; measurement limits; signal behaviour; adapter contract;
   test doubles; grammar qualification), updated the users', developers', and
-  CLI design guides, README, and roadmap, and exported the typed public API
-  from `rust_prover_tools`. `make all PYTEST_XDIST_WORKERS=4` passes with
-  1,779 tests and 6 skips; the opt-in live 0.67.0 fixture also passes.
+  CLI design guides, README, and roadmap, and exported the typed public API from
+  `rust_prover_tools`. `make all PYTEST_XDIST_WORKERS=4` passes with 1,779
+  tests and 6 skips; the opt-in live 0.67.0 fixture also passes.
 
 ## Surprises & discoveries
 
@@ -305,6 +305,17 @@ Plain-language terms used in this plan:
   module-level `run_command` reference remains the shared patch point so
   existing route tests and callers are unaffected. Date/Author: 2026-11-21,
   implementation agent.
+- D13. Decision: a JSONL record that exceeds its byte budget is shortened by
+  bounding its string fields before serialization, with a minimal valid
+  `truncated` record as the last resort.
+  Rationale: cutting a serialized line produces invalid JSON and makes the
+  whole evidence stream unreadable through the strict reader. Keeping every
+  record valid preserves the stream's value after a pathological line.
+  Date/Author: 2026-11-21, implementation agent.
+- D14. Decision: a test-target harness composes `--tests` because Kani 0.67.0
+  only builds an integration-test target when that flag is present.
+  Rationale: exact selection cannot match a target Kani never built.
+  Date/Author: 2026-11-21, implementation agent.
 - D12. Decision: the supervision layer's adapter seam is an
   `observer(spec)` factory plus `classify(evidence, observer)`. Rationale:
   classification needs facts accumulated while output streams, but the generic

@@ -218,3 +218,25 @@ def test_the_snapshot_route_resolves_one_generation(
     assert counted.call_count == 1, "the active pointer was read more than once"
     assert first.argv[0] == second.argv[0] == str(prepared.runtime.launcher)
     assert first.env is second.env, "the proof environment was rebuilt"
+
+
+def test_an_explicit_empty_environment_is_not_replaced(
+    installed_release: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only None inherits the process environment."""
+    monkeypatch.setenv("RPT_HOST_ONLY", "1")
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_release.run_command",
+        _identity_runner([]),
+    )
+
+    qualified = qualify_kani_installation(
+        KaniExecOptions(installed_release, tmp_path, ()),
+        {"HOME": str(tmp_path)},
+    )
+
+    environment = qualified.spec.env
+    assert environment is not None
+    assert "RPT_HOST_ONLY" not in environment

@@ -76,9 +76,8 @@ def make_inventory() -> HarnessInventory:
     ))
 
 
-def result(status: ExecutionStatus) -> HarnessResult:
-    """Return one result with the given status."""
-    spec = HarnessSpec("alpha", "harnesses::verified")
+def result(status: ExecutionStatus, spec: HarnessSpec) -> HarnessResult:
+    """Return one result for `spec` with the given status."""
     return HarnessResult(
         spec=spec,
         status=status,
@@ -110,14 +109,16 @@ def run(
     interrupt_signal: int | None = None,
 ) -> KaniHarnessRun:
     """Return a minimal typed run for the CLI adapter."""
-    current = make_inventory()
+    inventory = make_inventory()
+    selected = (inventory.packages[0].harnesses[0],)
+    current = selected[0].to_spec()
     report = RunReport(
         schema_version=1,
         run_id="r" * 16,
         started_at=dt.datetime.now(tz=dt.UTC),
         finished_at=None,
-        expected=(HarnessSpec("alpha", "harnesses::verified"),),
-        results=(result(status),),
+        expected=(current,),
+        results=(result(status, current),),
         accounting=InventoryDrift(),
         outcome=(
             RunOutcome.INTERRUPTED
@@ -133,8 +134,8 @@ def run(
     )
     return KaniHarnessRun(
         report=report,
-        inventory=current,
-        selected=current.harnesses,
+        inventory=inventory,
+        selected=selected,
         backend_version="0.67.0",
         route_kind="legacy",
     )

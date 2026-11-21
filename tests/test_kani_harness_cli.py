@@ -260,3 +260,34 @@ def test_a_closed_stdout_does_not_replace_a_passing_status(
     ])
 
     assert status == 0
+
+
+def test_a_jsonl_append_keeps_absolute_offsets(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reopened JSONL file does not report offsets from zero."""
+    jsonl = tmp_path / "evidence.jsonl"
+    jsonl.write_text("existing-record\n", encoding="utf-8")
+    captured = capture_run(monkeypatch, run())
+
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--inventory",
+        str(inventory_file(tmp_path)),
+        "--jsonl",
+        str(jsonl),
+    ])
+
+    assert status == 0
+    assert captured[0].dependencies is not None
+    diagnostics = captured[0].dependencies.diagnostics
+    assert diagnostics is not None
+    assert diagnostics.jsonl.offset == len("existing-record\n")

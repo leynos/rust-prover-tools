@@ -14,7 +14,17 @@ can start a false literal.
 
 from __future__ import annotations
 
-__all__ = ("mask_source",)
+import re
+import typing as typ
+
+__all__ = (
+    "Identifier",
+    "identifier",
+    "mask_source",
+)
+
+#: A Rust identifier starts with a Unicode letter or an underscore.
+_IDENTIFIER = re.compile(r"[^\W\d]\w*")
 
 
 def mask_source(text: str) -> str:
@@ -89,7 +99,7 @@ def _is_identifier_char(char: str) -> bool:
 def _starts_raw_string(text: str, index: int) -> bool:
     """Whether a raw-string prefix starts at `index`."""
     prefix = index + 1
-    if text.startswith("br", index):
+    if text.startswith(("br", "cr"), index):
         prefix = index + 2
     elif not text.startswith("r", index):
         return False
@@ -104,7 +114,7 @@ def _mask_raw_string(out: list[str], text: str, index: int) -> int:
     """Mask a raw string, including its hashes."""
     hashes = 0
     position = index + 1
-    if text.startswith("br", index):
+    if text.startswith(("br", "cr"), index):
         position = index + 2
     while position < len(text) and text[position] == "#":
         hashes += 1
@@ -157,3 +167,46 @@ def _mask_escape_char(out: list[str], text: str, index: int) -> int:
             return position + 1
         position += 1
     return index + 1
+
+
+class Identifier(typ.NamedTuple):
+    """One normalized Rust identifier.
+
+    Attributes
+    ----------
+    text : str
+        Identifier text without a raw ``r#`` prefix.
+    end : int
+        Position just after the identifier in the masked text.
+    is_raw : bool
+        Whether the source spelled it as a raw identifier.
+    """
+
+    text: str
+    end: int
+    is_raw: bool
+
+
+def identifier(masked: str, position: int) -> Identifier | None:
+    """Read one Rust identifier, normalizing a raw ``r#`` prefix.
+
+    Parameters
+    ----------
+    masked : str
+        Masked source text.
+    position : int
+        Position at which the identifier may begin.
+
+    Returns
+    -------
+    Identifier | None
+        The identifier, or `None` when one does not begin here.
+    """
+    if masked.startswith("r#", position):
+        match = _IDENTIFIER.match(masked, position + 2)
+        if match is not None:
+            return Identifier(match.group(), match.end(), is_raw=True)
+    match = _IDENTIFIER.match(masked, position)
+    if match is None:
+        return None
+    return Identifier(match.group(), match.end(), is_raw=False)

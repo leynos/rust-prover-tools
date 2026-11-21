@@ -10,7 +10,10 @@ import dataclasses as dc
 import json
 import typing as typ
 
-from rust_prover_tools.supervision.sinks import JSONL_SCHEMA_VERSION, _normalise
+from rust_prover_tools.supervision.formatting import (
+    JSONL_SCHEMA_VERSION,
+    normalise,
+)
 
 __all__ = ("MemorySink",)
 
@@ -34,7 +37,7 @@ class MemorySink:
     def write(self, record: dict[str, object]) -> None:
         """Record one payload and its JSONL rendering."""
         payload = {"schema": JSONL_SCHEMA_VERSION, **record}
-        normalised = typ.cast("dict[str, object]", _normalise(payload))
+        normalised = typ.cast("dict[str, object]", normalise(payload))
         line = json.dumps(normalised, ensure_ascii=False)
         self.records.append(normalised)
         self.text += line + "\n"

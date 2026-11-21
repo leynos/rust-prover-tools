@@ -283,3 +283,27 @@ def test_an_extra_blank_line_changes_nothing(name: str) -> None:
     """Blank lines are not report structure and must be tolerated."""
     lines = lines_of(name)
     parse("\n".join([lines[0], "", *lines[1:]]))
+
+
+def test_a_successful_verdict_with_an_ordinary_failure_is_refused() -> None:
+    """A successful verdict cannot excuse an unexplained failed check."""
+    lines = [
+        line.replace(
+            "VERIFICATION:- SUCCESSFUL (encountered one or more panics as expected)",
+            "VERIFICATION:- SUCCESSFUL",
+        )
+        for line in lines_of("expected_panic")
+    ]
+    assert "reports SUCCESSFUL but lists" in refusal_of(lines)
+
+
+def test_an_explicit_zero_other_count_is_refused() -> None:
+    """An omitted count is optional; an explicit wrong zero is not."""
+    lines = [
+        line.replace(
+            " ** 0 of 2 failed (1 unreachable)",
+            " ** 0 of 2 failed (0 unreachable)",
+        )
+        for line in lines_of("verified")
+    ]
+    assert "counts 0 unreachable results but lists 1" in refusal_of(lines)

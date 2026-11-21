@@ -28,7 +28,6 @@ from rust_prover_tools.unittests.supervision_doubles import (
     ScriptedCgroup,
     ScriptedLauncher,
     ScriptedProbe,
-    StepInterrupts,
     VirtualClock,
     VirtualSleeper,
 )
@@ -39,6 +38,12 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision import (
         AttemptEvidence,
         LineObserver,
+    )
+    from rust_prover_tools.supervision.protocols import (
+        CgroupReader,
+        InterruptSource,
+        ResourceProbe,
+        Sleeper,
     )
 
 __all__ = ("async_test", "classify", "config", "environment")
@@ -105,11 +110,12 @@ def environment(
     launcher: ScriptedLauncher,
     clock: VirtualClock,
     *,
-    probe: ScriptedProbe | None = None,
-    cgroup: ScriptedCgroup | None = None,
-    interrupts: StepInterrupts | None = None,
+    probe: ResourceProbe | None = None,
+    cgroup: CgroupReader | None = None,
+    interrupts: InterruptSource | None = None,
     statuses: cabc.Mapping[str, ExecutionStatus] | None = None,
     sinks: Diagnostics | None = None,
+    sleeper: Sleeper | None = None,
 ) -> RunEnvironment:
     """Build a run environment from doubles."""
 
@@ -125,7 +131,7 @@ def environment(
         diagnostics=sinks or Diagnostics(jsonl=MemorySink()),
         build=build,
         adapter=_ScriptedAdapter(statuses or {}),
-        sleeper=VirtualSleeper(clock),
+        sleeper=sleeper or VirtualSleeper(clock),
         interrupts=interrupts,
     )
 

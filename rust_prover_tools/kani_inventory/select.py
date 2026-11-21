@@ -220,12 +220,14 @@ def compose_arguments(
             f"supervised selection or output: {list(conflicts)}"
         )
         raise SelectionError(msg)
+    target_arguments = ("--tests",) if harness.target_kind == "test" else ()
     return (
         "--package",
         harness.package,
         "--harness",
         harness.harness,
         "--exact",
+        *target_arguments,
         *grammar.output_arguments,
         *caller_arguments,
     )

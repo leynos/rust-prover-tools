@@ -137,13 +137,22 @@ class AttemptSupervisor:
             "RunningHarness",
             self.launcher.start(self.spec, self.build, self._on_line),
         )
+        done = asyncio.get_running_loop().create_task(running.wait())
         monitor = asyncio.get_running_loop().create_task(
             self._monitor(running, started_at, started_monotonic)
         )
-        result = await running.wait()
-        monitor.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await monitor
+        try:
+            await asyncio.wait({done, monitor}, return_when=asyncio.FIRST_COMPLETED)
+            if monitor.done():
+                # Surface a monitor failure instead of letting its cleanup
+                # cancellation hide it behind the child's cancellation.
+                await monitor
+            result = await done
+        finally:
+            for task in (monitor, done):
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
         return evidence, self.adapter.classify(evidence, self._observer)
 
@@ -187,8 +196,14 @@ class AttemptSupervisor:
         )
         try:
             while not done.done():
+                elapsed = max(0.0, self.clock.monotonic() - started_monotonic)
+                remaining = min(
+                    self._next_sample - elapsed,
+                    self._next_heartbeat - elapsed,
+                    self.config.timeout_seconds - elapsed,
+                )
                 sleep = asyncio.get_running_loop().create_task(
-                    self.sleeper.sleep(min(self._next_sample, self._next_heartbeat))
+                    self.sleeper.sleep(max(0.0, remaining))
                 )
                 waiters = (
                     {done, sleep} if interrupt is None else {done, sleep, interrupt}

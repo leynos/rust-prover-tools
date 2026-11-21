@@ -162,7 +162,8 @@ class SupervisedRun:
             )
         )
         evidence, classification = await self._supervise(spec)
-        ledger.executed.append(spec.qualified)
+        if evidence.stop_reason is not StopReason.LAUNCH_FAILED:
+            ledger.executed.append(spec.qualified)
         if evidence.stop_reason is StopReason.INTERRUPTED:
             ledger.interrupted = True
             ledger.interrupt_signal = self._signum()

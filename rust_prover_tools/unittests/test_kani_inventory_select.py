@@ -21,12 +21,13 @@ def _harness(
     harness: str,
     package: str = "alpha",
     target: str = "alpha",
+    target_kind: str = "lib",
 ) -> InventoryHarness:
     """Return one inventory harness."""
     return InventoryHarness(
         package=package,
         target=target,
-        target_kind="lib",
+        target_kind=target_kind,
         harness=harness,
         source="src/lib.rs",
         line=1,
@@ -106,6 +107,17 @@ def test_the_composed_arguments_put_the_selector_first() -> None:
         "--exact",
         "--output-format=regular",
     )
+
+
+def test_a_test_target_composes_the_tests_flag() -> None:
+    """Kani only builds an integration-test target when `--tests` is set."""
+    arguments = compose_arguments(
+        _harness("integration::proof", target="integration", target_kind="test"),
+        KANI_067,
+    )
+
+    assert "--tests" in arguments
+    assert arguments.index("--tests") < arguments.index("--output-format=regular")
 
 
 def test_proof_affecting_arguments_are_preserved() -> None:

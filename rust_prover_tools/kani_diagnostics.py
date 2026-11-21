@@ -69,9 +69,11 @@ def _jsonl_sink(
     if path is None:
         return NullSink()
     path.parent.mkdir(parents=True, exist_ok=True)
+    existing = path.stat().st_size if path.exists() else 0
     handle = stack.enter_context(path.open("a", encoding="utf-8"))
     return JsonlSink(
         handle,
         path=path,
         max_line_bytes=config.max_line_bytes,
+        start_offset=existing,
     )
