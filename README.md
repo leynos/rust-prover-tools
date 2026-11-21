@@ -91,6 +91,32 @@ prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bound
 The [users' guide](docs/users-guide.md#kani-snapshot-commands) describes the
 reviewed pin, manifest and attestation checks these commands perform.
 
+### Supervised harness execution
+
+List the resolved per-harness inventory as JSON, then run every selected proof
+in its own invocation under supervision:
+
+```bash
+prover-tools kani harnesses list --repo-root . --package cuprum-native-io
+prover-tools kani harnesses run --repo-root . --package cuprum-native-io \
+  --installation "$HOME/.kani/kani-0.67.0" --cwd .
+```
+
+Each harness runs sequentially in its own process group. The defaults are a
+1,200-second budget per harness, 5-second resource sampling, a 15-second
+heartbeat, and a 1,024 MiB host available-memory watchdog floor, which
+`--no-watchdog` disables. A run continues past individual failures: it exits
+zero only when every selected harness passes, one for any other completed run,
+and `128 + signal` after finalizing its report when a signal interrupts it.
+Live human records go to standard output, and `--human`, `--jsonl`, and
+`--report` select file destinations.
+
+The [supervised execution reference](docs/kani-supervised-execution.md)
+documents the inventory and evidence schemas, the adapter contract, and the
+discovery rules.
+
+### Verus proofs
+
 Verus reads two pins: `tools/verus/VERSION`, and `tools/verus/SHA256SUMS`,
 which records the digest of the matching release archive beside its file name in
 `sha256sum` format. Verus publishes archives without checksums, so after
@@ -143,6 +169,8 @@ ______________________________________________________________________
 - `--repo-root PATH` on commands that resolve repository pins, defaulting to
   the current directory. `kani exec` instead requires explicit `--installation`
   and `--cwd` paths.
+- Supervised Kani harness runs with an inspectable per-harness inventory, live
+  human and JSONL evidence, and a host-memory watchdog.
 - `INPUT_`-prefixed environment variables for GitHub Actions-style wrappers.
 - Legacy `KANI`, `VERUS_TARGET`, `VERUS_INSTALL_DIR`, `VERUS_BIN`, and
   `VERUS_PROOF_FILE` variables honoured for compatibility.

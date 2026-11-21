@@ -64,3 +64,26 @@ preserving the legacy release path. See the
   afterwards. Assign monitoring and manual missed-run recovery. This entry
   stays open when implementation merges: code completion is not the first
   publication.
+
+## 2. Supervised Kani harness execution
+
+Provide a reusable, inspectable per-harness execution capability that survives
+runner loss. See the
+[supervised execution reference](kani-supervised-execution.md) and
+[issue #260](https://github.com/leynos/rust-prover-tools/issues/260).
+
+### 2.1. Upstream per-harness observability and inspectability
+
+- [x] 2.1.1. Deliver inventory, supervision, evidence, and reporting. Complete
+  a strict package-qualified inventory with `#[path]` and inline-module
+  discovery, one exact invocation per harness in an owned process group, live
+  human and JSONL evidence, process-group RSS and host-memory sampling, a
+  timeout and host-memory watchdog, typed outcomes and multiset accounting, and
+  versioned JSONL and report schemas. Exposed through a typed Python API and
+  `kani harnesses list`/`run`. Implemented 21 November; the full gate reports
+  1,779 tests and 6 skips.
+- [ ] 2.1.2. Adopt the capability in Cuprum. Requires 2.1.1. Wire the
+  package-specific Make targets, CI matrix split, fault-check dependencies, the
+  19-harness inventory, and any proof repairs in
+  [cuprum#723](https://github.com/leynos/cuprum/issues/723); do not encode
+  Cuprum's layout or inventory here.

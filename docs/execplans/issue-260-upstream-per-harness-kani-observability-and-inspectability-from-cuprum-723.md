@@ -5,7 +5,7 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
+Status: IN PROGRESS (implementation complete; review and delivery pending)
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -191,12 +191,19 @@ Plain-language terms used in this plan:
   Existing route tests remain green, and the full gate passes with 1,758 tests.
 - [x] (2026-11-21 18:20Z) `EP-M5` `kani harnesses list` and
   `kani harnesses run` CLI contract. The CLI exposes route exclusivity,
-  inventory inspection, budgets, evidence destinations, and verifier
-  arguments; installs SIGINT/SIGTERM only for the duration of a run; returns
-  0 only for a complete pass, 1 otherwise, and `128 + signal` on interruption.
-  Help snapshots and injected contract tests cover the surface. The full gate
-  passes with 1,779 tests and 6 skips.
-- [ ] `EP-M6` Documentation, roadmap, schema document, and full gates.
+  inventory inspection, budgets, evidence destinations, and verifier arguments;
+  installs SIGINT/SIGTERM only for the duration of a run; returns 0 only for a
+  complete pass, 1 otherwise, and `128 + signal` on interruption. Help
+  snapshots and injected contract tests cover the surface. The full gate passes
+  with 1,779 tests and 6 skips.
+- [x] (2026-11-21 19:10Z) `EP-M6` Documentation, roadmap, schema
+  document, and full gates. Added `docs/kani-supervised-execution.md` (the
+  version-1 inventory, JSONL, and report schemas; configuration; discovery;
+  outcome precedence; measurement limits; signal behaviour; adapter contract;
+  test doubles; grammar qualification), updated the users', developers', and
+  CLI design guides, README, and roadmap, and exported the typed public API
+  from `rust_prover_tools`. `make all PYTEST_XDIST_WORKERS=4` passes with
+  1,779 tests and 6 skips; the opt-in live 0.67.0 fixture also passes.
 
 ## Surprises & discoveries
 
@@ -318,8 +325,8 @@ and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves
 the existing message and chains the Cuprum timeout. The full repository gate
 passes with 1,580 tests and 5 skips.
 
-`EP-M5` is complete: `kani_harness_cli.py` registers `kani harnesses list`
-and `kani harnesses run`, disables `INPUT_*` binding for the subtree, installs
+`EP-M5` is complete: `kani_harness_cli.py` registers `kani harnesses list` and
+`kani harnesses run`, disables `INPUT_*` binding for the subtree, installs
 SIGINT and SIGTERM only for one run, and maps a typed report to the documented
 exit status. Its help snapshots and injected contract tests cover route
 exclusivity, selector conflicts, drift, interruption, and a closed standard
@@ -345,9 +352,24 @@ multiset accounting, the async Cuprum launcher, the monitor-driven attempt
 supervisor, and the run orchestrator. The production defaults remain the source
 plan's 1,200 seconds, 5 seconds, and 1,024 MiB.
 
-The remaining outcomes are the four later milestones and the five acceptance
-criteria in issue #260. A retrospective will be added after the final gates and
-CodeRabbit pass.
+All six milestones are implemented. The acceptance evidence is:
+
+- a second consumer can supply different packages, paths, inventories,
+  budgets, evidence destinations, and a route without copying the runner,
+  parser, watchdog, or telemetry code;
+- deterministic doubles cover exact selection and preserved execution
+  configuration, no and multiple matches, missing, duplicate, and unexpected
+  executions, proof failure, nonzero exit, timeout and watchdog cleanup,
+  continuation, silent and verbose children, unavailable cgroup data, and
+  partial reporting after interruption;
+- the version-qualified corpus rejects incomplete and ambiguous success
+  evidence;
+- examples in the users' guide and README show live human output, JSONL,
+  inspectable summaries, and programmatic result access;
+- documentation explains configuration, outcome semantics, measurement
+  limits, signal behaviour, and adoption.
+
+The retrospective will be completed after CodeRabbit review and PR delivery.
 
 ## Context and orientation
 

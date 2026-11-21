@@ -807,6 +807,81 @@ contracts, not full verifier compatibility. Linux x86_64 Kani 0.67.0 is the
 bounded initial qualification target; an upstream release that drops wrappers
 is unsupported.
 
+## Kani supervised harness execution
+
+The supervised layer answers a different question from installation and
+single-invocation execution: which exact harness is running, how much memory
+and time it is using, and why it stopped. Its modules divide that question by
+responsibility rather than by prover:
+
+- `rust_prover_tools.kani_log` is the shared 0.67.0 grammar, incremental
+  reader, report reconciliation, and exact-version registry. Its grammar,
+  model, reader, and corpus derive from Combobulate at commit `9dd6e3c`; see
+  `rust_prover_tools/kani_log/ATTRIBUTION.md`. `parse` is a thin wrapper over
+  `KaniLogReader` so the live and offline paths cannot drift.
+- `rust_prover_tools.kani_inventory` resolves Cargo packages and targets,
+  scans Rust sources lexically for proofs, follows module declarations and
+  `#[path]`, and reads or writes the strict version-1 inventory document.
+  `select` chooses exact harnesses and composes the verifier argv.
+- `rust_prover_tools.kani_qualification` validates one release installation,
+  builds its child environment, probes the compiler and verifier identities
+  once, and derives every harness command from that base. The legacy
+  `exec_kani` entry point keeps its stage order and delegates here.
+- `rust_prover_tools.kani_snapshot.run` exposes `prepare_snapshot_proof` and
+  `QualifiedSnapshotProof` so a supervised snapshot run reads one activation
+  and builds one proof environment.
+- `rust_prover_tools.supervision` is prover-neutral. It owns the typed models,
+  the validated policy, the Linux procfs and cgroup readers, flushed human and
+  JSONL sinks, the strict schema readers, multiset accounting, the async Cuprum
+  launcher, the monitor-driven attempt supervisor, and the run orchestrator.
+- `rust_prover_tools.supervision.kani` is the Kani adapter. It feeds the shared
+  reader as lines arrive and classifies the settled attempt under the
+  documented precedence.
+- `rust_prover_tools.kani_harness_run` is the composition root. It loads or
+  discovers the inventory, selects exact identities, qualifies one route,
+  composes and validates each argv, runs the supervisor, and returns a
+  `KaniHarnessRun`.
+- `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
+  `kani harnesses list` and `kani harnesses run`.
+
+The adapter seam is deliberately small. A prover adapter supplies an observer
+factory and a classifier:
+
+```python
+class HarnessAdapter(Protocol):
+    def observer(self, spec: HarnessSpec) -> LineObserver: ...
+    def classify(
+        self, evidence: AttemptEvidence, observer: LineObserver
+    ) -> HarnessClassification: ...
+```
+
+The observer accumulates facts while output streams; the classifier receives
+the supervisor's termination evidence. Neither reimplements timing,
+measurement, evidence, or accounting.
+
+### Deterministic tests
+
+The supervision suite uses a virtual clock, a virtual sleeper that advances it,
+a scripted launcher, scripted resource and cgroup probes, and an in-memory
+JSONL sink. No supervision test outside the real-process witness sleeps. The
+launcher's scripted child emits its lines synchronously and then either settles
+or waits to be stopped, so an immediate completion cannot race a monitor tick.
+
+The real-process witness proves two properties doubles cannot: a stop reaches
+the whole owned process group, and a silent child still produces heartbeats.
+The live 0.67.0 fixture test is opt-in through `RPT_LIVE_KANI=1` and exercises
+one passing proof, one `#[path]` proof, and one deliberately failing proof.
+
+### Qualify-once rationale
+
+A run must not observe one installation, generation, environment, or grammar
+while launching another. `qualify_kani_installation` and
+`prepare_snapshot_proof` therefore perform their validation, identity probes,
+activation read, and environment construction once; every harness command is
+derived from the result. A pointer switch after preparation cannot move the run
+to another generation, and a concurrent snapshot repair cannot change the
+launcher between harnesses.
+
 ## Kani snapshot producer recipe
 
 `rust_prover_tools.kani_snapshot.producer` is the producer-side domain package.
