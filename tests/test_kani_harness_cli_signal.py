@@ -242,3 +242,51 @@ def test_a_signal_after_the_loop_closed_is_still_recorded() -> None:
     interrupt._handle(signal.SIGTERM, None)
 
     assert interrupt.signum == signal.SIGTERM
+
+
+def test_an_execution_keyboard_interrupt_is_named(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unexpected SIGINT during execution is not called preparation."""
+    from rust_prover_tools.cli import app
+    from tests.kani_harness_cli_support import inventory_file
+
+    def prepared(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+        """Reach execution without qualifying a real installation."""
+        del options
+        return typ.cast("KaniHarnessPreparation", object())
+
+    def interrupted(
+        preparation: KaniHarnessPreparation,
+        config: SupervisionConfig,
+        dependencies: KaniHarnessDependencies | None = None,
+        *,
+        diagnostics: Diagnostics | None = None,
+    ) -> KaniHarnessRun:
+        """Raise the interrupt the handler would normally replace."""
+        del preparation, config, dependencies, diagnostics
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.prepare_harnesses", prepared
+    )
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.execute_harnesses", interrupted
+    )
+
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--inventory",
+        str(inventory_file(tmp_path)),
+    ])
+
+    assert status == 128 + signal.SIGINT
+    assert "execution interrupted" in capsys.readouterr().err

@@ -223,6 +223,7 @@ def run_command_harnesses(
         Zero only for a complete passing run, one otherwise, and
         ``128 + signal`` when a signal interrupted the run.
     """
+    executing = False
     try:
         root = resolve_repo_root(selection.repo_root)
         route = resolve_route(routing, root=root)
@@ -243,11 +244,13 @@ def run_command_harnesses(
                 diagnostics=open_run_diagnostics(stack, config, destinations),
                 interrupts=interrupt,
             )
+            executing = True
             run = execute_harnesses(preparation, config, dependencies)
     except KeyboardInterrupt:
         # Preparation runs under the application's normal signal disposition,
         # so SIGINT arrives here as KeyboardInterrupt and ends it immediately.
-        print_lines(("run preparation interrupted",), stream=sys.stderr)
+        phase = "execution" if executing else "preparation"
+        print_lines((f"run {phase} interrupted",), stream=sys.stderr)
         return 128 + signal.SIGINT
     except _EXPECTED_ERRORS as exc:
         print_lines((str(exc),), stream=sys.stderr)
