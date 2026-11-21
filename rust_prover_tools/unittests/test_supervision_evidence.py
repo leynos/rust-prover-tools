@@ -1,0 +1,311 @@
+"""Hold the evidence sinks and the versioned schemas to their contract."""
+
+from __future__ import annotations
+
+import io
+import json
+import typing as typ
+
+import pytest
+
+from rust_prover_tools.supervision import (
+    REPORT_NOTES,
+    Diagnostics,
+    EvidenceFormatError,
+    ExecutionStatus,
+    HarnessResult,
+    HarnessSpec,
+    HumanSink,
+    InventoryDrift,
+    JsonlSink,
+    Measurement,
+    MemorySink,
+    OutputLine,
+    ProofVerdict,
+    ResourceSample,
+    RunOutcome,
+    RunReport,
+    StopReason,
+    SupervisionConfig,
+    bounded_text,
+    decode_jsonl,
+    render_table,
+    report_document,
+    utc_text,
+    validate_report_document,
+    write_report,
+)
+from rust_prover_tools.supervision.events import (
+    RunStart,
+    harness_finish_record,
+    harness_start_record,
+    heartbeat_record,
+    output_record,
+    run_finish_record,
+    run_start_record,
+    sample_record,
+)
+from rust_prover_tools.unittests.supervision_doubles import VirtualClock, spec
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _record(**fields: object) -> dict[str, object]:
+    """Return a minimal run-start record with the given overrides."""
+    base: dict[str, object] = {
+        "record": "run-start",
+        "run_id": "run-1",
+        "timestamp": "2026-11-21T12:00:00.000Z",
+        "packages": ["example"],
+        "harness_count": 1,
+        "timeout_seconds": 1.0,
+        "sample_interval_seconds": 1.0,
+        "heartbeat_interval_seconds": 1.0,
+        "watchdog_mib": 1024,
+    }
+    base.update(fields)
+    return base
+
+
+def test_utc_text_is_explicit_and_stable() -> None:
+    """A timestamp names UTC and carries milliseconds."""
+    clock = VirtualClock()
+
+    assert utc_text(clock.now()) == "2026-11-21T12:00:00.000Z"
+
+
+def test_bounded_text_marks_a_truncated_line() -> None:
+    """A cut line is visibly cut rather than quietly short."""
+    text = bounded_text("x" * 100, 20)
+
+    assert len(text.encode("utf-8")) <= 20
+    assert text.endswith("…[truncated]")
+
+
+def test_bounded_text_leaves_a_short_line_alone() -> None:
+    """A line inside its budget is unchanged."""
+    assert bounded_text("short", 20) == "short"
+
+
+def test_the_jsonl_sink_writes_a_versioned_flushed_record() -> None:
+    """Every record carries the schema and is flushed before returning."""
+    handle = io.StringIO()
+    sink = JsonlSink(handle)
+
+    sink.write(_record())
+
+    assert handle.getvalue().endswith("\n")
+    document = json.loads(handle.getvalue())
+    assert document["schema"] == 1
+    assert document["record"] == "run-start"
+    assert sink.offset == len(handle.getvalue().encode("utf-8"))
+
+
+def test_the_human_sink_renders_a_readable_line() -> None:
+    """The human log names the run, timeout, sampling, and watchdog."""
+    handle = io.StringIO()
+    sink = HumanSink(handle)
+
+    sink.write(_record())
+
+    line = handle.getvalue()
+    assert "run run-1 start" in line
+    assert "timeout=1.0s" in line
+    assert "watchdog=1024MiB" in line
+
+
+def test_the_human_sink_survives_a_closed_reader() -> None:
+    """A reader that goes away must not fail the proof."""
+
+    class _Closed(io.StringIO):
+        """A text stream whose reader has gone away."""
+
+        def write(self, payload: str, /) -> int:
+            """Refuse the write, as a closed pipe does."""
+            raise BrokenPipeError
+
+    HumanSink(_Closed()).write(_record())
+
+
+def test_diagnostics_returns_the_jsonl_offset() -> None:
+    """The offset names where a harness's evidence begins."""
+    jsonl = MemorySink()
+    human = io.StringIO()
+    diagnostics = Diagnostics(jsonl=jsonl, human=HumanSink(human))
+
+    first = diagnostics.emit(_record())
+    second = diagnostics.emit(_record(run_id="run-2"))
+
+    assert first is not None
+    assert second is not None
+    assert first.offset == 0
+    assert second.offset > first.offset
+    assert len(jsonl.records) == 2
+
+
+def _result() -> HarnessResult:
+    """Return one complete passing result."""
+    return HarnessResult(
+        spec=HarnessSpec("example", "harnesses::verified"),
+        status=ExecutionStatus.PASSED,
+        stop_reason=StopReason.EXITED,
+        exit_code=0,
+        signal_number=None,
+        proof_verdict=ProofVerdict.PASSED,
+        started_at=VirtualClock().now(),
+        finished_at=VirtualClock().now(),
+        duration_seconds=1.25,
+        peak_group_rss=Measurement.available(128 * 1024 * 1024),
+        min_host_available=Measurement.available(8 * 1024 * 1024 * 1024),
+        host_total=Measurement.available(16 * 1024 * 1024 * 1024),
+        cgroup=None,
+        last_output="VERIFICATION:- SUCCESSFUL",
+        last_progress="Verification Time: 1.2s",
+        diagnostic=None,
+        detail="",
+    )
+
+
+def _report() -> RunReport:
+    """Return one complete passing report."""
+    clock = VirtualClock()
+    return RunReport(
+        schema_version=1,
+        run_id="run-1",
+        started_at=clock.now(),
+        finished_at=clock.now(),
+        expected=(HarnessSpec("example", "harnesses::verified"),),
+        results=(_result(),),
+        accounting=InventoryDrift(),
+        outcome=RunOutcome.PASSED,
+    )
+
+
+def test_the_report_document_carries_the_schema_and_notes() -> None:
+    """The final report is versioned and states its measurement limits."""
+    document = report_document(_report())
+
+    assert document["schema"] == 1
+    assert document["passed"] is True
+    assert document["notes"] == list(REPORT_NOTES)
+    validate_report_document(document)
+
+
+def test_an_unknown_report_key_is_refused() -> None:
+    """A schema that is not enforced drifts."""
+    document = report_document(_report())
+    document["surprise"] = 1
+
+    with pytest.raises(EvidenceFormatError, match="unknown"):
+        validate_report_document(document)
+
+
+def test_a_missing_report_key_is_refused() -> None:
+    """A report that omits a documented field is refused."""
+    document = report_document(_report())
+    del document["outcome"]
+
+    with pytest.raises(EvidenceFormatError, match="missing"):
+        validate_report_document(document)
+
+
+def test_a_measurement_that_is_neither_form_is_refused() -> None:
+    """An empty measurement object is not evidence."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["peak_group_rss"] = {}
+
+    with pytest.raises(EvidenceFormatError, match="neither"):
+        validate_report_document(document)
+
+
+def test_a_report_is_written_atomically(tmp_path: Path) -> None:
+    """The destination holds a complete JSON document after the call."""
+    destination = tmp_path / "report.json"
+
+    write_report(destination, _report())
+
+    document = json.loads(destination.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_every_record_kind_can_be_decoded() -> None:
+    """The strict reader accepts exactly the shipped record shapes."""
+    clock = VirtualClock()
+    identity = spec()
+    sample = ResourceSample(
+        timestamp_utc=clock.now(),
+        elapsed_seconds=1.0,
+        package=identity.package,
+        harness=identity.harness,
+        attempt=identity.attempt,
+        group_rss=Measurement.available(1),
+        host_available=Measurement.available(2),
+        host_total=Measurement.available(3),
+    )
+    sink = MemorySink()
+    diagnostics = Diagnostics(jsonl=sink)
+    config = SupervisionConfig()
+    for record in (
+        run_start_record(
+            RunStart(
+                run_id="run-1",
+                timestamp=clock.now(),
+                packages=("example",),
+                harness_count=1,
+                config=config,
+            )
+        ),
+        harness_start_record(run_id="run-1", spec=identity, timestamp=clock.now()),
+        output_record(
+            run_id="run-1",
+            spec=identity,
+            line=OutputLine(
+                stream="stdout",
+                text="hello",
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.5,
+            ),
+        ),
+        sample_record(run_id="run-1", sample=sample),
+        heartbeat_record(
+            run_id="run-1", sample=sample, idle_seconds=0.0, last_progress=None
+        ),
+        harness_finish_record(run_id="run-1", result=_result()),
+        run_finish_record(run_id="run-1", timestamp=clock.now(), report=_report()),
+    ):
+        diagnostics.emit(record)
+
+    records = decode_jsonl(sink.text)
+
+    assert [record["record"] for record in records] == [
+        "run-start",
+        "harness-start",
+        "output",
+        "sample",
+        "heartbeat",
+        "harness-finish",
+        "run-finish",
+    ]
+
+
+def test_an_unknown_record_kind_is_refused() -> None:
+    """A reader refuses a record it does not understand."""
+    sink = MemorySink()
+    sink.write({"record": "surprise", "run_id": "run-1"})
+
+    with pytest.raises(EvidenceFormatError, match="unknown kind"):
+        decode_jsonl(sink.text)
+
+
+def test_the_table_names_every_result_and_the_limits() -> None:
+    """The human summary carries the identity, status, and measurement notes."""
+    lines = render_table(_report())
+
+    assert "PACKAGE" in lines[0]
+    assert "HARNESS" in lines[0]
+    assert any("harnesses::verified" in line for line in lines)
+    assert any(line.startswith("note:") for line in lines)
+    assert any("outcome=passed" in line for line in lines)

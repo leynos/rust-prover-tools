@@ -96,10 +96,10 @@ extend-ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["non-empty-init-module"]
 "rust_prover_tools/cli.py" = ["too-many-arguments", "too-many-positional-arguments"]
-"**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
+"**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "too-many-locals", "magic-value-comparison", "no-self-use"]
 # Test support modules hold assertions and fixtures on behalf of test modules,
 # so they need the same test-only relaxations.
-"**/*_support.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
+"**/*_support.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "too-many-locals", "magic-value-comparison", "no-self-use"]
 "tests/steps/*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 
 [tool.ruff.lint.flake8-import-conventions]

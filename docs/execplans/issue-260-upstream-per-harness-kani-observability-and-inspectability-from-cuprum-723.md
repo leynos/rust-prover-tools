@@ -171,8 +171,12 @@ Plain-language terms used in this plan:
   registry, corpus, and typed timeout reason. All fifteen corpus logs parse or
   refuse exactly as committed; `make all`, Markdown lint, and Mermaid
   validation pass.
-- [ ] `EP-M2` Prover-neutral supervision models, measurement, evidence sinks,
-  accounting, report schema, and runner.
+- [x] (2026-11-21 14:20Z) `EP-M2` Prover-neutral supervision models,
+  measurement, evidence sinks, accounting, report schema, and runner. The
+  deterministic suite covers timeouts, watchdog stops, first-stop precedence,
+  continuation, interruption, unavailable cgroup and host values, and the
+  versioned schema; one real-process witness proves group cancellation and
+  heartbeat emission. `make all` passes with 1,661 tests.
 - [ ] `EP-M3` Package-qualified Kani inventory discovery, strict inventory
   JSON, exact selection, and argv composition.
 - [ ] `EP-M4` Qualify-once route seams, Kani classification, public typed API,
@@ -204,11 +208,10 @@ Plain-language terms used in this plan:
 - Observation: the reader records refusals and raises at `finish` rather
   than raising on the first bad line. This keeps the selection record and the
   verdict of a proof that was stopped mid-report available to the supervisor
-  while still failing a complete call closed.
-  Evidence: `KaniLogReader.facts` reports `selection_records`,
-  `verdicts`, and `truncation_reason` before `finish` raises.
-  Impact: the classifier can attribute an interruption to the harness that was
-  actually running.
+  while still failing a complete call closed. Evidence: `KaniLogReader.facts`
+  reports `selection_records`, `verdicts`, and `truncation_reason` before
+  `finish` raises. Impact: the classifier can attribute an interruption to the
+  harness that was actually running.
 - Observation: the corpus contains exactly fifteen logs: `counterexample`,
   `default_unwind`, `expected_panic`, `fail_fast`, `in_place`,
   `insufficient_unwind`, `list`, `multiplication_timeout`,
@@ -283,11 +286,18 @@ Plain-language terms used in this plan:
 
 `EP-M1` is complete: `rust_prover_tools/kani_log/` provides the ported grammar,
 value model, incremental reader, report reconciliation, exact-version registry,
-and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves the
-existing message and chains the Cuprum timeout. The full repository gate passes
-with 1,580 tests and 5 skips.
+and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves
+the existing message and chains the Cuprum timeout. The full repository gate
+passes with 1,580 tests and 5 skips.
 
-The remaining outcomes are the five later milestones and the five acceptance
+`EP-M2` is complete: `rust_prover_tools/supervision/` provides the typed
+models, validated policy, injectable protocols, Linux procfs and cgroup v2
+readers, flushed human and JSONL sinks, strict version-1 schema readers,
+multiset accounting, the async Cuprum launcher, the monitor-driven attempt
+supervisor, and the run orchestrator. The production defaults remain the
+source plan's 1,200 seconds, 5 seconds, and 1,024 MiB.
+
+The remaining outcomes are the four later milestones and the five acceptance
 criteria in issue #260. A retrospective will be added after the final gates and
 CodeRabbit pass.
 
