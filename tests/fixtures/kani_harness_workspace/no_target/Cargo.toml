@@ -1,0 +1,8 @@
+[package]
+name = "no_target"
+version = "0.1.0"
+edition = "2021"
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"

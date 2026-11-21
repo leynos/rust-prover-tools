@@ -177,8 +177,12 @@ Plain-language terms used in this plan:
   continuation, interruption, unavailable cgroup and host values, and the
   versioned schema; one real-process witness proves group cancellation and
   heartbeat emission. `make all` passes with 1,661 tests.
-- [ ] `EP-M3` Package-qualified Kani inventory discovery, strict inventory
-  JSON, exact selection, and argv composition.
+- [x] (2026-11-21 15:40Z) `EP-M3` Package-qualified Kani inventory
+  discovery, strict inventory JSON, exact selection, and argv composition. The
+  two-package fixture workspace covers `#[path]`, inline modules, all three
+  target kinds, a conditional proof, an empty package, an ambiguous module, a
+  package with no verifiable target, and a duplicate pretty name across
+  targets. `make all PYTEST_XDIST_WORKERS=4` passes with 1,727 tests.
 - [ ] `EP-M4` Qualify-once route seams, Kani classification, public typed API,
   and supervised entry point.
 - [ ] `EP-M5` `kani harnesses list` and `kani harnesses run` CLI contract.
@@ -290,12 +294,18 @@ and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves
 the existing message and chains the Cuprum timeout. The full repository gate
 passes with 1,580 tests and 5 skips.
 
+`EP-M3` is complete: `rust_prover_tools/kani_inventory/` provides the typed
+inventory models, the strict version-1 document, a comment-and-literal-aware
+Rust scanner that follows inline modules and `#[path]`, fail-closed Cargo
+package and target selection, exact harness selection, and argv composition
+with a conflict matrix for selector and output spellings.
+
 `EP-M2` is complete: `rust_prover_tools/supervision/` provides the typed
 models, validated policy, injectable protocols, Linux procfs and cgroup v2
 readers, flushed human and JSONL sinks, strict version-1 schema readers,
 multiset accounting, the async Cuprum launcher, the monitor-driven attempt
-supervisor, and the run orchestrator. The production defaults remain the
-source plan's 1,200 seconds, 5 seconds, and 1,024 MiB.
+supervisor, and the run orchestrator. The production defaults remain the source
+plan's 1,200 seconds, 5 seconds, and 1,024 MiB.
 
 The remaining outcomes are the four later milestones and the five acceptance
 criteria in issue #260. A retrospective will be added after the final gates and
