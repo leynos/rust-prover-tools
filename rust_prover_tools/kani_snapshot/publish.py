@@ -23,6 +23,7 @@ import typing as typ
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.publish_budget import (
+    PublicationUncertainError,
     decide_exhausted,
     uncertain_after_write,
 )
@@ -74,8 +75,9 @@ def _run_steps(
             advanced = advance(api, request, observed, step)
         except ProverToolError as exc:
             # A later step's failure cannot be reported as though the write
-            # never happened: the release may already be public.
-            if not publish_attempted:
+            # never happened: the release may already be public. A failure
+            # already wrapped where it happened keeps its one warning.
+            if isinstance(exc, PublicationUncertainError) or not publish_attempted:
                 raise
             raise uncertain_after_write(exc) from exc
         if isinstance(advanced, ReleaseDecision):

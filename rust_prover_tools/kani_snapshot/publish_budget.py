@@ -14,6 +14,9 @@ produced without writing, and whether the irreversible call was entered.
 `uncertain_after_write` carries the same fact into failure: once the call has
 been entered, a later failure of any kind leaves a release that may be public,
 so the error it produces says so instead of reading as though nothing happened.
+`PublicationUncertainError` is that error's own type, so the same uncertainty
+is stated once whether it is wrapped where the failure happened or where it was
+caught.
 """
 
 from __future__ import annotations
@@ -33,7 +36,20 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.publish_request import PublicationRequest
     from rust_prover_tools.observability import OperationSpan
 
-__all__ = ("StepOutcome", "decide_exhausted", "uncertain_after_write")
+__all__ = (
+    "PublicationUncertainError",
+    "StepOutcome",
+    "decide_exhausted",
+    "uncertain_after_write",
+)
+
+
+class PublicationUncertainError(ProverToolError):
+    """A failure that followed a publish call this run had already entered.
+
+    Its own type so that the same uncertainty is stated once: a failure wrapped
+    where it happened must not be wrapped again where it is caught.
+    """
 
 
 @dc.dataclass(frozen=True)
@@ -118,7 +134,7 @@ def decide_exhausted(
     return None
 
 
-def uncertain_after_write(error: ProverToolError) -> ProverToolError:
+def uncertain_after_write(error: ProverToolError) -> PublicationUncertainError:
     """Return `error` restated as the uncertainty a publish call leaves behind.
 
     Once a run has entered the publish call, a later failure cannot be reported
@@ -134,11 +150,15 @@ def uncertain_after_write(error: ProverToolError) -> ProverToolError:
 
     Returns
     -------
-    ProverToolError
+    PublicationUncertainError
         An error carrying the same diagnosis and the publication uncertainty.
+        An error that already is one is returned unchanged, so a failure
+        wrapped where it happened is not wrapped again where it is caught.
     """
+    if isinstance(error, PublicationUncertainError):
+        return error
     msg = (
         "publication entered a publish call earlier in this run, so the release"
         f" may already be public; {error}"
     )
-    return ProverToolError(msg)
+    return PublicationUncertainError(msg)

@@ -246,9 +246,12 @@ to inspect the exit code, such as `rustup which` or `verus --version`.
 A command that exceeds its wall-clock budget is terminated, process group and
 all, and `run_command` raises `rust_prover_tools.commands.CommandTimeoutError`.
 That class subclasses `ProverToolError`, so existing handling keeps working,
-but a caller that may retry a timeout should catch the narrower type: the
-release transport and the publication loop do, so a genuine command failure is
-never mistaken for a timeout worth repeating.
+but a caller that may retry a timeout should catch the narrower type, because a
+genuine command failure is not worth repeating. The release path does this at
+two boundaries: `gh_transport` catches `CommandTimeoutError` and wraps it once
+in `ReleaseTransientError`, and the publication loop catches that wrapper. A
+caller adding retry handling to the release path therefore catches
+`ReleaseTransientError`, not the timeout type, which never reaches it.
 
 Set `CommandSpec.echo=True` only when the child process output is part of the
 public CLI stream, such as a Verus proof run.
@@ -875,13 +878,16 @@ run holds. A budget that ends on the publish call takes one confirming
 observation and reports an unconfirmed publication — or the conflict that
 observation found, with its reason — and never a state that did not converge. A
 budget that ends on the recheck which withdrew authority for the write decides
-on the reading that withdrew it: a conflict is reported as the policy conflict
-it is, with its reason, and any other withdrawal such as an asset the recheck
-found missing reports a state that did not converge — unless an earlier step
-entered the publish call, in which case an unconfirmed publication is reported
-instead. The same warning covers a failure after the call was entered — a read
-or verification the run cannot complete — with the original error kept as its
-cause, because the retry such an error invites would be a second publication.
+on the reading that withdrew it: a release the recheck found already published
+and verified is reported as the no-op it is, an observed conflict as the policy
+conflict it is, with its reason, and any other withdrawal, such as an asset the
+recheck found missing, as a state that did not converge — unless an earlier
+step entered the publish call, in which case an unconfirmed publication is
+reported instead. The same warning covers a failure after the call was entered:
+the publish call's own failure, or a read or verification the run cannot
+complete, each keeps its original error as the cause, because the retry such an
+error invites would be a second publication. The warning is stated once, because
+`PublicationUncertainError` marks an error that already carries it.
 `publish_observation` decides when two readings describe the same release,
 which is what lets a completed download be believed only if the release did not
 move while it ran. `publish_request` holds the record of what one attempt is

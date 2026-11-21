@@ -434,6 +434,24 @@ Terms used here:
   conflict with its reason, the state that did not converge, and the
   unconfirmed publication, so the prose matches the three branches of
   `decide_exhausted` one for one.
+- 21 November 2026: remediated the sixth review round on `b56a491`, which found
+  the same uncertainty leaking through one more door. `_publish` treated only
+  `ReleaseTransientError` as a write that may have landed, so a permanent
+  failure from the publish call itself — a connection closed after the request
+  was sent — left the run without `write_attempted` and reached the operator as
+  a bare error. `_publish` now wraps any other `ProverToolError` from that call
+  in the uncertainty, keeping the original cause, and never re-sends the write.
+  Wrapping at the failure as well as in the loop would state the warning twice,
+  so `PublicationUncertainError` marks an error that already carries it: the
+  loop re-raises one rather than wrapping again, and `uncertain_after_write`
+  returns one unchanged. Two tests hold it, one for a permanent publish failure
+  and one for a transient failure followed by a permanent one, which asserts
+  the warning appears exactly once. The same round corrected two documentation
+  sentences: the `CommandTimeoutError` paragraph described the timeout type as
+  reaching the publication loop, when `gh_transport` wraps it in
+  `ReleaseTransientError` first, and the withdrawn-recheck sentence omitted the
+  verified no-op that a recheck reports when another actor has published the
+  matching release.
 
 ## Surprises & discoveries
 

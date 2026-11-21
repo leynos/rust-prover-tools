@@ -926,11 +926,13 @@ orchestrator. The entrypoint's subcommands are:
   and reports a publication that may have landed as unconfirmed, or reports the
   conflict that reading found with its reason. A budget that ends on the
   recheck which withdrew authority for the write decides on the reading that
-  withdrew it: a conflict is reported as the policy conflict it is, with its
-  reason, and any other withdrawal as a state that did not converge, unless an
-  earlier step entered the publish call, in which case the ending is an
-  unconfirmed publication. A failure after the call was entered carries the
-  same warning and keeps its original error as the cause.
+  withdrew it: a release the recheck found already published and verified is
+  reported as the no-op it is, an observed conflict as the policy conflict it
+  is, with its reason, and any other withdrawal as a state that did not
+  converge, unless an earlier step entered the publish call, in which case the
+  ending is an unconfirmed publication. A failure after the call was entered,
+  including the call's own failure, carries the same warning and keeps its
+  original error as the cause.
 
 Publication observation resolves `refs/tags/<tag>` rather than trusting the
 release's `target_commitish`, which GitHub ignores once the tag exists: an

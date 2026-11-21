@@ -19,7 +19,11 @@ import logging
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.publish_budget import StepOutcome
+from rust_prover_tools.kani_snapshot.publish_budget import (
+    PublicationUncertainError,
+    StepOutcome,
+    uncertain_after_write,
+)
 from rust_prover_tools.kani_snapshot.publish_observation import settle
 from rust_prover_tools.kani_snapshot.release_policy import (
     ObservedAsset,
@@ -145,6 +149,15 @@ def _publish(
         # plain retryable failure is how a publication is sent twice.
         _log_transient(ReleaseAction.PUBLISH)
         return StepOutcome(write_attempted=True)
+    except ProverToolError as exc:
+        # A connection that closes after the request was sent raises an error
+        # the transport cannot classify as retryable, yet the write may still
+        # have landed. The call is over either way; only the uncertainty is
+        # left to report, and it is stated here because this is where the
+        # attempt is known to have been entered.
+        if isinstance(exc, PublicationUncertainError):
+            raise
+        raise uncertain_after_write(exc) from exc
     return StepOutcome(write_attempted=True)
 
 
