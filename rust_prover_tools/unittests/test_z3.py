@@ -435,6 +435,8 @@ def test_install_z3_reinstalls_on_a_version_only_marker(
     "marker_content",
     [
         pytest.param(b"not json", id="invalid-json"),
+        pytest.param(b"1" * 5000, id="excessive-integer-digits"),
+        pytest.param(b"[" * 100_000, id="excessive-nesting"),
         pytest.param(b"[]", id="non-object"),
         pytest.param(
             json.dumps({"version": Z3_VERSION}).encode("utf-8"),

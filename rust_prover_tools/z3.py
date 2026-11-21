@@ -47,6 +47,9 @@ __all__ = (
 MARKER_NAME = ".z3-version"
 _EXECUTE_BITS: typ.Final[int] = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
 _MARKER_KEYS: typ.Final[frozenset[str]] = frozenset({"version", "sha256"})
+# Ruff emits PEP 758 here for the py314 target, but the pylint gate runs on
+# Python 3.12, which cannot parse that form, so the tuple is named.
+_MARKER_PARSE_ERRORS: typ.Final = (ValueError, RecursionError)
 _SHA256_HEX_CHARS: typ.Final[frozenset[str]] = frozenset("0123456789abcdef")
 _SHA256_HEX_LENGTH: typ.Final[int] = 64
 
@@ -224,14 +227,15 @@ def _recorded_digest(text: str) -> str | None:
     """Return the digest recorded by a well-formed marker, or `None`.
 
     A marker is usable only when it is a JSON object with exactly the
-    `version` and `sha256` keys, both holding strings, the current pinned
-    version, and a 64-character lowercase hexadecimal digest. Everything else
-    is a cache miss, so a marker from an earlier release, a hand-edited marker,
-    or a truncated write is repaired by a fresh installation.
+    `version` and `sha256` keys, both strings, the current pinned version,
+    and a lowercase SHA-256 digest. Anything else is a cache miss that a
+    fresh installation repairs.
     """
     try:
         parsed: object = json.loads(text)
-    except json.JSONDecodeError:
+    except _MARKER_PARSE_ERRORS:
+        # Every failure here means the marker is unusable, never that the
+        # run should fail.
         return None
     if not isinstance(parsed, dict) or set(parsed) != _MARKER_KEYS:
         return None
