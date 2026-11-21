@@ -189,9 +189,12 @@ def test_stream_reports_a_blocked_read_at_the_deadline(
     """A body read the watchdog cuts short is the transfer's deadline."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
     clock = GatedClock()
-    # `download_stream` keeps the real clock, which shares `GatedClock`'s time
-    # base, so the body read and the watchdog agree on the deadline.
+    # The pre-read check and the watchdog must both start after the gate opens
+    # only once the blocked read is in flight; a real clock could trip the
+    # check before `BlockingResponse.read()` runs, which would pass the test
+    # without ever exercising the watchdog.
     monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
     released = threading.Event()
     sock = FakeSocket(release=released)
 
