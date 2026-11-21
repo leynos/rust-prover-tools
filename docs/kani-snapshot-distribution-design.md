@@ -925,8 +925,11 @@ orchestrator. The entrypoint's subcommands are:
   was decided on. A budget that ends on that call reads the release once more
   and reports a publication that may have landed as unconfirmed, or reports the
   conflict that reading found with its reason. A budget that ends on the
-  recheck which withdrew authority for the write reports a state that did not
-  converge, because nothing was published.
+  recheck which withdrew authority for the write decides on the reading that
+  withdrew it: a conflict is reported as that conflict, and any other
+  withdrawal as a state that did not converge, unless an earlier step entered
+  the publish call. A failure after the call was entered carries the same
+  warning and keeps its original error as the cause.
 
 Publication observation resolves `refs/tags/<tag>` rather than trusting the
 release's `target_commitish`, which GitHub ignores once the tag exists: an

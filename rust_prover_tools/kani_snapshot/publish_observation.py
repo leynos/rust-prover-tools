@@ -34,6 +34,16 @@ def state_key(observed: ObservedRelease) -> tuple[object, ...]:
     digests are left out, because the two readings sit on either side of a
     download, so one of them carries hashes the other cannot, and that
     difference alone is not a change of state.
+
+    Parameters
+    ----------
+    observed : ObservedRelease
+        The reading to reduce.
+
+    Returns
+    -------
+    tuple[object, ...]
+        The fields the policy decides from, in a stable order.
     """
     return (
         observed.exists,
@@ -67,6 +77,25 @@ def settle(
     does not. The newer reading then carries no verification verdict, and the
     next decision asks for the download it needs rather than trusting one taken
     across a change.
+
+    Parameters
+    ----------
+    api : ReleaseApi
+        Adapter that reads release state.
+    tag : str
+        Release both readings describe.
+    observed : ObservedRelease
+        Reading the completed work started from.
+    completed : ObservedRelease
+        Reading the completed work produced. It must derive from `observed`,
+        because it is believed only while the release still matches that
+        reading.
+
+    Returns
+    -------
+    ObservedRelease
+        `completed` when the release still matches `observed`, otherwise the
+        newer reading, which carries no verification verdict.
     """
     confirmed = api.observe(tag)
     if state_key(confirmed) != state_key(observed):
@@ -79,7 +108,25 @@ def observe_or_keep(
     tag: str,
     observed: ObservedRelease | None,
 ) -> ObservedRelease | None:
-    """Observe the release once, keeping the previous state after a retryable error."""
+    """Observe the release once, keeping the previous state after a retryable error.
+
+    Parameters
+    ----------
+    api : ReleaseApi
+        Adapter that reads release state.
+    tag : str
+        Release to read.
+    observed : ObservedRelease | None
+        A reading the caller already holds. Supplying one returns it without a
+        fresh API read, so a caller that has just observed does not pay for a
+        second query.
+
+    Returns
+    -------
+    ObservedRelease | None
+        The supplied or newly read observation, or `None` when none was
+        supplied and the read failed in a way a later attempt may survive.
+    """
     if observed is not None:
         return observed
     try:

@@ -397,6 +397,36 @@ Terms used here:
   final-step tests hold the new endings, and the successful, lost-response and
   unreadable-confirmation tests now assert that the observation after the write
   actually happened: removing it fails all four.
+- 21 November 2026: remediated the fifth review round on `bc3c25c`, which
+  accepted the endings and found three narrower gaps. A failure after the
+  publish call was entered was reported as itself: a permanent read or
+  verification failure inside or after the loop exited before the run could say
+  the release may already be public, so the operator saw only the read error
+  and the retry it invites would be a second publication.
+  `uncertain_after_write` now restates such a failure with the uncertainty and
+  keeps the original error as its cause; it covers the loop body after a write
+  and the confirming read, and it is never applied before a write, so a recheck
+  that refused the write still reports a state that did not converge. Two tests
+  hold it, one for a permanent confirmation read on the last step and one for a
+  verification failure on the step after the publish; each asserts exactly one
+  publish call and the preserved cause. The withdrawn-recheck sentence in both
+  documents was also wrong: a withdrawal whose fresh reading is a conflict
+  reports that conflict, and a withdrawal reports non-convergence only when no
+  earlier step entered the publish call. `publish_observation`'s exported
+  helpers gained NumPy-style parameter and return contracts, including that
+  `settle` requires `completed` to derive from `observed` and that
+  `observe_or_keep` does not read the API when handed a reading.
+- 21 November 2026: split the step effects out of `publish` into
+  `publish_steps`, because wrapping the loop body in the failure translation
+  pushed `_converge` past ruff's complexity limit and the module past pylint's
+  400-line budget. `advance` now holds one whole step — decide, record the
+  decision, perform the effect — and the effects it performs keep their own
+  module beside the loop that drives them. `publish` is left with the loop, the
+  ending and the local-asset precondition, at 178 lines. The step module logs
+  through the orchestration's logger deliberately: the events of one
+  publication belong to one trace, and a per-module level selection on
+  `kani_snapshot.publish` enables all of them. Two logging tests caught the
+  difference when the module first used its own logger.
 
 ## Surprises & discoveries
 

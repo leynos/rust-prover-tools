@@ -223,3 +223,102 @@ def test_a_recheck_that_stops_the_final_publish_does_not_claim_a_write(
     )
     assert api.calls.count("publish") == 0, "the withdrawn write was attempted"
     assert api.is_draft is True, "the release was published under test"
+
+
+class _UnreadableAfterPublishApi(FakeReleaseApi):
+    """Refuse every observation after the publish, without retrying.
+
+    A permanent read failure is not the retryable kind the loop tolerates: it
+    ends the run. What it must not do is hide that the release is already
+    public.
+    """
+
+    def __init__(self) -> None:
+        """Create the fake with its release still readable."""
+        super().__init__()
+        self.published = False
+
+    def publish(self, tag: str, release_id: int) -> None:
+        """Publish, then make the release unreadable from that moment on."""
+        super().publish(tag, release_id)
+        self.published = True
+
+    def observe(self, tag: str) -> ObservedRelease:
+        """Fail permanently once the release has been published."""
+        if self.published:
+            msg = "the release could not be read"
+            raise ProverToolError(msg)
+        return super().observe(tag)
+
+
+def test_a_permanent_read_failure_after_the_publish_still_names_the_write(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A failed confirmation keeps its diagnosis and reports the uncertainty.
+
+    The write landed, the run cannot see it, and the read error is the only
+    detail it holds. Reporting that alone would invite the retry the run has
+    just made unsafe, so the read error is kept as the cause and the message
+    says the release may already be public.
+    """
+    api = _UnreadableAfterPublishApi()
+    with pytest.raises(ProverToolError, match="may already be public") as raised:
+        publish_release(fixtures.request(tmp_path), api, max_steps=4)
+    assert "could not be read" in str(raised.value), "the read error was lost"
+    assert isinstance(raised.value.__cause__, ProverToolError), (
+        "the original failure was not kept as the cause"
+    )
+    assert api.calls.count("publish") == 1, "publication was attempted twice"
+
+
+class _UnverifiableAfterPublishApi(FakeReleaseApi):
+    """Fail the verification that follows the publish.
+
+    A published release is read as unverified, so the next decision asks for
+    another verification. That download is the step after the write, and its
+    failure must not read as though nothing was published.
+    """
+
+    def __init__(self) -> None:
+        """Create the fake with its release still unverified."""
+        super().__init__()
+        self.published = False
+
+    def publish(self, tag: str, release_id: int) -> None:
+        """Publish, then refuse every later verification."""
+        super().publish(tag, release_id)
+        self.published = True
+
+    def verify(
+        self,
+        tag: str,
+        observed: ObservedRelease,
+        names: cabc.Sequence[str],
+    ) -> VerifiedAssets:
+        """Fail permanently once the release has been published."""
+        if self.published:
+            msg = "the published bytes could not be authenticated"
+            raise ProverToolError(msg)
+        return super().verify(tag, observed, names)
+
+
+def test_a_failed_verification_after_the_publish_still_names_the_write(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A step after the write can fail, and the ending must still say so.
+
+    The budget reaches the step after the publish, where the published release
+    asks to be verified again. The verification fails permanently, so the run
+    ends there; the error must report both that verification failed and that
+    the release may already be public.
+    """
+    api = _UnverifiableAfterPublishApi()
+    with pytest.raises(ProverToolError, match="may already be public") as raised:
+        publish_release(fixtures.request(tmp_path), api, max_steps=5)
+    assert "could not be authenticated" in str(raised.value), (
+        "the verification error was lost"
+    )
+    assert isinstance(raised.value.__cause__, ProverToolError), (
+        "the original failure was not kept as the cause"
+    )
+    assert api.calls.count("publish") == 1, "publication was attempted twice"

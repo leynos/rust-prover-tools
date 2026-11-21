@@ -11,6 +11,9 @@ repeated or to accept a state the run never reached.
 
 `StepOutcome` is how the loop says which of those happened: the reading a step
 produced without writing, and whether the irreversible call was entered.
+`uncertain_after_write` carries the same fact into failure: once the call has
+been entered, a later failure of any kind leaves a release that may be public,
+so the error it produces says so instead of reading as though nothing happened.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.publish_request import PublicationRequest
     from rust_prover_tools.observability import OperationSpan
 
-__all__ = ("StepOutcome", "decide_exhausted")
+__all__ = ("StepOutcome", "decide_exhausted", "uncertain_after_write")
 
 
 @dc.dataclass(frozen=True)
@@ -113,3 +116,29 @@ def decide_exhausted(
         )
         raise ProverToolError(msg)
     return None
+
+
+def uncertain_after_write(error: ProverToolError) -> ProverToolError:
+    """Return `error` restated as the uncertainty a publish call leaves behind.
+
+    Once a run has entered the publish call, a later failure cannot be reported
+    as a plain failure: the release may be public even though this run never
+    saw it, and an operator reading only the failing read or verification would
+    retry a publication that already happened. The original error is kept as
+    the cause, so its diagnosis survives, and nothing here retries anything.
+
+    Parameters
+    ----------
+    error : ProverToolError
+        The failure raised after this run entered its publish call.
+
+    Returns
+    -------
+    ProverToolError
+        An error carrying the same diagnosis and the publication uncertainty.
+    """
+    msg = (
+        "publication entered a publish call earlier in this run, so the release"
+        f" may already be public; {error}"
+    )
+    return ProverToolError(msg)
