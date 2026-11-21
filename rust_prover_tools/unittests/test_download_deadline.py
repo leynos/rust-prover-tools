@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import socket
+import ssl
 import threading
 import typing as typ
 
@@ -352,3 +353,38 @@ def test_watchdog_is_inert_for_an_unbounded_deadline() -> None:
     finally:
         watchdog.stop()
     assert not watchdog.expired, "an unbounded watchdog can never expire"
+
+
+def test_watchdog_shutdown_preserves_a_tls_socket_wrapper() -> None:
+    """A TLS socket keeps its SSL object when the watchdog shuts it down.
+
+    `SSLSocket.shutdown` clears `_sslobj` before shutting the descriptor down,
+    so a read that already passed its own "is there a wrapper?" check can then
+    dereference the cleared field and fail with `AttributeError`, which no
+    caller classifies as the deadline. The watchdog shuts the descriptor down
+    through the base class instead. The private attribute is the invariant
+    here, so the test inspects it directly.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    client, server = socket.socketpair()
+    tls = context.wrap_socket(
+        client,
+        server_hostname="127.0.0.1",
+        do_handshake_on_connect=False,
+    )
+    watchdog = download_deadline._DeadlineWatchdog(
+        typ.cast("download_stream._DeadlineSocket", tls),
+        float("inf"),
+    )
+    try:
+        wrapper = getattr(tls, "_sslobj", None)
+        assert wrapper is not None, "the wrapper must exist before the test"
+        watchdog._shut_down()
+        assert getattr(tls, "_sslobj", None) is not None, (
+            "shutting the socket down must not discard its TLS wrapper"
+        )
+    finally:
+        tls.close()
+        server.close()

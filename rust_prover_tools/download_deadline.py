@@ -28,6 +28,7 @@ import dataclasses as dc
 import logging
 import math
 import socket
+import ssl
 import threading
 import typing as typ
 from time import monotonic
@@ -103,7 +104,23 @@ class _DeadlineWatchdog:
     def _shut_down(self) -> None:
         """Shut the captured socket down, treating a closed one as done."""
         with contextlib.suppress(OSError):
-            self._sock.shutdown(socket.SHUT_RDWR)
+            _shut_down_socket(self._sock)
+
+
+def _shut_down_socket(sock: _DeadlineSocket) -> None:
+    """Shut a socket down without discarding its TLS state.
+
+    `SSLSocket.shutdown` clears the socket's SSL object before shutting the
+    descriptor down. A read that has already passed its own "is there a
+    wrapper?" check can then dereference the cleared field and fail with
+    `AttributeError`, which no caller classifies as the deadline. Shutting the
+    descriptor down through the base class releases the blocked call and leaves
+    the wrapper in place, so the read fails with the socket's `OSError`.
+    """
+    if isinstance(sock, ssl.SSLSocket):
+        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+        return
+    sock.shutdown(socket.SHUT_RDWR)
 
 
 @dc.dataclass(slots=True)
