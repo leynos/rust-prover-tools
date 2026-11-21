@@ -305,17 +305,29 @@ Plain-language terms used in this plan:
   module-level `run_command` reference remains the shared patch point so
   existing route tests and callers are unaffected. Date/Author: 2026-11-21,
   implementation agent.
+- D15. Decision: accept a Kani failure explanation without a source location,
+  while still requiring one explanation per counted failure.
+  Rationale: Kani 0.67.0 may omit the optional trace location, but the verdict
+  still reports the proof as failed; rejecting the log would turn a valid
+  failure into a tool error. The count reconciliation still makes a deleted
+  explanation detectable.
+  Date/Author: 2026-11-21, implementation agent.
+- D16. Decision: a successful Kani classification requires an explicit zero
+  exit status; an absent status is an error.
+  Rationale: only a supervisor stop or a launch failure can leave a child
+  without a status, and both are classified earlier. Treating an impossible
+  absence as success would weaken the exact-success rule.
+  Date/Author: 2026-11-21, implementation agent.
 - D13. Decision: a JSONL record that exceeds its byte budget is shortened by
   bounding its string fields before serialization, with a minimal valid
-  `truncated` record as the last resort.
-  Rationale: cutting a serialized line produces invalid JSON and makes the
-  whole evidence stream unreadable through the strict reader. Keeping every
-  record valid preserves the stream's value after a pathological line.
-  Date/Author: 2026-11-21, implementation agent.
+  `truncated` record as the last resort. Rationale: cutting a serialized line
+  produces invalid JSON and makes the whole evidence stream unreadable through
+  the strict reader. Keeping every record valid preserves the stream's value
+  after a pathological line. Date/Author: 2026-11-21, implementation agent.
 - D14. Decision: a test-target harness composes `--tests` because Kani 0.67.0
-  only builds an integration-test target when that flag is present.
-  Rationale: exact selection cannot match a target Kani never built.
-  Date/Author: 2026-11-21, implementation agent.
+  only builds an integration-test target when that flag is present. Rationale:
+  exact selection cannot match a target Kani never built. Date/Author:
+  2026-11-21, implementation agent.
 - D12. Decision: the supervision layer's adapter seam is an
   `observer(spec)` factory plus `classify(evidence, observer)`. Rationale:
   classification needs facts accumulated while output streams, but the generic

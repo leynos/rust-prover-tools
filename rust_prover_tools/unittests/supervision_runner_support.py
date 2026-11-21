@@ -41,6 +41,7 @@ if typ.TYPE_CHECKING:
     )
     from rust_prover_tools.supervision.protocols import (
         CgroupReader,
+        HarnessAdapter,
         InterruptSource,
         ResourceProbe,
         Sleeper,
@@ -68,6 +69,8 @@ def async_test(
 
 class _NullObserver:
     """An observer that records nothing, for tests that do not parse output."""
+
+    last_progress: str | None = None
 
     def observe(self, line: OutputLine) -> None:
         """Discard one line."""
@@ -116,6 +119,7 @@ def environment(
     statuses: cabc.Mapping[str, ExecutionStatus] | None = None,
     sinks: Diagnostics | None = None,
     sleeper: Sleeper | None = None,
+    adapter: HarnessAdapter | None = None,
 ) -> RunEnvironment:
     """Build a run environment from doubles."""
 
@@ -130,7 +134,7 @@ def environment(
         cgroup=cgroup or ScriptedCgroup(),
         diagnostics=sinks or Diagnostics(jsonl=MemorySink()),
         build=build,
-        adapter=_ScriptedAdapter(statuses or {}),
+        adapter=adapter or _ScriptedAdapter(statuses or {}),
         sleeper=sleeper or VirtualSleeper(clock),
         interrupts=interrupts,
     )

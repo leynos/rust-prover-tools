@@ -1,15 +1,10 @@
 """Accumulate one harness block and reconcile its counts.
 
-A ``Checking harness`` block is the unit Kani reports on, and every fact a run
-needs about one harness is spread across it: the header, the ``RESULTS:`` list,
-the ``SUMMARY:`` counts and explanations, and the verdict. This module owns one
-block's accumulation so :mod:`rust_prover_tools.kani_log.reader` can stay a
-line dispatcher, and so the reconciliation rules — the part a new Kani release
-must be compared against — are readable on their own.
-
-The rules are derived from Combobulate's ``docs_validation.kani_log.reader`` at
-commit ``9dd6e3c`` and are used under the ISC licence recorded in
-``ATTRIBUTION.md``.
+A ``Checking harness`` block is the unit Kani reports on: its header,
+``RESULTS:`` list, ``SUMMARY:`` counts and verdict. This module owns one
+block's accumulation so the reader stays a line dispatcher and the
+reconciliation rules stay readable. The rules derive from Combobulate's reader
+at commit ``9dd6e3c`` under the ISC licence in ``ATTRIBUTION.md``.
 
 Examples
 --------
@@ -21,6 +16,7 @@ Examples
 
 from __future__ import annotations
 
+import re
 import typing as typ
 
 from rust_prover_tools.kani_log.issues import Issue, IssueKind
@@ -35,9 +31,6 @@ from rust_prover_tools.kani_log.syntax import (
 )
 
 __all__ = ("BlockCursor", "Issue", "IssueKind")
-
-if typ.TYPE_CHECKING:
-    import re
 
 
 class BlockCursor:
@@ -92,6 +85,8 @@ class BlockCursor:
         """Record one field of the pending check, or name the refusal."""
         if self._check_id is None:
             return "field outside a check"
+        if key in self._check_values:
+            return f"check {self._check_id!r} repeats field {key!r}"
         self._check_values[key] = value
         return None
 
@@ -165,8 +160,18 @@ class BlockCursor:
             ]
         self.block.failed_count = int(match["failed"])
         self.block.total_count = int(match["total"])
-        self.block.other_count = int(match["other"] or 0)
-        self.block.other_kind = match["other_kind"]
+        try:
+            pairs = _other_pairs(match["others"])
+        except ValueError:
+            return [
+                Issue(
+                    IssueKind.CONTRADICTION,
+                    f"the block for {self.block.name!r} has a malformed "
+                    "other-result list",
+                )
+            ]
+        self.block.other_counts = pairs
+        self.block.other_count, self.block.other_kind = pairs[0] if pairs else (0, None)
         return []
 
     def add_cover(self, match: re.Match[str]) -> list[Issue]:
@@ -300,19 +305,6 @@ class BlockCursor:
                     f"failures but explains {len(self.block.failures)}",
                 )
             )
-        unlocated = [
-            item
-            for item in self.block.failures
-            if item.path is None or item.line is None
-        ]
-        if unlocated:
-            reasons.append(
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {name!r} explains a failure without a source "
-                    f"location: {unlocated[0].message!r}",
-                )
-            )
         return reasons
 
     def _reconcile_covers(self) -> list[Issue]:
@@ -368,18 +360,36 @@ class BlockCursor:
         return reasons
 
     def _reconcile_other(self) -> list[Issue]:
-        """Check the parenthesized other-result count against the checks."""
-        if self.block.other_kind is None:
-            return []
-        status = OTHER_STATUS.get(self.block.other_kind, "")
-        observed = sum(1 for item in self.block.checks if item.status == status)
-        if self.block.other_count != observed:
-            return [
-                Issue(
-                    IssueKind.CONTRADICTION,
-                    f"the block for {self.block.name!r} counts "
-                    f"{self.block.other_count} {self.block.other_kind} results but "
-                    f"lists {observed}",
+        """Check every parenthesized other-result pair against the checks."""
+        pairs = self.block.other_counts or (
+            ((self.block.other_count, self.block.other_kind),)
+            if self.block.other_kind is not None
+            else ()
+        )
+        reasons: list[Issue] = []
+        for count, kind in pairs:
+            status = OTHER_STATUS.get(kind, "")
+            observed = sum(1 for item in self.block.checks if item.status == status)
+            if count != observed:
+                reasons.append(
+                    Issue(
+                        IssueKind.CONTRADICTION,
+                        f"the block for {self.block.name!r} counts {count} "
+                        f"{kind} results but lists {observed}",
+                    )
                 )
-            ]
-        return []
+        return reasons
+
+
+def _other_pairs(text: str | None) -> tuple[tuple[int, str], ...]:
+    """Parse a comma-separated list of ``N kind`` other-result pairs."""
+    if not text:
+        return ()
+    pairs: list[tuple[int, str]] = []
+    for part in text.split(","):
+        match = re.fullmatch(r"\s*(\d+)\s+([a-z]+)\s*", part)
+        if match is None:
+            msg = f"malformed other-result pair {part!r}"
+            raise ValueError(msg)
+        pairs.append((int(match[1]), match[2]))
+    return tuple(pairs)

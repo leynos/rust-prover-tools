@@ -54,9 +54,11 @@ class HarnessBlock:
     total_count : int | None
         Total from the same line, when printed.
     other_count : int
-        Count of ``(N undetermined)`` or similar results.
+        Count of the first ``(N undetermined)`` or similar result pair.
     other_kind : str | None
-        Word Kani used for ``other_count``.
+        Word Kani used for the first ``other_count``.
+    other_counts : tuple[tuple[int, str], ...]
+        Every ``(count, kind)`` pair in the summary, in log order.
     covered_satisfied : int | None
         Satisfied cover count, when a cover count was printed.
     covered_total : int | None
@@ -86,6 +88,7 @@ class HarnessBlock:
     total_count: int | None = None
     other_count: int = 0
     other_kind: str | None = None
+    other_counts: tuple[tuple[int, str], ...] = ()
     covered_satisfied: int | None = None
     covered_total: int | None = None
     covered_unreachable: int | None = None

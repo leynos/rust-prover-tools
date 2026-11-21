@@ -240,3 +240,23 @@ def test_an_explicit_empty_environment_is_not_replaced(
     environment = qualified.spec.env
     assert environment is not None
     assert "RPT_HOST_ONLY" not in environment
+
+
+def test_an_empty_environment_is_not_replaced_by_the_host(
+    installed_release: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty injected environment fails rather than reading the host."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("RPT_HOST_ONLY", "1")
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_release.run_command",
+        _identity_runner([]),
+    )
+
+    with pytest.raises(ProverToolError, match="requires injected HOME or CARGO_HOME"):
+        qualify_kani_installation(
+            KaniExecOptions(installed_release, tmp_path, ()),
+            {},
+        )

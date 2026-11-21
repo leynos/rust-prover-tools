@@ -32,6 +32,13 @@ __all__ = (
 _SCHEMA_VERSION = 1
 
 
+#: The optional context a truncation record may carry.
+_TRUNCATED_CONTEXT: typ.Final[frozenset[str]] = frozenset({
+    "original_kind",
+    "run_id",
+})
+
+
 class EvidenceFormatError(ValueError):
     """A record or report that does not match the documented schema."""
 
@@ -49,6 +56,20 @@ def _require_exact(
         msg = (
             f"{subject} does not match the schema: missing={missing}, unknown={unknown}"
         )
+        raise EvidenceFormatError(msg)
+
+
+def _require_optional(
+    document: cabc.Mapping[str, object],
+    permitted: frozenset[str],
+    *,
+    required: frozenset[str],
+) -> None:
+    """Require `required`, permit `permitted`, and reject anything else."""
+    missing = sorted(required - set(document))
+    unknown = sorted(set(document) - permitted)
+    if missing or unknown:
+        msg = f"the record has missing={missing} and unknown={unknown}"
         raise EvidenceFormatError(msg)
 
 
@@ -170,7 +191,11 @@ def _decode_record(line: str, number: int) -> dict[str, object]:
     if not isinstance(kind, str) or kind not in JSONL_FIELDS:
         msg = f"record {number} has unknown kind {kind!r}"
         raise EvidenceFormatError(msg)
-    _require_exact(document, JSONL_FIELDS[kind], subject=f"record {number}")
+    fields = JSONL_FIELDS[kind]
+    if kind == "truncated":
+        _require_optional(document, fields | _TRUNCATED_CONTEXT, required=fields)
+    else:
+        _require_exact(document, fields, subject=f"record {number}")
     _validate_record_measurements(kind, document, subject=f"record {number}")
     return typ.cast("dict[str, object]", document)
 
@@ -259,3 +284,24 @@ def _validate_results(results: object) -> None:
         for field in ("peak_group_rss", "min_host_available", "host_total"):
             decode_measurement(result[field], subject=f"result {index}.{field}")
         _validate_cgroup(result["cgroup"], subject=f"result {index}.cgroup")
+        _validate_diagnostic(result["diagnostic"], subject=f"result {index}.diagnostic")
+
+
+def _validate_diagnostic(document: object, *, subject: str) -> None:
+    """Require a diagnostic reference to name a sink and an integer offset."""
+    if document is None:
+        return
+    if not isinstance(document, dict):
+        msg = f"{subject} is not an object"
+        raise EvidenceFormatError(msg)
+    _require_exact(document, frozenset({"sink", "offset"}), subject=subject)
+    if not isinstance(document["sink"], str):
+        msg = f"{subject}.sink is not a string"
+        raise EvidenceFormatError(msg)
+    offset = document["offset"]
+    if not isinstance(offset, int) or isinstance(offset, bool):
+        msg = f"{subject}.offset is not an integer"
+        raise EvidenceFormatError(msg)
+    if offset < 0:
+        msg = f"{subject}.offset is negative"
+        raise EvidenceFormatError(msg)

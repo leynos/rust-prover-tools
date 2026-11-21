@@ -83,7 +83,7 @@ CHECK = re.compile(r"^Check (?P<number>\d+): (?P<identifier>\S+)$")
 FIELD = re.compile(r"^\t - (?P<key>Status|Description|Location): (?P<value>.*)$")
 TOTAL = re.compile(
     r"^ \*\* (?P<failed>\d+) of (?P<total>\d+) failed"
-    r"(?: \((?P<other>\d+) (?P<other_kind>[a-z]+)\))?$"
+    r"(?: \((?P<others>[^)]*)\))?$"
 )
 COVER = re.compile(
     r"^ \*\* (?P<satisfied>\d+) of (?P<total>\d+) cover properties satisfied"

@@ -285,10 +285,14 @@ class AttemptSupervisor:
         running.stop(verdict.reason)
         return True
 
+    def _recognised_progress(self) -> str | None:
+        """Return the adapter's last recognised progress line, if any."""
+        return None if self._observer is None else self._observer.last_progress
+
     def _idle_seconds(self, elapsed: float) -> float:
-        """Seconds since the last observed output line."""
+        """Seconds since the last observed output, or since the start."""
         if self._last_output_elapsed is None:
-            return 0.0
+            return elapsed
         return max(0.0, elapsed - self._last_output_elapsed)
 
     def _evidence(

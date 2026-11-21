@@ -55,6 +55,8 @@ if typ.TYPE_CHECKING:
 class _NullObserver:
     """An observer that records nothing; this witness checks process behaviour."""
 
+    last_progress: str | None = None
+
     def observe(self, line: object) -> None:
         """Discard one line."""
 

@@ -73,6 +73,9 @@ class Sleeper(typ.Protocol):
 class LineObserver(typ.Protocol):
     """A per-attempt observer that accumulates prover evidence as it streams."""
 
+    last_progress: str | None
+    """Last recognised prover progress line, or `None` before one is seen."""
+
     def observe(self, line: OutputLine) -> None:
         """Consume one decoded child output line."""
         ...

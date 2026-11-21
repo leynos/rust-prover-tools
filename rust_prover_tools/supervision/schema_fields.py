@@ -102,13 +102,8 @@ JSONL_FIELDS: typ.Final[dict[str, frozenset[str]]] = {
         "last_progress",
         "detail",
     }),
-    "truncated": frozenset({
-        "schema",
-        "record",
-        "marker",
-        "original_kind",
-        "run_id",
-    }),
+    # The minimal truncation record may omit its optional context fields.
+    "truncated": frozenset({"schema", "record", "marker"}),
     "run-finish": frozenset({
         "schema",
         "record",

@@ -67,6 +67,9 @@ async def test_a_silent_passing_child_still_produces_a_heartbeat() -> None:
     assert "heartbeat" in kinds
     assert "harness-finish" in kinds
     assert "run-finish" in kinds
+    heartbeats = [record for record in jsonl.records if record["record"] == "heartbeat"]
+    idle = typ.cast("float", heartbeats[0]["idle_seconds"])
+    assert idle > 0
     assert report.results[0].stop_reason is StopReason.TIMEOUT
 
 
@@ -180,8 +183,8 @@ def test_a_missing_execution_makes_the_run_incomplete() -> None:
 
 
 @_async_test
-async def test_a_duplicate_execution_fails_the_aggregate_result() -> None:
-    """Executing one identity twice is drift even when the count matches."""
+async def test_a_repeated_expectation_matched_exactly_is_complete() -> None:
+    """An exactly matched repeated expectation is not drift."""
     clock = VirtualClock()
     launcher = ScriptedLauncher()
     environment = _environment(launcher, clock)
@@ -193,8 +196,9 @@ async def test_a_duplicate_execution_fails_the_aggregate_result() -> None:
         environment,
     )
 
-    assert duplicate.qualified in report.accounting.duplicate
-    assert report.outcome is RunOutcome.INCOMPLETE
+    assert report.accounting.duplicate == ()
+    assert report.is_complete
+    assert report.outcome is RunOutcome.PASSED
 
 
 @_async_test
@@ -329,3 +333,45 @@ async def test_a_launch_failure_is_not_counted_as_executed() -> None:
     assert not report.results[0].executed
     assert not report.is_complete
     assert spec().qualified in report.accounting.missing
+
+
+class _InterruptingSink:
+    """A sink that fires an interrupt when the harness finishes."""
+
+    def __init__(self, interrupts: StepInterrupts) -> None:
+        """Wrap an interrupt source and a memory sink."""
+        self._interrupts = interrupts
+        self._records: list[dict[str, object]] = []
+
+    def write(self, record: dict[str, object]) -> None:
+        """Record the payload and fire once the harness finishes."""
+        self._records.append(record)
+        if record.get("record") == "harness-finish":
+            self._interrupts.fire(15)
+
+    def flush(self) -> None:
+        """Do nothing: the sink is in memory."""
+
+    @property
+    def offset(self) -> int:
+        """A monotonic record count as a stand-in offset."""
+        return len(self._records)
+
+
+@_async_test
+async def test_a_late_interrupt_is_refreshed_before_finalization() -> None:
+    """A signal that arrives during the final finish record is not lost."""
+    clock = VirtualClock()
+    interrupts = StepInterrupts()
+    environment = _environment(
+        ScriptedLauncher(clock=clock),
+        clock,
+        interrupts=interrupts,
+        sinks=Diagnostics(jsonl=_InterruptingSink(interrupts)),
+    )
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert report.interrupted
+    assert report.interrupt_signal == 15
+    assert report.outcome is RunOutcome.INTERRUPTED

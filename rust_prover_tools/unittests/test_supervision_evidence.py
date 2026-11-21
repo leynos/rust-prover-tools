@@ -9,6 +9,7 @@ import typing as typ
 import pytest
 
 from rust_prover_tools.supervision import (
+    MIN_LINE_BYTES,
     REPORT_NOTES,
     Diagnostics,
     DiagnosticSinks,
@@ -132,6 +133,27 @@ def test_an_oversized_record_remains_valid_json() -> None:
         assert "…[truncated]" in str(records[0]["run_id"])
     else:
         assert records[0]["marker"] == "…[truncated]"
+
+
+def test_the_fallback_record_fits_the_minimum_budget() -> None:
+    """Even the minimal truncation record obeys the configured budget."""
+    handle = io.StringIO()
+    sink = JsonlSink(handle, max_line_bytes=MIN_LINE_BYTES)
+
+    sink.write(_record(run_id="x" * 10_000))
+
+    assert len(handle.getvalue().encode("utf-8")) <= MIN_LINE_BYTES
+    assert len(decode_jsonl(handle.getvalue())) == 1
+
+
+def test_a_diagnostic_reference_needs_an_offset() -> None:
+    """A nested diagnostic reference obeys the same strict key set."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["diagnostic"] = {"sink": "jsonl"}
+
+    with pytest.raises(EvidenceFormatError, match="missing"):
+        validate_report_document(document)
 
 
 def test_an_appended_sink_keeps_absolute_offsets() -> None:

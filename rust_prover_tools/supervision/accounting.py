@@ -66,7 +66,11 @@ def compare_identities(
     seen = collections.Counter(executed)
     missing = sorted((wanted - seen).elements())
     unexpected = sorted((seen - wanted).elements())
-    duplicate = sorted(key for key, count in seen.items() if count > 1)
+    # A repeated identity is drift only when it exceeds its expected count, so
+    # an exactly matched repeated expectation has no drift.
+    duplicate = sorted(
+        key for key, count in seen.items() if count > 1 and count > wanted.get(key, 0)
+    )
     return InventoryDrift(
         missing=tuple(missing),
         duplicate=tuple(duplicate),

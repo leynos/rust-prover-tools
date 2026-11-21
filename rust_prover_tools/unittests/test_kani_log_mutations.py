@@ -74,13 +74,52 @@ def test_a_second_verification_result_is_refused() -> None:
     assert "reports two verification results" in refusal_of(lines)
 
 
-def test_a_failure_without_its_source_location_is_refused() -> None:
-    """Require the `` File:`` line, which carries the fact a record cannot invent."""
+def test_a_failure_without_its_source_location_is_preserved() -> None:
+    """Kani may omit the optional location; the failure remains a failure."""
     lines = lines_of("counterexample")
     index = next(
         index for index, line in enumerate(lines) if line.startswith(" File: ")
     )
-    assert "without a source location" in refusal_of(lines[:index] + lines[index + 1 :])
+
+    log = parse("\n".join(lines[:index] + lines[index + 1 :]))
+
+    (block,) = log.blocks
+    assert block.verdict == "FAILED"
+    assert block.failures[0].path is None
+
+
+def test_a_duplicate_check_field_is_refused() -> None:
+    """A repeated field could hide a failure behind a later success."""
+    lines = lines_of("verified")
+    index = next(
+        index for index, line in enumerate(lines) if line.startswith("\t - Status:")
+    )
+    lines.insert(index + 1, "\t - Status: FAILURE")
+    assert "repeats field 'Status'" in refusal_of(lines)
+
+
+def test_a_summary_with_two_other_pairs_is_parsed() -> None:
+    """Kani may print undetermined and unreachable counts together."""
+    lines = [
+        line.replace("(3 undetermined)", "(3 undetermined,0 unreachable)")
+        for line in lines_of("insufficient_unwind")
+    ]
+
+    log = parse("\n".join(lines))
+
+    assert log.blocks[0].other_counts == (
+        (3, "undetermined"),
+        (0, "unreachable"),
+    )
+
+
+def test_a_wrong_pair_in_a_multi_pair_summary_is_refused() -> None:
+    """Every pair in a multi-pair summary is reconciled."""
+    lines = [
+        line.replace("(3 undetermined)", "(3 undetermined,1 unreachable)")
+        for line in lines_of("insufficient_unwind")
+    ]
+    assert "counts 1 unreachable results but lists 0" in refusal_of(lines)
 
 
 def test_a_check_listed_that_the_count_denies_is_refused() -> None:

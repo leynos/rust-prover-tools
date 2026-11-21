@@ -152,11 +152,17 @@ class KaniAdapter:
                 detail=detail,
                 progress=observer.last_progress,
             )
-        if evidence.exit_code not in {0, None} or evidence.signal_number is not None:
+        if evidence.exit_code is None:
+            status, reason = ExecutionStatus.ERROR, "no exit status"
+        elif evidence.exit_code != 0 or evidence.signal_number is not None:
+            status, reason = ExecutionStatus.EXIT_NONZERO, detail
+        else:
+            status = None
+        if status is not None:
             return _classification(
-                ExecutionStatus.EXIT_NONZERO,
+                status,
                 verdict=verdict,
-                detail=detail,
+                detail=reason,
                 progress=observer.last_progress,
             )
         if block.succeeded:

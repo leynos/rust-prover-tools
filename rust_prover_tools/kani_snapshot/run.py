@@ -109,8 +109,8 @@ class QualifiedSnapshotProof:
     ----------
     runtime : SnapshotRuntime
         Validated generation, toolchain, and launcher.
-    cwd : Path | None
-        Proof working directory, or `None` to inherit the caller's.
+    cwd : Path
+        Absolute proof working directory that preparation checked.
     environment : cabc.Mapping[str, str | UnsetType]
         Child environment overlay built once for this generation.
     arguments : tuple[str, ...]
@@ -120,7 +120,7 @@ class QualifiedSnapshotProof:
     """
 
     runtime: SnapshotRuntime
-    cwd: Path | None
+    cwd: Path
     environment: cabc.Mapping[str, str | UnsetType]
     arguments: tuple[str, ...]
     backend_version: str
@@ -213,15 +213,15 @@ def prepare_snapshot_proof(
         toolchain=identity.toolchain,
         backend_version=identity.backend_version,
     )
-    working_directory = Path.cwd() if options.cwd is None else options.cwd
+    working_directory = (Path.cwd() if options.cwd is None else options.cwd).resolve()
     base = os.environ if environment is None else environment
     return QualifiedSnapshotProof(
         runtime=runtime,
-        cwd=options.cwd,
+        cwd=working_directory,
         environment=proof_environment(
             runtime,
             base,
-            cwd=working_directory.resolve(),
+            cwd=working_directory,
         ),
         arguments=options.args,
         backend_version=runtime.backend_version,

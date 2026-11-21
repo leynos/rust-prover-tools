@@ -114,7 +114,9 @@ select the identity the inventory names.
 Discovery refuses an unknown package, a package with no verifiable target, a
 package that resolves to no harnesses, a duplicate pretty name across targets,
 a missing module file, an ambiguous pair of module files, and a module file
-reachable twice.
+that re-enters an active ancestor (a cycle). One file reached through two
+different `#[path]` declarations is allowed: the two module paths give it two
+distinct identities.
 
 ### Inventory document, version 1
 

@@ -261,3 +261,11 @@ def test_an_unregistered_grammar_is_refused_before_observation() -> None:
 def test_the_adapter_exports_are_the_documented_types() -> None:
     """The classifier and observer are the public adapter surface."""
     assert KaniAdapter().version == "0.67.0"
+
+
+def test_a_passing_log_without_an_exit_status_is_an_error() -> None:
+    """Success requires an explicit zero status, not an absent one."""
+    result = _classify("harnesses::a", exit_code=None)
+
+    assert result.status is ExecutionStatus.ERROR
+    assert "no exit status" in result.detail

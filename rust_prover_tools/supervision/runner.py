@@ -209,6 +209,10 @@ class SupervisedRun:
 
     def _finalize(self, ledger: _RunLedger, started_at: dt.datetime) -> RunReport:
         """Build, emit, and optionally write the run's final report."""
+        signum = self._signum()
+        if signum is not None:
+            ledger.interrupted = True
+            ledger.interrupt_signal = signum
         ledger.finished_at = self.environment.clock.now()
         report = assemble_report(
             ReportInput(

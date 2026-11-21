@@ -106,14 +106,25 @@ def fit_record(payload: dict[str, object], limit: int) -> str:
         line = json.dumps(candidate, ensure_ascii=False)
         if len(line.encode("utf-8")) <= limit:
             return line
-    fallback = {
+    minimal = {
         "schema": JSONL_SCHEMA_VERSION,
         "record": "truncated",
         "marker": TRUNCATION_MARKER,
-        "original_kind": str(payload.get("record", "")),
-        "run_id": str(payload.get("run_id", "")),
     }
-    return json.dumps(fallback, ensure_ascii=False)
+    for include_context in (True, False):
+        fallback = dict(minimal)
+        if include_context:
+            fallback["original_kind"] = bounded_text(
+                str(payload.get("record", "")), MIN_LINE_BYTES // 2
+            )
+            fallback["run_id"] = bounded_text(
+                str(payload.get("run_id", "")), MIN_LINE_BYTES // 2
+            )
+        line = json.dumps(fallback, separators=(",", ":"), ensure_ascii=False)
+        if len(line.encode("utf-8")) <= limit:
+            return line
+    msg = f"max_line_bytes={limit} is too small for a valid record"
+    raise ValueError(msg)
 
 
 def normalise(value: object) -> object:

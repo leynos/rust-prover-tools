@@ -86,3 +86,10 @@ def test_comparison_is_total(
     assert isinstance(drift.missing, tuple)
     assert isinstance(drift.duplicate, tuple)
     assert isinstance(drift.unexpected, tuple)
+
+
+def test_a_repeated_expectation_matched_exactly_has_no_drift() -> None:
+    """Equal multisets have no drift even when an identity is repeated."""
+    drift = compare_identities(("a::x", "a::x"), ("a::x", "a::x"))
+
+    assert drift.is_empty

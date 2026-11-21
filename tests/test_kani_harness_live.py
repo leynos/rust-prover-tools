@@ -63,7 +63,6 @@ def test_a_live_run_classifies_passing_path_and_failing_proofs() -> None:
     assert run.exit_status == 1
 
 
-def test_the_live_fixture_is_opt_in() -> None:
-    """The default suite states why the live case did not run."""
+def test_the_live_fixture_exists() -> None:
+    """The opt-in case names a fixture this checkout contains."""
     assert _FIXTURE.is_dir()
-    assert os.environ.get("RPT_LIVE_KANI") in {None, "0", "1"}

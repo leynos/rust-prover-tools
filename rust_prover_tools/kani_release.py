@@ -17,6 +17,8 @@ import sys
 import time
 import typing as typ
 
+from cuprum.context import EnvMode
+
 from rust_prover_tools.commands import CommandSpec, run_command  # ruff: ignore[unused-import] - qualification's patch point
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
 from rust_prover_tools.kani_exec_routing import runtime_search_path
@@ -280,6 +282,10 @@ def _prepare_kani_command(
         (str(root / "bin/kani-driver"), "kani", *options.arguments),
         cwd=cwd,
         env=child,
+        # The child environment was resolved once from the injected mapping.
+        # Replacing, rather than overlaying, keeps a later host change from
+        # reaching a derived harness command that qualification never saw.
+        env_mode=EnvMode.REPLACE,
     )
     return spec, root
 
