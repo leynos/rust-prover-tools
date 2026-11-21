@@ -111,7 +111,7 @@ Plain-language terms used in this plan:
   changes; no new runtime dependency is planned.
 - Documentation: if net lines of documentation excluding ExecPlan files exceed
   1,200, stop and escalate.
-- Dependencies: no new runtime or development dependency is authorised. If a
+- Dependencies: no new runtime or development dependency is authorized. If a
   new dependency seems necessary, stop and escalate.
 - Architecture: if the work needs to change the process-group ownership
   pattern, the qualified route contracts, or the bounded telemetry contract,
@@ -167,8 +167,10 @@ Plain-language terms used in this plan:
   `--output-format` defaults to `regular` and accepts `regular`, `terse`, and
   `old`; `--exact` matches the fully qualified name.
 - [x] (2026-11-21 11:50Z) Branch renamed and Lody session titled.
-- [ ] `EP-M1` Kani 0.67.0 grammar, incremental reader, registry, corpus, and
-  typed timeout reason.
+- [x] (2026-11-21 12:40Z) `EP-M1` Kani 0.67.0 grammar, incremental reader,
+  registry, corpus, and typed timeout reason. All fifteen corpus logs parse or
+  refuse exactly as committed; `make all`, Markdown lint, and Mermaid
+  validation pass.
 - [ ] `EP-M2` Prover-neutral supervision models, measurement, evidence sinks,
   accounting, report schema, and runner.
 - [ ] `EP-M3` Package-qualified Kani inventory discovery, strict inventory
@@ -199,6 +201,14 @@ Plain-language terms used in this plan:
   commit `9dd6e3c`. Impact: an incremental state machine can reproduce it
   exactly; whole-text `parse()` becomes feed-line plus finish, which makes the
   equivalence test straightforward.
+- Observation: the reader records refusals and raises at `finish` rather
+  than raising on the first bad line. This keeps the selection record and the
+  verdict of a proof that was stopped mid-report available to the supervisor
+  while still failing a complete call closed.
+  Evidence: `KaniLogReader.facts` reports `selection_records`,
+  `verdicts`, and `truncation_reason` before `finish` raises.
+  Impact: the classifier can attribute an interruption to the harness that was
+  actually running.
 - Observation: the corpus contains exactly fifteen logs: `counterexample`,
   `default_unwind`, `expected_panic`, `fail_fast`, `in_place`,
   `insufficient_unwind`, `list`, `multiplication_timeout`,
@@ -258,7 +268,7 @@ Plain-language terms used in this plan:
   error so standard output stays suitable for the final table and machine
   consumption; library consumers retain control of destinations. Date/Author:
   2026-11-21, implementation agent.
-- D9. Decision: the inventory scanner recognises `#[kani::proof]` and
+- D9. Decision: the inventory scanner recognizes `#[kani::proof]` and
   `#[kani::proof_for_contract]`, and marks a harness `conditional` when any
   enclosing `cfg` attribute is anything other than `cfg(kani)`. Rationale:
   `cfg(kani)` is the normal Kani activation gate and is active under the
@@ -271,9 +281,15 @@ Plain-language terms used in this plan:
 
 ## Outcomes & retrospective
 
-Not yet complete. The intended outcomes are the six milestones below and the
-five acceptance criteria in issue #260. A retrospective will be added after the
-final gates and CodeRabbit pass.
+`EP-M1` is complete: `rust_prover_tools/kani_log/` provides the ported grammar,
+value model, incremental reader, report reconciliation, exact-version registry,
+and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves the
+existing message and chains the Cuprum timeout. The full repository gate passes
+with 1,580 tests and 5 skips.
+
+The remaining outcomes are the five later milestones and the five acceptance
+criteria in issue #260. A retrospective will be added after the final gates and
+CodeRabbit pass.
 
 ## Context and orientation
 
@@ -787,7 +803,7 @@ Reconnaissance evidence:
 
 ## Interfaces and dependencies
 
-No new dependencies. Authorised interfaces (names are prescriptive):
+No new dependencies. Authorized interfaces (names are prescriptive):
 
 ```python
 # rust_prover_tools/kani_log/reader.py

@@ -1,0 +1,758 @@
+{
+  "revision": "0.1",
+  "description": "The facts every committed Kani log must yield, and the decision each must reach. Read with provenance.json, which records how each log was produced: the two together make a log's meaning a committed claim rather than this suite's opinion.",
+  "logs": {
+    "counterexample": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 0,
+        "failures": 1,
+        "total": 1,
+        "failed": [
+          "harnesses::counterexample"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::counterexample",
+          "verdict": "FAILED",
+          "failed": 1,
+          "total": 2,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "SUCCESS"
+            ],
+            [
+              "assertion",
+              "FAILURE"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "This is a placeholder message; Kani doesn't support message formatted at runtime",
+              "src/harnesses.rs",
+              18
+            ]
+          ]
+        }
+      ]
+    },
+    "expected_panic": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 0,
+        "total": 1,
+        "failed": []
+      },
+      "blocks": [
+        {
+          "name": "harnesses::expected_panic",
+          "verdict": "SUCCESSFUL",
+          "failed": 1,
+          "total": 2,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": true,
+          "checks": [
+            [
+              "assertion",
+              "FAILURE"
+            ],
+            [
+              "assertion",
+              "SUCCESS"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "This is a placeholder message; Kani doesn't support message formatted at runtime",
+              "src/harnesses.rs",
+              82
+            ]
+          ]
+        }
+      ]
+    },
+    "fail_fast": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 0,
+        "failures": 1,
+        "total": 1,
+        "failed": [
+          "harnesses::seeded_wrapping_mutant"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::seeded_wrapping_mutant",
+          "verdict": "FAILED",
+          "failed": 1,
+          "total": 2,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "SUCCESS"
+            ],
+            [
+              "assertion",
+              "FAILURE"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "This is a placeholder message; Kani doesn't support message formatted at runtime",
+              "src/harnesses.rs",
+              89
+            ]
+          ]
+        }
+      ]
+    },
+    "in_place": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 0,
+        "total": 1,
+        "failed": []
+      },
+      "blocks": [
+        {
+          "name": "verification::target_facts",
+          "verdict": "SUCCESSFUL",
+          "failed": 0,
+          "total": 2,
+          "other": [
+            1,
+            "unreachable"
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "cover",
+              "SATISFIED"
+            ],
+            [
+              "assertion",
+              "SUCCESS"
+            ],
+            [
+              "assertion",
+              "UNREACHABLE"
+            ]
+          ],
+          "covers": [
+            [
+              "the supported target has a reachable 64-bit width",
+              "SATISFIED"
+            ]
+          ],
+          "failures": []
+        }
+      ]
+    },
+    "insufficient_unwind": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 0,
+        "failures": 1,
+        "total": 1,
+        "failed": [
+          "harnesses::insufficient_unwind"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::insufficient_unwind",
+          "verdict": "FAILED",
+          "failed": 1,
+          "total": 4,
+          "other": [
+            3,
+            "undetermined"
+          ],
+          "timed_out": false,
+          "unwinding_reported": true,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "UNDETERMINED"
+            ],
+            [
+              "assertion",
+              "UNDETERMINED"
+            ],
+            [
+              "assertion",
+              "UNDETERMINED"
+            ],
+            [
+              "unwind",
+              "FAILURE"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "unwinding assertion loop 0",
+              "src/harnesses.rs",
+              56
+            ]
+          ]
+        }
+      ]
+    },
+    "list": {
+      "format": "inventory",
+      "banner": "0.67.0",
+      "unsupported": [
+        "TerminatorKind::InlineAsm"
+      ],
+      "manual": null,
+      "blocks": []
+    },
+    "multiplication_timeout": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 0,
+        "failures": 1,
+        "total": 1,
+        "failed": [
+          "harnesses::multiplication_timeout"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::multiplication_timeout",
+          "verdict": "FAILED",
+          "failed": null,
+          "total": null,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": true,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [],
+          "covers": [],
+          "failures": []
+        }
+      ]
+    },
+    "seeded_wrapping_mutant": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 0,
+        "failures": 1,
+        "total": 1,
+        "failed": [
+          "harnesses::seeded_wrapping_mutant"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::seeded_wrapping_mutant",
+          "verdict": "FAILED",
+          "failed": 1,
+          "total": 2,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "SUCCESS"
+            ],
+            [
+              "assertion",
+              "FAILURE"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "This is a placeholder message; Kani doesn't support message formatted at runtime",
+              "src/harnesses.rs",
+              89
+            ]
+          ]
+        }
+      ]
+    },
+    "selected_harness": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 0,
+        "total": 1,
+        "failed": []
+      },
+      "blocks": [
+        {
+          "name": "harnesses::verified",
+          "verdict": "SUCCESSFUL",
+          "failed": 0,
+          "total": 2,
+          "other": [
+            1,
+            "unreachable"
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "UNREACHABLE"
+            ],
+            [
+              "cover",
+              "SATISFIED"
+            ],
+            [
+              "assertion",
+              "SUCCESS"
+            ]
+          ],
+          "covers": [
+            [
+              "the boundary below saturation is reachable",
+              "SATISFIED"
+            ]
+          ],
+          "failures": []
+        }
+      ]
+    },
+    "truncated": {
+      "refused": "the log is truncated inside the block for 'harnesses::multiplication_timeout'"
+    },
+    "unsatisfied_cover": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 0,
+        "total": 1,
+        "failed": []
+      },
+      "blocks": [
+        {
+          "name": "harnesses::unsatisfied_cover",
+          "verdict": "SUCCESSFUL",
+          "failed": 0,
+          "total": 2,
+          "other": [
+            1,
+            "unreachable"
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "UNREACHABLE"
+            ],
+            [
+              "cover",
+              "UNSATISFIABLE"
+            ],
+            [
+              "assertion",
+              "SUCCESS"
+            ]
+          ],
+          "covers": [
+            [
+              "this deliberately impossible witness must be rejected",
+              "UNSATISFIABLE"
+            ]
+          ],
+          "failures": []
+        }
+      ]
+    },
+    "unsupported": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [
+        "TerminatorKind::InlineAsm"
+      ],
+      "manual": {
+        "verified": 0,
+        "failures": 1,
+        "total": 1,
+        "failed": [
+          "harnesses::unsupported"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::unsupported",
+          "verdict": "FAILED",
+          "failed": 1,
+          "total": 1,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "unsupported_construct",
+              "FAILURE"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "TerminatorKind::InlineAsm is not currently supported by Kani. Please post your example at https://github.com/model-checking/kani/issues/2",
+              "src/harnesses.rs",
+              74
+            ]
+          ]
+        }
+      ]
+    },
+    "vacuous_assumption": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 0,
+        "total": 1,
+        "failed": []
+      },
+      "blocks": [
+        {
+          "name": "harnesses::vacuous_assumption",
+          "verdict": "SUCCESSFUL",
+          "failed": 0,
+          "total": 0,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "cover",
+              "UNREACHABLE"
+            ]
+          ],
+          "covers": [
+            [
+              "the contradictory assumption makes this unreachable",
+              "UNREACHABLE"
+            ]
+          ],
+          "failures": []
+        }
+      ]
+    },
+    "verified": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 0,
+        "total": 1,
+        "failed": []
+      },
+      "blocks": [
+        {
+          "name": "harnesses::verified",
+          "verdict": "SUCCESSFUL",
+          "failed": 0,
+          "total": 2,
+          "other": [
+            1,
+            "unreachable"
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "UNREACHABLE"
+            ],
+            [
+              "cover",
+              "SATISFIED"
+            ],
+            [
+              "assertion",
+              "SUCCESS"
+            ]
+          ],
+          "covers": [
+            [
+              "the boundary below saturation is reachable",
+              "SATISFIED"
+            ]
+          ],
+          "failures": []
+        }
+      ]
+    },
+    "default_unwind": {
+      "format": "regular",
+      "banner": "0.67.0",
+      "unsupported": [],
+      "manual": {
+        "verified": 1,
+        "failures": 1,
+        "total": 2,
+        "failed": [
+          "harnesses::seeded_wrapping_mutant"
+        ]
+      },
+      "blocks": [
+        {
+          "name": "harnesses::seeded_wrapping_mutant",
+          "verdict": "FAILED",
+          "failed": 1,
+          "total": 2,
+          "other": [
+            0,
+            null
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "SUCCESS"
+            ],
+            [
+              "assertion",
+              "FAILURE"
+            ]
+          ],
+          "covers": [],
+          "failures": [
+            [
+              "This is a placeholder message; Kani doesn't support message formatted at runtime",
+              "src/harnesses.rs",
+              89
+            ]
+          ]
+        },
+        {
+          "name": "harnesses::verified",
+          "verdict": "SUCCESSFUL",
+          "failed": 0,
+          "total": 2,
+          "other": [
+            1,
+            "unreachable"
+          ],
+          "timed_out": false,
+          "unwinding_reported": false,
+          "panics_as_expected": false,
+          "checks": [
+            [
+              "assertion",
+              "UNREACHABLE"
+            ],
+            [
+              "cover",
+              "SATISFIED"
+            ],
+            [
+              "assertion",
+              "SUCCESS"
+            ]
+          ],
+          "covers": [
+            [
+              "the boundary below saturation is reachable",
+              "SATISFIED"
+            ]
+          ],
+          "failures": []
+        }
+      ]
+    }
+  },
+  "decisions": {
+    "counterexample": {
+      "outcome": "counterexample",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "expected_panic": {
+      "outcome": "verified",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "fail_fast": {
+      "outcome": "skipped",
+      "witnesses": [
+        "unsatisfied"
+      ],
+      "controls": [
+        [
+          true,
+          "rejected-as-intended"
+        ]
+      ],
+      "run_mode": "focused"
+    },
+    "in_place": {
+      "outcome": "verified",
+      "witnesses": [
+        "satisfied"
+      ],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "insufficient_unwind": {
+      "outcome": "resource-exhausted",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "full-profile"
+    },
+    "list": {
+      "outcome": "tool-error",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "multiplication_timeout": {
+      "outcome": "resource-exhausted",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "seeded_wrapping_mutant": {
+      "outcome": "verified",
+      "witnesses": [],
+      "controls": [
+        [
+          true,
+          "rejected-as-intended"
+        ]
+      ],
+      "run_mode": "focused"
+    },
+    "selected_harness": {
+      "outcome": "verified",
+      "witnesses": [
+        "satisfied"
+      ],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "truncated": {
+      "outcome": "tool-error",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "focused",
+      "reason": "the log is truncated inside the block for 'harnesses::multiplication_timeout'"
+    },
+    "unsatisfied_cover": {
+      "outcome": "verified",
+      "witnesses": [
+        "unsatisfied"
+      ],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "unsupported": {
+      "outcome": "unsupported",
+      "witnesses": [],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "vacuous_assumption": {
+      "outcome": "solver-unknown",
+      "witnesses": [
+        "unsatisfied"
+      ],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "verified": {
+      "outcome": "verified",
+      "witnesses": [
+        "satisfied"
+      ],
+      "controls": [],
+      "run_mode": "focused"
+    },
+    "default_unwind": {
+      "outcome": "verified",
+      "witnesses": [
+        "satisfied"
+      ],
+      "controls": [
+        [
+          true,
+          "rejected-as-intended"
+        ]
+      ],
+      "run_mode": "full-profile"
+    }
+  }
+}

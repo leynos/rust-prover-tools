@@ -19,6 +19,7 @@ from __future__ import annotations
 
 __all__ = (
     "CommandFailedError",
+    "CommandTimedOutError",
     "ProverToolError",
     "TransientDownloadError",
 )
@@ -34,6 +35,45 @@ class TransientDownloadError(ProverToolError):
     Integrity, policy and local filesystem failures deliberately use the base
     class so a retry can never mask them as a flaky connection.
     """
+
+
+class CommandTimedOutError(ProverToolError):
+    """Raised when an external command exceeds its wall-clock budget.
+
+    Attributes
+    ----------
+    command_line : str
+        Human-readable command line that expired.
+    timeout_seconds : float
+        Effective budget that the command exceeded. This may come from the
+        command specification or from an enclosing Cuprum scope.
+    argv : tuple[str, ...]
+        Argument vector that was executed, without shell interpretation.
+    """
+
+    def __init__(
+        self,
+        command_line: str,
+        timeout_seconds: float,
+        argv: tuple[str, ...],
+    ) -> None:
+        """Initialise the timeout failure.
+
+        Parameters
+        ----------
+        command_line : str
+            The command line that expired.
+        timeout_seconds : float
+            Effective timeout that applied to the command.
+        argv : tuple[str, ...]
+            The executed argument vector.
+        """
+        super().__init__(
+            f"command timed out after {timeout_seconds:g} seconds: {command_line}"
+        )
+        self.command_line = command_line
+        self.timeout_seconds = timeout_seconds
+        self.argv = argv
 
 
 class CommandFailedError(ProverToolError):
