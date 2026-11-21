@@ -352,6 +352,22 @@ def test_a_description_spanning_lines_is_read_in_full() -> None:
     assert block.covers[0].description == "the boundary below\nsaturation is reachable"
 
 
+def test_a_description_whose_line_ends_with_a_quote_is_read_in_full() -> None:
+    """Keep reading past an embedded quote that happens to end a line.
+
+    Kani escapes nothing inside a description, so a value holding both a quote
+    and a newline prints a line that ends with the very character the frame is
+    recognised by.  Closing the description there would leave the rest to be
+    rejected as an unrecognised line in the block, refusing a complete log.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: ""ready"\nnext"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == '"ready"\nnext'
+
+
 def test_an_undetermined_cover_is_counted() -> None:
     """Reconcile a cover count that names an undetermined cover."""
     text = (
@@ -515,6 +531,35 @@ def test_a_harness_block_after_the_manual_summary_is_refused() -> None:
     assert "follows the manual harness summary" in refused(text)
 
 
+def test_a_second_kani_banner_is_refused() -> None:
+    """Refuse a capture that holds more than one Kani invocation.
+
+    A second banner means the file is two runs concatenated.  The first run's
+    facts describe only itself, so returning them would silently ignore the
+    second invocation - including any failure it reported after its banner.
+    """
+    text = log_text("verified") + (
+        "\nKani Rust Verifier 0.67.0 (cargo plugin)\n"
+        "error: could not compile `kani-corpus` (lib) due to 1 previous error\n"
+    )
+    assert "second Kani banner" in refused(text)
+
+
+def test_a_failed_verdict_carrying_the_panic_note_is_refused() -> None:
+    """Refuse a verdict Kani never prints with the expected-panic note.
+
+    Kani prints that note only when every failed property is an assertion, and
+    that is exactly the combination it calls successful.  A failed verdict
+    carrying the note describes a report the pinned release cannot produce, and
+    accepting it would let the note excuse a failure Kani itself did not.
+    """
+    text = log_text("expected_panic").replace(
+        "VERIFICATION:- SUCCESSFUL (encountered one or more panics as expected)",
+        "VERIFICATION:- FAILED (encountered one or more panics as expected)",
+    )
+    assert "expected-panic note" in refused(text)
+
+
 def test_a_flag_inside_a_path_does_not_disable_unwinding_checks() -> None:
     """Read solver flags at argument boundaries, not as substrings."""
     inside_a_path = HarnessBlock(
@@ -548,13 +593,45 @@ def test_a_flag_last_in_the_solver_command_is_still_read() -> None:
     assert unwinding_checks_enabled(flag_last) is False
 
 
+def test_an_apostrophe_in_the_echo_does_not_hide_the_flag() -> None:
+    """Split the echo at Kani's boundaries rather than as shell text.
+
+    Kani wraps an argument in double quotes only when it holds a space and
+    escapes nothing inside it, so an apostrophe is an ordinary character.
+    Reading the echo as shell text would let one apostrophe open a quoted
+    region that swallows the flag sitting between two paths.
+    """
+    ambiguous = HarnessBlock(
+        name="h::x",
+        solver_command=(
+            "[Kani] Running: `cbmc /tmp/solver' --no-unwinding-assertions "
+            "/tmp/model'.goto`"
+        ),
+    )
+    assert unwinding_checks_enabled(ambiguous) is False
+
+
 def test_an_unreadable_solver_command_leaves_unwinding_checks_unknown() -> None:
     """Report an unknown command rather than reading it as enabled checks."""
     unreadable = HarnessBlock(
         name="h::x",
-        solver_command="[Kani] Running: `cbmc --no-unwinding-assertions 'open`",
+        solver_command='[Kani] Running: `cbmc --no-unwinding-assertions "/tmp/run`',
     )
     assert unwinding_checks_enabled(unreadable) is None
+
+
+def test_a_quote_inside_a_wrapped_argument_leaves_checks_unknown() -> None:
+    """Refuse a rendering whose argument boundaries cannot be recovered.
+
+    Kani wraps only a whole argument, so a quote that is followed by more text
+    before the next space means the rendering cannot be split into the words
+    the solver was actually given.
+    """
+    ambiguous = HarnessBlock(
+        name="h::x",
+        solver_command='[Kani] Running: `cbmc "/tmp/a"b c" --sat-solver cadical`',
+    )
+    assert unwinding_checks_enabled(ambiguous) is None
 
 
 def test_two_conflicting_solver_echoes_are_refused() -> None:
@@ -612,10 +689,64 @@ def test_a_failure_without_a_location_is_retained() -> None:
     assert block.failures[0].message
 
 
+def test_a_multiline_failure_explanation_is_read_in_full() -> None:
+    """Consume the lines a newline in the failed description splits it across.
+
+    Kani prints the failed property's description twice: quoted in its check
+    and raw beneath ``Failed Checks:``.  It escapes neither, so a description
+    holding a newline prints over two lines in both places.  Reading only the
+    first line of the explanation would leave the continuation to be refused
+    as an unrecognised summary line.
+    """
+    placeholder = (
+        "This is a placeholder message; Kani doesn't support message "
+        "formatted at runtime"
+    )
+    broken = "This is a placeholder message;\nKani doesn't support..."
+    text = (
+        log_text("counterexample")
+        .replace(
+            f'- Description: "{placeholder}"',
+            '- Description: "This is a placeholder message;\nKani doesn\'t support..."',
+        )
+        .replace(f"Failed Checks: {placeholder}", f"Failed Checks: {broken}")
+    )
+    block = parse_text(text).blocks[0]
+    assert block.failures[0].message == broken
+
+
+def test_a_failure_explanation_contradicting_its_check_is_refused() -> None:
+    """Refuse a summary that explains a different description than it listed.
+
+    Both renderings come from one description, so a continuation line that
+    disagrees with the check's own description means the report is not
+    self-consistent.  Reading it anyway would attribute a failure to words the
+    results never reported.
+    """
+    placeholder = (
+        "This is a placeholder message; Kani doesn't support message "
+        "formatted at runtime"
+    )
+    text = (
+        log_text("counterexample")
+        .replace(
+            f'- Description: "{placeholder}"',
+            '- Description: "This is a placeholder message;\nsecond line"',
+        )
+        .replace(
+            f"Failed Checks: {placeholder}",
+            "Failed Checks: This is a placeholder message;\nsomething else",
+        )
+    )
+    assert "disagrees with the check it explains" in refused(text)
+
+
 def test_a_mixed_inventory_and_verification_log_is_refused() -> None:
     """A log cannot be both an inventory and a verification run."""
     listing = log_text("list").splitlines()
-    verified = log_text("verified").splitlines()
+    # Drop the second banner: it would name a second invocation, which the
+    # parser refuses for that reason before it can see the mixed shapes.
+    verified = log_text("verified").splitlines()[1:]
     text = "\n".join([*listing, *verified])
     assert "both an inventory and a verification run" in refused(text)
 

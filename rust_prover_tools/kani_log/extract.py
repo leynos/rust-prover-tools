@@ -11,11 +11,11 @@ unrecognised line inside a report block.
 from __future__ import annotations
 
 import dataclasses as dc
-import shlex
 
 from rust_prover_tools.kani_log.model import HarnessBlock, KaniLog, ManualSummary
 from rust_prover_tools.kani_log.reader import Reader
 from rust_prover_tools.kani_log.syntax import (
+    BANNER,
     HARNESS_START,
     LIST_WRITTEN,
     NO_UNWINDING_ASSERTIONS_FLAG,
@@ -106,13 +106,18 @@ def _scan(reader: Reader) -> _ObservedLog:
             is_list = True
             reader.take()
         elif header := HARNESS_START.match(line):
-            if manual is not None:
-                msg = (
-                    f"{reader.where()}: a harness block follows the manual "
-                    "harness summary"
-                )
-                raise KaniLogError(msg)
+            _refuse_harness_after_manual(reader, manual)
             blocks.append(reader.block(header))
+        elif BANNER.match(line) is not None:
+            # A second banner means the capture is two invocations
+            # concatenated.  The first run's facts describe only itself, so
+            # returning them would silently drop whatever the second run
+            # reported - including a failure after its banner.
+            msg = (
+                f"{reader.where()}: a second Kani banner, so the log holds "
+                "more than one invocation"
+            )
+            raise KaniLogError(msg)
         else:
             reader.take()
     return _ObservedLog(
@@ -121,6 +126,20 @@ def _scan(reader: Reader) -> _ObservedLog:
         is_list,
         tuple(unsupported),
     )
+
+
+def _refuse_harness_after_manual(
+    reader: Reader,
+    manual: ManualSummary | None,
+) -> None:
+    """Refuse a harness block that follows the manual harness summary.
+
+    The manual summary closes the report, so a block after it belongs to a
+    later part of the log that the summary cannot describe.
+    """
+    if manual is not None:
+        msg = f"{reader.where()}: a harness block follows the manual harness summary"
+        raise KaniLogError(msg)
 
 
 def _reconcile(version: str, seen: _ObservedLog) -> KaniLog:
@@ -213,26 +232,73 @@ def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:
 def _solver_arguments(command: str) -> frozenset[str] | None:
     """Split the echoed ``cbmc`` command into its arguments and their options.
 
-    Kani quotes a path holding spaces as one argument, so ``--unwind`` there is
-    part of a path, not an option.  Each argument contributes itself and, when
-    written ``--option=value``, the option alone; the flags read here are
-    written as separate words, so matching whole arguments is enough.
+    The echo is read at Kani's own boundaries rather than as shell text.  Kani
+    wraps an argument in double quotes when, and only when, it holds a space,
+    and escapes nothing: an apostrophe is an ordinary character.  Splitting it
+    as shell words would let one apostrophe open a quoted region spanning the
+    arguments that follow, which hides a flag such as
+    ``--no-unwinding-assertions`` from the membership test and reports checks
+    that were disabled as enabled.
 
-    The echo's own framing is removed first.  A closing backtick is an ordinary
-    character to ``shlex``, so leaving it on would join it to the last argument
-    and hide a trailing flag such as ``--no-unwinding-assertions`` from the
-    membership test.
+    Each argument contributes itself and, when written ``--option=value``, the
+    option alone; the flags read here are written as separate words, so
+    matching whole arguments is enough.
+
+    The echo's own framing is removed first.  A closing backtick would
+    otherwise join the last argument and hide a trailing flag.
 
     Returns
     -------
     frozenset[str] | None
-        The arguments and their option names, or ``None`` when the command
-        cannot be split, because an unbalanced quote leaves no argument
-        boundary to trust.
+        The arguments and their option names, or ``None`` when the rendering
+        cannot be split.  An unterminated wrap, or text after a closing quote,
+        means the argument boundaries cannot be recovered; Kani only wraps a
+        whole argument, so either shape is ambiguous and must not be read as
+        evidence that the checks were generated.
     """
     framed = command.removeprefix(SOLVER_FRAME).removesuffix("`")
-    try:
-        words = shlex.split(framed)
-    except ValueError:
+    words = _rendered_words(framed)
+    if words is None:
         return None
     return frozenset(word for item in words for word in (item, item.partition("=")[0]))
+
+
+def _rendered_words(rendered: str) -> list[str] | None:
+    """Split a command echo at the boundaries Kani rendered it with.
+
+    Parameters
+    ----------
+    rendered : str
+        The echoed command without its framing backticks.
+
+    Returns
+    -------
+    list[str] | None
+        The words Kani passed, or ``None`` when a quote leaves them ambiguous.
+
+    """
+    words: list[str] = []
+    index = 0
+    end_of_rendering = len(rendered)
+    while index < end_of_rendering:
+        if rendered[index] == " ":
+            index += 1
+            continue
+        if rendered[index] == '"':
+            closing = rendered.find('"', index + 1)
+            if closing == -1:
+                return None
+            words.append(rendered[index + 1 : closing])
+            index = closing + 1
+            if index < end_of_rendering and rendered[index] != " ":
+                # Kani wraps a whole argument, so text after the closing quote
+                # means the quote belonged to the value and the boundary is
+                # lost.
+                return None
+            continue
+        end = rendered.find(" ", index)
+        if end == -1:
+            end = end_of_rendering
+        words.append(rendered[index:end])
+        index = end
+    return words

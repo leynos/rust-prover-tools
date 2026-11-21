@@ -46,6 +46,7 @@ __all__ = (
     "TIMEOUT",
     "UNATTRIBUTED_FAILURE",
     "UNDETERMINED",
+    "UNEXPLAINED_FAILURE",
     "UNSUPPORTED_ASSERTION",
     "UNSUPPORTED_CHECK",
     "UNWIND_FAILURE",
@@ -69,6 +70,7 @@ UNSUPPORTED_ASSERTION = "UNSUPPORTED_ASSERTION"
 FOREIGN_FAILURE = "FOREIGN_FAILURE"
 FOREIGN_UNWIND_FAILURE = "FOREIGN_UNWIND_FAILURE"
 UNATTRIBUTED_FAILURE = "UNATTRIBUTED_FAILURE"
+UNEXPLAINED_FAILURE = "UNEXPLAINED_FAILURE"
 ABSENT = "ABSENT"
 
 SATISFIED = "SATISFIED"
@@ -90,16 +92,6 @@ ENABLED_SOLVER = (
 DISABLED_SOLVER = (
     "[Kani] Running: `cbmc --object-bits 16 --no-unwinding-assertions "
     "--sat-solver cadical`"
-)
-FAILING = (
-    FAILURE,
-    AS_INTENDED,
-    OTHERWISE,
-    UNWIND_FAILURE,
-    UNSUPPORTED_CHECK,
-    UNSUPPORTED_ASSERTION,
-    FOREIGN_FAILURE,
-    FOREIGN_UNWIND_FAILURE,
 )
 
 
@@ -202,6 +194,11 @@ def _owned_checks(fact: HarnessFact) -> list[PropertyResult]:
             "SUCCESS",
             "the assertion holds",
         ),
+        UNEXPLAINED_FAILURE: (
+            "assertion.1",
+            "SUCCESS",
+            "the assertion holds",
+        ),
     }
     check = descriptions.get(fact.status)
     if check is None:
@@ -210,13 +207,23 @@ def _owned_checks(fact: HarnessFact) -> list[PropertyResult]:
 
 
 def _checks(fact: HarnessFact) -> list[PropertyResult]:
-    """Build the checks this fact's block reports, in the order Kani lists them."""
+    """Build the checks this fact's block reports, in the order Kani lists them.
+
+    ``UNATTRIBUTED_FAILURE`` keeps a passing check the harness owns and adds a
+    failing one CBMC printed without an owner.  The owned check proves the
+    block's verdict did not come from it; the ownerless one is the failure the
+    block reported and no named routine accounts for.
+    """
     if fact.status == FOREIGN_FAILURE:
         checks = _foreign_checks(fact.name)
     elif fact.status == FOREIGN_UNWIND_FAILURE:
         checks = _foreign_unwind_checks(fact.name)
     else:
         checks = _owned_checks(fact)
+        if fact.status == UNATTRIBUTED_FAILURE:
+            checks.append(
+                PropertyResult("assertion.1", "FAILURE", "the assertion fails"),
+            )
     if fact.cover != NOTHING:
         checks.append(
             PropertyResult(
@@ -253,18 +260,18 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
         return None
     checks = tuple(_checks(fact))
     covers = tuple(item for item in checks if item.is_cover)
-    failed = sum(1 for item in checks if item.status == "FAILURE")
+    failed = tuple(item for item in checks if item.status == "FAILURE")
+    # Kani explains each failure with the description it listed, so the first
+    # failed check is the description every failing class explains.
     failures = (
-        (FailedCheck(checks[0].description, "src/harnesses.rs", 7),)
-        if fact.status in FAILING
-        else ()
+        (FailedCheck(failed[0].description, "src/harnesses.rs", 7),) if failed else ()
     )
     is_timeout = fact.status == TIMEOUT
     return HarnessBlock(
         name=fact.name,
         properties=checks,
         failures=failures,
-        failed_count=None if is_timeout else failed,
+        failed_count=None if is_timeout else len(failed),
         # CBMC's ``N of M failed`` counts properties, and a cover is not one;
         # the parser reads the printed count, so the fixture must not add it.
         total_count=None

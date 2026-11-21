@@ -18,6 +18,7 @@ import typing as typ
 
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_tree import (
+    LOCAL_QUALIFIERS,
     member_aliases,
     rooted_spans,
     statement_end,
@@ -36,6 +37,21 @@ _EXTERN_CRATE_TOKENS = 5
 def alias_bindings(tokens: tuple[Token, ...], root: str) -> frozenset[str]:
     """Return every local name a file binds ``root`` to, plus ``root`` itself.
 
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    root : str
+        The crate name to follow, such as ``kani``.
+
+    Returns
+    -------
+    frozenset[str]
+        ``root`` and every name the file binds it to, including a name bound
+        only through a rename of a rename.
+
+    Notes
+    -----
     Rust lets a crate be renamed on import — ``use kani as k;`` — after which
     ``k::assume`` is the same call as ``kani::assume``. The audit's location
     claim is about what the code does, not what the crate is called at the use
@@ -105,6 +121,24 @@ def member_bindings(
 ) -> frozenset[tuple[str, str]]:
     """Return ``(item, local name)`` for each renamed import from ``roots``.
 
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    roots : Container[str]
+        The crate names whose members are followed, including any local name
+        the file binds one of them to.
+
+    Returns
+    -------
+    frozenset[tuple[str, str]]
+        One ``(item, local name)`` pair per binding, where ``item`` is the
+        member's own name and ``local name`` is the spelling the file uses for
+        it.  Every pair a rename can reach is included, so one local name may
+        appear in several pairs.
+
+    Notes
+    -----
     ``use kani::{assume as a};`` binds ``a`` to Kani's ``assume``, so a later
     ``a(x)`` is the same request for trust under another spelling. Unlike a
     crate alias, the local name stands for one item: only a bare use of it is
@@ -174,17 +208,68 @@ def _span_bindings(
     roots: cabc.Container[str],
     bindings: cabc.Mapping[str, cabc.Iterable[str]],
 ) -> dict[str, set[str]]:
-    """Return the names one path of a ``use`` statement binds to which items."""
+    """Return the names one path of a ``use`` statement binds to which items.
+
+    Three shapes name items.  A path rooted at a trust root names that crate's
+    members.  A path rooted at a local name already bound to items is a further
+    rename of those items.  A path rooted at ``self``, ``crate`` or ``super``
+    reaches the binding through the module it lives in: ``use self::a as b;``
+    after ``use kani::assume as a;`` binds ``b`` to Kani's ``assume`` just as
+    ``use a as b;`` does, and the same holds through ``crate::`` and
+    ``super::`` from a nested module.
+    """
     root, start, stop = span
-    discovered: dict[str, set[str]] = {}
     if root in roots:
-        for member, alias in member_aliases(tokens, start, stop):
-            discovered.setdefault(alias, set()).add(member)
-        return discovered
+        return _member_bindings(tokens, start, stop)
     if root in bindings:
-        for _root, alias in use_roots(tokens, start, stop):
-            if alias is not None:
-                discovered.setdefault(alias, set()).update(bindings[root])
+        return _renamed_bindings(tokens, start, stop, bindings[root])
+    if root in LOCAL_QUALIFIERS:
+        return _requalified_bindings(tokens, start, stop, bindings)
+    return {}
+
+
+def _member_bindings(
+    tokens: tuple[Token, ...],
+    start: int,
+    stop: int,
+) -> dict[str, set[str]]:
+    """Return the trust-root members one path binds, keyed by local name."""
+    discovered: dict[str, set[str]] = {}
+    for member, alias in member_aliases(tokens, start, stop):
+        discovered.setdefault(alias, set()).add(member)
+    return discovered
+
+
+def _renamed_bindings(
+    tokens: tuple[Token, ...],
+    start: int,
+    stop: int,
+    items: cabc.Iterable[str],
+) -> dict[str, set[str]]:
+    """Return the names a further rename of ``items`` binds to those items."""
+    discovered: dict[str, set[str]] = {}
+    for _root, alias in use_roots(tokens, start, stop):
+        if alias is not None:
+            discovered.setdefault(alias, set()).update(items)
+    return discovered
+
+
+def _requalified_bindings(
+    tokens: tuple[Token, ...],
+    start: int,
+    stop: int,
+    bindings: cabc.Mapping[str, cabc.Iterable[str]],
+) -> dict[str, set[str]]:
+    """Return the names a ``self::``, ``crate::`` or ``super::`` rename binds.
+
+    The member segment names a local binding rather than a module, so the
+    rename reaches whatever items that binding already denotes.  A member with
+    no local binding names something this scan never saw, and is left alone.
+    """
+    discovered: dict[str, set[str]] = {}
+    for member, alias in member_aliases(tokens, start, stop):
+        if member in bindings:
+            discovered.setdefault(alias, set()).update(bindings[member])
     return discovered
 
 

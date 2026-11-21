@@ -33,8 +33,31 @@ _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 def verus_regions(tokens: tuple[Token, ...]) -> tuple[tuple[int, int], ...]:
     """Return the token ranges whose identifiers carry Verus' own vocabulary.
 
-    Two forms create a region: a ``verus!`` body, and a Verus attribute anywhere
-    in an attribute list, including one nested in a ``cfg_attr``.
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+
+    Returns
+    -------
+    tuple[tuple[int, int], ...]
+        One ``(start, end)`` pair per region, as inclusive token indices.  A
+        ``verus!`` body ends at its closing delimiter and an attribute at its
+        closing bracket or last token, so an end may name a delimiter rather
+        than an identifier; a caller's inclusive range test reads that
+        harmlessly.
+
+    Notes
+    -----
+    Two forms create a region: a ``verus!`` body, and a Verus attribute
+    anywhere in an attribute list, including one nested in a ``cfg_attr``.  A
+    ``cfg_attr`` predicate is not a region: it asks whether a configuration is
+    set rather than applying an attribute.
+
+    Examples
+    --------
+    ``verus! { proof fn f() {} }`` is one region, and
+    ``#[verifier::external_body]`` is another.
     """
     regions = list(_verus_bodies(tokens))
     for open_index, close_index in attribute_spans(tokens):

@@ -48,10 +48,37 @@ _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     """Collect the module files this source compiles, in source order.
 
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+
+    Returns
+    -------
+    tuple[ModuleReference, ...]
+        One reference per ``mod name;`` declaration, each carrying its name, the
+        ``#[path]`` value it was given when it has one, its position, and the
+        inline modules that enclose it.
+
+    Raises
+    ------
+    TrustAuditError
+        If a delimiter group never closes, so the declarations after it cannot
+        be located; if a ``macro_rules!`` expansion declares a module named by
+        a metavariable, so the file it compiles cannot be known; or if a
+        declaration's ``#[path]`` is chosen by a ``cfg_attr``.
+
+    Notes
+    -----
     A ``macro_rules!`` pattern is source syntax rather than a declaration: a
     matcher may spell ``mod sample;`` as the input it matches without ever
-    compiling that file. Those tokens are skipped so the walk does not demand a
-    file the crate never loads.
+    compiling that file.  Those tokens are skipped so the walk does not demand
+    a file the crate never loads.
+
+    An expansion is not skipped.  rustc resolves a ``mod`` declaration that a
+    ``macro_rules!`` expansion emits from the invocation's module directory,
+    which is where the expansion's tokens sit, so the enclosing chain recorded
+    here is the one rustc uses.
     """
     references = []
     spans = dict(attribute_spans(tokens))
@@ -83,11 +110,13 @@ def _macro_spans(
     """Return the pattern and expansion tokens of every ``macro_rules!``.
 
     A rule is a pattern followed by ``=>`` and a body, so the group before each
-    arrow is the pattern and the group after it is the expansion. Only the
+    arrow is the pattern and the group after it is the expansion.  Only the
     pattern is skipped: an expansion that emits ``mod x;`` is code the crate
-    compiles, even though Rust resolves its file from the macro's own position.
-    The expansion is returned separately so a declaration whose name is a
-    metavariable can be refused rather than silently missed.
+    compiles.  rustc resolves that declaration from the invocation's module
+    directory - the expansion's own source position - rather than from the
+    macro definition, so the reference the walk records already names the file
+    the crate loads.  The expansion is returned separately so a declaration
+    whose name is a metavariable can be refused rather than silently missed.
     """
     patterns: set[int] = set()
     expansions: set[int] = set()
@@ -138,13 +167,15 @@ def _refuse_metavariable_modules(
 ) -> None:
     """Fail closed on a ``mod $name;`` a macro expansion emits.
 
-    The declaration's file is chosen by the macro's invocation, which the
-    lexical scan never sees, so the audit cannot tell which file the crate
-    compiles; reporting a clean scan would leave that file unread.  A literal
-    ``mod name;`` in an expansion is left alone: the expansion spells the file
-    itself, and module discovery already records it.  Only the expansion after
-    ``=>`` is examined, so a matcher that spells ``mod $name;`` as the input it
-    matches is not a declaration.
+    The declaration's directory comes from the invocation, as any expansion's
+    does, but its name is whatever the invocation's arguments put in the
+    metavariable, and the lexical scan never evaluates those.  The audit
+    therefore cannot tell which file the crate compiles, and reporting a clean
+    scan would leave that file unread.  A literal ``mod name;`` in an expansion
+    is left alone: the expansion spells the file itself, and module discovery
+    already records it.  Only the expansion after ``=>`` is examined, so a
+    matcher that spells ``mod $name;`` as the input it matches is not a
+    declaration.
     """
     for index in sorted(expansions):
         token = tokens[index]
@@ -221,7 +252,13 @@ class _InlineModules:
                 stack.append((module, matching(tokens, index + 2, "{", "}")))
 
     def enclosing(self, index: int) -> tuple[InlineModule, ...]:
-        """Return the inline modules enclosing the token at ``index``."""
+        """Return the inline modules enclosing the token at ``index``.
+
+        An expansion's tokens keep the invocation's position, and rustc
+        resolves a ``mod`` declaration an expansion emits from the invocation's
+        module directory, so this chain is the one that declaration is
+        searched from.
+        """
         return self._chains[index]
 
 

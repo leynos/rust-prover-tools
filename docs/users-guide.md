@@ -246,16 +246,19 @@ supports. In decreasing precedence:
 6. `verified` — every declared claim ran and nothing disproved it.
 
 An unwinding failure is a bound, not a counterexample. A `should_panic` claim
-is excused only when Kani also reported that the panic matched, and the
-exemption reaches a failed check under a called routine, which is the same
-panic seen one frame down. The run is still bounded: none of these outcomes
-proves a property over every execution.
+is excused only when Kani also reported that the panic matched, and then only
+for the checks it counts as a panic: the driver prints that note only when
+every failed property is an assertion, so a failure of any other kind beside it
+is an independent failure and still a counterexample. The exemption reaches a
+failed assertion under a called routine, which is the same panic seen one frame
+down. The run is still bounded: none of these outcomes proves a property over
+every execution.
 
 `tool-error` covers a log that cannot be decided from at all: truncated or
-otherwise structurally invalid output, a release other than 0.67.0, `kani list`
-inventory output, or a log that reports a harness the manifest does not
-declare. It completes the analysis with exit status `2`; it is not an input
-error.
+otherwise structurally invalid output, two invocations concatenated so a second
+banner appears, a release other than 0.67.0, `kani list` inventory output, or a
+log that reports a harness the manifest does not declare. It completes the
+analysis with exit status `2`; it is not an input error.
 
 Each declared cover is reported as `satisfied` or `unsatisfied`. A cover that
 Kani reported unreachable, or did not report at all, is `unsatisfied`. Each
@@ -726,7 +729,10 @@ Useful options are:
   the summary counts exactly one failing function and one diagnostic lands
   inside that region. A second failure, located or not, or a second count in
   the summary, means the run broke more than the seeded fault, and a control
-  that never failed has not shown that the fault would be caught.
+  that never failed has not shown that the fault would be caught. Paths are
+  compared without touching the filesystem: `./` and separator spellings match,
+  but a `..` step does not, because through a symbolic link it can name a
+  different file.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for
@@ -759,7 +765,12 @@ file the crate compiles is. A declaration may use `#[path]`, inline modules, or
 nested module directories; each target is resolved as Rust resolves it. A
 declaration that resolves to no file, to a file outside the repository root, or
 to whichever file a `cfg_attr` selects, is refused: a configuration decides the
-last of those, so no single answer describes what the crate compiles.
+last of those, so no single answer describes what the crate compiles. A `mod`
+written as a `macro_rules!` pattern names no file, because it is a template for
+source the macro is given rather than source the crate compiles; a declaration
+an expansion emits is followed, because rustc resolves it from the invocation's
+module directory. A declaration whose name comes from a metavariable is
+refused, because only the invocation's arguments decide that name.
 
 A word counts as trust only in a context that gives it meaning:
 

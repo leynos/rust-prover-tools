@@ -274,8 +274,11 @@ def test_parse_expectation_refuses_an_unusable_region(text: str) -> None:
     [
         (VerusFailure("failed", "proofs/mutant.rs", 8, 13), True),
         (VerusFailure("failed", "./proofs/mutant.rs", 8, 13), True),
+        (VerusFailure("failed", "proofs/./mutant.rs", 8, 13), True),
         (VerusFailure("failed", "proofs\\mutant.rs", 8, 13), True),
-        (VerusFailure("failed", "proofs/../proofs/mutant.rs", 8, 13), True),
+        # A ``..`` step is kept: through a symbolic link it can name another
+        # file, so only the exact path may satisfy the expectation.
+        (VerusFailure("failed", "proofs/../proofs/mutant.rs", 8, 13), False),
         (VerusFailure("failed", "proofs/mutant.rs", 4, 13), False),
         (VerusFailure("failed", "proofs/mutant.rs", 13, 13), False),
         (VerusFailure("failed", "proofs/other.rs", 8, 13), False),
@@ -287,7 +290,7 @@ def test_expectation_containment_compares_normalized_paths(
     *,
     expected: bool,
 ) -> None:
-    """Both sides are reduced lexically, so separators and ``..`` do not matter."""
+    """Spellings that cannot change the file match; a ``..`` step does not."""
     expectation = FailureExpectation("proofs/mutant.rs", 5, 12)
 
     assert expectation.contains(failure) is expected

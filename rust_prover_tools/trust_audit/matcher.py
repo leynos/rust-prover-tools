@@ -37,7 +37,11 @@ from rust_prover_tools.trust_audit.modules import module_references
 from rust_prover_tools.trust_audit.regions import verus_regions
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
 from rust_prover_tools.trust_audit.use_bindings import alias_bindings, member_bindings
-from rust_prover_tools.trust_audit.use_tree import file_roots, imported_roots
+from rust_prover_tools.trust_audit.use_tree import (
+    LOCAL_QUALIFIERS,
+    file_roots,
+    imported_roots,
+)
 from rust_prover_tools.trust_audit.vocabulary import (
     KANI_ROOT,
     KANI_VOCABULARY,
@@ -207,9 +211,10 @@ class _Context:
         A renamed import is reported under the item it names, at the position
         where it is used: after ``use kani::{assume as a};`` the call ``a(x)``
         is Kani's ``assume``, and reporting the local spelling would leave the
-        audit unable to say which prover surface it reached.  ``self::a(..)``
-        names the item the same import bound, so it counts too; another
-        module's qualifier does not, because the binding there is not shown.
+        audit unable to say which prover surface it reached.  The qualifiers
+        that name the binding itself — ``self::``, ``crate::`` and ``super::``
+        — count too; another module's name does not, because the binding there
+        is not shown.
         """
         if not self.imported_roots:
             return
@@ -219,7 +224,7 @@ class _Context:
         items = self.member_names.get(token.text)
         if items is None or not _is_member_use(self.tokens, index):
             return
-        if _is_bare_use(self.tokens, index) or _is_self_qualified(self.tokens, index):
+        if _is_bare_use(self.tokens, index) or _is_local_qualified(self.tokens, index):
             for item in sorted(items):
                 self._report(item, token)
 
@@ -336,19 +341,21 @@ def _member_names(
     return {alias: frozenset(items) for alias, items in names.items()}
 
 
-def _is_self_qualified(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether this token is named through ``self::``.
+def _is_local_qualified(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether this token is named through a local module qualifier.
 
-    A named import binds its item in the module it appears in, so
+    The qualifiers are ``self::``, ``crate::`` and ``super::``.  A named import
+    binds its item in the module it appears in, so
     ``self::a(..)`` after ``use kani::assume as a;`` is the same call as the
-    bare ``a(..)``.  The qualifier is ``self`` rather than another module, so
-    it names the binding rather than turning the name into a path through an
-    item.
+    bare ``a(..)``.  ``crate::a`` names the same binding when the import sits
+    at the crate root, and ``super::a`` names it from a child module; the scan
+    is file-scoped, so it cannot rule either out and reports both.  Another
+    module's name stays unreported, because the binding there is not shown.
     """
     return (
         index >= _QUALIFIED_SEGMENTS
         and tokens[index - 1].text == "::"
-        and tokens[index - _QUALIFIED_SEGMENTS].text == "self"
+        and tokens[index - _QUALIFIED_SEGMENTS].text in LOCAL_QUALIFIERS
     )
 
 

@@ -137,6 +137,10 @@ COVER_PROPERTY_STATUSES = frozenset(
 COVER_KIND = "cover"
 UNWINDING_KIND = "unwind"
 UNSUPPORTED_KIND = "unsupported_construct"
+# The class Kani counts as a panic.  Its driver calls a harness declared to
+# panic successful only when every failed property carries this class, so the
+# expected-panic note is evidence about these checks and no others.
+ASSERTION_KIND = "assertion"
 # A check identifier is ``<owner>.<property>.<ordinal>``.  Three segments are
 # what let the middle one be read as a property of a named harness; two are
 # what a property needs to keep its own name and ordinal.

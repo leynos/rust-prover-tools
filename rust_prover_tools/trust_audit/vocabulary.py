@@ -54,6 +54,7 @@ VERUS_VOCABULARY: typ.Final[frozenset[str]] = frozenset(
         "external_type_specification",
         "external_trait_specification",
         "exec_allows_no_decreases_clause",
+        "assume_termination",
     },
 )
 

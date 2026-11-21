@@ -71,6 +71,30 @@ def test_a_self_qualified_member_rename_is_reported() -> None:
     assert items(source) == [("assume", 1), ("assume", 2)]
 
 
+def test_a_crate_qualified_member_rename_is_reported() -> None:
+    """Read ``crate::a(..)`` as the binding a crate-root import made.
+
+    A ``use`` at the crate root binds its item there, so a child module reaches
+    the same call through ``crate::``.  The scan is file-scoped and cannot see
+    which module holds the import, so the qualified call is reported rather
+    than dropped.
+    """
+    source = "use kani::assume as a;\nfn f() { crate::a(false); }"
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
+def test_a_super_qualified_member_rename_is_reported() -> None:
+    """Read ``super::a(..)`` as a binding the parent module imported."""
+    source = "use kani::assume as a;\nmod child { fn f() { super::a(false); } }"
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
+def test_a_foreign_qualified_member_rename_is_not_reported() -> None:
+    """Leave another module's qualifier alone: its binding is not shown."""
+    source = "use kani::assume as a;\nfn f() { other::a(false); }"
+    assert items(source) == [("assume", 1)]
+
+
 def test_two_scopes_binding_one_name_report_both_items() -> None:
     """Report every item a local name may denote when two scopes reuse it.
 
@@ -106,6 +130,26 @@ def test_a_chained_member_rename_reports_the_original_item() -> None:
     """Follow ``use a as b`` from a member rename to the item it renames."""
     source = "use kani::{assume as a};\nuse a as b;\nfn f() { b(true); }"
     assert items(source) == [("assume", 1), ("assume", 2), ("assume", 3)]
+
+
+def test_a_self_qualified_member_rename_is_followed() -> None:
+    """Follow ``use self::a as b`` to the item the earlier import bound to ``a``."""
+    source = "use kani::assume as a;\nuse self::a as b;\nfn f() { b(true); }"
+    assert items(source) == [("assume", 1), ("assume", 2), ("assume", 3)]
+
+
+def test_a_crate_qualified_member_rename_is_followed() -> None:
+    """Follow ``use crate::a as b`` to the item bound at the crate root."""
+    source = "use kani::assume as a;\nuse crate::a as b;\nfn f() { b(true); }"
+    assert items(source) == [("assume", 1), ("assume", 2), ("assume", 3)]
+
+
+def test_a_super_qualified_member_rename_is_followed() -> None:
+    """Follow ``use super::a as b`` to the item the parent module bound."""
+    source = (
+        "use kani::assume as a;\nmod child { use super::a as b; fn f() { b(true); } }"
+    )
+    assert items(source) == [("assume", 1), ("assume", 2), ("assume", 2)]
 
 
 def test_a_member_rename_before_a_path_is_not_a_call() -> None:
@@ -150,6 +194,17 @@ def test_a_verus_attribute_reports_its_arguments() -> None:
     """Report a Verus word inside a bare ``external`` attribute."""
     source = "#[verifier(external_body)]\nfn f() {}"
     assert items(source) == [("external_body", 1)]
+
+
+def test_an_assume_termination_attribute_is_reported() -> None:
+    """Report Verus' termination assumption as the request for trust it is.
+
+    The reference calls the attribute currently unneeded, but it still tells
+    the verifier to accept a termination argument without proof, so the
+    inventory must name it.
+    """
+    source = "#[verifier::assume_termination]\nfn f() {}"
+    assert items(source) == [("assume_termination", 1)]
 
 
 def test_a_cfg_attr_carrying_a_verus_attribute_reports_its_arguments() -> None:

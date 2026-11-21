@@ -686,6 +686,12 @@ is asserted against that corpus.
   command and exit status, and the origin commit. It carries no digest
   provenance: the transcripts themselves are the qualified evidence.
 
+A rendering rule that no captured log can settle is read from the pinned
+release's own driver source instead of guessed: how a description holding a
+newline is printed, how the echoed solver command is quoted, and which verdict
+can carry the expected-panic note. The corpus then keeps a log that exercises
+the rule, so the parser and the decision stay tied to evidence.
+
 `rust_prover_tools/unittests/test_kani_log_parse.py` loads every corpus
 directory whose name is in `SUPPORTED_KANI_VERSIONS`; a supported release
 without a directory fails that test. The decision tests read the same corpus,

@@ -71,6 +71,17 @@ def test_a_word_inside_a_character_literal_is_not_reported(word: str) -> None:
     assert _items(f"fn f() {{ let _ = '{first}'; kani::assume(x); }}") == ("assume",)
 
 
+@given(WORD)
+def test_a_bare_word_after_a_trust_import_is_reported(word: str) -> None:
+    """Establish the control the string-body property is measured against.
+
+    ``use kani;`` switches the bare-word rule on, so a word the lexer wrongly
+    exposes as code becomes an item.  Without this control a scan that reported
+    nothing at all would pass the string-body property.
+    """
+    assert _items(f"use kani;\nfn f() {{ let _ = {word}; }}") == (word,)
+
+
 @given(st.lists(BODY_FRAGMENT, max_size=8).map("".join))
 def test_an_ordinary_string_body_yields_no_item(body: str) -> None:
     """Scan a string body as trivia even when it spells the whole vocabulary.
@@ -78,8 +89,10 @@ def test_an_ordinary_string_body_yields_no_item(body: str) -> None:
     The body is built from vocabulary words, complete escapes and plain text,
     so a word can sit directly after an escaped quote — the position where a
     lexer that mistook the escape for the terminator would resume mid-literal.
+    The surrounding file imports ``kani``, so a word the lexer leaks out of the
+    literal is reportable, and the empty result means nothing leaked.
     """
-    source = f'fn f() {{ let _ = "{body}"; }}'
+    source = f'use kani;\nfn f() {{ let _ = "{body}"; }}'
     assert not _items(source)
 
 

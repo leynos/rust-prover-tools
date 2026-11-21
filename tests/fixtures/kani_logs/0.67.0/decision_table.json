@@ -39,10 +39,18 @@
     {
       "id": "failed-verdict-with-no-attributable-failure",
       "harnesses": [
-        {"name": "h::claim", "role": "claim", "status": "UNATTRIBUTED_FAILURE", "verdict": "FAILED"}
+        {"name": "h::claim", "role": "claim", "status": "UNEXPLAINED_FAILURE", "verdict": "FAILED"}
       ],
       "outcome": "counterexample",
       "why": "Kani printed FAILED and reconciled a failure count, so a failure exists; none of the checks this decision can attribute carries it. Ownership explains whose failure it was, not whether the run succeeded, so the verdict decides it a counterexample rather than verified."
+    },
+    {
+      "id": "ownerless-check-failure-is-a-counterexample",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNATTRIBUTED_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "counterexample",
+      "why": "CBMC printed the failed assertion without naming an owner, so the block it appears in is the harness it was checked for. A failure the block reported denies the claim whether or not a routine is named beside it."
     },
     {
       "id": "counterexample-outranks-timeout",

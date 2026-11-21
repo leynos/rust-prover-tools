@@ -13,7 +13,7 @@ edit touched.
 from __future__ import annotations
 
 import dataclasses as dc
-import posixpath
+import pathlib
 import re
 import typing as typ
 
@@ -33,12 +33,19 @@ _EXPECTATION = re.compile(
 def _normalize(path: str) -> str:
     """Return a comparable form of a path Verus printed or a caller typed.
 
-    Verus repeats the path it was given, which may already contain ``..``
-    components, so both sides are reduced lexically.  Nothing is resolved
-    against the filesystem: the log and the expectation may describe a machine
-    that is no longer present.
+    The comparison ignores spellings that cannot change which file a path
+    names: a ``.`` component, an empty component, a trailing separator, and a
+    separator written the other way round.  :class:`pathlib.PureWindowsPath`
+    reads all of those alike, so its POSIX rendering is the comparable form.
+
+    A ``..`` component is kept.  It is resolved against the component before
+    it, and when that component is a symbolic link, ``linked/../mutant.rs``
+    names a different file from ``mutant.rs``; collapsing it would let one
+    diagnostic satisfy an expectation for a file the run never read.  Nothing
+    is resolved against the filesystem either: the log and the expectation may
+    describe a machine that is no longer present.
     """
-    return posixpath.normpath(path.replace("\\", "/"))
+    return pathlib.PureWindowsPath(path).as_posix()
 
 
 @dc.dataclass(frozen=True, slots=True)

@@ -27,9 +27,31 @@ def crate_alias_indices(
 ) -> cabc.Iterator[int]:
     """Yield the index of each ``as`` that renames the crate in one statement.
 
+    Parameters
+    ----------
+    tokens : tuple[Token, ...]
+        The lexed source.
+    start : int
+        Token index of the first token of the statement or path.
+    end : int
+        Token index just past its last token.  The last ``as`` that can be
+        reported is at ``end - 2``, because an alias identifier must follow it.
+
+    Yields
+    ------
+    int
+        The index of each ``as`` that renames the crate rather than a member.
+
+    Notes
+    -----
     At most one such ``as`` can appear in a statement Rust accepts, but the
     reader reports every one it finds rather than assuming: a statement it
     misreads is better reported twice than silently narrowed.
+
+    Examples
+    --------
+    ``use kani as k;`` yields the index of its ``as``, while
+    ``use kani::{assume as a};`` yields nothing.
     """
     for index in range(start, end - 1):
         if tokens[index].text != "as":

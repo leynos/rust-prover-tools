@@ -643,6 +643,32 @@ reconciled. A cover carrying any status outside `SATISFIED`, `UNSATISFIABLE`,
 `UNREACHABLE` and `UNDETERMINED` is therefore refused: accepting it would admit
 a report the pinned release cannot produce.
 
+The expected-panic exemption covers only the checks Kani counts as a panic. The
+driver prints `(encountered one or more panics as expected)` only when the
+harness declared `should_panic` and every failed property has class
+`assertion`, and that same condition makes it print a successful verdict. A
+failure of any other kind beside the note is therefore an independent failure,
+not part of the panic, and a verdict that is not `SUCCESSFUL` while carrying
+the note is a report the release cannot produce and is refused. The parser
+reads the note and the verdict from the same line, so the two cannot drift
+apart.
+
+Kani escapes nothing inside a description or an echoed command. A description
+holding a newline is printed over several lines, with the opening quote ending
+the `Description:` line and the closing quote ending the last continuation
+line; the parser joins those lines, and reads a failure explanation by the
+description of the failed check it repeats, because the results section has
+already said how many lines it occupies. An echoed `cbmc` command is split at
+Kani's own boundaries rather than as shell text: the driver wraps an argument
+in double quotes exactly when it holds a space, and an apostrophe is an
+ordinary character, so shell splitting would let one apostrophe hide a flag.
+The expected-panic note and the description rule are both read from the pinned
+release's source rather than inferred from a sample.
+
+A second banner means the capture holds two invocations. The parser refuses it
+rather than returning the first run's facts, because those facts say nothing
+about whatever the second run reported.
+
 The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
 manifest or digest binding.
@@ -679,15 +705,29 @@ target outside the root is refused for what it is before its existence is asked
 about. Every file directly under `tests/` is a crate root in its own right, so
 an integration test's declarations resolve beside it rather than in a directory
 named after it. A `mod` written as a `macro_rules!` pattern is a template for
-source the macro is given, not source the crate compiles, so it names no file. A
-`#[path]` that a `cfg_attr` can select is refused: the configuration decides
-which file compiles, so no single answer would be true.
+source the macro is given, not source the crate compiles, so it names no file.
+A declaration an expansion emits does name a file: rustc resolves it from the
+invocation's module directory, which is where the expansion's tokens sit, so
+the enclosing chain the walk records is the one rustc uses. A declaration whose
+name a metavariable supplies is refused, because only the invocation's
+arguments decide that name and the scan never evaluates them. A `#[path]` that a
+`cfg_attr` can select is refused: the configuration decides which file
+compiles, so no single answer would be true.
 
 The vocabulary is the full set both current releases document, not the subset
 the ticket names. Under-reporting is a soundness failure in an audit, so
-`external_trait_specification` and `exec_allows_no_decreases_clause` are
-included with the words the ticket lists; over-reporting only asks a reviewer
-to read one more line.
+`external_trait_specification`, `exec_allows_no_decreases_clause` and
+`assume_termination` are included with the words the ticket lists;
+over-reporting only asks a reviewer to read one more line. `assume_termination`
+is currently unneeded according to the reference, but the note does not remove
+it from the inventory.
+
+A renamed member is reported under the item it names, at the position it is
+used. A bare call is the ordinary case; `self::`, `crate::` and `super::` name
+the same binding, because each reaches a `use` in the current module, the crate
+root or a parent. A further rename of the local name — `use self::a as b;` after
+`use kani::assume as a;` — is followed to the original item for the same
+reason: the binding is the same request for trust under another spelling.
 
 ### Verus outcome vocabulary
 
@@ -729,6 +769,14 @@ disagree: a capture can lose a diagnostic, and a run can break in two functions
 while reporting one of them. A control passes only when both say the same
 thing. The range exists because Verus reports a postcondition failure at the
 contract line above the body, not at the line a seeded mutation touched.
+
+Path comparison ignores spellings that cannot change the file: a `.` component,
+an empty component, a trailing separator and a separator written the other way
+round. A `..` component is kept. It is resolved against the directory before
+it, and through a symbolic link `linked/../mutant.rs` names a different file
+from `mutant.rs`; collapsing it would let one diagnostic satisfy an expectation
+for a file the run never read. Nothing is resolved against the filesystem,
+because the log and the expectation may describe a machine that is gone.
 
 ### Solver selection for Verus runs
 

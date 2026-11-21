@@ -24,9 +24,17 @@ import dataclasses as dc
 import enum
 import typing as typ
 
+from rust_prover_tools.kani_log.controls import (
+    ACCEPTED,
+    NOT_RUN,
+    REJECTED_AS_INTENDED,
+    REJECTED_OTHERWISE,
+    control_statuses,
+)
 from rust_prover_tools.kani_log.observation import Observed
 from rust_prover_tools.kani_log.run_mode import FOCUSED, FULL_PROFILE, run_mode
 from rust_prover_tools.kani_log.syntax import (
+    ASSERTION_KIND,
     UNSUPPORTED_KIND,
     UNSUPPORTED_MARKER,
     KaniLogError,
@@ -35,9 +43,8 @@ from rust_prover_tools.kani_log.syntax import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from rust_prover_tools.kani_log.manifest import Harness, Manifest
+    from rust_prover_tools.kani_log.manifest import Manifest
     from rust_prover_tools.kani_log.model import KaniLog as ParsedLog
-    from rust_prover_tools.kani_log.syntax import PropertyResult
 
 __all__ = (
     "ACCEPTED",
@@ -56,10 +63,6 @@ __all__ = (
 
 SATISFIED = "satisfied"
 UNSATISFIED = "unsatisfied"
-REJECTED_AS_INTENDED = "rejected-as-intended"
-REJECTED_OTHERWISE = "rejected-otherwise"
-ACCEPTED = "accepted"
-NOT_RUN = "not-run"
 
 
 class KaniOutcome(enum.StrEnum):
@@ -157,7 +160,7 @@ def _analyse(
     return KaniAnalysis(
         _outcome(log, claims, manifest),
         _witness_statuses(manifest, observed),
-        _control_statuses(manifest, observed),
+        control_statuses(manifest, observed),
         run_mode(log, manifest),
         reason="decided from the parsed log",
     )
@@ -241,64 +244,6 @@ def _all_satisfied(statuses: list[str] | None) -> bool:
     return bool(statuses) and all(status == "SATISFIED" for status in statuses)
 
 
-def _control_statuses(
-    manifest: Manifest,
-    observed: dict[str, Observed],
-) -> tuple[str, ...]:
-    """Map each control to whether it was rejected, accepted or never ran."""
-    statuses: list[str] = []
-    for control in manifest.controls:
-        seen = observed.get(control.name)
-        if seen is None:
-            statuses.append(NOT_RUN)
-        elif seen.succeeded:
-            statuses.append(ACCEPTED)
-        elif _rejected_as_intended(control, seen):
-            statuses.append(REJECTED_AS_INTENDED)
-        else:
-            statuses.append(REJECTED_OTHERWISE)
-    return tuple(statuses)
-
-
-def _rejected_as_intended(control: Harness, seen: Observed) -> bool:
-    """Report whether a control failed exactly the property the manifest expects.
-
-    The expected failure may name a full identifier, the property within the
-    harness, or a check kind; anything else is ``rejected-otherwise``.  Every
-    failed check must match, including one owned by a called routine: a seeded
-    fault that also trips an unrelated check has not shown that the claim's own
-    property would be caught.
-    """
-    expected = (control.expected_failure or "").strip()
-    if not expected:
-        return False
-    failed = seen.failed_checks
-    if not failed:
-        return False
-    return all(
-        _matches_expected(item, expected, owned=item.owner == seen.name)
-        for item in failed
-    )
-
-
-def _matches_expected(
-    item: PropertyResult,
-    expected: str,
-    *,
-    owned: bool,
-) -> bool:
-    """Report whether one failed check is the failure the manifest expects.
-
-    A property name such as ``assertion.1`` identifies a check only within its
-    owner.  A called routine's check may carry the same property name, so only
-    its full identifier or kind can name it.
-    """
-    names = {item.identifier, item.kind}
-    if owned:
-        names.add(item.name_in_owner)
-    return expected in names
-
-
 def _outcome(
     log: ParsedLog,
     claims: list[Observed | None],
@@ -345,17 +290,24 @@ def _has_counterexample(
 ) -> bool:
     """Report whether a claim was disproved by its own or a called failure.
 
-    The expected-panic exemption covers both sources.  A panic aborts the
-    routine it happens in and unwinds through the harness, so a check that
-    fails beneath a claim declared to panic is that same panic witnessed one
-    frame down.  Denying the claim for it would report the outcome the manifest
-    asked for as a counterexample.
+    The expected-panic exemption covers both sources, but only the checks Kani
+    counts as panics.  A panic aborts the routine it happens in and unwinds
+    through the harness, so an assertion that fails beneath a claim declared to
+    panic is that same panic witnessed one frame down.  A failure of any other
+    kind is not: the note cannot explain it, and excusing it would report the
+    claim verified beside an independent safety failure.
     """
-    return any(
-        (seen.substantive_failures or seen.foreign_failures)
-        and not _panics_as_expected(seen, manifest)
-        for seen in reported
-    )
+    return any(_denies_claim(seen, manifest) for seen in reported)
+
+
+def _denies_claim(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether one block carries a failure its manifest cannot excuse."""
+    failures = (*seen.substantive_failures, *seen.foreign_failures)
+    if not failures:
+        return False
+    if not _panics_as_expected(seen, manifest):
+        return True
+    return any(item.kind != ASSERTION_KIND for item in failures)
 
 
 def _has_resource_exhaustion(reported: list[Observed]) -> bool:
@@ -371,7 +323,14 @@ def _has_resource_exhaustion(reported: list[Observed]) -> bool:
 
 
 def _panics_as_expected(seen: Observed, manifest: Manifest) -> bool:
-    """Report whether the manifest declares this claim's panic, and it happened."""
+    """Report whether the manifest declares this claim's panic, and it happened.
+
+    The note is Kani's own certificate rather than an inference from the
+    failure: the driver prints it only for a harness declared to panic whose
+    every failed property is an assertion, and it is that combination the
+    driver calls successful.  It therefore says nothing about a failure of any
+    other kind, which is why the caller still reads the failed checks.
+    """
     if not seen.panics_as_expected:
         return False
     entry = next(item for item in manifest.claims if item.name == seen.name)

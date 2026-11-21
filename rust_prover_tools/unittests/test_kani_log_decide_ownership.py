@@ -10,6 +10,8 @@ decided on evidence it does not have.
 
 from __future__ import annotations
 
+import pytest
+
 from rust_prover_tools.kani_log import (
     CLAIM,
     Harness,
@@ -144,6 +146,26 @@ def test_an_unreachable_foreign_check_is_not_this_blocks_evidence() -> None:
     assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
 
 
+def test_an_unreachable_foreign_assertion_is_not_this_blocks_evidence() -> None:
+    """Leave another routine's unreachable assertion out of the evidence too.
+
+    The rule is not about covers: any check owned by a called routine is that
+    routine's fact, so its unreachability cannot show that this harness proved
+    nothing.  An implementation that only special-cased covers would fail here.
+    """
+    name = "h::c"
+    block = shapes.block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "own"),
+        PropertyResult("other.assertion.1", "UNREACHABLE", "foreign"),
+        failed_count=0,
+        total_count=2,
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest((Harness(name, CLAIM),))
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
+
+
 def test_an_expected_panic_excuses_a_foreign_failure() -> None:
     """Exempt a called routine's failure from a claim declared to panic.
 
@@ -164,6 +186,32 @@ def test_an_expected_panic_excuses_a_foreign_failure() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
     assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
+
+
+@pytest.mark.parametrize(
+    "failing",
+    ["h::p.overflow.1", "other.overflow.1"],
+    ids=["owned", "foreign"],
+)
+def test_an_expected_panic_excuses_only_the_checks_it_notes(failing: str) -> None:
+    """Deny the claim for a failure the note cannot explain.
+
+    Kani prints the note only when every failed property is an assertion, so a
+    failed check of another kind in the same block is an independent failure
+    the note does not cover, whether the harness or a called routine owns it.
+    Excusing it would report verified beside a safety failure.
+    """
+    name = "h::p"
+    block = shapes.block(
+        name,
+        PropertyResult(failing, "FAILURE", "arithmetic overflow on signed +"),
+        failed_count=1,
+        total_count=1,
+        panics_as_expected=True,
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
 
 
 def test_a_foreign_failure_without_an_expected_panic_is_a_counterexample() -> None:
