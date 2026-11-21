@@ -199,6 +199,10 @@ class _Response:
             return str(self._declared_length)
         return default
 
+    def isclosed(self) -> bool:
+        """Report whether the body has already been served."""
+        return self._read
+
     def read(self, amt: int | None = None) -> bytes:
         """Return the body once, then end the stream."""
         del amt

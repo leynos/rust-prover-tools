@@ -555,12 +555,13 @@ these stay outside it:
 
 - DNS resolution, which has no socket timeout at all;
 - the per-address connection attempts the standard library makes inside one
-  connect call, and the TLS negotiation that reuses the same budget, so a
-  multi-address host can overrun the deadline by one hop timeout per address;
+  connect call, and the initial TLS handshake, which reuses the same budget, so
+  a multi-address host can overrun the deadline by one hop timeout per address;
 - local file I/O while the body is written, which the watchdog does not
   supervise;
-- digest verification, publication and any bounded retry, each of which has
-  its own bound rather than the transfer's.
+- digest verification, which follows the transfer and is bounded only by the
+  byte ceiling; publication, which has no time bound; and a retry, which is
+  bounded by its attempt count and backoff.
 
 ### GitHub Actions inputs
 

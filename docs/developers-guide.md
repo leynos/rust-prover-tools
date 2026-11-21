@@ -284,10 +284,13 @@ read, including an EOF at or after the deadline, because a socket the watchdog
 shut down reads as end of stream.
 
 The deadline is not a hard wall-clock bound. DNS resolution has no socket
-timeout, the standard library applies one connect budget to every resolved
-address in turn and TLS renegotiation reuses it, and local file I/O while the
-body is written is not supervised. Digest verification, publication and retries
-each have their own bound rather than sharing the transfer's.
+timeout; the standard library applies one connect budget to every resolved
+address in turn, and the initial TLS handshake, which `connect()` performs
+before the watchdog is armed, reuses that budget. Local file I/O while the body
+is written is not supervised either. Digest verification runs after `_download`
+returns and is bounded only by the byte ceiling already enforced on the
+download; publication has no time bound at all; and a retry is bounded by its
+attempt count and backoff rather than by the transfer's deadline.
 
 ## External commands
 

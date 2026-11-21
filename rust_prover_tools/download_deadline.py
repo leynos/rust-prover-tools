@@ -11,10 +11,10 @@ body read fail alike.
 A socket timeout bounds each blocking call, not a sequence of them, so the
 budget is recomputed between phases rather than fixed when a hop opens. A call
 already in flight cannot be re-armed, though, and the standard library applies
-a hop's timeout to every resolved address in turn before TLS negotiation reuses
-it, so a multi-address host can overrun the deadline by one hop timeout per
-address. DNS resolution is outside the socket timeout altogether, and local
-file I/O is not supervised at all.
+a hop's timeout to every resolved address in turn before the initial TLS
+handshake, performed inside `connect()`, reuses it, so a multi-address host can
+overrun the deadline by one hop timeout per address. DNS resolution is outside
+the socket timeout altogether, and local file I/O is not supervised at all.
 
 `rust_prover_tools.download_transport` owns how a hop is requested;
 `rust_prover_tools.download_stream` owns the body rules. This module owns only
@@ -62,15 +62,21 @@ class _DeadlineWatchdog:
         self.expired = False
 
     def start(self) -> None:
-        """Start watching, unless the deadline can never arrive."""
+        """Start watching, unless the deadline can never arrive.
+
+        The thread field is set only after a successful start, so a start that
+        fails leaves `stop()` nothing to join and cannot replace the startup
+        error with a join error.
+        """
         if not math.isfinite(self._deadline):
             return
-        self._thread = threading.Thread(
+        thread = threading.Thread(
             target=self._watch,
             name="download-deadline-watchdog",
             daemon=True,
         )
-        self._thread.start()
+        thread.start()
+        self._thread = thread
 
     def stop(self) -> None:
         """Stop watching and wait for the watchdog thread to finish."""
