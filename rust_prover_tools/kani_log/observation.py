@@ -17,7 +17,7 @@ import dataclasses as dc
 from rust_prover_tools.kani_log.syntax import (
     COVER_KIND,
     UNSUPPORTED_KIND,
-    UNWINDING_KIND,
+    UNWINDING_KINDS,
     PropertyResult,
 )
 
@@ -28,7 +28,9 @@ UNRESOLVED_STATUS = "UNDETERMINED"
 #: A check the harness never reaches, which only its own owner can explain.
 UNREACHABLE_STATUS = "UNREACHABLE"
 #: Check kinds whose failure limits or annotates a run rather than denying it.
-_NON_DENYING_KINDS = frozenset({COVER_KIND, UNWINDING_KIND, UNSUPPORTED_KIND})
+#: The unwinding set is shared with :attr:`PropertyResult.is_unwinding`, so a
+#: recursion bound is classified the same way everywhere it matters.
+_NON_DENYING_KINDS = frozenset({COVER_KIND, UNSUPPORTED_KIND}) | UNWINDING_KINDS
 
 
 @dc.dataclass(frozen=True, slots=True)

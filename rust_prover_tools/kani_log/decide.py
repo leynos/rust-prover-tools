@@ -341,14 +341,16 @@ def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:
     """Report whether Kani could not model a construct this harness reached.
 
     Three shapes say so.  A failed ``unsupported_construct`` check is
-    unambiguous.  A failure whose message names the unsupported marker is the
+    unambiguous, whoever owns it: a check a called routine could not model is
+    the harness's problem too, because the harness's verdict rests on that
+    routine.  A failure whose message names the unsupported marker is the
     shape the corpus records.  The pre-flight warning alone proves nothing - it
     covers the whole crate - so it counts only when this harness was left
     undecided.
     """
     if any(
         item.kind == UNSUPPORTED_KIND and item.status == "FAILURE"
-        for item in seen.properties
+        for item in (*seen.properties, *seen.unattributed)
     ):
         return True
     if any(UNSUPPORTED_MARKER in text.lower() for text in seen.failure_messages):

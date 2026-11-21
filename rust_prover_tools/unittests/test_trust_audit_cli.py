@@ -280,9 +280,9 @@ def test_the_root_alias_and_repeated_prover_parse(
             "--root",
             str(tmp_path),
             "--prover",
-            "kani",
-            "--prover",
             "verus",
+            "--prover",
+            "kani",
             "src/lib.rs",
         ],
         exit_on_error=False,
@@ -290,6 +290,6 @@ def test_the_root_alias_and_repeated_prover_parse(
     captured = capsys.readouterr()
 
     assert status == 0
-    assert "provers: kani, verus\n" in captured.out
+    assert "provers: verus, kani\n" in captured.out
     assert ": admit\n" in captured.out
     assert ": assume\n" in captured.out

@@ -9,10 +9,14 @@ one per request, so a reviewer can read each against a justification:
   character literal is never read as code; :mod:`.cursor` and :mod:`.literals`
   hold the position arithmetic and the literal forms it shares with the
   decoder.
-- :mod:`.structure`, :mod:`.use_tree`, :mod:`.use_paths`, :mod:`.use_bindings`,
-  :mod:`.use_alias` and :mod:`.modules` locate the brackets, imports, bound
-  names, crate aliases and module declarations the rules depend on, and
-  :mod:`.regions` locates the ``verus!`` bodies and attributes.
+- :mod:`.structure`, :mod:`.conditions`, :mod:`.macro_rules`,
+  :mod:`.module_paths`, :mod:`.use_tree`, :mod:`.use_paths`,
+  :mod:`.use_bindings`, :mod:`.use_alias`, :mod:`.manifests` and
+  :mod:`.modules` locate the brackets, conditional attributes, macro
+  invocations, module paths, imports, bound names, crate kinds and module
+  declarations the rules depend on, and :mod:`.regions` locates the ``verus!``
+  bodies and attributes.
+- :mod:`.context` applies the rules to one file's tokens.
 - :mod:`.matcher` decides which occurrences of the vocabulary are trust.
 - :mod:`.tree` follows ``mod`` declarations from a set of entry points, so the
   audit covers compiled code and not stray files.

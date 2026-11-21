@@ -278,3 +278,41 @@ def test_the_summary_is_found_before_or_after_the_diagnostic(chatter: str) -> No
 
     assert first.summary == second.summary
     assert first.failures == second.failures
+
+
+def test_a_clean_summary_beside_an_error_trailer_is_refused() -> None:
+    """Rustc's closing count is evidence even when its diagnostic was lost.
+
+    The trailer is not itself a failure, but a clean summary beside one means
+    the capture kept the count and lost the diagnostic.
+    """
+    text = "\n".join(
+        (
+            "verification results:: 1 verified, 0 errors",
+            "error: aborting due to 1 previous error",
+        ),
+    )
+
+    with pytest.raises(VerusLogError, match="reports the trailer"):
+        parse_verus_log(text)
+
+
+def test_a_trailer_is_not_counted_as_a_failure() -> None:
+    """A valid negative control still counts only its primary diagnostic.
+
+    The trailer repeats rustc's own count; treating it as a second failure
+    would make every real failing run fail its declared region.
+    """
+    text = "\n".join(
+        (
+            "error: postcondition not satisfied",
+            "  --> mutant.rs:8:13",
+            "verification results:: 1 verified, 1 errors",
+            "error: aborting due to 1 previous error",
+        ),
+    )
+
+    log = parse_verus_log(text)
+
+    assert len(log.failures) == 1
+    assert log.failures[0].where == "mutant.rs:8:13"

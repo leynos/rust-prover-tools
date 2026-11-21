@@ -135,9 +135,57 @@ def test_a_declared_region_demands_exactly_one_failure() -> None:
         LogExpectations(errors=2, failure=parse_expectation("mutant.rs:5-12")),
     )
 
-    assert (
-        "the declared failure region expects one diagnostic"
-        in (result.disagreements[0])
+    assert any(
+        "expects one diagnostic" in sentence for sentence in result.disagreements
+    )
+    assert any(
+        "expects one failing function" in sentence for sentence in result.disagreements
+    )
+
+
+def test_a_declared_region_requires_a_summary_counting_one_error() -> None:
+    """One matching diagnostic cannot make a two-error summary a control.
+
+    A run that broke two functions while reporting one of them has not shown
+    that the seeded fault alone was caught, even when the diagnostic that was
+    captured lands in the right place.
+    """
+    log = VerusLog(
+        VerusSummary(0, 2),
+        (VerusFailure("postcondition not satisfied", "mutant.rs", 8, 13),),
+    )
+
+    result = verdict(
+        log,
+        LogExpectations(failure=parse_expectation("mutant.rs:5-12")),
+    )
+
+    assert not result.meets
+    assert any(
+        "but the summary counted 2" in sentence for sentence in result.disagreements
+    )
+
+
+def test_a_declared_region_requires_a_summary_at_all() -> None:
+    """A compiler diagnostic is not a verification control.
+
+    The diagnostic can name the right file and line while the run never
+    reached a verification result, so the region alone cannot accept it.
+    """
+    log = VerusLog(
+        None,
+        (VerusFailure("mismatched types", "mutant.rs", 8, 13),),
+    )
+
+    result = verdict(
+        log,
+        LogExpectations(failure=parse_expectation("mutant.rs:5-12")),
+    )
+
+    assert not result.meets
+    assert any(
+        "requires a verification summary" in sentence
+        for sentence in result.disagreements
     )
 
 

@@ -34,8 +34,12 @@ from __future__ import annotations
 
 from rust_prover_tools.trust_audit.context import Context
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.macro_rules import macro_rules
 from rust_prover_tools.trust_audit.model import ScanResult
-from rust_prover_tools.trust_audit.modules import module_references
+from rust_prover_tools.trust_audit.modules import (
+    inline_module_names,
+    module_references,
+)
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
 from rust_prover_tools.trust_audit.use_bindings import member_bindings
 from rust_prover_tools.trust_audit.use_tree import file_roots
@@ -89,10 +93,13 @@ def scan(
     tokens = tokenize(text)
     try:
         _refuse_opaque_macros(tokens, procedural_macro=procedural_macro)
+        modules = module_references(tokens)
         context = Context(
             tokens,
             procedural_macro=procedural_macro,
             vocabularies=vocabularies,
+            module_names=frozenset(reference.name for reference in modules)
+            | inline_module_names(tokens),
         )
     except RecursionError as error:
         # A grouped ``use`` nests, so a deeply nested one recurses through the
@@ -101,7 +108,7 @@ def scan(
         # them with a traceback instead.
         msg = "the file's use statements nest too deeply for the trust audit to read"
         raise TrustAuditError(msg) from error
-    return ScanResult(context.run(), module_references(tokens))
+    return ScanResult(context.run(), modules)
 
 
 def _refuse_opaque_macros(
@@ -115,17 +122,26 @@ def _refuse_opaque_macros(
     load;`` makes ``load!`` expand as ``include!``, so the refusal follows the
     file's imports rather than only the literal name.
 
-    ``include_str!`` joins the refused set only for a proc-macro crate.  Its
-    expansion is a string literal, which an ordinary crate's scan never reads;
-    a proc-macro crate's literals are read as code, so there the spliced file
-    would carry code the lexer never saw.
+    ``include_str!`` and ``include_bytes!`` join the refused set only for a
+    proc-macro crate.  Their expansions are a string literal and a byte array,
+    which an ordinary crate's scan never reads; a proc-macro crate's literals
+    are read as code, and such a crate can decode a spliced template and parse
+    it into a token stream, so there the spliced text would carry code the
+    lexer never saw.
+
+    A matcher pattern is not an invocation: ``macro_rules! m { (include!($x)) =>
+    … }`` describes input, and refusing it would abort an audit of a file that
+    never calls ``include!``.
     """
     base = OPAQUE_MACROS
     if procedural_macro:
         base |= PROCEDURAL_OPAQUE_MACROS
     names = _opaque_names(tokens, base)
+    patterns = macro_rules(tokens).patterns
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
+        if index in patterns:
+            continue
         if token.kind is not Kind.IDENT or token.text not in names:
             continue
         if following.text != "!":

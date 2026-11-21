@@ -118,13 +118,16 @@ def test_every_committed_log_yields_its_recorded_facts(
         assert refused(log_text(name, version)) == expected["refused"]
         return
     parsed = parse_text(log_text(name, version))
-    assert parsed.banner_version == expected["banner"]
-    assert parsed.format == expected["format"]
-    assert parsed.unsupported_constructs == tuple(expected["unsupported"])
+    where = f"{version}/{name}.log"
+    assert parsed.banner_version == expected["banner"], f"banner of {where}"
+    assert parsed.format == expected["format"], f"format of {where}"
+    assert parsed.unsupported_constructs == tuple(expected["unsupported"]), (
+        f"unsupported constructs of {where}"
+    )
     if expected["manual"] is None:
-        assert parsed.manual is None
+        assert parsed.manual is None, f"unexpected manual summary in {where}"
     else:
-        assert parsed.manual is not None
+        assert parsed.manual is not None, f"missing manual summary in {where}"
         assert [
             parsed.manual.verified,
             parsed.manual.failures,
@@ -135,8 +138,10 @@ def test_every_committed_log_yields_its_recorded_facts(
             expected["manual"]["failures"],
             expected["manual"]["total"],
             expected["manual"]["failed"],
-        ]
-    assert [block_facts(block) for block in parsed.blocks] == expected["blocks"]
+        ], f"manual summary of {where}"
+    assert [block_facts(block) for block in parsed.blocks] == expected["blocks"], (
+        f"blocks of {where}"
+    )
 
 
 def test_every_supported_version_has_a_corpus() -> None:
@@ -147,12 +152,14 @@ def test_every_supported_version_has_a_corpus() -> None:
     comparison against a list built the same way could never show.
     """
     on_disk = {item.name for item in FIXTURES.iterdir() if item.is_dir()}
-    assert on_disk == set(SUPPORTED_KANI_VERSIONS)
+    assert on_disk == set(SUPPORTED_KANI_VERSIONS), (
+        "corpus directories must match the supported releases"
+    )
     for version, entries in EXPECTED.items():
         banners = {
             entry["banner"] for entry in entries["logs"].values() if "banner" in entry
         }
-        assert banners == {version}
+        assert banners == {version}, f"every {version} log must carry its own banner"
 
 
 def test_every_recorded_log_exists() -> None:
@@ -561,11 +568,15 @@ def test_a_failed_verdict_carrying_the_panic_note_is_refused() -> None:
 
 
 def test_a_flag_inside_a_path_does_not_disable_unwinding_checks() -> None:
-    """Read solver flags at argument boundaries, not as substrings."""
+    """Read solver flags at argument boundaries, not as substrings.
+
+    The wrapped path ends the echo, so its contents are unambiguously one
+    argument and the flag spelled inside it was never passed as an option.
+    """
     inside_a_path = HarnessBlock(
         name="h::x",
-        solver_command='[Kani] Running: `cbmc "/tmp/run --no-unwinding-assertions" '
-        "--sat-solver cadical`",
+        solver_command="[Kani] Running: `cbmc --sat-solver cadical "
+        '"/tmp/run --no-unwinding-assertions"`',
     )
     separate = HarnessBlock(
         name="h::x",
@@ -574,6 +585,20 @@ def test_a_flag_inside_a_path_does_not_disable_unwinding_checks() -> None:
     )
     assert unwinding_checks_enabled(inside_a_path) is True
     assert unwinding_checks_enabled(separate) is False
+
+
+def test_a_wrapped_argument_followed_by_text_leaves_checks_unknown() -> None:
+    """Refuse a wrapped argument whose closing quote could be content.
+
+    ``"a b" --flag`` is what two arguments render as, and also what one
+    argument holding ``a b" --flag`` renders as.  Kani escapes nothing, so the
+    flag's presence cannot be decided from the text.
+    """
+    ambiguous = HarnessBlock(
+        name="h::x",
+        solver_command='[Kani] Running: `cbmc "/tmp/a b" --sat-solver cadical`',
+    )
+    assert unwinding_checks_enabled(ambiguous) is None
 
 
 def test_a_flag_last_in_the_solver_command_is_still_read() -> None:
@@ -752,11 +777,19 @@ def test_a_mixed_inventory_and_verification_log_is_refused() -> None:
 
 
 def test_a_front_truncated_tail_of_a_real_log_is_refused() -> None:
-    """A log missing its banner cannot be attributed to a Kani release."""
-    padding = "\n".join(f"capture chatter {index}" for index in range(10_000))
-    text = f"{padding}\n{log_text('verified')}"
+    """A log missing its banner cannot be attributed to a Kani release.
+
+    The padding goes *after* the banner so the tail a front-truncating capture
+    keeps holds no banner at all.  Putting it before the banner would leave the
+    banner in the middle of the kept tail, and a parser that accepted leading
+    chatter would then pass a test meant to prove the banner is required.
+    """
+    banner, *rest = log_text("verified").splitlines()
+    padding = [f"capture chatter {index}" for index in range(10_000)]
+    text = "\n".join([banner, *padding, *rest])
     tail = text[-64 * 1024 :]
     assert len(tail.encode("utf-8")) == 64 * 1024
+    assert not tail.startswith(banner)
     assert "does not begin with a Kani banner" in refused(tail)
 
 
@@ -800,3 +833,20 @@ def test_unknown_chatter_between_reports_does_not_change_the_result(
     """Unknown chatter between reports is tolerated and changes no parsed fact."""
     text = log_text(name)
     assert parse_text(_with_chatter(text, chatter)) == parse_text(text)
+
+
+def test_a_description_with_an_embedded_quote_then_a_blank_line_is_read_in_full() -> (
+    None
+):
+    """A blank line inside a description does not close the check entry.
+
+    The description below renders ``""ready"`` on its first line and a blank
+    line before the continuation.  The blank is content: the entry boundary is
+    the next report construct, so the frame must stay open across it.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: ""ready"\n\nand continued"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == '"ready"\n\nand continued'

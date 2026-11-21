@@ -785,9 +785,22 @@ to whichever file a `cfg_attr` selects, is refused: a configuration decides the
 last of those, so no single answer describes what the crate compiles. A `mod`
 written as a `macro_rules!` pattern names no file, because it is a template for
 source the macro is given rather than source the crate compiles; a declaration
-an expansion emits is followed, because rustc resolves it from the invocation's
-module directory. A declaration whose name comes from a metavariable is
-refused, because only the invocation's arguments decide that name.
+an expansion emits is followed from the invocation's module directory, which is
+where rustc resolves it. A macro no invocation in the file names compiles
+nothing there, so its declaration demands no file. An invocation in another
+file is outside the audit's per-file scan, and the audit does not claim to
+follow it. A declaration whose name comes from a metavariable is refused,
+because only the invocation's arguments decide that name.
+
+A `#[path]` is resolved from the directory rustc uses at that position. At file
+scope that is the declaring file's own directory; the first inline `#[path]`
+inside `src/a.rs` is applied before the deferred `a` component exists, so it
+names `src/parts`, not `src/a/parts`. A `#[path]` that leaves the repository is
+refused. The proc-macro flag is read from the nearest `Cargo.toml` with
+`tomllib`: `[lib] proc-macro = true`, its deprecated `proc_macro` spelling, and
+`crate-type = ["proc-macro"]` all make the crate a proc-macro crate. A manifest
+that resolves outside the repository, or cannot be parsed, is refused rather
+than guessed at.
 
 A word counts as trust only in a context that gives it meaning:
 
@@ -803,11 +816,25 @@ The third rule is deliberately wide. A named import such as `use kani::assume;`
 makes a later bare `assume(..)` ambiguous, so it is reported with every other
 unqualified vocabulary word in that file. An audit that reports a word wrongly
 leaves something for the reviewer to dismiss; one that stays silent hides a
-request for proof by assumption.
+request for proof by assumption. A renamed import is reported under the item it
+names when the use is bare, is reached through `self::`, `crate::` or
+`super::`, or is qualified by a module the same file declares —
+`mod m { pub use kani::assume as a; } m::a(..)` reaches the binding the file
+shows. A module declared elsewhere is not shown, so its names are left alone.
+
+The lexical rules follow the compiler where they decide what is code. An
+identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a
+leading shebang is discarded; a literal's suffix belongs to the literal, so
+`"text"include` is not an `include` call; and a `\u{…}` escape must begin with
+a hexadecimal digit, so `\u{_63}` is refused rather than read as `c`.
 
 Source the audit cannot read is refused rather than skipped: comments and
 literals that never terminate, and the macros `include!`, `paste!` and
-`concat_idents!`, whose expansion it never sees.
+`concat_idents!`, whose expansion it never sees. For a proc-macro crate, whose
+literals are read as code, `include_str!` and `include_bytes!` join them: the
+crate can decode a template and parse it into a token stream the audit never
+sees. A macro named inside a `macro_rules!` matcher is input rather than an
+invocation, so it is not refused on that account.
 
 Useful options are:
 

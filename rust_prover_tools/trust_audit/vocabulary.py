@@ -150,12 +150,14 @@ OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset(
 
 #: A macro whose splice is opaque only where literals are read as code.
 #:
-#: ``include_str!`` expands to a string literal.  An ordinary crate's literals
-#: are trivia, so the expansion adds nothing the audit reads.  A proc-macro
-#: crate's literals are scanned as potential code, and a spliced file's text
-#: never passed through the lexer, so there the macro is as opaque as
-#: ``include!``.
-PROCEDURAL_OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset({"include_str"})
+#: ``include_str!`` expands to a string literal and ``include_bytes!`` to a
+#: byte array.  An ordinary crate's literals are trivia, so either expansion
+#: adds nothing the audit reads.  A proc-macro crate's literals are scanned as
+#: potential code, and such a crate can decode a spliced template and parse it
+#: into a token stream, so there both are as opaque as ``include!``.
+PROCEDURAL_OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset(
+    {"include_str", "include_bytes"},
+)
 
 
 def select_vocabularies(names: cabc.Iterable[str] | None) -> tuple[Vocabulary, ...]:

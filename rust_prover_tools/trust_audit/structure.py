@@ -17,12 +17,10 @@ from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 __all__ = (
     "attribute_spans",
-    "conditional_path",
     "matching",
     "opening_bracket",
     "opening_paren",
     "path_value",
-    "payload_start",
     "previous_closer",
     "skip_visibility",
     "texts",
@@ -30,8 +28,6 @@ __all__ = (
 
 # The tokens between ``#[`` and a path attribute's value.
 _PATH_HEAD = ("path", "=")
-# The attribute that applies another attribute under a configuration predicate.
-_CFG_ATTR = "cfg_attr"
 # The bracket pairs an attribute or use tree may nest.
 _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 _OPENERS = frozenset(_DELIMITER_PAIRS)
@@ -287,85 +283,3 @@ def path_value(
     if literal.kind is not Kind.LITERAL:
         return None
     return decoded_literal_body(literal.text)[1]
-
-
-def payload_start(
-    tokens: tuple[Token, ...], open_index: int, close_index: int
-) -> int | None:
-    """Return the index after a ``cfg_attr`` predicate's closing comma.
-
-    The predicate is the first item and may itself contain commas inside a
-    nested call such as ``all(…)``, so only a comma at the attribute's own
-    bracket depth separates it from the payload.
-
-    Parameters
-    ----------
-    tokens : tuple[Token, ...]
-        The lexed source.
-    open_index : int
-        Token index of the ``cfg_attr`` call's ``(``.
-    close_index : int
-        Token index of its matching ``)``.
-
-    Returns
-    -------
-    int | None
-        Index of the first payload token, or ``None`` when the attribute
-        carries no payload and so applies no attribute at all.
-
-    """
-    if open_index >= close_index or tokens[open_index].text != "(":
-        return None
-    depth = 0
-    for index in range(open_index + 1, close_index):
-        text = tokens[index].text
-        if text in _OPENERS:
-            depth += 1
-        elif text in _CLOSERS:
-            depth -= 1
-        elif text == "," and depth == 0:
-            return index + 1
-    return None
-
-
-def conditional_path(
-    tokens: tuple[Token, ...], open_index: int, close_index: int
-) -> bool:
-    """Report whether a ``cfg_attr`` span can select a ``#[path]`` target.
-
-    ``#[cfg_attr(unix, path = "unix_impl.rs")] mod platform;`` compiles one of
-    two different files depending on the configuration. The audit reads the
-    repository rather than one configuration, so a declaration like this is
-    refused instead of being resolved to whichever file happens to exist.
-
-    Only the payload can select a target. The configuration predicate is the
-    first item, so a predicate that happens to spell ``path = "…"`` — a custom
-    configuration named ``path`` with a value — is not a path attribute.
-
-    Parameters
-    ----------
-    tokens : tuple[Token, ...]
-        The lexed source.
-    open_index : int
-        Token index of the attribute's ``[``.
-    close_index : int
-        Token index of that attribute's ``]``.
-
-    Returns
-    -------
-    bool
-        Whether the attribute is a ``cfg_attr`` whose payload carries
-        ``path = …``.
-
-    """
-    head_index = open_index + 1
-    if head_index >= close_index or tokens[head_index].text != _CFG_ATTR:
-        return False
-    start = payload_start(tokens, head_index + 1, close_index)
-    if start is None:
-        return False
-    return any(
-        tuple(token.text for token in tokens[index : index + len(_PATH_HEAD)])
-        == _PATH_HEAD
-        for index in range(start, close_index)
-    )

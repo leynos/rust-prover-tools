@@ -13,26 +13,27 @@ own directory. The enclosing inline names therefore travel with the reference.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.trust_audit.conditions import conditional_path
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
 from rust_prover_tools.trust_audit.structure import (
     attribute_spans,
-    conditional_path,
     matching,
     opening_bracket,
     path_value,
     previous_closer,
     skip_visibility,
-    texts,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("module_references",)
+__all__ = ("inline_module_names", "module_references")
 
 # ``mod``, the module's name, and what follows it: a ``;`` for an external
 # module or a ``{`` for an inline one.
@@ -40,9 +41,6 @@ _DECLARATION_TOKENS = 3
 _INLINE = "{"
 _EXTERNAL = ";"
 # ``macro_rules``, ``!``, the macro's name and its body.
-_MACRO_HEAD = ("macro_rules", "!")
-_RULE_ARROW = "=>"
-_DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 
 
 def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
@@ -75,27 +73,47 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     compiling that file.  Those tokens are skipped so the walk does not demand
     a file the crate never loads.
 
-    An expansion is not skipped.  rustc resolves a ``mod`` declaration that a
-    ``macro_rules!`` expansion emits from the invocation's module directory,
-    which is where the expansion's tokens sit, so the enclosing chain recorded
-    here is the one rustc uses.
+    An expansion is attributed to the invocations of its macro.  rustc
+    resolves a ``mod`` declaration an expansion emits from the *invocation's*
+    module directory, not from the definition's, so a macro defined at the
+    crate root and invoked inside ``mod nested { … }`` compiles
+    ``nested/child.rs``.  The expansion's own inline modules are appended to
+    the chain at each invocation.  An invocation in another file is outside a
+    per-file scan; that limitation is recorded in the package documentation.
     """
     references = []
     spans = dict(attribute_spans(tokens))
-    patterns, expansions = _macro_spans(tokens)
-    _refuse_metavariable_modules(tokens, expansions)
-    inline = _InlineModules(tokens, patterns)
+    rules = macro_rules(tokens)
+    _refuse_metavariable_modules(tokens, rules.expansions)
+    inline = _InlineModules(tokens, rules.patterns)
     for index, token in enumerate(tokens):
         head = tokens[index + 1 : index + _DECLARATION_TOKENS]
-        if index in patterns:
+        if index in rules.patterns:
             continue
         if not _names_module(token, head) or head[1].text != _EXTERNAL:
             continue
         name = head[0]
+        path = _path_attribute(tokens, spans, index)
+        if index in rules.expansions:
+            references.extend(
+                _expanded_references(
+                    rules,
+                    inline,
+                    index,
+                    ModuleReference(
+                        name.text,
+                        path,
+                        name.line,
+                        name.column,
+                        (),
+                    ),
+                ),
+            )
+            continue
         references.append(
             ModuleReference(
                 name.text,
-                _path_attribute(tokens, spans, index),
+                path,
                 name.line,
                 name.column,
                 inline.enclosing(index),
@@ -104,61 +122,42 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     return tuple(references)
 
 
-def _macro_spans(
-    tokens: tuple[Token, ...],
-) -> tuple[frozenset[int], frozenset[int]]:
-    """Return the pattern and expansion tokens of every ``macro_rules!``.
+def inline_module_names(tokens: tuple[Token, ...]) -> frozenset[str]:
+    """Return the names of the inline modules this file declares.
 
-    A rule is a pattern followed by ``=>`` and a body, so the group before each
-    arrow is the pattern and the group after it is the expansion.  Only the
-    pattern is skipped: an expansion that emits ``mod x;`` is code the crate
-    compiles.  rustc resolves that declaration from the invocation's module
-    directory - the expansion's own source position - rather than from the
-    macro definition, so the reference the walk records already names the file
-    the crate loads.  The expansion is returned separately so a declaration
-    whose name is a metavariable can be refused rather than silently missed.
+    A qualified path such as ``m::a`` names a local binding when ``m`` is an
+    inline module in the same file.  A module declared elsewhere is not shown,
+    so the scan cannot say what its names bind to and does not claim to.
     """
-    patterns: set[int] = set()
-    expansions: set[int] = set()
-    for index in range(len(tokens) - len(_MACRO_HEAD)):
-        if texts(tokens, index, len(_MACRO_HEAD)) != _MACRO_HEAD:
-            continue
-        opening = index + len(_MACRO_HEAD) + 1
-        closing = _group_end(tokens, opening, len(tokens))
-        if closing is None:
-            continue
-        body_patterns, body_expansions = _rule_spans(tokens, opening, closing)
-        patterns.update(body_patterns)
-        expansions.update(body_expansions)
-    return frozenset(patterns), frozenset(expansions)
+    rules = macro_rules(tokens)
+    return _InlineModules(tokens, rules.patterns).names
 
 
-def _rule_spans(
-    tokens: tuple[Token, ...],
-    opening: int,
-    closing: int,
-) -> tuple[set[int], set[int]]:
-    """Return the pattern and expansion indices of each rule in a macro body.
+def _expanded_references(
+    rules: MacroRules,
+    inline: _InlineModules,
+    token_index: int,
+    reference: ModuleReference,
+) -> tuple[ModuleReference, ...]:
+    """Attribute one expansion's declaration to each invocation in this file.
 
-    A group is a pattern when the token after it is ``=>``, and the group after
-    the arrow is that rule's expansion. A rule whose arrow ends the body has no
-    expansion to read.
+    The chain at a definition's own position says nothing about where the
+    expansion compiles.  The chain at each invocation is the one rustc uses,
+    and the inline modules the expansion itself declares are appended to it.
+    A macro no invocation in this file names compiles nothing here, so the
+    reference is dropped.
     """
-    patterns: set[int] = set()
-    expansions: set[int] = set()
-    index = opening + 1
-    while index < closing:
-        group = _group_end(tokens, index, closing)
-        if group is None:
-            index += 1
-            continue
-        if group + 1 < closing and tokens[group + 1].text == _RULE_ARROW:
-            patterns.update(range(index, group + 1))
-            expansion = _group_end(tokens, group + 2, closing)
-            if expansion is not None:
-                expansions.update(range(group + 2, expansion + 1))
-        index = group + 1
-    return patterns, expansions
+    name = rules.owners[token_index]
+    head = rules.heads[name]
+    definition_chain = inline.enclosing(head)
+    local_chain = inline.enclosing(token_index)[len(definition_chain) :]
+    return tuple(
+        dc.replace(
+            reference,
+            enclosing=(*inline.enclosing(site), *local_chain),
+        )
+        for site in rules.invocations.get(name, ())
+    )
 
 
 def _refuse_metavariable_modules(
@@ -191,16 +190,6 @@ def _refuse_metavariable_modules(
             raise TrustAuditError(msg)
 
 
-def _group_end(tokens: tuple[Token, ...], index: int, limit: int) -> int | None:
-    """Return the close index of the group opening at ``index``, if it opens one."""
-    if index >= limit:
-        return None
-    closer = _DELIMITER_PAIRS.get(tokens[index].text)
-    if closer is None:
-        return None
-    return matching(tokens, index, tokens[index].text, closer)
-
-
 def _names_module(token: Token, head: tuple[Token, ...]) -> bool:
     """Report whether ``token`` is ``mod`` and ``head`` names what follows it.
 
@@ -224,9 +213,10 @@ class _InlineModules:
     """Report the inline ``mod`` names that enclose a token.
 
     A single left-to-right walk pairs every ``mod name {`` with the ``}`` that
-    closes it, so the enclosing chain at any index is the stack the walk holds
-    there. Building that once per file keeps the lookup from re-scanning the
-    token stream for every ``mod`` declaration.
+    closes it.  The chain at any index is rebuilt on demand from parent links
+    rather than copied there: a file with ``D`` nested modules around ``N``
+    ordinary tokens would otherwise retain ``N x D`` references even when the
+    body declares no external module at all.
     """
 
     def __init__(
@@ -235,31 +225,47 @@ class _InlineModules:
         patterns: cabc.Container[int] = frozenset(),
     ) -> None:
         """Pair every inline module's braces and record each token's chain."""
-        self._chains: list[tuple[InlineModule, ...]] = [()] * len(tokens)
-        stack: list[tuple[InlineModule, int]] = []
+        # Each entry is (module, index of the enclosing entry, closing brace).
+        self._modules: list[tuple[InlineModule, int | None, int]] = []
+        self._innermost: list[int | None] = [None] * len(tokens)
+        stack: list[int] = []
         spans = dict(attribute_spans(tokens))
         for index in range(len(tokens)):
             # A closing brace belongs to the module that *holds* the inline one,
             # so it is popped before the chain is recorded for that position.
-            if stack and index == stack[-1][1]:
+            if stack and index == self._modules[stack[-1]][2]:
                 stack.pop()
-            self._chains[index] = tuple(module for module, _ in stack)
+            self._innermost[index] = stack[-1] if stack else None
             if index not in patterns and _opens_inline_module(tokens, index):
                 module = InlineModule(
                     tokens[index + 1].text,
                     _path_attribute(tokens, spans, index),
                 )
-                stack.append((module, matching(tokens, index + 2, "{", "}")))
+                parent = stack[-1] if stack else None
+                self._modules.append(
+                    (module, parent, matching(tokens, index + 2, "{", "}")),
+                )
+                stack.append(len(self._modules) - 1)
+
+    @property
+    def names(self) -> frozenset[str]:
+        """Every inline module name this file declares."""
+        return frozenset(module.name for module, _, _ in self._modules)
 
     def enclosing(self, index: int) -> tuple[InlineModule, ...]:
         """Return the inline modules enclosing the token at ``index``.
 
-        An expansion's tokens keep the invocation's position, and rustc
-        resolves a ``mod`` declaration an expansion emits from the invocation's
-        module directory, so this chain is the one that declaration is
-        searched from.
+        The chain is rebuilt from parent links, innermost first, and then
+        reversed so a caller reads it outermost first.
         """
-        return self._chains[index]
+        chain: list[InlineModule] = []
+        current = self._innermost[index]
+        while current is not None:
+            module, parent, _ = self._modules[current]
+            chain.append(module)
+            current = parent
+        chain.reverse()
+        return tuple(chain)
 
 
 def _path_attribute(

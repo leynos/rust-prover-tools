@@ -113,6 +113,28 @@ class Reader:
         """Return the current line without consuming it."""
         return self._lines[self._index]
 
+    def peek_at(self, offset: int) -> str | None:
+        """Return the line ``offset`` lines ahead, or ``None`` past the end.
+
+        A description holding a newline can print a blank line as content, so
+        deciding whether a blank line closes an entry needs the next line that
+        is not blank.  The lookahead never moves the cursor.
+
+        Parameters
+        ----------
+        offset : int
+            How many lines past the current one to read.
+
+        Returns
+        -------
+        str | None
+            The line at that offset, or ``None`` when the log ends first.
+        """
+        position = self._index + offset
+        if position >= len(self._lines):
+            return None
+        return self._lines[position]
+
     def take(self) -> str:
         """Consume and return the current line, or refuse a truncated log.
 

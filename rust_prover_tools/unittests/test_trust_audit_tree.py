@@ -112,8 +112,8 @@ def test_a_module_named_by_a_macro_metavariable_is_refused() -> None:
 
 
 def test_a_literal_module_declaration_in_an_expansion_is_reported() -> None:
-    """Keep a declaration an expansion spells, whose file is already known."""
-    source = "macro_rules! decl { () => { mod proofs; }; }"
+    """Keep a declaration an expansion spells, attributed to its invocation."""
+    source = "macro_rules! decl { () => { mod proofs; }; }\ndecl!();"
     assert references(source) == [("proofs", None, ())]
 
 
@@ -150,6 +150,7 @@ def test_a_path_escape_is_read_as_rust_reads_it(spelling: str) -> None:
     [
         (r"\u{0000063}", "malformed"),
         (r"\u{d800}", "not a Unicode scalar value"),
+        (r"\u{_63}", "malformed"),
     ],
 )
 def test_an_undecodable_path_escape_is_refused(spelling: str, pattern: str) -> None:
@@ -369,16 +370,15 @@ def test_a_main_rs_module_owns_its_directory(tmp_path: Path) -> None:
     }
 
 
-def test_a_cyclic_path_is_refused(tmp_path: Path) -> None:
+def test_a_cyclic_path_through_a_symlink_is_refused(tmp_path: Path) -> None:
     """Refuse a ``#[path]`` that reaches a file already being audited.
 
-    The second spelling resolves to the same file, so following it would either
-    walk forever or resolve that file's children under a second owner.
+    The symlink keeps a second spelling that lexical normalization cannot
+    collapse, so following it would either walk forever or resolve that file's
+    children under a second owner.
     """
-    write(
-        tmp_path,
-        {"src/lib.rs": '#[path = "../src/lib.rs"]\nmod again;'},
-    )
+    write(tmp_path, {"src/lib.rs": '#[path = "alias.rs"]\nmod again;'})
+    (tmp_path / "src/alias.rs").symlink_to(tmp_path / "src/lib.rs")
 
     with pytest.raises(TrustAuditError, match="under two spellings"):
         audit_tree(tmp_path, ["src/lib.rs"])
@@ -578,11 +578,12 @@ def test_a_file_with_no_manifest_above_it_reads_as_ordinary(tmp_path: Path) -> N
     assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
 
 
-def test_a_proc_macro_key_without_the_hyphen_is_not_the_flag(tmp_path: Path) -> None:
-    """Only Cargo's own spelling of the key makes a proc-macro crate.
+def test_a_deprecated_proc_macro_key_is_honoured(tmp_path: Path) -> None:
+    """Read Cargo's deprecated underscore spelling as the same flag.
 
-    ``proc_macro`` is a different key Cargo ignores, so reading it as the flag
-    would scan literals as code for a manifest that never asked for it.
+    Cargo accepts ``proc_macro = true`` before the 2024 edition, so the crate
+    still builds as a proc-macro crate; missing the flag would leave the code
+    its literals generate unread.
     """
     write(
         tmp_path,
@@ -593,7 +594,66 @@ def test_a_proc_macro_key_without_the_hyphen_is_not_the_flag(tmp_path: Path) -> 
         },
     )
 
-    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": ["assume"]}
+
+
+def test_a_proc_macro_crate_type_makes_literals_code(tmp_path: Path) -> None:
+    """Read the general crate-type field Cargo accepts for a proc macro.
+
+    ``[lib] crate-type = ["proc-macro"]`` names the same crate type as the
+    dedicated flag, so a manifest written that way still expands literals.
+    """
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            '[lib]\ncrate-type = ["proc-macro"]\n',
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": ["assume"]}
+
+
+def test_a_manifest_symlinked_outside_the_root_is_refused(tmp_path: Path) -> None:
+    """Refuse a manifest whose target leaves the repository.
+
+    ``is_file`` follows a symbolic link, so probing before resolving would read
+    a file the root does not own and decide the crate kind from it.
+    """
+    outside = tmp_path.parent / "outside-Cargo.toml"
+    outside.write_text(
+        '[package]\nname = "p"\nversion = "0.1.0"\n\n[lib]\nproc-macro = true\n',
+        encoding="utf-8",
+    )
+    write(tmp_path, {"src/lib.rs": "fn f() {}"})
+    (tmp_path / "Cargo.toml").symlink_to(outside)
+
+    with pytest.raises(TrustAuditError, match="resolves outside the repository"):
+        audit_tree(tmp_path, ["src/lib.rs"])
+
+
+def test_a_shared_module_takes_the_drivers_crate_kind(tmp_path: Path) -> None:
+    """Scan a ``#[path]`` module as part of the crate that compiles it.
+
+    The shared file sits in a directory with no manifest of its own; reading
+    the nearest manifest above it would call the crate ordinary and leave the
+    literal's expansion unread.
+    """
+    write(
+        tmp_path,
+        {
+            "macros/Cargo.toml": '[package]\nname = "macros"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "macros/src/lib.rs": '#[path = "../../shared/helper.rs"]\nmod helper;',
+            "shared/helper.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "macros/src/lib.rs") == {
+        "macros/src/lib.rs": [],
+        "shared/helper.rs": ["assume"],
+    }
 
 
 def test_an_unparseable_manifest_is_refused(tmp_path: Path) -> None:
@@ -632,3 +692,106 @@ def test_the_flag_overrides_the_manifest(tmp_path: Path) -> None:
 
     assert forced == {"src/lib.rs": ["assume"]}
     assert suppressed == {"src/lib.rs": []}
+
+
+def test_a_nested_cfg_attr_predicate_is_not_a_path_attribute() -> None:
+    """Read a nested ``cfg_attr`` predicate as configuration, not as ``path``.
+
+    ``cfg_attr(path = "fast", allow(dead_code))`` configures by a custom key
+    named ``path`` and applies only ``allow``, so the declaration still uses
+    the default module file and must not be refused.
+    """
+    source = '#[cfg_attr(unix, cfg_attr(path = "fast", allow(dead_code)))]\nmod child;'
+
+    assert references(source) == [("child", None, ())]
+
+
+def test_a_nested_cfg_attr_payload_can_still_select_a_path() -> None:
+    """Refuse a nested payload that applies a ``path`` attribute."""
+    source = (
+        '#[cfg_attr(unix, cfg_attr(feature = "fast", path = "alt.rs"))]\nmod child;'
+    )
+
+    with pytest.raises(TrustAuditError, match="conditional #\\[path\\]"):
+        references(source)
+
+
+def test_a_first_inline_path_is_relative_to_the_files_directory(
+    tmp_path: Path,
+) -> None:
+    """Resolve an inline ``#[path]`` before the deferred module component.
+
+    rustc applies the attribute to the physical directory of ``src/a.rs``, so
+    ``#[path = "parts"]`` there names ``src/parts``.  Searching beneath
+    ``src/a/parts`` would read a file the crate never compiles, or refuse a
+    valid crate when that directory does not exist.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "mod a;",
+            "src/a.rs": '#[path = "parts"]\nmod inner { mod leaf; }',
+            "src/parts/leaf.rs": "fn f() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/a.rs": [],
+        "src/lib.rs": [],
+        "src/parts/leaf.rs": ["assume"],
+    }
+
+
+def test_a_macro_expansion_resolves_from_its_invocation(tmp_path: Path) -> None:
+    """Search an expansion's ``mod`` declaration from the invocation site.
+
+    The definition sits at the crate root, but the invocation is inside
+    ``mod nested``, so rustc compiles ``nested/child.rs``.  Reading the
+    definition's position would search the crate root instead.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "\n".join(
+                (
+                    "macro_rules! emit {",
+                    "    () => { mod child; };",
+                    "}",
+                    "mod nested {",
+                    "    emit!();",
+                    "}",
+                ),
+            ),
+            "src/nested/child.rs": "fn f() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/lib.rs": [],
+        "src/nested/child.rs": ["assume"],
+    }
+
+
+def test_a_macro_expansion_with_no_invocation_compiles_no_file(
+    tmp_path: Path,
+) -> None:
+    """Do not demand a file for a macro that is never invoked here.
+
+    A definition alone compiles nothing, so its ``mod child;`` names no file in
+    this scan.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "\n".join(
+                (
+                    "macro_rules! emit {",
+                    "    () => { mod child; };",
+                    "}",
+                    "fn f() {}",
+                ),
+            ),
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}

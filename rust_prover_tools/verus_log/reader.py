@@ -7,7 +7,11 @@ first.  Lines the grammar does not name - compiler chatter, progress notes,
 delegates to rustc and the compiler's vocabulary is not this package's to pin.
 
 What is refused is a log that contradicts itself: two summaries, or a clean
-summary beside a failure that would have to have been counted.
+summary beside a failure that would have to have been counted.  rustc's closing
+``error: aborting due to N previous errors`` trailer counts as that evidence
+even though it is not itself a failure: a capture can lose the diagnostic and
+keep the trailer, and reading the trailer as chatter would report the run as
+clean.
 """
 
 from __future__ import annotations
@@ -60,6 +64,7 @@ def parse_verus_log(text: str) -> VerusLog:
     summary: VerusSummary | None = None
     selection: str | None = None
     failures: list[VerusFailure] = []
+    trailers: list[str] = []
     for index, line in enumerate(lines):
         found = SUMMARY.match(line)
         if found is not None:
@@ -70,9 +75,13 @@ def parse_verus_log(text: str) -> VerusLog:
             selection = selection or note["subject"]
             continue
         header = ERROR_HEADER.match(line)
-        if header is not None and not line.startswith(TRAILER_PREFIXES):
+        if header is None:
+            continue
+        if line.startswith(TRAILER_PREFIXES):
+            trailers.append(header["message"])
+        else:
             failures.append(_failure(header["message"], lines, index))
-    _require_consistent(summary, failures)
+    _require_consistent(summary, failures, trailers)
     return VerusLog(summary, tuple(failures), selection)
 
 
@@ -152,11 +161,25 @@ def _located(message: str, span: re.Match[str]) -> VerusFailure:
 def _require_consistent(
     summary: VerusSummary | None,
     failures: list[VerusFailure],
+    trailers: list[str],
 ) -> None:
-    """Refuse a clean summary beside a failure that contradicts it."""
-    if summary is None or not failures:
+    """Refuse a clean summary beside evidence that contradicts it.
+
+    A trailer is rustc's own count of the errors it printed.  It is not a
+    failure, so it never enters the failure collection a negative control
+    counts, but a clean summary beside one is a capture that lost the
+    diagnostic the trailer says was printed.
+    """
+    if summary is None:
         return
-    _require_counted(summary, failures[0])
+    if summary.errors == 0 and trailers:
+        msg = (
+            f"the log records no verification errors but reports the trailer "
+            f"{trailers[0]!r}"
+        )
+        raise VerusLogError(msg)
+    if failures:
+        _require_counted(summary, failures[0])
 
 
 def _require_counted(summary: VerusSummary, failure: VerusFailure) -> None:

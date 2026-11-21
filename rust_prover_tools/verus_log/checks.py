@@ -141,13 +141,25 @@ def _failure_disagreements(
 ) -> cabc.Iterator[str]:
     """Yield a sentence when the declared negative control was not met.
 
-    A declared region demands exactly one diagnostic, because a second one
-    means the run broke something besides the seeded fault, and a control that
-    did not fail at all has not shown that the fault would be caught.
+    A declared region demands a summary counting exactly one failing function
+    *and* exactly one diagnostic, because either fact alone can mislead: a
+    capture can lose a diagnostic, and a run can break two functions while
+    reporting one of them.  Checking both is what keeps a matching compiler
+    diagnostic, which has no summary beside it, from passing as a control.
     """
     region = expected.failure
     if region is None:
         return
+    if log.summary is None:
+        yield (
+            "the declared failure region requires a verification summary, "
+            "but the log reached none"
+        )
+    elif log.summary.errors != 1:
+        yield (
+            "the declared failure region expects one failing function, "
+            f"but the summary counted {log.summary.errors}"
+        )
     if len(log.failures) != 1:
         yield (
             f"the declared failure region expects one diagnostic, "

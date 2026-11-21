@@ -479,3 +479,113 @@ def test_a_selected_kani_vocabulary_does_not_read_a_verus_region() -> None:
     source = "verus! { fn f() { admit(); } }"
 
     assert scan(source, vocabularies=(KANI,)).items == ()
+
+
+def test_an_xid_continue_character_stays_inside_an_identifier() -> None:
+    """Keep a Unicode continuation such as the middle dot in the name.
+
+    Rust identifiers are XID, which admits U+00B7 after the first character.
+    Splitting there would turn ``mod a·b;`` into a punctuator the module walk
+    cannot read, losing the file the declaration compiles.
+    """
+    tokens = tokenize("mod a·b;")
+
+    assert [token.text for token in tokens if token.kind == "ident"] == [
+        "mod",
+        "a·b",
+    ]
+
+
+def test_a_shebang_is_not_read_as_code() -> None:
+    """Skip a leading shebang even when its arguments hold a quote.
+
+    Rust discards the line, so the unmatched quote must not open a string that
+    swallows the code beneath it.
+    """
+    source = '#!/usr/bin/env "run-cargo-script\nkani::assume(x);'
+
+    assert items(source) == [("assume", 2)]
+
+
+def test_a_leading_inner_attribute_is_not_a_shebang() -> None:
+    """Keep an inner attribute that begins with ``#!`` in the token stream."""
+    source = "#![allow(dead_code)]\nkani::assume(x);"
+
+    assert items(source) == [("assume", 2)]
+
+
+def test_a_string_literal_suffix_is_not_an_identifier() -> None:
+    """Consume a suffix as part of its literal, as Rust lexes it.
+
+    ``"text"include`` is one literal token in a token tree.  Exposing
+    ``include`` would refuse the file as an opaque ``include!`` invocation
+    whose expansion the audit never sees.
+    """
+    assert items('ignore!("text"include!());') == []
+    with pytest.raises(TrustAuditError, match=r"include! .* generates code"):
+        scan('include!("text");')
+
+
+def test_a_declared_module_qualifies_a_renamed_member() -> None:
+    """Report a renamed import reached through a module the file declares.
+
+    ``mod m { pub use kani::assume as a; }`` puts the binding in this file, so
+    ``m::a(..)`` is the same call as the bare ``a(..)``.
+    """
+    source = "mod m { pub use kani::assume as a; }\nfn f() { m::a(true); }"
+
+    assert items(source) == [("assume", 1), ("assume", 2)]
+
+
+def test_an_undeclared_module_does_not_qualify_a_renamed_member() -> None:
+    """Leave a path through a module this file never declares alone."""
+    source = "use kani::assume as a;\nfn f() { elsewhere::a(true); }"
+
+    assert items(source) == [("assume", 1)]
+
+
+def test_a_plain_member_import_seeds_a_requalified_rename() -> None:
+    """Follow ``self::`` to a member imported without a rename.
+
+    ``use kani::assume; use self::assume as a;`` binds ``a`` to Kani's
+    ``assume``, so a later ``a(..)`` is trust.
+    """
+    source = "use kani::assume;\nuse self::assume as a;\nfn f() { a(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume", "assume", "assume"]
+
+
+def test_a_crate_alias_requalified_through_self_is_followed() -> None:
+    """Follow a crate alias renamed again through a local qualifier.
+
+    ``use kani as k; use self::k as kk;`` makes ``kk::assume`` the Kani call.
+    """
+    source = "use kani as k;\nuse self::k as kk;\nfn f() { kk::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_an_opaque_macro_in_a_matcher_pattern_is_not_refused() -> None:
+    """Read a matcher pattern as input, not as an ``include!`` invocation."""
+    assert items("macro_rules! m { (include!($x:literal)) => { () }; }") == []
+
+
+def test_an_opaque_macro_invocation_is_still_refused() -> None:
+    """Refuse the invocation the pattern merely describes."""
+    with pytest.raises(TrustAuditError, match=r"include! .* generates code"):
+        scan('macro_rules! m { (include!($x:literal)) => { () }; }\ninclude!("x");')
+
+
+def test_include_bytes_is_opaque_in_a_procedural_macro_crate() -> None:
+    """Fail closed on a template a proc-macro crate could decode and parse."""
+    source = 'fn f() { include_bytes!("template.rs"); }'
+
+    with pytest.raises(TrustAuditError, match=r"include_bytes! .* generates code"):
+        scan(source, procedural_macro=True)
+
+
+def test_include_bytes_is_read_as_trivia_in_an_ordinary_crate() -> None:
+    """An ordinary crate's byte array is not code the audit reads."""
+    source = 'fn f() { include_bytes!("template.rs"); }'
+
+    assert scan(source).items == ()

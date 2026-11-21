@@ -44,10 +44,17 @@ class Context:
         *,
         procedural_macro: bool,
         vocabularies: tuple[Vocabulary, ...],
+        module_names: frozenset[str] = frozenset(),
     ) -> None:
-        """Record the tokens and the file-scoped facts the rules depend on."""
+        """Record the tokens and the file-scoped facts the rules depend on.
+
+        ``module_names`` holds the modules this file declares.  A qualified use
+        such as ``m::a`` names a local binding when ``m`` is one of them; a
+        module declared elsewhere is not shown, so its names are not read.
+        """
         self.tokens = tokens
         self.vocabularies = vocabularies
+        self.module_names = module_names
         self.words = frozenset(
             item for vocabulary in vocabularies for item in vocabulary.items
         )
@@ -123,8 +130,10 @@ class Context:
         is Kani's ``assume``, and reporting the local spelling would leave the
         audit unable to say which prover surface it reached.  The qualifiers
         that name the binding itself — ``self::``, ``crate::`` and ``super::``
-        — count too; another module's name does not, because the binding there
-        is not shown.
+        — count too, and so does a module this file declares, because its
+        import can be read here: ``mod m { pub use kani::assume as a; }`` makes
+        ``m::a`` the same call.  A module declared elsewhere is not shown, so
+        its names are left alone.
         """
         if not self.imported_roots:
             return
@@ -134,7 +143,7 @@ class Context:
         items = self.member_names.get(token.text)
         if items is None or not _is_member_use(self.tokens, index):
             return
-        if _is_bare_use(self.tokens, index) or _is_local_qualified(self.tokens, index):
+        if _is_member_position(self.tokens, index, self.module_names):
             for item in sorted(items):
                 self._report(item, token)
 
@@ -300,6 +309,42 @@ def _is_local_qualified(tokens: tuple[Token, ...], index: int) -> bool:
         index >= _QUALIFIED_SEGMENTS
         and tokens[index - 1].text == "::"
         and tokens[index - _QUALIFIED_SEGMENTS].text in LOCAL_QUALIFIERS
+    )
+
+
+def _is_member_position(
+    tokens: tuple[Token, ...],
+    index: int,
+    module_names: frozenset[str],
+) -> bool:
+    """Report whether a renamed member is used as the imported item here.
+
+    Three positions count: the bare call, a ``self::``, ``crate::`` or
+    ``super::`` qualifier that reaches the binding in this module, and a module
+    this file declares, whose export the audit can read.
+    """
+    if _is_bare_use(tokens, index) or _is_local_qualified(tokens, index):
+        return True
+    return _is_declared_module_qualified(tokens, index, module_names)
+
+
+def _is_declared_module_qualified(
+    tokens: tuple[Token, ...],
+    index: int,
+    module_names: frozenset[str],
+) -> bool:
+    """Report whether a module this file declares qualifies the name.
+
+    ``mod m { pub use kani::assume as a; } m::a(..)`` reaches the binding the
+    module exports, and the import is in this file, so the audit can read it.
+    The scan is file-scoped rather than scope-exact: an ``a`` imported in a
+    different module would also be reported here, which is the fail-closed
+    direction this audit takes everywhere else.
+    """
+    return (
+        index >= _QUALIFIED_SEGMENTS
+        and tokens[index - 1].text == "::"
+        and tokens[index - _QUALIFIED_SEGMENTS].text in module_names
     )
 
 

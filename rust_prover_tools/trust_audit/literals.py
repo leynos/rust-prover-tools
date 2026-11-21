@@ -303,7 +303,12 @@ def _decode_unicode_escape(
 
     Rust permits underscores between the hexadecimal digits — ``\u{6_3}`` is
     ``c`` — so the separators are removed before the digit count and the value
-    are checked. The six-digit ceiling is Rust's, not Python's.
+    are checked.  The first character after ``{`` must be a digit, though:
+    Rust's grammar is one or more groups of a digit followed by any number of
+    underscores, so ``\u{_63}`` is rejected even though stripping the
+    separator would leave a valid-looking run.  Accepting it would let an
+    escape Rust refuses name a module file the compiler never reads.  The
+    six-digit ceiling is Rust's, not Python's.
     """
     opening = index + 2
     if opening >= len(body) or body[opening] != "{":
@@ -311,6 +316,9 @@ def _decode_unicode_escape(
         raise TrustAuditError(msg)
     closing = body.find("}", opening + 1)
     written = body[opening + 1 : closing] if closing >= 0 else ""
+    if not written or written[0] not in _HEX_DIGITS:
+        msg = f"malformed \\u escape in {source!r}"
+        raise TrustAuditError(msg)
     digits = written.replace("_", "")
     if not _is_unicode_digits(digits):
         msg = f"malformed \\u escape in {source!r}"

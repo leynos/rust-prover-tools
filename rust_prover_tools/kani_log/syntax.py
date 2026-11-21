@@ -136,6 +136,14 @@ COVER_PROPERTY_STATUSES = frozenset(
 )
 COVER_KIND = "cover"
 UNWINDING_KIND = "unwind"
+# A recursion-unwinding assertion is Kani's other bound check.  CBMC names it
+# by the same ``unwind`` class, but a check identifier such as
+# ``helper.recursion.1`` carries ``recursion`` in the position a kind is read
+# from, so both words must mean the same thing wherever a bound check is
+# recognised.
+RECURSION_KIND = "recursion"
+#: Every check kind that bounds a run rather than denying it.
+UNWINDING_KINDS = frozenset({UNWINDING_KIND, RECURSION_KIND})
 UNSUPPORTED_KIND = "unsupported_construct"
 # The class Kani counts as a panic.  Its driver calls a harness declared to
 # panic successful only when every failed property carries this class, so the
@@ -245,8 +253,14 @@ class PropertyResult:
 
     @property
     def is_unwinding(self) -> bool:
-        """Report whether this check is an unwinding assertion."""
-        return self.kind == UNWINDING_KIND
+        """Report whether this check is a bound assertion.
+
+        Both of Kani's bound checks count: the loop-unwinding assertion and
+        the recursion-unwinding assertion.  Either says the bound was too
+        small rather than that the property is false, so neither may be read
+        as a counterexample.
+        """
+        return self.kind in UNWINDING_KINDS
 
     @property
     def owner(self) -> str | None:

@@ -56,12 +56,30 @@ def test_a_word_inside_a_block_comment_is_not_reported(word: str) -> None:
     assert not _items(f"/* kani::{word}(x) */ fn f() {{}}")
 
 
-@given(WORD, st.integers(min_value=0, max_value=12))
-def test_a_word_inside_a_raw_string_is_not_reported(word: str, hashes: int) -> None:
-    """Close a raw string on the fence it opened with, not a shorter one."""
-    fence = "#" * hashes
-    source = f'fn f() {{ let _ = r{fence}"kani::{word}("{fence}; }}'
+@given(WORD)
+def test_a_word_inside_a_plain_string_is_not_reported(word: str) -> None:
+    """Read an ordinary string body as trivia."""
+    source = f'fn f() {{ let _ = "kani::{word}(x)"; }}'
     assert not _items(source)
+
+
+@given(WORD, st.integers(min_value=1, max_value=12))
+def test_a_word_after_a_shorter_raw_fence_is_not_reported(
+    word: str,
+    hashes: int,
+) -> None:
+    """Keep a raw string open across a quote with too few hashes.
+
+    The body holds a quote followed by one hash fewer than the fence, so a
+    lexer that stopped at the first quote would end the literal early and
+    expose ``kani::{word}`` as code.  A real call after the string is the
+    control: the scan reports it and nothing from inside.
+    """
+    fence = "#" * hashes
+    shorter = '"' + "#" * (hashes - 1)
+    body = f"{shorter} kani::{word}({shorter}"
+    source = f'fn f() {{ let _ = r{fence}"{body}"{fence}; kani::assume(x); }}'
+    assert _items(source) == ("assume",)
 
 
 @given(WORD)

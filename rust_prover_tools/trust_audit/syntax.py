@@ -53,14 +53,6 @@ class Token:
     column: int
 
 
-# Rust identifiers follow Unicode XID: a start character from the identifier
-# start set — the letter categories, letter numbers and connector punctuation
-# such as `_` — followed by those plus combining marks and decimal digits.
-# Python's `re` spells a Unicode word character as `\w`, but that excludes
-# combining marks, so it would split a decomposed `café` into two tokens and
-# hide the `mod` declaration that compiles its file.
-_IDENT_START_CATEGORIES = frozenset({"Lu", "Ll", "Lt", "Lm", "Lo", "Nl", "Pc"})
-_IDENT_CONTINUE_CATEGORIES = _IDENT_START_CATEGORIES | {"Mn", "Mc", "Nd"}
 # Multi-character punctuators, longest first.
 _PUNCTUATORS = (
     "::",
@@ -101,6 +93,7 @@ def tokenize(text: str) -> tuple[Token, ...]:
         because a resumed scan reads the literal's contents as code.
     """
     cursor = Cursor(text)
+    _skip_shebang(cursor)
     tokens: list[Token] = []
     while not cursor.at_end:
         if _skip_trivia(cursor):
@@ -110,6 +103,7 @@ def tokenize(text: str) -> tuple[Token, ...]:
             tokens.append(
                 Token(Kind.LITERAL, literal, cursor.line_before, cursor.column_before),
             )
+            _skip_literal_suffix(cursor)
             continue
         length = _identifier_length(cursor.text, cursor.index)
         if length:
@@ -131,6 +125,40 @@ def tokenize(text: str) -> tuple[Token, ...]:
         line, column = cursor.line, cursor.column
         tokens.append(Token(Kind.PUNCT, _punct(cursor), line, column))
     return tuple(tokens)
+
+
+def _skip_shebang(cursor: Cursor) -> None:
+    """Consume a leading shebang, which Rust discards before lexing.
+
+    Rust treats a first line beginning ``#!`` as a shebang unless the next
+    character is ``[``, which makes it an inner attribute.  The line is not
+    Rust code, so an apostrophe in the interpreter arguments must not open a
+    character literal and a quote there must not open a string the file never
+    contains.
+    """
+    if not cursor.starts("#!"):
+        return
+    if cursor.text[cursor.index + 2 : cursor.index + 3] == "[":
+        return
+    newline = cursor.text.find("\n", cursor.index)
+    end = len(cursor.text) if newline < 0 else newline
+    cursor.take(end - cursor.index)
+
+
+def _skip_literal_suffix(cursor: Cursor) -> None:
+    """Consume the identifier suffix that belongs to the literal just read.
+
+    Rust lexes ``"text"suffix`` as one literal token.  Leaving the suffix in
+    the stream would expose ``include`` in a token-tree input such as
+    ``ignore!("text"include!())``, where it belongs to the literal rather than
+    invoking ``include!``.  The suffix is not part of the quote-delimited span
+    the decoder reads, so its text is consumed and not kept.
+    """
+    if cursor.at_end:
+        return
+    length = _plain_identifier_length(cursor.text, cursor.index)
+    if length:
+        cursor.take(length)
 
 
 def _skip_trivia(cursor: Cursor) -> bool:
@@ -235,13 +263,27 @@ def _plain_identifier_length(text: str, start: int) -> int:
 
 
 def _is_identifier_start(character: str) -> bool:
-    """Report whether ``character`` can begin a Rust identifier."""
-    return unicodedata.category(character) in _IDENT_START_CATEGORIES
+    """Report whether ``character`` can begin a Rust identifier.
+
+    Rust identifiers are Unicode XID: an ``XID_Start`` character, plus ``_``.
+    Python's :meth:`str.isidentifier` applies exactly that rule to a
+    single-character string, so it is the authority here rather than a
+    handwritten category list.  A list misses characters such as the middle
+    dot (U+00B7), which is an ``XID_Continue`` character Rust accepts in a
+    module name; missing it splits ``mod a·b;`` and loses the file the
+    declaration compiles.
+    """
+    return character.isidentifier()
 
 
 def _is_identifier_continue(character: str) -> bool:
-    """Report whether ``character`` can continue a Rust identifier."""
-    return unicodedata.category(character) in _IDENT_CONTINUE_CATEGORIES
+    """Report whether ``character`` can continue a Rust identifier.
+
+    Python accepts a character in a non-initial position under the same XID
+    rules Rust uses, so asking it about a two-character string answers the
+    continuation question.
+    """
+    return ("a" + character).isidentifier()
 
 
 def _punct(cursor: Cursor) -> str:

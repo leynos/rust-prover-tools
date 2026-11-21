@@ -111,6 +111,33 @@ def _alias_round(
             for crate, alias in use_roots(tokens, index + 1, end)
             if crate in names and alias is not None
         )
+        discovered.update(_requalified_aliases(tokens, index + 1, end, names))
+    return discovered
+
+
+def _requalified_aliases(
+    tokens: tuple[Token, ...],
+    start: int,
+    end: int,
+    names: cabc.Container[str],
+) -> set[str]:
+    """Return crate aliases bound through ``self::``, ``crate::`` or ``super::``.
+
+    ``use kani as k; use self::k as kk;`` binds ``kk`` to the same crate, so a
+    later ``kk::assume`` is Kani's.  The qualifier names the module holding the
+    binding, not a crate, and the member names the alias already in ``names``.
+    The fixpoint in `alias_bindings` makes the order of the two statements
+    irrelevant.
+    """
+    discovered: set[str] = set()
+    for root, span_start, span_stop in rooted_spans(tokens, start, end):
+        if root not in LOCAL_QUALIFIERS:
+            continue
+        discovered.update(
+            alias
+            for member, alias in member_aliases(tokens, span_start, span_stop)
+            if member in names
+        )
     return discovered
 
 
@@ -232,11 +259,38 @@ def _member_bindings(
     start: int,
     stop: int,
 ) -> dict[str, set[str]]:
-    """Return the trust-root members one path binds, keyed by local name."""
+    """Return the trust-root members one path binds, keyed by local name.
+
+    A plain import binds the member under its own name, so it seeds the map.
+    Without that seed, ``use kani::assume; use self::assume as a;`` has no
+    entry for ``assume`` and the second binding is lost, leaving a later
+    ``a(..)`` unreported.
+    """
     discovered: dict[str, set[str]] = {}
     for member, alias in member_aliases(tokens, start, stop):
         discovered.setdefault(alias, set()).add(member)
+    plain = _plain_member(tokens, start, stop)
+    if plain is not None:
+        discovered.setdefault(plain, set()).add(plain)
     return discovered
+
+
+def _plain_member(tokens: tuple[Token, ...], start: int, stop: int) -> str | None:
+    """Return the member a path imports without a rename, if it names one.
+
+    The last identifier before any ``as`` is the member; a path ending in a
+    glob names none.  A path that names only the crate roots itself, which the
+    vocabulary does not list, so seeding it is harmless.
+    """
+    end = stop
+    for index in range(start, stop):
+        if tokens[index].text == "as":
+            end = index
+            break
+    for index in range(end - 1, start - 1, -1):
+        if tokens[index].kind is Kind.IDENT:
+            return tokens[index].text
+    return None
 
 
 def _renamed_bindings(

@@ -247,14 +247,21 @@ def _solver_arguments(command: str) -> frozenset[str] | None:
     The echo's own framing is removed first.  A closing backtick would
     otherwise join the last argument and hide a trailing flag.
 
+    A wrapped argument is only recoverable when it ends the echo.  Because
+    Kani escapes nothing inside it, a quote followed by more text can close
+    the argument or be a quote the value contains; no fact in the rendering
+    says which.  Reading it as a boundary would let one rendering stand for
+    two argument lists, and the flag the other reading contains would go
+    unread.
+
     Returns
     -------
     frozenset[str] | None
         The arguments and their option names, or ``None`` when the rendering
-        cannot be split.  An unterminated wrap, or text after a closing quote,
-        means the argument boundaries cannot be recovered; Kani only wraps a
-        whole argument, so either shape is ambiguous and must not be read as
-        evidence that the checks were generated.
+        cannot be split.  An unterminated wrap, text after a closing quote, or
+        a wrapped argument followed by more arguments means the boundaries
+        cannot be recovered; none of those shapes may be read as evidence that
+        the checks were generated.
     """
     framed = command.removeprefix(SOLVER_FRAME).removesuffix("`")
     words = _rendered_words(framed)
@@ -289,12 +296,18 @@ def _rendered_words(rendered: str) -> list[str] | None:
             if closing == -1:
                 return None
             words.append(rendered[index + 1 : closing])
-            index = closing + 1
-            if index < end_of_rendering and rendered[index] != " ":
-                # Kani wraps a whole argument, so text after the closing quote
-                # means the quote belonged to the value and the boundary is
-                # lost.
+            following = closing + 1
+            while following < end_of_rendering and rendered[following] == " ":
+                following += 1
+            if following < end_of_rendering:
+                # Kani escapes nothing inside a wrapped argument, so a quote
+                # followed by more text is ambiguous: it can close the
+                # argument, or it can be a quote the value itself contains
+                # with the rest of the value continuing after the space.  No
+                # fact in the rendering distinguishes the two reads, so the
+                # boundary is unknown rather than assumed.
                 return None
+            index = following
             continue
         end = rendered.find(" ", index)
         if end == -1:

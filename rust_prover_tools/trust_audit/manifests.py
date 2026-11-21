@@ -55,7 +55,14 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
     while True:
         manifest = directory / CARGO_MANIFEST
         if manifest.is_file():
-            return _declares_procedural_macro(manifest)
+            resolved = manifest.resolve()
+            if resolved_root not in resolved.parents:
+                msg = (
+                    f"{manifest} resolves outside the repository root "
+                    f"{resolved_root}, so its crate kind is unknown"
+                )
+                raise TrustAuditError(msg)
+            return _declares_procedural_macro(resolved)
         if directory == resolved_root or resolved_root not in directory.parents:
             return False
         directory = directory.parent
@@ -64,10 +71,15 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
 def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
     """Report whether one Cargo manifest declares a proc-macro library.
 
-    A ``[lib]`` table with ``proc-macro = true`` is the only declaration Cargo
-    honours.  ``proc_macro`` without the hyphen is a different key, so reading
-    it as the flag would change what the audit scans for a manifest that never
-    asked for it.
+    Cargo accepts two declarations.  ``[lib] proc-macro = true`` is the
+    documented flag, and ``crate-type = ["proc-macro"]`` names the same crate
+    type through the general field; a manifest using either builds a proc-macro
+    crate, so the audit must scan its literals.  The underscore spellings
+    ``proc_macro`` and ``crate_type`` are deprecated aliases Cargo still honours
+    outside the 2024 edition; reading them is the fail-closed choice, because
+    missing the flag leaves literal-generated code unread.  A non-boolean
+    ``proc-macro`` value or a non-string crate type is refused rather than
+    guessed at.
     """
     try:
         document = tomllib.loads(manifest.read_text(encoding="utf-8"))
@@ -77,4 +89,42 @@ def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
     library = document.get("lib")
     if not isinstance(library, dict):
         return False
-    return library.get("proc-macro") is True
+    # Cargo reads ``crate-type`` first: when it is present it decides the crate
+    # type, and the ``proc-macro`` flag is only consulted when it is absent.
+    crate_types = _manifest_value(library, "crate-type", "crate_type")
+    if crate_types is not None:
+        if isinstance(crate_types, str):
+            return crate_types == "proc-macro"
+        if isinstance(crate_types, list):
+            return "proc-macro" in crate_types
+        msg = f"{manifest} sets [lib] crate-type to an unexpected value"
+        raise TrustAuditError(msg)
+    flag = _manifest_value(library, "proc-macro", "proc_macro")
+    if flag is None:
+        return False
+    if not isinstance(flag, bool):
+        msg = f"{manifest} sets [lib] proc-macro to a non-boolean value"
+        raise TrustAuditError(msg)
+    return flag
+
+
+def _manifest_value(
+    library: dict[str, object],
+    documented: str,
+    deprecated: str,
+) -> object | None:
+    """Return a value written under its documented or deprecated key.
+
+    Cargo's deprecated underscore spellings are still honoured before the 2024
+    edition.  A manifest writing both spellings is ambiguous, so it is refused
+    rather than read one way.
+    """
+    first = library.get(documented)
+    second = library.get(deprecated)
+    if first is not None and second is not None:
+        msg = (
+            f"the manifest sets both {documented!r} and its deprecated "
+            f"spelling {deprecated!r}"
+        )
+        raise TrustAuditError(msg)
+    return first if first is not None else second

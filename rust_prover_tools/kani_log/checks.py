@@ -18,9 +18,19 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.kani_log.syntax import (
+    CHECK,
     CHECK_FIELDS,
     CHECK_STATUSES,
+    COMPLETE,
+    COVER,
+    FAILED_CHECK,
+    FAILED_LOCATION,
     FIELD,
+    HARNESS_START,
+    TOTAL,
+    UNSUPPORTED_ENTRY,
+    VERIFICATION,
+    VERIFICATION_TIME,
     KaniLogError,
     PropertyResult,
 )
@@ -150,6 +160,28 @@ def _is_open_quotation(reader: Reader, value: str) -> bool:
     return not _ends_entry(reader)
 
 
+#: Report constructs that can follow a check entry.  A blank line only closes
+#: the entry when what follows it is one of these: a description holding a
+#: newline can print a blank line as content, and the next continuation line
+#: then looks like ordinary text.
+_ENTRY_HEADS = (
+    CHECK,
+    FIELD,
+    FAILED_CHECK,
+    FAILED_LOCATION,
+    COVER,
+    TOTAL,
+    COMPLETE,
+    UNSUPPORTED_ENTRY,
+    VERIFICATION,
+    VERIFICATION_TIME,
+    HARNESS_START,
+)
+
+#: Whole-line report markers that can follow a check entry.
+_ENTRY_LINES = frozenset({"RESULTS:", "SUMMARY:", "Manual Harness Summary:"})
+
+
 def _ends_entry(reader: Reader) -> bool:
     """Report whether the quote just read ends the check's description.
 
@@ -157,13 +189,33 @@ def _ends_entry(reader: Reader) -> bool:
     blank line that closes the entry, or by nothing when the log ends.  All
     three shapes mean the frame has closed; anything else is a continuation
     line waiting to be read.
+
+    A blank line is not by itself the entry boundary: a description holding a
+    newline can print one as content.  The boundary is the next line that is
+    not blank, so a blank line closes the entry only when a report construct
+    follows it.  Without that lookahead, a description containing
+    ``first"`` and an empty line before ``second`` would be cut short at the
+    embedded quote, losing the continuation and leaving it to be refused as an
+    unrecognised line.
     """
     if reader.exhausted:
         return True
     following = reader.peek()
     if not following.strip():
-        return True
+        return _blank_closes_entry(reader)
     return FIELD.match(following) is not None
+
+
+def _blank_closes_entry(reader: Reader) -> bool:
+    """Report whether the blank line at the cursor ends the check entry."""
+    offset = 1
+    while (following := reader.peek_at(offset)) is not None and not following.strip():
+        offset += 1
+    if following is None:
+        return True
+    return following in _ENTRY_LINES or any(
+        pattern.match(following) is not None for pattern in _ENTRY_HEADS
+    )
 
 
 def _unquote(value: str) -> str:

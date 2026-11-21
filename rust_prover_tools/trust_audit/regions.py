@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import typing as typ
 
+from rust_prover_tools.trust_audit.conditions import payload_start
 from rust_prover_tools.trust_audit.structure import (
     attribute_spans,
     matching,
-    payload_start,
     texts,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token

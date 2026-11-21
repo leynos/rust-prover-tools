@@ -656,6 +656,22 @@ echoed solver command decides the setting and a missing bound proves nothing. A
 block that echoed no command, or one whose command cannot be split into
 arguments, stays `focused`: the log does not show which flags were passed.
 
+A wrapped argument is only recoverable when it ends the echo. Kani escapes
+nothing inside the quotes, so `"a b" --flag` is both the rendering of two
+arguments and the rendering of one argument holding `a b" --flag`; no fact in
+the text decides which. The parser therefore returns no arguments for that
+shape, and the block stays `focused`, rather than reading the quote as a
+boundary the value might not contain. A wrapped argument that ends the echo,
+such as the last path in a command, stays unambiguous.
+
+A `recursion` check is Kani's other bound check, and it is classified with
+`unwind`: its failure says the recursion limit was too small, not that the
+property is false. Both kinds are excluded from the substantive failures that
+deny a claim and included in the failures that report resource exhaustion. A
+failed `unsupported_construct` check owned by a called routine is unsupported
+too: the harness's verdict rests on that routine, so reading only the harness's
+own checks would report the claim verified beside a construct nobody modelled.
+
 Kani's renderer rewrites a cover CBMC reported as `FAILURE` into `SATISFIED`
 before printing it, and a listed cover is not one of the checks whose count is
 reconciled. A cover carrying any status outside `SATISFIED`, `UNSATISFIABLE`,
@@ -677,12 +693,16 @@ holding a newline is printed over several lines, with the opening quote ending
 the `Description:` line and the closing quote ending the last continuation
 line; the parser joins those lines, and reads a failure explanation by the
 description of the failed check it repeats, because the results section has
-already said how many lines it occupies. An echoed `cbmc` command is split at
-Kani's own boundaries rather than as shell text: the driver wraps an argument
-in double quotes exactly when it holds a space, and an apostrophe is an
-ordinary character, so shell splitting would let one apostrophe hide a flag.
-The expected-panic note and the description rule are both read from the pinned
-release's source rather than inferred from a sample.
+already said how many lines it occupies. A blank line inside a description is
+content too, so it closes the entry only when the next line that is not blank
+is a report construct. Closing at the blank line would cut a description at an
+embedded quote and leave its continuation to be refused as an unrecognized
+line. An echoed `cbmc` command is split at Kani's own boundaries rather than as
+shell text: the driver wraps an argument in double quotes exactly when it holds
+a space, and an apostrophe is an ordinary character, so shell splitting would
+let one apostrophe hide a flag. The expected-panic note and the description
+rule are both read from the pinned release's source rather than inferred from a
+sample.
 
 A second banner means the capture holds two invocations. The parser refuses it
 rather than returning the first run's facts, because those facts say nothing
@@ -799,15 +819,24 @@ have had to count. The number of diagnostics is deliberately not checked
 against the error count, because `--multiple-errors` can report several
 failures for one function.
 
+rustc's closing `error: aborting due to N previous errors` trailer is evidence
+even though it is not a failure. It is kept out of the failure collection, so a
+valid negative control still counts only its primary diagnostic, but a clean
+summary beside one is refused: the capture kept the count and lost the
+diagnostic. Without that check, a transcript holding only the summary and the
+trailer would be reported as verified.
+
 `--expect-failure` declares a negative control: a `path`, `path:line` or
 `path:start-end` region that the run's only failure must land in. The check
 reads the complete failure collection rather than the located subset, so an
 unlocated diagnostic beside the seeded fault also fails the control. It also
-requires the summary to count exactly one failing function. The two facts can
-disagree: a capture can lose a diagnostic, and a run can break in two functions
-while reporting one of them. A control passes only when both say the same
-thing. The range exists because Verus reports a postcondition failure at the
-contract line above the body, not at the line a seeded mutation touched.
+requires the summary to count exactly one failing function, and requires that
+summary to exist at all. The two facts can disagree: a capture can lose a
+diagnostic, and a run can break in two functions while reporting one of them. A
+control passes only when both say the same thing; a matching compiler
+diagnostic with no summary behind it is not a verification control. The range
+exists because Verus reports a postcondition failure at the contract line above
+the body, not at the line a seeded mutation touched.
 
 Path comparison ignores spellings that cannot change the file: a `.` component,
 an empty component, a trailing separator and a separator written the other way

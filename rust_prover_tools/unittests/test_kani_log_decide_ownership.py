@@ -264,3 +264,67 @@ def test_a_passing_unsupported_construct_check_is_not_unsupported() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
     assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED
+
+
+def test_a_foreign_unsupported_construct_check_denies_the_claim() -> None:
+    """A routine Kani could not model leaves the claim unsupported.
+
+    The check is owned by the called routine, so it sits in the block's
+    unattributed checks.  Reading only the harness's own checks would leave
+    the claim reported as verified beside a construct nobody modelled.
+    """
+    name = "h::c"
+    block = shapes.block(
+        name,
+        PropertyResult(
+            "other::helper.unsupported_construct.1",
+            "FAILURE",
+            "unsupported construct",
+        ),
+        failed_count=1,
+        total_count=1,
+        verdict="FAILED",
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest((Harness(name, CLAIM),))
+
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNSUPPORTED
+
+
+def test_a_foreign_recursion_bound_counts_as_resource_exhaustion() -> None:
+    """A called routine's recursion bound limits the run; it is not a disproof.
+
+    CBMC names the check ``recursion`` where a loop bound is named ``unwind``.
+    Reading only the latter as a bound check would report a counterexample for
+    a run that merely needs a larger recursion limit.
+    """
+    name = "h::c"
+    block = shapes.block(
+        name,
+        PropertyResult("other::helper.recursion.1", "FAILURE", "recursion"),
+        failed_count=1,
+        total_count=1,
+        verdict="FAILED",
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest((Harness(name, CLAIM),))
+
+    decision = analyse_kani_log(log, manifest)
+
+    assert decision.outcome == KaniOutcome.RESOURCE_EXHAUSTED
+
+
+def test_the_harness_own_recursion_bound_counts_as_resource_exhaustion() -> None:
+    """The same classification applies to a check the harness owns."""
+    name = "h::c"
+    block = shapes.block(
+        name,
+        PropertyResult(f"{name}.recursion.1", "FAILURE", "recursion"),
+        failed_count=1,
+        total_count=1,
+        verdict="FAILED",
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest((Harness(name, CLAIM),))
+
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.RESOURCE_EXHAUSTED
