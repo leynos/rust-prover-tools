@@ -181,10 +181,15 @@ Plain-language terms used in this plan:
   discovery, strict inventory JSON, exact selection, and argv composition. The
   two-package fixture workspace covers `#[path]`, inline modules, all three
   target kinds, a conditional proof, an empty package, an ambiguous module, a
-  package with no verifiable target, and a duplicate pretty name across
-  targets. `make all PYTEST_XDIST_WORKERS=4` passes with 1,727 tests.
-- [ ] `EP-M4` Qualify-once route seams, Kani classification, public typed API,
-  and supervised entry point.
+  package with no verifiable target, and a duplicate pretty name across targets.
+  `make all PYTEST_XDIST_WORKERS=4` passes with 1,727 tests.
+- [x] (2026-11-21 17:05Z) `EP-M4` Qualify-once route seams, Kani
+  classification, public typed API, and supervised entry point. The legacy and
+  snapshot routes expose one-time qualification and derive every harness
+  command from it; `KaniAdapter` applies the documented precedence; and
+  `run_harnesses` joins inventory, selection, route, supervision, and report.
+  Existing route tests remain green, and the full gate passes with 1,758
+  tests.
 - [ ] `EP-M5` `kani harnesses list` and `kani harnesses run` CLI contract.
 - [ ] `EP-M6` Documentation, roadmap, schema document, and full gates.
 
@@ -281,6 +286,20 @@ Plain-language terms used in this plan:
   `cfg(kani)` is the normal Kani activation gate and is active under the
   verifier; every other `cfg` is an unevaluated condition that discovery must
   not pretend to resolve. Date/Author: 2026-11-21, implementation agent.
+- D11. Decision: split qualification into `kani_qualification.py` and keep
+  `kani_release.py` as the installation and command-construction boundary.
+  Rationale: the repository's 400-line module limit forced a split, and the
+  qualification sequence is the part a supervised run must perform once. The
+  module-level `run_command` reference remains the shared patch point so
+  existing route tests and callers are unaffected.
+  Date/Author: 2026-11-21, implementation agent.
+- D12. Decision: the supervision layer's adapter seam is an
+  `observer(spec)` factory plus `classify(evidence, observer)`.
+  Rationale: classification needs facts accumulated while output streams, but
+  the generic runner must not know a prover's grammar. A per-attempt observer
+  keeps the parser state private to the adapter and leaves the runner's timing,
+  measurement, evidence, and accounting untouched.
+  Date/Author: 2026-11-21, implementation agent.
 - D10. Decision: no new dependency; JSON, hashing, parsing, and process
   inspection use the standard library. Rationale: the capability needs no
   third-party runtime package, and the repository's gates already cover the
@@ -293,6 +312,13 @@ value model, incremental reader, report reconciliation, exact-version registry,
 and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves
 the existing message and chains the Cuprum timeout. The full repository gate
 passes with 1,580 tests and 5 skips.
+
+`EP-M4` is complete: `kani_qualification.py` exposes the one-time legacy
+qualification and `prepare_snapshot_proof` the one-time snapshot preparation;
+`supervision/kani.py` classifies attempts under the documented precedence; and
+`kani_harness_run.py` composes inventory, exact selection, route, supervision,
+and report behind `run_harnesses`. The legacy `exec_kani` and snapshot
+`run_snapshot` behaviour is unchanged, as their existing suites show.
 
 `EP-M3` is complete: `rust_prover_tools/kani_inventory/` provides the typed
 inventory models, the strict version-1 document, a comment-and-literal-aware

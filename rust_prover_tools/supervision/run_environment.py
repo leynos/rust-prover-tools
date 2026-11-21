@@ -12,11 +12,11 @@ import dataclasses as dc
 import typing as typ
 
 if typ.TYPE_CHECKING:
-    from rust_prover_tools.supervision.attempt import Classifier
     from rust_prover_tools.supervision.launcher import CommandBuilder
     from rust_prover_tools.supervision.protocols import (
         CgroupReader,
         Clock,
+        HarnessAdapter,
         HarnessLauncher,
         InterruptSource,
         ResourceProbe,
@@ -45,8 +45,8 @@ class RunEnvironment:
         Live evidence destinations.
     build : CommandBuilder
         Composes the argv and environment for one identity.
-    classifier : Classifier
-        Adapter classification.
+    adapter : HarnessAdapter
+        Prover adapter supplying the observer and the classifier.
     sleeper : Sleeper
         Pause between monitor ticks.
     interrupts : InterruptSource | None
@@ -60,6 +60,6 @@ class RunEnvironment:
     cgroup: CgroupReader
     diagnostics: Diagnostics
     build: CommandBuilder
-    classifier: Classifier
+    adapter: HarnessAdapter
     sleeper: Sleeper
     interrupts: InterruptSource | None = None

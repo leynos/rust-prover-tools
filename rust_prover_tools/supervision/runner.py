@@ -183,7 +183,7 @@ class SupervisedRun:
             diagnostics=self.environment.diagnostics,
             run_id=self.run_id,
             build=self.environment.build,
-            classifier=self.environment.classifier,
+            adapter=self.environment.adapter,
             sleeper=self.environment.sleeper,
             interrupts=self.environment.interrupts,
         )

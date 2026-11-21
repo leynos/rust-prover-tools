@@ -16,6 +16,7 @@ real process groups. Every other supervision test avoids sleeping.
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import os
 import signal
 import sys
@@ -46,7 +47,37 @@ from rust_prover_tools.supervision.launcher import LaunchCommand
 from rust_prover_tools.unittests.supervision_doubles import spec
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+
+
+class _NullObserver:
+    """An observer that records nothing; this witness checks process behaviour."""
+
+    def observe(self, line: object) -> None:
+        """Discard one line."""
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _WitnessAdapter:
+    """A prover adapter wrapping the witness classifier."""
+
+    classify_evidence: cabc.Callable[[AttemptEvidence], HarnessClassification]
+
+    def observer(self, spec: object) -> _NullObserver:
+        """Return the null observer for this attempt."""
+        del spec
+        return _NullObserver()
+
+    def classify(
+        self,
+        evidence: AttemptEvidence,
+        observer: object,
+    ) -> HarnessClassification:
+        """Classify the attempt with the configured function."""
+        del observer
+        return self.classify_evidence(evidence)
 
 
 class _RealSleeper:
@@ -118,7 +149,7 @@ def test_a_real_stop_reaches_the_whole_group_and_heartbeats_fire(
         cgroup=CgroupV2Reader(),
         diagnostics=Diagnostics(jsonl=sink),
         build=lambda identity: LaunchCommand((sys.executable, "-I", "-c", child)),
-        classifier=_classify,
+        adapter=_WitnessAdapter(_classify),
         sleeper=_RealSleeper(),
         interrupts=None,
     )
@@ -174,7 +205,7 @@ def test_the_human_and_jsonl_sinks_agree_on_a_real_run(tmp_path: Path) -> None:
                 human=HumanSink(human_handle),
             ),
             build=lambda identity: LaunchCommand((sys.executable, "-I", "-c", child)),
-            classifier=_passing,
+            adapter=_WitnessAdapter(_passing),
             sleeper=_RealSleeper(),
         )
         run_supervised_sync((spec(),), SupervisionConfig(), environment)

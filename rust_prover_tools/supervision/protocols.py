@@ -20,23 +20,28 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import datetime as dt
 
+    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
     from rust_prover_tools.supervision.launcher import LaunchCommand
     from rust_prover_tools.supervision.models import (
         CgroupMemory,
         HarnessSpec,
         LaunchResult,
+        OutputLine,
         ResourceSample,
         StopReason,
     )
+    from rust_prover_tools.supervision.results import HarnessClassification
 
 __all__ = (
     "CgroupReader",
     "Clock",
     "EvidenceSink",
+    "HarnessAdapter",
     "HarnessLauncher",
     "InterruptSource",
     "Launcher",
     "LineConsumer",
+    "LineObserver",
     "ResourceProbe",
     "RunningHarnessHandle",
     "Sleeper",
@@ -61,6 +66,30 @@ class Sleeper(typ.Protocol):
 
     async def sleep(self, seconds: float) -> None:
         """Wait for `seconds`, or return early when the run is stopping."""
+        ...
+
+
+class LineObserver(typ.Protocol):
+    """A per-attempt observer that accumulates prover evidence as it streams."""
+
+    def observe(self, line: OutputLine) -> None:
+        """Consume one decoded child output line."""
+        ...
+
+
+class HarnessAdapter(typ.Protocol):
+    """A prover adapter: live observation plus outcome classification."""
+
+    def observer(self, spec: HarnessSpec) -> LineObserver:
+        """Return a fresh observer for one attempt of `spec`."""
+        ...
+
+    def classify(
+        self,
+        evidence: AttemptEvidence,
+        observer: LineObserver,
+    ) -> HarnessClassification:
+        """Classify one settled attempt from its evidence."""
         ...
 
 

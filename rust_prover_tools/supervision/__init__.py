@@ -68,6 +68,10 @@ from rust_prover_tools.supervision.models import (
     ResourceSample,
     StopReason,
 )
+from rust_prover_tools.supervision.protocols import (
+    HarnessAdapter,
+    LineObserver,
+)
 from rust_prover_tools.supervision.report import (
     REPORT_NOTES,
     REPORT_SCHEMA_VERSION,
@@ -145,6 +149,7 @@ __all__ = [
     "Diagnostics",
     "EvidenceFormatError",
     "ExecutionStatus",
+    "HarnessAdapter",
     "HarnessClassification",
     "HarnessResult",
     "HarnessSpec",
@@ -153,6 +158,7 @@ __all__ = [
     "JsonlSink",
     "LaunchCommand",
     "LaunchResult",
+    "LineObserver",
     "Measurement",
     "MemorySink",
     "NullSink",

@@ -8,6 +8,7 @@ state only the behaviour they are about.
 from __future__ import annotations
 
 import asyncio
+import dataclasses as dc
 import functools
 import typing as typ
 
@@ -18,6 +19,7 @@ from rust_prover_tools.supervision import (
     HarnessSpec,
     LaunchCommand,
     MemorySink,
+    OutputLine,
     ProofVerdict,
     RunEnvironment,
     SupervisionConfig,
@@ -34,7 +36,10 @@ from rust_prover_tools.unittests.supervision_doubles import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from rust_prover_tools.supervision import AttemptEvidence
+    from rust_prover_tools.supervision import (
+        AttemptEvidence,
+        LineObserver,
+    )
 
 __all__ = ("async_test", "classify", "config", "environment")
 
@@ -54,6 +59,35 @@ def async_test(
         asyncio.run(test())
 
     return wrapper
+
+
+class _NullObserver:
+    """An observer that records nothing, for tests that do not parse output."""
+
+    def observe(self, line: OutputLine) -> None:
+        """Discard one line."""
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _ScriptedAdapter:
+    """A prover adapter whose status is fixed by identity."""
+
+    statuses: cabc.Mapping[str, ExecutionStatus] = dc.field(default_factory=dict)
+
+    def observer(self, spec: HarnessSpec) -> LineObserver:
+        """Return the null observer for this attempt."""
+        del spec
+        return _NullObserver()
+
+    def classify(
+        self,
+        evidence: AttemptEvidence,
+        observer: LineObserver,
+    ) -> HarnessClassification:
+        """Return the status configured for this identity."""
+        del observer
+        status = self.statuses.get(evidence.spec.qualified, ExecutionStatus.PASSED)
+        return classify(status, detail=evidence.stop_reason.value)
 
 
 def classify(status: ExecutionStatus, detail: str = "") -> HarnessClassification:
@@ -78,12 +112,6 @@ def environment(
     sinks: Diagnostics | None = None,
 ) -> RunEnvironment:
     """Build a run environment from doubles."""
-    status_for = statuses or {}
-
-    def classifier(evidence: AttemptEvidence) -> HarnessClassification:
-        """Return the status the test configured for this identity."""
-        status = status_for.get(evidence.spec.qualified, ExecutionStatus.PASSED)
-        return classify(status, detail=evidence.stop_reason.value)
 
     def build(identity: HarnessSpec) -> LaunchCommand:
         """Compose a stand-in command that names the requested harness."""
@@ -96,7 +124,7 @@ def environment(
         cgroup=cgroup or ScriptedCgroup(),
         diagnostics=sinks or Diagnostics(jsonl=MemorySink()),
         build=build,
-        classifier=classifier,
+        adapter=_ScriptedAdapter(statuses or {}),
         sleeper=VirtualSleeper(clock),
         interrupts=interrupts,
     )

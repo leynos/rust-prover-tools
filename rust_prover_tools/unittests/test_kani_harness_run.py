@@ -1,0 +1,332 @@
+"""Hold the supervised Kani composition root end to end, with doubles."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from rust_prover_tools.kani_harness_run import (
+    KaniHarnessDependencies,
+    KaniHarnessRun,
+    KaniHarnessRunOptions,
+    LegacyRoute,
+    run_harnesses,
+)
+from rust_prover_tools.kani_inventory import (
+    HarnessInventory,
+    InventoryHarness,
+    PackageInventory,
+    compose_arguments,
+)
+from rust_prover_tools.kani_log import KANI_067
+from rust_prover_tools.kani_routes import PreparedRoute
+from rust_prover_tools.supervision import (
+    Diagnostics,
+    ExecutionStatus,
+    LaunchCommand,
+    MemorySink,
+    SupervisionConfig,
+    validate_report_document,
+)
+from rust_prover_tools.supervision.config import DiagnosticSinks
+from rust_prover_tools.unittests.supervision_doubles import (
+    Script,
+    ScriptedCgroup,
+    ScriptedLauncher,
+    ScriptedProbe,
+    VirtualClock,
+    VirtualSleeper,
+)
+
+_CORPUS = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kani_logs"
+
+
+def _harness(pretty: str) -> InventoryHarness:
+    """Return one inventory harness."""
+    return InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness=pretty,
+        source="src/lib.rs",
+        line=1,
+        attributes=("kani::proof",),
+    )
+
+
+def _inventory(*harnesses: str) -> HarnessInventory:
+    """Return an inventory of the requested harnesses."""
+    return HarnessInventory((
+        PackageInventory("alpha", tuple(_harness(name) for name in harnesses)),
+    ))
+
+
+def _log(name: str, pretty: str) -> list[str]:
+    """Return one corpus log with its harness name rewritten to `pretty`."""
+    import re
+
+    text = (_CORPUS / f"{name}.log").read_text(encoding="utf-8")
+    names = re.findall(r"Checking harness (\S+)\.\.\.", text)
+    if names:
+        text = text.replace(names[0], pretty)
+    return text.splitlines()
+
+
+def _script(name: str, pretty: str) -> Script:
+    """Return a scripted child that emits a rewritten corpus log."""
+    return Script(
+        lines=tuple(("stdout", line) for line in _log(name, pretty)),
+        exit_code=0 if name == "verified" else 1,
+    )
+
+
+def _prepared() -> PreparedRoute:
+    """Return a prepared route that composes exact selector arguments."""
+
+    def build(harness: InventoryHarness) -> LaunchCommand:
+        """Compose one exact selector vector for `harness`."""
+        arguments = compose_arguments(harness, KANI_067)
+        return LaunchCommand(("driver", "kani", *arguments))
+
+    return PreparedRoute(grammar=KANI_067, kind="test", build=build)
+
+
+def _test_config(*, sinks: DiagnosticSinks | None = None) -> SupervisionConfig:
+    """Return the documented default policy for a scripted child."""
+    return SupervisionConfig(
+        watchdog_threshold_bytes=None,
+        sinks=sinks or DiagnosticSinks(),
+    )
+
+
+# pylint: disable-next=too-many-arguments
+def _run(
+    tmp_path: Path,
+    *,
+    inventory: HarnessInventory,
+    scripts: dict[str, Script],
+    harnesses: tuple[str, ...] = (),
+    config: SupervisionConfig | None = None,
+) -> tuple[KaniHarnessRun, ScriptedLauncher, MemorySink]:
+    """Run the composition root with a scripted launcher."""
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(per_harness=scripts, clock=clock)
+    jsonl = MemorySink()
+    dependencies = KaniHarnessDependencies(
+        clock=clock,
+        launcher=launcher,
+        probe=ScriptedProbe(),
+        cgroup=ScriptedCgroup(),
+        sleeper=VirtualSleeper(clock),
+        diagnostics=Diagnostics(jsonl=jsonl),
+        prepare=lambda route: _prepared(),
+    )
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+        harnesses=harnesses,
+        inventory=inventory,
+        config=config or _test_config(),
+        dependencies=dependencies,
+    )
+    return run_harnesses(options), launcher, jsonl
+
+
+def test_a_successful_harness_is_passed_and_exits_zero(tmp_path: Path) -> None:
+    """Discovery, exact selection, classification, and reporting agree."""
+    run, _, _ = _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a"),
+        scripts={"alpha::harnesses::a": _script("verified", "harnesses::a")},
+    )
+
+    assert run.report.passed
+    assert run.report.results[0].status is ExecutionStatus.PASSED
+    assert run.exit_status == 0
+    assert "harnesses::a" in "\n".join(run.table)
+
+
+def test_a_counterexample_fails_the_run(tmp_path: Path) -> None:
+    """A proof failure is an ordinary failing result, not a tool error."""
+    run, _, _ = _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a"),
+        scripts={"alpha::harnesses::a": _script("counterexample", "harnesses::a")},
+    )
+
+    assert run.report.results[0].status is ExecutionStatus.FAILED
+    assert not run.report.passed
+    assert run.exit_status == 1
+
+
+def test_a_wrong_selected_identity_is_no_match(tmp_path: Path) -> None:
+    """The run cannot succeed by proving a different harness."""
+    run, _, _ = _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a"),
+        scripts={"alpha::harnesses::a": _script("verified", "harnesses::other")},
+    )
+
+    assert run.report.results[0].status is ExecutionStatus.NO_MATCH
+    assert run.exit_status == 1
+
+
+def test_the_composed_command_carries_the_exact_selector(tmp_path: Path) -> None:
+    """The route builder receives exactly the supported selector arguments."""
+    _, launcher, _ = _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a"),
+        scripts={"alpha::harnesses::a": _script("verified", "harnesses::a")},
+    )
+
+    argv = launcher.commands[0].argv
+    assert argv[:4] == ("driver", "kani", "--package", "alpha")
+    assert "--harness" in argv
+    assert "harnesses::a" in argv
+    assert "--exact" in argv
+    assert "--output-format=regular" in argv
+
+
+def test_only_the_selected_harnesses_are_expected(tmp_path: Path) -> None:
+    """A harness filter narrows the expected inventory before execution."""
+    run, launcher, _ = _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a", "harnesses::b"),
+        scripts={
+            "alpha::harnesses::a": _script("verified", "harnesses::a"),
+            "alpha::harnesses::b": _script("verified", "harnesses::b"),
+        },
+        harnesses=("harnesses::b",),
+    )
+
+    assert [result.spec.harness for result in run.report.results] == ["harnesses::b"]
+    assert len(launcher.commands) == 1
+
+
+def test_the_final_report_is_written_and_valid(tmp_path: Path) -> None:
+    """The configured report path receives the versioned document."""
+    report_path = tmp_path / "report.json"
+    config = _test_config(sinks=DiagnosticSinks(report_path=report_path))
+
+    _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a"),
+        scripts={"alpha::harnesses::a": _script("verified", "harnesses::a")},
+        config=config,
+    )
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    assert document["passed"] is True
+
+
+def test_an_interrupted_run_is_not_passed(tmp_path: Path) -> None:
+    """A run whose signal account is present cannot report success."""
+    from rust_prover_tools.unittests.supervision_doubles import StepInterrupts
+
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(
+        per_harness={"alpha::harnesses::a": Script(block=True)},
+        clock=clock,
+    )
+    interrupts = StepInterrupts()
+    interrupts.fire(15)
+    dependencies = KaniHarnessDependencies(
+        clock=clock,
+        launcher=launcher,
+        probe=ScriptedProbe(),
+        cgroup=ScriptedCgroup(),
+        sleeper=VirtualSleeper(clock),
+        diagnostics=Diagnostics(jsonl=MemorySink()),
+        interrupts=interrupts,
+        prepare=lambda route: _prepared(),
+    )
+    run = run_harnesses(
+        KaniHarnessRunOptions(
+            repo_root=tmp_path,
+            route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+            inventory=_inventory("harnesses::a", "harnesses::b"),
+            dependencies=dependencies,
+        )
+    )
+
+    assert run.report.interrupted
+    assert run.report.interrupt_signal == 15
+    assert not run.report.passed
+    assert run.exit_status == 128 + 15
+
+
+def test_a_missing_inventory_package_is_refused(tmp_path: Path) -> None:
+    """A package filter that the inventory lacks is an error."""
+    from rust_prover_tools.kani_inventory import InventoryDiscoveryError
+
+    with pytest.raises(InventoryDiscoveryError, match="does not contain"):
+        run_harnesses(
+            KaniHarnessRunOptions(
+                repo_root=tmp_path,
+                route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+                packages=("beta",),
+                inventory=_inventory("harnesses::a"),
+                dependencies=KaniHarnessDependencies(prepare=lambda route: _prepared()),
+            )
+        )
+
+
+def test_the_run_exposes_the_inventory_it_used(tmp_path: Path) -> None:
+    """The result names the inventory and the selected harnesses."""
+    inventory = _inventory("harnesses::a")
+    run, _, _ = _run(
+        tmp_path,
+        inventory=inventory,
+        scripts={"alpha::harnesses::a": _script("verified", "harnesses::a")},
+    )
+
+    assert run.inventory == inventory
+    assert [harness.harness for harness in run.selected] == ["harnesses::a"]
+    assert run.backend_version == "0.67.0"
+    assert run.route_kind == "test"
+
+
+def test_the_diagnostics_are_not_closed_by_the_runner(tmp_path: Path) -> None:
+    """A caller-supplied sink remains usable after the run."""
+    jsonl = MemorySink()
+    clock = VirtualClock()
+    dependencies = KaniHarnessDependencies(
+        clock=clock,
+        launcher=ScriptedLauncher(
+            per_harness={"alpha::harnesses::a": _script("verified", "harnesses::a")},
+            clock=clock,
+        ),
+        probe=ScriptedProbe(),
+        cgroup=ScriptedCgroup(),
+        sleeper=VirtualSleeper(clock),
+        diagnostics=Diagnostics(jsonl=jsonl),
+        prepare=lambda route: _prepared(),
+    )
+    run_harnesses(
+        KaniHarnessRunOptions(
+            repo_root=tmp_path,
+            route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+            inventory=_inventory("harnesses::a"),
+            dependencies=dependencies,
+        )
+    )
+
+    jsonl.write({"record": "run-finish", "run_id": "after"})
+    assert jsonl.records[-1]["run_id"] == "after"
+
+
+def test_the_report_document_names_the_measurement_limits(tmp_path: Path) -> None:
+    """The written report carries the sampling and scope notes."""
+    report_path = tmp_path / "report.json"
+    _run(
+        tmp_path,
+        inventory=_inventory("harnesses::a"),
+        scripts={"alpha::harnesses::a": _script("verified", "harnesses::a")},
+        config=_test_config(sinks=DiagnosticSinks(report_path=report_path)),
+    )
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert any("sampled" in note or "sample" in note for note in document["notes"])

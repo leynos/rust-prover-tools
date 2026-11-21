@@ -47,7 +47,6 @@ from rust_prover_tools.supervision.watchdog import (
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import datetime as dt
 
     from rust_prover_tools.supervision.config import SupervisionConfig
@@ -58,18 +57,17 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.protocols import (
         CgroupReader,
         Clock,
+        HarnessAdapter,
         HarnessLauncher,
         InterruptSource,
+        LineObserver,
         ResourceProbe,
         Sleeper,
     )
     from rust_prover_tools.supervision.results import HarnessClassification
     from rust_prover_tools.supervision.sinks import Diagnostics
 
-__all__ = ("AttemptSupervisor", "Classifier")
-
-type Classifier = cabc.Callable[[AttemptEvidence], HarnessClassification]
-"""Turns one attempt's evidence into the adapter's documented status."""
+__all__ = ("AttemptSupervisor",)
 
 
 @dc.dataclass(slots=True)
@@ -98,8 +96,8 @@ class AttemptSupervisor:
         Owning run identifier.
     build : CommandBuilder
         Composes the argv and environment for the identity.
-    classifier : Classifier
-        Adapter classification, applied once the child has settled.
+    adapter : HarnessAdapter
+        Prover adapter supplying the observer and the classifier.
     sleeper : Sleeper
         Pause between monitor ticks.
     interrupts : InterruptSource | None
@@ -115,7 +113,7 @@ class AttemptSupervisor:
     diagnostics: Diagnostics
     run_id: str
     build: CommandBuilder
-    classifier: Classifier
+    adapter: HarnessAdapter
     sleeper: Sleeper
     interrupts: InterruptSource | None = None
     _samples: list[ResourceSample] = dc.field(default_factory=list)
@@ -125,6 +123,7 @@ class AttemptSupervisor:
     _stop_detail: str = ""
     _next_sample: float = 0.0
     _next_heartbeat: float = 0.0
+    _observer: LineObserver | None = None
 
     async def run(self) -> tuple[AttemptEvidence, HarnessClassification]:
         """Run the attempt, returning its evidence and classification."""
@@ -132,6 +131,7 @@ class AttemptSupervisor:
         started_monotonic = self.clock.monotonic()
         self._next_sample = self.config.sample_interval_seconds
         self._next_heartbeat = self.config.heartbeat_interval_seconds
+        self._observer = self.adapter.observer(self.spec)
         cgroup_start = self._cgroup_start()
         running = typ.cast(
             "RunningHarness",
@@ -145,7 +145,7 @@ class AttemptSupervisor:
         with contextlib.suppress(asyncio.CancelledError):
             await monitor
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
-        return evidence, self.classifier(evidence)
+        return evidence, self.adapter.classify(evidence, self._observer)
 
     @property
     def stop_detail(self) -> str:
@@ -166,6 +166,8 @@ class AttemptSupervisor:
         typed = typ.cast("OutputLine", line)
         self._last_output = typed.text
         self._last_output_elapsed = typed.elapsed_seconds
+        if self._observer is not None:
+            self._observer.observe(typed)
         self.diagnostics.emit(
             output_record(run_id=self.run_id, spec=self.spec, line=typed)
         )

@@ -16,11 +16,10 @@ import stat
 import sys
 import time
 import typing as typ
-from functools import partial
 
-from rust_prover_tools.commands import CommandSpec, run_command
+from rust_prover_tools.commands import CommandSpec, run_command  # ruff: ignore[unused-import] - qualification's patch point
 from rust_prover_tools.errors import CommandFailedError, ProverToolError
-from rust_prover_tools.kani_exec_routing import admission_chain, runtime_search_path
+from rust_prover_tools.kani_exec_routing import runtime_search_path
 from rust_prover_tools.kani_release_config import (
     VerificationConfig,
     backend_overrides,
@@ -38,6 +37,15 @@ _RUSTC_IDENTITY = "rustc 1.93.0-nightly (53732d5e0 2025-11-20)"
 _TOOLCHAIN_IDENTITY = "nightly-2025-11-21-x86_64-unknown-linux-gnu"
 _LOGGER = logging.getLogger(__name__)
 
+#: Kani release this route qualifies.
+KANI_RELEASE_VERSION: typ.Final[str] = "0.67.0"
+
+#: Rustc identity the qualified release must report.
+RUSTC_IDENTITY: typ.Final[str] = _RUSTC_IDENTITY
+
+#: Toolchain identity the qualified release must report.
+TOOLCHAIN_IDENTITY: typ.Final[str] = _TOOLCHAIN_IDENTITY
+
 
 def _status_class(status: int) -> str:
     """Describe outcomes without including commands or captured user payload."""
@@ -46,7 +54,7 @@ def _status_class(status: int) -> str:
     return "signal" if status < 0 else "nonzero"
 
 
-def _emit_stage_event(
+def emit_stage_event(
     stage: str, started: float, fields: cabc.Mapping[str, object]
 ) -> None:
     """Emit one bounded event for a completed stage, without private payloads.
@@ -66,7 +74,7 @@ def _emit_stage_event(
     )
 
 
-def _observe_stage[T](
+def observe_stage[T](
     stage: str,
     operation: cabc.Callable[[], T],
     *,
@@ -90,7 +98,7 @@ def _observe_stage[T](
     finally:
         # INFO keeps the normal CLI output unchanged unless the application
         # explicitly enables logging. Never attach exception text or traceback.
-        _emit_stage_event(
+        emit_stage_event(
             stage, started, {"status_class": status, "error_category": category}
         )
 
@@ -163,6 +171,23 @@ def _validate_installation(root: Path) -> None:
         raise ProverToolError(msg)
 
 
+def validate_kani_arguments(arguments: tuple[str, ...]) -> None:
+    """Reject setup and routing overrides in a composed verifier vector.
+
+    Parameters
+    ----------
+    arguments : tuple[str, ...]
+        Complete verifier argument vector for one invocation.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the vector would re-run setup or replace the Cargo
+        configuration selection.
+    """
+    _validate_arguments(arguments)
+
+
 def _validate_arguments(arguments: tuple[str, ...]) -> None:
     """Reject routes that could install or change the checked Cargo context."""
     forbidden = ("--config", "--profile", "--manifest-path")
@@ -197,7 +222,7 @@ def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) 
     # values. A collision means two spellings share one normalized variable;
     # one profile declared in several files is a duplicate, not a collision.
     # The event keeps the stage schema so a sink can read every record alike.
-    _emit_stage_event(
+    emit_stage_event(
         "backend_overrides",
         started,
         {
@@ -211,28 +236,13 @@ def _apply_backend_overrides(child: dict[str, str], config: VerificationConfig) 
     )
 
 
-def prepare_kani_command(
-    options: KaniExecOptions, environment: cabc.Mapping[str, str]
-) -> CommandSpec:
-    """Construct a child-scoped verifier command after routing validation.
-
-    Parameters
-    ----------
-    options : KaniExecOptions
-        Explicit release installation, proof cwd, and literal arguments.
-    environment : Mapping[str, str]
-        Injected inherited environment; wrapper values are retained verbatim.
-
-    Returns
-    -------
-    CommandSpec
-        Validated Cuprum specification with normalized verification flags.
-
-    Raises
-    ------
-    ProverToolError
-        Installation, arguments, or configuration cannot be qualified safely.
-    """
+def _prepare_kani_command(
+    options: KaniExecOptions,
+    environment: cabc.Mapping[str, str],
+    *,
+    validate_arguments: bool,
+) -> tuple[CommandSpec, Path]:
+    """Build the validated command and return its release root."""
     root = checked_resolve(options.installation)
     directory = checked_stat(options.cwd)
     if directory is None or not stat.S_ISDIR(directory.st_mode):
@@ -240,7 +250,8 @@ def prepare_kani_command(
         raise ProverToolError(msg)
     cwd = checked_resolve(options.cwd)
     _validate_installation(root)
-    _validate_arguments(options.arguments)
+    if validate_arguments:
+        _validate_arguments(options.arguments)
     config = check_verification_config(cwd, environment)
     flags = verification_flags(environment)
     child = dict(environment)
@@ -265,37 +276,58 @@ def prepare_kani_command(
         inherited = child.get(variable)
         child[variable] = os.pathsep.join((*prefix, inherited) if inherited else prefix)
     child["RUSTUP_TOOLCHAIN"] = _TOOLCHAIN_IDENTITY
-    return CommandSpec(
-        (str(root / "bin/kani-driver"), "kani", *options.arguments), cwd=cwd, env=child
+    spec = CommandSpec(
+        (str(root / "bin/kani-driver"), "kani", *options.arguments),
+        cwd=cwd,
+        env=child,
     )
+    return spec, root
 
 
-def _checked_identity(spec: CommandSpec, argv: tuple[str, ...], expected: str) -> None:
-    """Query a selected tool without masking nonzero status or identity drift."""
-    result = run_command(CommandSpec(argv, cwd=spec.cwd, env=spec.env))
-    if result.exit_code != 0:
-        raise CommandFailedError(argv[0], result.exit_code, result.stderr)
-    if result.stdout.strip() != expected:
-        msg = (
-            "Kani selected binary identity does not match the qualified "
-            "release metadata"
-        )
-        raise ProverToolError(msg)
+def prepare_kani_command(
+    options: KaniExecOptions, environment: cabc.Mapping[str, str]
+) -> CommandSpec:
+    """Construct a child-scoped verifier command after routing validation.
+
+    Parameters
+    ----------
+    options : KaniExecOptions
+        Explicit release installation, proof cwd, and literal arguments.
+    environment : Mapping[str, str]
+        Injected inherited environment; wrapper values are retained verbatim.
+
+    Returns
+    -------
+    CommandSpec
+        Validated Cuprum specification with normalized verification flags.
+
+    Raises
+    ------
+    ProverToolError
+        Installation, arguments, or configuration cannot be qualified safely.
+    """
+    return _prepare_kani_command(options, environment, validate_arguments=True)[0]
 
 
-def _checked_verifier(spec: CommandSpec) -> None:
-    """Accept only the qualified stable driver's complete version response."""
-    version = run_command(
-        CommandSpec((spec.argv[0], "kani", "--version"), cwd=spec.cwd, env=spec.env)
-    )
-    if version.exit_code != 0:
-        raise CommandFailedError(spec.argv[0], version.exit_code, version.stderr)
-    if (version.stdout + version.stderr).strip() not in {
-        "kani 0.67.0",
-        "cargo-kani 0.67.0",
-    }:
-        msg = "Kani selected verifier identity is outside the qualified 0.67.0 release"
-        raise ProverToolError(msg)
+def prepare_kani_installation(
+    options: KaniExecOptions, environment: cabc.Mapping[str, str]
+) -> tuple[CommandSpec, Path]:
+    """Build a validated command for a supervised per-harness run.
+
+    Parameters
+    ----------
+    options : KaniExecOptions
+        Explicit release installation and proof cwd. The literal argument
+        vector may be empty; the supervisor validates each composed vector.
+    environment : Mapping[str, str]
+        Injected inherited environment; wrapper values are retained verbatim.
+
+    Returns
+    -------
+    tuple[CommandSpec, Path]
+        The validated specification and its release root.
+    """
+    return _prepare_kani_command(options, environment, validate_arguments=False)
 
 
 def exec_kani(options: KaniExecOptions, environment: cabc.Mapping[str, str]) -> int:
@@ -313,34 +345,13 @@ def exec_kani(options: KaniExecOptions, environment: cabc.Mapping[str, str]) -> 
     int
         Child status, including negative signal status, without success masking.
 
-    Raises
-    ------
-    ProverToolError
-        The release identity or verification route could not be qualified.
-    CommandFailedError
-        An identity query failed before proof execution.
+    Notes
+    -----
+    The implementation lives in `rust_prover_tools.kani_qualification`; this
+    wrapper keeps the route's established import location.
     """
-    spec = _observe_stage(
-        "validation", partial(prepare_kani_command, options, environment)
+    from rust_prover_tools.kani_qualification import (
+        exec_kani as qualified_exec,
     )
-    root = checked_resolve(options.installation)
-    chain = admission_chain(environment)
-    for stage, relative in (
-        ("rustc_identity", "toolchain/bin/rustc"),
-        ("compiler_identity", "bin/kani-compiler"),
-    ):
-        _observe_stage(
-            stage,
-            partial(
-                _checked_identity,
-                spec,
-                (*chain, str(root / relative), "--version"),
-                _RUSTC_IDENTITY,
-            ),
-        )
-    _observe_stage("verifier_identity", partial(_checked_verifier, spec))
-    return _observe_stage(
-        "proof",
-        partial(run_command, dc.replace(spec, echo=True)),
-        status_of=lambda result: result.exit_code,
-    ).exit_code
+
+    return qualified_exec(options, environment)

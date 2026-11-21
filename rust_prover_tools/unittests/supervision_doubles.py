@@ -216,7 +216,6 @@ class ScriptedLauncher:
                     elapsed_seconds=float(index),
                 )
             )
-            await asyncio.sleep(0)
         if script.block:
             await asyncio.Event().wait()
         if script.launch_error is not None:

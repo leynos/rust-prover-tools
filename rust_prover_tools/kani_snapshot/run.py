@@ -1,12 +1,16 @@
 """Execution of a proof through the active snapshot generation.
 
-Execution never installs, never falls back to a host Kani and never changes the
-user's environment. It revalidates the generation, rejects setup or backend
-selectors, isolates the child's Cargo routing so a repository profile cannot
-replace the pinned compiler, and then runs the pinned launcher with the
-verifier's arguments unchanged, mirroring the launcher's stdout and stderr as
-they are produced, retaining only a bounded tail of each stream and preserving
-its exit status.
+Execution never installs, never falls back to a host Kani, and never changes
+the user's environment. The route has two halves. `prepare_snapshot_proof`
+revalidates the generation once, rejects setup or backend selectors, isolates
+the child's Cargo routing, and builds the proof environment;
+`run_snapshot` runs exactly one forwarded invocation through that prepared
+base. Supervised per-harness execution derives every invocation from the same
+prepared base, so one run reads one activation and one environment regardless
+of how many harnesses it executes.
+
+Standard output and standard error are mirrored as they are produced, with
+only a bounded tail retained, and the launcher's exit status is preserved.
 """
 
 from __future__ import annotations
@@ -36,10 +40,21 @@ from rust_prover_tools.kani_snapshot.verification_env import proof_environment
 from rust_prover_tools.observability import operation_span
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from cuprum import LineHook
+    from cuprum.context import UnsetType
+
     from rust_prover_tools.kani_snapshot.install_model import InstallHooks
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
-__all__ = ("RunOptions", "run_snapshot")
+__all__ = (
+    "QualifiedSnapshotProof",
+    "RunOptions",
+    "SnapshotOutput",
+    "prepare_snapshot_proof",
+    "run_snapshot",
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +80,152 @@ class RunOptions:
     args: tuple[str, ...] = ()
     cache_home: Path | None = None
     cwd: Path | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class SnapshotOutput:
+    """Output handling for one snapshot invocation.
+
+    Attributes
+    ----------
+    echo : bool
+        Mirror the child's output to the caller's streams.
+    capture : bool
+        Retain the child's output on the result.
+    on_line : LineHook | None
+        Line hook for bounded observation.
+    """
+
+    echo: bool
+    capture: bool
+    on_line: LineHook | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class QualifiedSnapshotProof:
+    """A snapshot generation validated once, ready for one or more harnesses.
+
+    Attributes
+    ----------
+    runtime : SnapshotRuntime
+        Validated generation, toolchain, and launcher.
+    cwd : Path | None
+        Proof working directory, or `None` to inherit the caller's.
+    environment : cabc.Mapping[str, str | UnsetType]
+        Child environment overlay built once for this generation.
+    arguments : tuple[str, ...]
+        Literal arguments supplied at qualification time.
+    backend_version : str
+        Kani version the snapshot generation reports.
+    """
+
+    runtime: SnapshotRuntime
+    cwd: Path | None
+    environment: cabc.Mapping[str, str | UnsetType]
+    arguments: tuple[str, ...]
+    backend_version: str
+
+    @property
+    def base_argv(self) -> tuple[str, ...]:
+        """The launcher path, without verifier arguments."""
+        return (str(self.runtime.launcher),)
+
+    def command(
+        self,
+        arguments: cabc.Sequence[str],
+        output: SnapshotOutput,
+    ) -> CommandSpec:
+        """Return one invocation derived from this qualified base.
+
+        Parameters
+        ----------
+        arguments : Sequence[str]
+            Complete verifier argument vector for one invocation.
+        output : SnapshotOutput
+            Echo, capture, and line-hook choices.
+
+        Returns
+        -------
+        CommandSpec
+            The derived command, preserving the prepared environment.
+        """
+        return CommandSpec(
+            (*self.base_argv, *arguments),
+            cwd=self.cwd,
+            env=self.environment,
+            echo=output.echo,
+            capture=output.capture,
+            on_line=output.on_line,
+        )
+
+
+def prepare_snapshot_proof(
+    options: RunOptions,
+    hooks: InstallHooks | None = None,
+    *,
+    environment: cabc.Mapping[str, str] | None = None,
+    validate_arguments: bool = True,
+) -> QualifiedSnapshotProof:
+    """Validate the active generation and build the proof environment once.
+
+    Parameters
+    ----------
+    options : RunOptions
+        Snapshot pin, forwarded arguments and cache root.
+    hooks : InstallHooks | None
+        Probe operation used while revalidating the generation.
+    environment : Mapping[str, str] | None
+        Inherited environment, or `None` for `os.environ`.
+    validate_arguments : bool
+        Whether to validate the literal forwarded arguments. Supervised
+        execution passes `False` and validates each composed vector instead.
+
+    Returns
+    -------
+    QualifiedSnapshotProof
+        The validated generation and its prepared child environment.
+
+    Raises
+    ------
+    ProverToolError
+        Raised when the snapshot is not installed, has drifted from its
+        manifest, the forwarded arguments would replace the backend, or the
+        repository's Cargo routing cannot be proved safe.
+    """
+    if validate_arguments:
+        validate_forwarded_args(options.args)
+    # The identity names the exact generation that was just validated.
+    # Resolving the activation records again would let a concurrent repair
+    # switch the active generation between the check and the launch, so
+    # execution uses the checked identity rather than a second, unvalidated
+    # resolution.
+    identity = check_active_snapshot(
+        InstallOptions(pin=options.pin, cache_home=options.cache_home),
+        hooks,
+    )
+    layout = snapshot_layout(
+        options.pin,
+        cache_home=options.cache_home,
+        generation=identity.generation.name,
+    )
+    runtime = SnapshotRuntime(
+        layout=layout,
+        toolchain=identity.toolchain,
+        backend_version=identity.backend_version,
+    )
+    working_directory = Path.cwd() if options.cwd is None else options.cwd
+    base = os.environ if environment is None else environment
+    return QualifiedSnapshotProof(
+        runtime=runtime,
+        cwd=options.cwd,
+        environment=proof_environment(
+            runtime,
+            base,
+            cwd=working_directory.resolve(),
+        ),
+        arguments=options.args,
+        backend_version=runtime.backend_version,
+    )
 
 
 def run_snapshot(
@@ -96,43 +257,16 @@ def run_snapshot(
         repository's Cargo routing cannot be proved safe.
     """
     with operation_span(_LOGGER, "kani.snapshot.run") as span:
-        validate_forwarded_args(options.args)
-        # The identity names the exact generation that was just validated.
-        # Resolving the activation records again would let a concurrent repair
-        # switch the active generation between the check and the launch, so
-        # execution uses the checked identity rather than a second,
-        # unvalidated resolution.
-        identity = check_active_snapshot(
-            InstallOptions(pin=options.pin, cache_home=options.cache_home),
-            hooks,
-        )
-        layout = snapshot_layout(
-            options.pin,
-            cache_home=options.cache_home,
-            generation=identity.generation.name,
-        )
-        runtime = SnapshotRuntime(
-            layout=layout,
-            toolchain=identity.toolchain,
-            backend_version=identity.backend_version,
-        )
-        working_directory = Path.cwd() if options.cwd is None else options.cwd
-        env = proof_environment(runtime, os.environ, cwd=working_directory.resolve())
+        qualified = prepare_snapshot_proof(options, hooks)
         # `echo=True` mirrors each stream live, so the CLI must not replay the
         # result. Capture stays off because a proof log can be arbitrarily
         # large; the line hook keeps only the tail that explains an outcome.
         tail = TailCapture()
-        # The launcher is the process boundary a proof spends its time in, so
-        # it gets its own span inside the overall run.
         with operation_span(_LOGGER, "kani.snapshot.launch"):
             result = run_command(
-                CommandSpec(
-                    (str(runtime.launcher), *options.args),
-                    cwd=options.cwd,
-                    env=env,
-                    echo=True,
-                    capture=False,
-                    on_line=tail,
+                qualified.command(
+                    qualified.arguments,
+                    SnapshotOutput(echo=True, capture=False, on_line=tail),
                 )
             )
         span.finish(
