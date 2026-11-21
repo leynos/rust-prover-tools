@@ -243,6 +243,13 @@ Use `run_checked` when non-zero exits should fail the workflow immediately with
 a user-facing `CommandFailedError`. Use `run_command` when the workflow needs
 to inspect the exit code, such as `rustup which` or `verus --version`.
 
+A command that exceeds its wall-clock budget is terminated, process group and
+all, and `run_command` raises `rust_prover_tools.commands.CommandTimeoutError`.
+That class subclasses `ProverToolError`, so existing handling keeps working,
+but a caller that may retry a timeout should catch the narrower type: the
+release transport and the publication loop do, so a genuine command failure is
+never mistaken for a timeout worth repeating.
+
 Set `CommandSpec.echo=True` only when the child process output is part of the
 public CLI stream, such as a Verus proof run.
 
