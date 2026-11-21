@@ -233,6 +233,15 @@ Plain-language terms used in this plan:
   were excluded by the global `*.log` ignore; the fixture directory is now an
   explicit exception and the corpus is tracked. The full deterministic gate
   passes with 1,886 tests and 6 skips.
+- [x] (2026-11-21 22:02Z) Fifth CodeRabbit pass: 23 findings, with the two
+  test-style suggestions documented as skips and the corpus finding already
+  landed at the reviewed head. The pass kept discovery and execution in one
+  workspace, resolved qualified identities before aliases, bounded retained
+  parser state, joined the child before a monitor failure, and kept report
+  publication independent of harness- and run-finish sink failures. It also
+  completed the Rust attribute grammar for whitespace, nested `cfg_attr`,
+  string continuations, and Unicode escapes. The full deterministic gate passes
+  with 1,898 tests and 6 skips.
 
 ## Surprises & discoveries
 
