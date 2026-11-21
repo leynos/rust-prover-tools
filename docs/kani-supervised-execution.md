@@ -219,7 +219,7 @@ Classification applies one precedence, strongest evidence first:
 1. a supervisor stop (timeout, watchdog, interruption);
 2. a launch failure;
 3. a selection mismatch;
-4. malformed verifier output;
+4. malformed or unattributable verifier output;
 5. a failed proof verdict;
 6. a nonzero or signalled exit;
 7. success.
