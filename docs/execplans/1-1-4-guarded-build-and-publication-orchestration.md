@@ -427,6 +427,13 @@ Terms used here:
   publication belong to one trace, and a per-module level selection on
   `kani_snapshot.publish` enables all of them. Two logging tests caught the
   difference when the module first used its own logger.
+- 21 November 2026: named the endings rather than describing them. The first
+  wording of the withdrawn-recheck sentence said an earlier publish call leaves
+  a release that "may already be public and the ending says so", which is true
+  but makes a reader infer which ending. Both documents now name the policy
+  conflict with its reason, the state that did not converge, and the
+  unconfirmed publication, so the prose matches the three branches of
+  `decide_exhausted` one for one.
 
 ## Surprises & discoveries
 

@@ -868,19 +868,19 @@ run holds. A budget that ends on the publish call takes one confirming
 observation and reports an unconfirmed publication — or the conflict that
 observation found, with its reason — and never a state that did not converge. A
 budget that ends on the recheck which withdrew authority for the write decides
-on the reading that withdrew it: a conflict is reported as that conflict, and
-any other withdrawal as a state that did not converge, unless an earlier step
-entered the publish call, in which case the release may already be public and
-the ending says so. The same warning covers a failure after the call was
-entered — a read or verification the run cannot complete — with the original
-error kept as its cause, because the retry such an error invites would be a
-second publication. `publish_observation` decides when two readings describe
-the same release, which is what lets a completed download be believed only if
-the release did not move while it ran. `publish_request` holds the record of
-what one attempt is asked to publish; checking the local files against the
-manifest reads and hashes them, so `publish` owns that precondition and runs it
-before any release API call. The policy these steps carry is D5 in the
-distribution design
+on the reading that withdrew it: a conflict is reported as the policy conflict
+it is, with its reason, and any other withdrawal such as an asset the recheck
+found missing reports a state that did not converge — unless an earlier step
+entered the publish call, in which case an unconfirmed publication is reported
+instead. The same warning covers a failure after the call was entered — a read
+or verification the run cannot complete — with the original error kept as its
+cause, because the retry such an error invites would be a second publication.
+`publish_observation` decides when two readings describe the same release,
+which is what lets a completed download be believed only if the release did not
+move while it ran. `publish_request` holds the record of what one attempt is
+asked to publish; checking the local files against the manifest reads and
+hashes them, so `publish` owns that precondition and runs it before any release
+API call. The policy these steps carry is D5 in the distribution design
 (`docs/kani-snapshot-distribution-design.md#d5-workflow-and-immutable-publication`);
 this guide names the code rather than restating the rules.
 
