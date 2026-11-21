@@ -55,3 +55,17 @@ Feature: Analyse captured Verus logs
     When the user analyses the Verus log in JSON
     Then the command completes without passing
     And stdout is a stable Verus JSON analysis with outcome "errors" and run mode "full"
+
+  Scenario: Name the release the log was captured from
+    Given the captured Verus log "verified"
+    And the Verus release "0.2026.11.02.8bf68ee" is named
+    When the user analyses the Verus log
+    Then the command succeeds
+    And stdout reports the Verus release "0.2026.11.02.8bf68ee"
+
+  Scenario: Reject a release the parser was not captured against
+    Given the captured Verus log "verified"
+    And the Verus release "0.1999.01.01.deadbeef" is named
+    When the user analyses the Verus log
+    Then the command fails
+    And stderr reports the release as unsupported

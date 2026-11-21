@@ -26,13 +26,21 @@ def run(
     *,
     expect_failure: str | None = None,
     require_full: bool = False,
+    verus_release: str | None = None,
+    repo_root: Path | None = None,
     output_format: typ.Literal["text", "json"] = "text",
 ) -> int:
-    """Run the command with every optional flag explicit."""
+    """Run the command with every optional flag explicit.
+
+    ``repo_root`` defaults to a directory with no pin, so a test states which
+    release it means instead of inheriting whatever the working tree pins.
+    """
     return verus_analyse_log(
         log=FIXTURES / f"{log}.log",
         expect_failure=expect_failure,
         require_full=require_full,
+        verus_release=verus_release,
+        repo_root=repo_root if repo_root is not None else FIXTURES,
         output_format=output_format,
     )
 
@@ -84,7 +92,11 @@ def test_an_invalid_log_file_is_an_input_error(
     """An unreadable log is reported before analysis, with status 1."""
     missing = tmp_path / "absent.log"
 
-    status = verus_analyse_log(log=missing)
+    status = verus_analyse_log(
+        log=missing,
+        verus_release=SUPPORTED_VERUS_VERSIONS[0],
+        repo_root=tmp_path,
+    )
 
     assert status == 1
     assert "cannot read log" in capsys.readouterr().err
@@ -151,7 +163,11 @@ def test_the_json_form_is_stable_and_machine_readable(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The JSON object carries the schema, the decision and each failure."""
-    status = run("two_errors", output_format="json")
+    status = run(
+        "two_errors",
+        verus_release=SUPPORTED_VERUS_VERSIONS[0],
+        output_format="json",
+    )
     payload = json.loads(capsys.readouterr().out)
 
     assert status == 2
@@ -161,6 +177,7 @@ def test_the_json_form_is_stable_and_machine_readable(
         "run_mode": "full",
         "passed": False,
         "reason": "the log reports 2 failing functions",
+        "verus_release": SUPPORTED_VERUS_VERSIONS[0],
         "failures": [
             {
                 "message": "postcondition not satisfied",
@@ -236,9 +253,107 @@ def test_a_structural_error_completes_as_a_tool_error(
         encoding="utf-8",
     )
 
-    status = verus_analyse_log(log=log)
+    status = verus_analyse_log(
+        log=log,
+        verus_release=SUPPORTED_VERUS_VERSIONS[0],
+        repo_root=tmp_path,
+    )
     captured = capsys.readouterr()
 
     assert status == 2
     assert "outcome: tool-error\n" in captured.out
     assert "reason: the log records no verification errors" in captured.out
+
+
+def test_a_named_supported_release_is_reported(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A release the parser is qualified against is named beside the outcome."""
+    release = SUPPORTED_VERUS_VERSIONS[0]
+
+    status = run("verified", verus_release=release)
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert f"verus release: {release}\n" in captured.out
+
+
+def test_an_unsupported_release_is_rejected_before_analysis(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A release with no captured corpus is refused with status 1."""
+    status = run("verified", verus_release="0.1999.01.01.deadbeef")
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "0.1999.01.01.deadbeef" in captured.err
+    assert "not one this parser is qualified against" in captured.err
+    assert SUPPORTED_VERUS_VERSIONS[0] in captured.err
+    assert captured.out == ""
+
+
+def test_the_consumer_pin_supplies_the_release(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without a flag, the release comes from ``tools/verus/VERSION``."""
+    release = SUPPORTED_VERUS_VERSIONS[0]
+    version_file = tmp_path / "tools" / "verus" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text(f"{release}\n", encoding="utf-8")
+
+    status = run("verified", repo_root=tmp_path)
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert f"verus release: {release}\n" in captured.out
+
+
+def test_an_unsupported_pin_is_rejected_before_analysis(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pin naming an unqualified release is refused, not silently ignored."""
+    version_file = tmp_path / "tools" / "verus" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("0.1999.01.01.deadbeef\n", encoding="utf-8")
+
+    status = run("verified", repo_root=tmp_path)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "0.1999.01.01.deadbeef" in captured.err
+    assert captured.out == ""
+
+
+def test_an_empty_pin_is_rejected(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A pin that exists but names nothing is an error, not an absent pin."""
+    version_file = tmp_path / "tools" / "verus" / "VERSION"
+    version_file.parent.mkdir(parents=True)
+    version_file.write_text("\n", encoding="utf-8")
+
+    status = run("verified", repo_root=tmp_path)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "is empty, so it names no Verus release" in captured.err
+    assert captured.out == ""
+
+
+def test_without_a_pin_or_a_flag_the_release_stays_unnamed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Analysis still reads a log where nothing records the release.
+
+    The corpus directories have no pin, which is the shape of a log captured
+    on a machine with no Verus installation: the facts are still readable, and
+    the report says plainly that no release was checked.
+    """
+    status = run("verified", output_format="json")
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 0
+    assert payload["verus_release"] is None

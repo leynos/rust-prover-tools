@@ -517,3 +517,118 @@ def test_a_file_reached_under_two_owners_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(TrustAuditError, match="different directories"):
         audit_tree(tmp_path, ["src/lib.rs"])
+
+
+#: A literal a proc-macro crate may expand into a Kani call.
+_LITERAL_SOURCE: typ.Final[str] = 'fn f() { let _ = "kani::assume(x);"; }'
+
+
+def test_a_proc_macro_manifest_makes_literals_code(tmp_path: Path) -> None:
+    """Read the crate kind from the manifest Cargo declares it in."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": ["assume"]}
+
+
+def test_an_ordinary_manifest_leaves_literals_alone(tmp_path: Path) -> None:
+    """An ordinary library's literals are trivia, not the crate's code.
+
+    The manifest is present and readable but declares no proc-macro library,
+    which is the case the flag must not turn on by default.
+    """
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n',
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
+
+
+def test_the_nearest_manifest_decides_the_crate_kind(tmp_path: Path) -> None:
+    """A workspace manifest above a member does not describe the member."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[workspace]\nmembers = ["macros"]\n',
+            "macros/Cargo.toml": '[package]\nname = "macros"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "macros/src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "macros/src/lib.rs") == {
+        "macros/src/lib.rs": ["assume"],
+    }
+
+
+def test_a_file_with_no_manifest_above_it_reads_as_ordinary(tmp_path: Path) -> None:
+    """A source outside any Cargo package belongs to no proc-macro crate."""
+    write(tmp_path, {"src/lib.rs": _LITERAL_SOURCE})
+
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
+
+
+def test_a_proc_macro_key_without_the_hyphen_is_not_the_flag(tmp_path: Path) -> None:
+    """Only Cargo's own spelling of the key makes a proc-macro crate.
+
+    ``proc_macro`` is a different key Cargo ignores, so reading it as the flag
+    would scan literals as code for a manifest that never asked for it.
+    """
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc_macro = true\n",
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
+
+
+def test_an_unparseable_manifest_is_refused(tmp_path: Path) -> None:
+    """A manifest the audit cannot read leaves the crate kind unknown."""
+    write(
+        tmp_path,
+        {"Cargo.toml": "[package\nname = ", "src/lib.rs": "fn f() {}"},
+    )
+
+    with pytest.raises(TrustAuditError, match="the crate kind is unknown"):
+        audit_tree(tmp_path, ["src/lib.rs"])
+
+
+def test_the_flag_overrides_the_manifest(tmp_path: Path) -> None:
+    """An explicit flag states the crate kind instead of reading the manifest."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n',
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    forced = {
+        file.path: [item.item for item in file.items]
+        for file in audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=True)
+    }
+    suppressed = {
+        file.path: [item.item for item in file.items]
+        for file in audit_tree(
+            tmp_path,
+            ["src/lib.rs"],
+            procedural_macro=False,
+        )
+    }
+
+    assert forced == {"src/lib.rs": ["assume"]}
+    assert suppressed == {"src/lib.rs": []}

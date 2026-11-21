@@ -32,9 +32,12 @@ __all__ = (
 
 #: Verus releases whose captured output this parser has been qualified
 #: against.  A new release is added here only after a real corpus for it has
-#: been captured; the evidence for the current entry is the release named in
-#: ``tests/fixtures/verus_logs/README.md``.
-SUPPORTED_VERUS_VERSIONS: tuple[str, ...] = ("0.2026.11.02.8bf68ee",)
+#: been captured; the evidence for each entry is the release-named directory
+#: under ``tests/fixtures/verus_logs/`` described in its ``README.md``.
+SUPPORTED_VERUS_VERSIONS: tuple[str, ...] = (
+    "0.2026.11.02.8bf68ee",
+    "0.2026.09.06.8dea4a2",
+)
 
 FULL_RUN = "full"
 PARTIAL_RUN = "partial"
@@ -50,8 +53,13 @@ SUMMARY = re.compile(
 # A diagnostic header.  rustc adds a bracketed code for compiler errors
 # (``error[E0308]:``); Verus adds none for verification failures.  Either way
 # the message is what follows the colon.
+#
+# The driver's own option errors are capitalised (``Error: --verify-function
+# option requires ...``) and carry no code.  Both releases in the corpus print
+# that form when Verus refuses to start, and skipping it as chatter would
+# report a failed invocation with no reason for the failure.
 ERROR_HEADER = re.compile(
-    r"^error(?:\[(?P<code>[A-Za-z0-9]+)\])?: (?P<message>.+)$",
+    r"^(?P<severity>[Ee]rror)(?:\[(?P<code>[A-Za-z0-9]+)\])?: (?P<message>.+)$",
 )
 # rustc prints the span one level in, with two leading spaces and an arrow.
 LOCATION = re.compile(

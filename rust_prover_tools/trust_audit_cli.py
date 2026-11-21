@@ -24,6 +24,10 @@ from cyclopts import Parameter
 
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.trust_audit import AuditedFile, TrustAuditError, audit_tree
+from rust_prover_tools.trust_audit.vocabulary import (
+    Vocabulary,
+    select_vocabularies,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -45,21 +49,34 @@ def _entries(
     return tuple((file.path, item) for file in files for item in file.items)
 
 
-def _text_lines(files: tuple[AuditedFile, ...]) -> tuple[str, ...]:
-    """Render the human-readable form: one item per line, then a count."""
+def _provers(vocabularies: tuple[Vocabulary, ...]) -> tuple[str, ...]:
+    """Name the selected provers in report order."""
+    return tuple(vocabulary.prover for vocabulary in vocabularies)
+
+
+def _text_lines(
+    files: tuple[AuditedFile, ...],
+    vocabularies: tuple[Vocabulary, ...],
+) -> tuple[str, ...]:
+    """Render the human-readable form: the selection, items, then a count."""
     entries = _entries(files)
     count = len(entries)
     noun = "item" if count == 1 else "items"
     return (
+        f"provers: {', '.join(_provers(vocabularies))}",
         *(f"{path}:{item.line}:{item.column}: {item.item}" for path, item in entries),
         f"audited {len(files)} files, {count} trusted {noun}",
     )
 
 
-def _json_payload(files: tuple[AuditedFile, ...]) -> dict[str, object]:
+def _json_payload(
+    files: tuple[AuditedFile, ...],
+    vocabularies: tuple[Vocabulary, ...],
+) -> dict[str, object]:
     """Render the stable machine-readable form."""
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
+        "provers": list(_provers(vocabularies)),
         "files_audited": len(files),
         "items": [
             {
@@ -73,21 +90,27 @@ def _json_payload(files: tuple[AuditedFile, ...]) -> dict[str, object]:
     }
 
 
-def audit_trust(
+# The public command needs one parameter per documented flag.
+# pylint: disable-next=too-many-arguments
+def audit_trust(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
     paths: typ.Annotated[list[Path], Parameter(help="Rust files to start from")],
     *,
     repo_root: typ.Annotated[
         Path | None,
-        Parameter(name="--repo-root", env_var="INPUT_REPO_ROOT"),
+        Parameter(name="--repo-root", alias="--root", env_var="INPUT_REPO_ROOT"),
     ] = None,
     procedural_macro: typ.Annotated[
-        bool,
+        bool | None,
         Parameter(
             name="--procedural-macro",
             negative="--no-procedural-macro",
             env_var="INPUT_PROCEDURAL_MACRO",
         ),
-    ] = False,
+    ] = None,
+    prover: typ.Annotated[
+        list[str] | None,
+        Parameter(name="--prover", allow_repeating=True, negative=()),
+    ] = None,
     output_format: typ.Annotated[
         typ.Literal["text", "json"],
         Parameter(name="--format"),
@@ -105,9 +128,14 @@ def audit_trust(
     repo_root : Path | None
         Repository root that bounds the audit and anchors every reported
         location. Defaults to the current working directory.
-    procedural_macro : bool
+    procedural_macro : bool | None
         Scan string literals as well as code, for a proc-macro crate that can
-        turn them into code.
+        turn them into code.  By default the crate kind is read from the nearest
+        `Cargo.toml` above each source; either flag states it for every source
+        instead.
+    prover : list[str] | None
+        Provers whose vocabularies to apply, named `kani` or `verus`. This
+        option may be repeated; without it both vocabularies are applied.
     output_format : Literal["text", "json"]
         Output form, defaulting to text.
 
@@ -115,24 +143,35 @@ def audit_trust(
     -------
     int
         ``0`` when every source was audited, and ``1`` when the audit could not
-        complete because a source was missing, unreadable or outside the root.
+        complete because a source was missing, unreadable or outside the root,
+        or a prover name is unknown.
 
     Notes
     -----
     A refused source is a failure of the audit, not a finding: the report would
     otherwise describe a proof whose code was never read.
     """
+    try:
+        vocabularies = select_vocabularies(prover)
+    except ValueError as error:
+        print_lines((str(error),), stream=sys.stderr)
+        return AUDIT_FAILED
     root = (repo_root or Path.cwd()).resolve()
     try:
         drivers = tuple(_relative_to(root, path) for path in paths)
-        files = audit_tree(root, drivers, procedural_macro=procedural_macro)
+        files = audit_tree(
+            root,
+            drivers,
+            procedural_macro=procedural_macro,
+            vocabularies=vocabularies,
+        )
     except TrustAuditError as error:
         print_lines((str(error),), stream=sys.stderr)
         return AUDIT_FAILED
     if output_format == "json":
-        lines: tuple[str, ...] = (json.dumps(_json_payload(files)),)
+        lines: tuple[str, ...] = (json.dumps(_json_payload(files, vocabularies)),)
     else:
-        lines = _text_lines(files)
+        lines = _text_lines(files, vocabularies)
     print_lines(lines)
     return 0
 

@@ -54,6 +54,12 @@ def requires_full_run() -> list[bool]:
     return [False]
 
 
+@pytest.fixture
+def named_release() -> list[str | None]:
+    """Collect the release a scenario names."""
+    return [None]
+
+
 @given(parsers.parse('the captured Verus log "{name}"'), target_fixture="log_path")
 def captured_log(name: str) -> Path:
     """Name one committed corpus log; an absent one exercises the read failure."""
@@ -92,15 +98,46 @@ def full_run_required(requires_full_run: list[bool]) -> None:
     requires_full_run[0] = True
 
 
-def run_analysis(
-    log_path: Path,
+@given(parsers.parse('the Verus release "{release}" is named'))
+def named_verus_release(named_release: list[str | None], release: str) -> None:
+    """Record the release the analysed log was captured from.
+
+    ``--repo-root`` points at the corpus directory, which holds no
+    ``tools/verus/VERSION`` pin, so the scenario's flag is the only source of
+    a release and an unqualified one is still refused.
+    """
+    named_release[0] = release
+
+
+@dc.dataclass(frozen=True, slots=True)
+class DeclaredOptions:
+    """The options one scenario declared for its analysis."""
+
+    region: str | None
+    requires_full_run: bool
+    release: str | None
+
+
+def declared_options(
     declared_region: list[str | None],
     requires_full_run: list[bool],
+    named_release: list[str | None],
+) -> DeclaredOptions:
+    """Collect the fixtures into the options the helper reads."""
+    return DeclaredOptions(
+        region=declared_region[0],
+        requires_full_run=requires_full_run[0],
+        release=named_release[0],
+    )
+
+
+def run_analysis(
+    log_path: Path,
+    options: DeclaredOptions,
     *,
     output_json: bool,
 ) -> CliRun:
     """Run `verus analyse-log` with one flag per declared option."""
-    region = declared_region[0]
     completed = subprocess.run(
         [
             sys.executable,
@@ -110,8 +147,11 @@ def run_analysis(
             "analyse-log",
             "--log",
             str(log_path),
-            *(["--expect-failure", region] if region is not None else []),
-            *(["--require-full"] if requires_full_run[0] else []),
+            "--repo-root",
+            str(FIXTURES),
+            *(["--verus-release", options.release] if options.release else []),
+            *(["--expect-failure", options.region] if options.region else []),
+            *(["--require-full"] if options.requires_full_run else []),
             *(["--format", "json"] if output_json else []),
         ],
         check=False,
@@ -131,12 +171,12 @@ def user_analyses_log(
     log_path: Path,
     declared_region: list[str | None],
     requires_full_run: list[bool],
+    named_release: list[str | None],
 ) -> CliRun:
     """Analyse one log as text."""
     return run_analysis(
         log_path,
-        declared_region,
-        requires_full_run,
+        declared_options(declared_region, requires_full_run, named_release),
         output_json=False,
     )
 
@@ -146,12 +186,12 @@ def user_analyses_log_in_json(
     log_path: Path,
     declared_region: list[str | None],
     requires_full_run: list[bool],
+    named_release: list[str | None],
 ) -> CliRun:
     """Analyse one log as a JSON object."""
     return run_analysis(
         log_path,
-        declared_region,
-        requires_full_run,
+        declared_options(declared_region, requires_full_run, named_release),
         output_json=True,
     )
 
@@ -232,3 +272,18 @@ def stdout_is_json_analysis(cli_run: CliRun, outcome: str, run_mode: str) -> Non
     assert payload["run_mode"] == run_mode
     assert payload["passed"] is False
     assert [failure["line"] for failure in payload["failures"]] == [8, 15]
+
+
+@then(parsers.parse('stdout reports the Verus release "{release}"'))
+def stdout_reports_release(cli_run: CliRun, release: str) -> None:
+    """Assert the report names the release the log was checked against."""
+    assert f"verus release: {release}\n" in cli_run.stdout, cli_run.stdout
+
+
+@then("stderr reports the release as unsupported")
+def stderr_reports_unsupported_release(cli_run: CliRun) -> None:
+    """Assert the refusal names the release and the qualified set."""
+    assert "is not one this parser is qualified against" in cli_run.stderr, (
+        cli_run.stderr
+    )
+    assert "0.1999.01.01.deadbeef" in cli_run.stderr, cli_run.stderr

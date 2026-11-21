@@ -29,12 +29,17 @@ import pathlib
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.manifests import is_procedural_macro
 from rust_prover_tools.trust_audit.matcher import scan
 from rust_prover_tools.trust_audit.model import (
     AuditedFile,
     InlineModule,
     ModuleReference,
     TrustItem,
+)
+from rust_prover_tools.trust_audit.vocabulary import (
+    PROVER_VOCABULARIES,
+    Vocabulary,
 )
 
 if typ.TYPE_CHECKING:
@@ -69,7 +74,8 @@ def audit_tree(
     root: pathlib.Path,
     drivers: cabc.Iterable[str],
     *,
-    procedural_macro: bool = False,
+    procedural_macro: bool | None = None,
+    vocabularies: tuple[Vocabulary, ...] = PROVER_VOCABULARIES,
 ) -> tuple[AuditedFile, ...]:
     """Audit every Rust source reachable from the given entry points.
 
@@ -80,8 +86,15 @@ def audit_tree(
     drivers : Iterable[str]
         Repository-relative Rust files to start from, typically each crate's
         ``lib.rs``, ``main.rs`` and integration-test roots.
-    procedural_macro : bool
-        Scan string literals too, for a crate that expands them into code.
+    procedural_macro : bool | None
+        Whether to scan string literals too, for a crate that expands them into
+        code.  ``None``, the default, reads the flag from the nearest
+        ``Cargo.toml`` above each driver; ``True`` or ``False`` states it for
+        every file instead, so a caller can correct a manifest the audit cannot
+        read.
+    vocabularies : tuple[Vocabulary, ...]
+        The prover vocabularies to apply.  Defaults to every known vocabulary;
+        a caller narrows it to audit one prover.
 
     Returns
     -------
@@ -121,7 +134,12 @@ def audit_tree(
             continue
         result = scan(
             _read_source(root, module.relative),
-            procedural_macro=procedural_macro,
+            procedural_macro=(
+                is_procedural_macro(root, module.relative)
+                if procedural_macro is None
+                else procedural_macro
+            ),
+            vocabularies=vocabularies,
         )
         scanned[module.relative] = result.items
         pending.extend(_module_targets(root, module, result.modules))

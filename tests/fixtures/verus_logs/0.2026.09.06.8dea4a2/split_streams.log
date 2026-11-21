@@ -1,0 +1,12 @@
+verification results:: 1 verified, 1 errors
+error: postcondition not satisfied
+  --> postcondition.rs:8:13
+   |
+ 8 |     ensures result == value + 1,
+   |             ^^^^^^^^^^^^^^^^^^^ failed this postcondition
+ 9 | {
+10 |     value + 2
+   |     --------- at the end of the function body
+
+error: aborting due to 1 previous error
+

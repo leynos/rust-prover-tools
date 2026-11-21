@@ -40,6 +40,18 @@ def repo_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def selected_provers() -> list[str]:
+    """Collect the provers a scenario selects."""
+    return []
+
+
+@pytest.fixture
+def crate_manifest() -> list[str | None]:
+    """Collect the Cargo manifest a scenario writes."""
+    return [None]
+
+
 @given(
     "a crate whose child module assumes a condition",
     target_fixture="crate_source",
@@ -83,6 +95,50 @@ def crate_with_a_missing_module(repo_root: Path) -> str:
 
 
 @given(
+    "a crate whose single module asks both provers for trust",
+    target_fixture="crate_source",
+)
+def crate_asking_both_provers(repo_root: Path) -> str:
+    """Write a crate root importing both provers and using each one's surface."""
+    _write(
+        repo_root,
+        {
+            "src/lib.rs": "\n".join(
+                (
+                    "use vstd::prelude::*;",
+                    "fn a() { admit(); }",
+                    "fn b() { kani::assume(true); }",
+                ),
+            ),
+        },
+    )
+    return "src/lib.rs"
+
+
+@given(parsers.parse('the prover "{prover}" is selected'))
+def prover_selected(selected_provers: list[str], prover: str) -> None:
+    """Record one ``--prover`` selection."""
+    selected_provers.append(prover)
+
+
+@given(
+    "a proc-macro crate whose literal holds a Kani call",
+    target_fixture="crate_source",
+)
+def proc_macro_crate(repo_root: Path) -> str:
+    """Write a crate the manifest declares as a proc-macro crate."""
+    _write(
+        repo_root,
+        {
+            "Cargo.toml": '[package]\nname = "macros"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "src/lib.rs": 'fn f() { let _ = "kani::assume(x);"; }',
+        },
+    )
+    return "src/lib.rs"
+
+
+@given(
     "a source file outside the repository root",
     target_fixture="crate_source",
 )
@@ -101,7 +157,13 @@ def _write(root: Path, files: dict[str, str]) -> None:
         path.write_text(text, encoding="utf-8")
 
 
-def run_audit(repo_root: Path, source: str, *, output_json: bool) -> CliRun:
+def run_audit(
+    repo_root: Path,
+    source: str,
+    *,
+    selected_provers: list[str],
+    output_json: bool,
+) -> CliRun:
     """Run `audit trust` over one entry point."""
     completed = subprocess.run(
         [
@@ -113,6 +175,7 @@ def run_audit(repo_root: Path, source: str, *, output_json: bool) -> CliRun:
             source,
             "--repo-root",
             str(repo_root),
+            *(flag for prover in selected_provers for flag in ("--prover", prover)),
             *(["--format", "json"] if output_json else []),
         ],
         check=False,
@@ -124,15 +187,33 @@ def run_audit(repo_root: Path, source: str, *, output_json: bool) -> CliRun:
 
 
 @when("the user audits the crate", target_fixture="cli_run")
-def user_audits_the_crate(repo_root: Path, crate_source: str) -> CliRun:
+def user_audits_the_crate(
+    repo_root: Path,
+    crate_source: str,
+    selected_provers: list[str],
+) -> CliRun:
     """Audit the crate as text."""
-    return run_audit(repo_root, crate_source, output_json=False)
+    return run_audit(
+        repo_root,
+        crate_source,
+        selected_provers=selected_provers,
+        output_json=False,
+    )
 
 
 @when("the user audits the crate as JSON", target_fixture="cli_run")
-def user_audits_the_crate_as_json(repo_root: Path, crate_source: str) -> CliRun:
+def user_audits_the_crate_as_json(
+    repo_root: Path,
+    crate_source: str,
+    selected_provers: list[str],
+) -> CliRun:
     """Audit the crate as a JSON object."""
-    return run_audit(repo_root, crate_source, output_json=True)
+    return run_audit(
+        repo_root,
+        crate_source,
+        selected_provers=selected_provers,
+        output_json=True,
+    )
 
 
 @then("the command succeeds")
@@ -187,3 +268,15 @@ def stderr_names_the_module(cli_run: CliRun, name: str) -> None:
 def stderr_reports_outside_root(cli_run: CliRun) -> None:
     """Assert the diagnostic refuses a path the report could not name."""
     assert "is outside the repository root" in cli_run.stderr, cli_run.stderr
+
+
+@then(parsers.parse('stdout reports the selected provers "{provers}"'))
+def stdout_reports_selected_provers(cli_run: CliRun, provers: str) -> None:
+    """Assert the report names the vocabularies it applied."""
+    assert f"provers: {provers}\n" in cli_run.stdout, cli_run.stdout
+
+
+@then(parsers.parse('stdout does not report the trusted word "{word}"'))
+def stdout_omits_the_word(cli_run: CliRun, word: str) -> None:
+    """Assert a word outside the selected vocabulary was not reported."""
+    assert f": {word}\n" not in cli_run.stdout, cli_run.stdout

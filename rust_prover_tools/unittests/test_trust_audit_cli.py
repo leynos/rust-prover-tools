@@ -68,6 +68,7 @@ def test_a_json_report_carries_each_item_and_its_location(
     assert status == 0
     assert payload == {
         "schema_version": 1,
+        "provers": ["kani", "verus"],
         "files_audited": 1,
         "items": [
             {"item": "assume", "path": "src/lib.rs", "line": 1, "column": 7},
@@ -152,3 +153,143 @@ def test_a_procedural_macro_scan_reads_string_literals(
     captured = capsys.readouterr()
 
     assert "src/lib.rs:1:25: assume\n" in captured.out
+
+
+#: One file importing both provers, so each rule can be selected in isolation.
+_BOTH_PROVERS: typ.Final[str] = "\n".join(
+    (
+        "use vstd::prelude::*;",
+        "fn verus_side() { admit(); }",
+        "fn kani_side() { kani::assume(true); }",
+    ),
+)
+
+
+def test_the_default_selection_reports_every_prover(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Without ``--prover``, both vocabularies are applied."""
+    write(tmp_path, {"src/lib.rs": _BOTH_PROVERS})
+
+    status = audit_trust([tmp_path / "src/lib.rs"], repo_root=tmp_path)
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert "provers: kani, verus\n" in captured.out
+    assert "admit\n" in captured.out
+    assert "assume\n" in captured.out
+
+
+def test_selecting_kani_reports_no_verus_word(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Kani-only audit ignores the Verus vocabulary, even in a importing file."""
+    write(tmp_path, {"src/lib.rs": _BOTH_PROVERS})
+
+    status = audit_trust(
+        [tmp_path / "src/lib.rs"],
+        repo_root=tmp_path,
+        prover=["kani"],
+    )
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert "provers: kani\n" in captured.out
+    assert ": assume\n" in captured.out
+    assert "admit" not in captured.out
+
+
+def test_selecting_verus_reports_no_kani_path(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A Verus-only audit ignores Kani's qualified paths."""
+    write(tmp_path, {"src/lib.rs": _BOTH_PROVERS})
+
+    status = audit_trust(
+        [tmp_path / "src/lib.rs"],
+        repo_root=tmp_path,
+        prover=["verus"],
+    )
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert "provers: verus\n" in captured.out
+    assert ": admit\n" in captured.out
+    assert "assume" not in captured.out
+
+
+def test_a_repeated_prover_is_reported_once(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Repeating a selection changes nothing and reports it once."""
+    write(tmp_path, {"src/lib.rs": _BOTH_PROVERS})
+
+    status = audit_trust(
+        [tmp_path / "src/lib.rs"],
+        repo_root=tmp_path,
+        prover=["verus", "verus", "kani"],
+        output_format="json",
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == 0
+    assert payload["provers"] == ["verus", "kani"]
+
+
+def test_an_unknown_prover_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A name the audit does not know fails rather than reporting silently."""
+    write(tmp_path, {"src/lib.rs": "fn f() {}"})
+
+    status = audit_trust(
+        [tmp_path / "src/lib.rs"],
+        repo_root=tmp_path,
+        prover=["coq"],
+    )
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "unknown prover 'coq'" in captured.err
+    assert "known provers are kani, verus" in captured.err
+    assert not captured.out
+
+
+def test_the_root_alias_and_repeated_prover_parse(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The command line accepts ``--root`` and a repeated ``--prover``.
+
+    The adapter's own parameters prove the behaviour; this test proves the
+    spellings the user guide documents actually reach them.
+    """
+    from rust_prover_tools.cli import app
+
+    write(tmp_path, {"src/lib.rs": _BOTH_PROVERS})
+
+    status = app(
+        [
+            "audit",
+            "trust",
+            "--root",
+            str(tmp_path),
+            "--prover",
+            "kani",
+            "--prover",
+            "verus",
+            "src/lib.rs",
+        ],
+        exit_on_error=False,
+    )
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert "provers: kani, verus\n" in captured.out
+    assert ": admit\n" in captured.out
+    assert ": assume\n" in captured.out

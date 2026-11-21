@@ -3,9 +3,9 @@
 The corpus is the oracle: every committed log is real Verus output captured on
 a named release, and ``expected.json`` records what the parser and the decision
 must make of it.  The corpus is version-indexed, so a supported release's logs
-live under ``tests/fixtures/verus_logs/<version>``; only the first supported
-version is read here, because the corpus-wide checks state facts about the
-release under test.
+live under ``tests/fixtures/verus_logs/<version>``.  The helpers for one
+release select the first supported version as the "current" corpus; the
+parser's corpus tests parametrize over every supported version.
 
 Each log is real output rather than a handwritten sample, which is what makes
 the grammar trustworthy: a change to :mod:`rust_prover_tools.verus_log.syntax`

@@ -430,3 +430,52 @@ def test_tokenize_refuses_a_nested_comment_that_never_closes() -> None:
     """Honour comment nesting when deciding a comment has ended."""
     with pytest.raises(TrustAuditError, match="unterminated block comment"):
         tokenize("/* a /* b */ kani::assume(x);")
+
+
+def test_an_audit_may_select_one_provers_vocabulary() -> None:
+    """Apply only the vocabulary a caller selected.
+
+    A file can import both provers.  Selecting one is how a caller asks for
+    that prover's surfaces alone, and the other prover's qualified path must
+    not be reported by a rule the selection left out.
+    """
+    source = "\n".join(
+        (
+            "use vstd::prelude::*;",
+            "fn f() { admit(); kani::assume(true); }",
+        ),
+    )
+
+    from rust_prover_tools.trust_audit.vocabulary import KANI, VERUS
+
+    kani_only = [item.item for item in scan(source, vocabularies=(KANI,)).items]
+    verus_only = [item.item for item in scan(source, vocabularies=(VERUS,)).items]
+    both = [item.item for item in scan(source).items]
+
+    assert kani_only == ["assume"]
+    assert verus_only == ["admit"]
+    assert both == ["admit", "assume"]
+
+
+def test_a_selected_verus_vocabulary_keeps_its_region_rule() -> None:
+    """A ``verus!`` body gives a selected Verus word meaning without an import."""
+    from rust_prover_tools.trust_audit.vocabulary import VERUS
+
+    source = "verus! { fn f() { admit(); } }"
+
+    assert [item.item for item in scan(source, vocabularies=(VERUS,)).items] == [
+        "admit",
+    ]
+
+
+def test_a_selected_kani_vocabulary_does_not_read_a_verus_region() -> None:
+    """A Kani audit leaves a Verus word in a ``verus!`` body alone.
+
+    The region rule belongs to the vocabulary record, so selecting Kani removes
+    it along with the Verus words it names.
+    """
+    from rust_prover_tools.trust_audit.vocabulary import KANI
+
+    source = "verus! { fn f() { admit(); } }"
+
+    assert scan(source, vocabularies=(KANI,)).items == ()

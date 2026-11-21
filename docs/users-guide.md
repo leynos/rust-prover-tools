@@ -695,7 +695,8 @@ that never reached a verification result is never mistaken for a passing proof.
 
 ```bash
 prover-tools verus run --proof-file proofs/example.rs 2>&1 | tee verus.log
-prover-tools verus analyse-log --log verus.log
+prover-tools verus analyse-log --log verus.log \
+  --verus-release 0.2026.11.02.8bf68ee
 ```
 
 Verus writes its `verification results::` summary to standard output and its
@@ -703,6 +704,16 @@ diagnostics to standard error, so a capture may show either first. The analysis
 reads the same facts from any merge order; keep both streams when capturing,
 because a log missing standard error loses every diagnostic and one missing
 standard output loses the summary.
+
+The grammar is qualified against named Verus releases, and a transcript does
+not state which release printed it. Name the release with `--verus-release`, or
+run in a repository whose `tools/verus/VERSION` pin records it. A release
+outside the supported set is refused with status `1` before the log is read. If
+neither the flag nor a pin supplies one, the log is analysed with the release
+unnamed: analysing a transcript needs no Verus installation, so a log copied to
+a machine that never installed Verus still reads. The supported releases are
+`0.2026.11.02.8bf68ee` and `0.2026.09.06.8dea4a2`; the corpus README under
+`tests/fixtures/verus_logs/` records what each capture proves.
 
 The analysis reports one of three outcomes:
 
@@ -724,6 +735,11 @@ summary would have had to count.
 Useful options are:
 
 - `--log PATH`: the captured transcript to analyse.
+- `--verus-release RELEASE`: the Verus release the log was captured from,
+  checked against the supported set. Defaults to the `tools/verus/VERSION` pin
+  when one exists.
+- `--repo-root PATH`: the directory holding `tools/verus/VERSION`. Defaults to
+  the working directory.
 - `--expect-failure REGION`: declare a negative control. `REGION` is
   `path`, `path:line` or `path:start-end`, and the analysis passes only when
   the summary counts exactly one failing function and one diagnostic lands
@@ -740,7 +756,8 @@ Useful options are:
 
 The command exits `0` when the analysis passed and any full-run requirement
 holds, `2` when it completed but did not pass, and `1` when the log could not
-be read or the expectation could not be parsed.
+be read, the expectation could not be parsed, or the named release is not one
+the parser is qualified against.
 
 ### Trust audit
 
@@ -774,8 +791,9 @@ refused, because only the invocation's arguments decide that name.
 
 A word counts as trust only in a context that gives it meaning:
 
-- a Kani item reached through a path rooted at `kani`, including one the file
-  renamed with `use kani as k;` or `extern crate kani as k;`;
+- an item reached through a path rooted at the prover's crate — `kani` for
+  Kani, `vstd` or `verus_builtin` for Verus — including one the file renamed
+  with `use kani as k;` or `extern crate kani as k;`;
 - a Verus word inside a `verus!` body, inside a `verifier`, `verus_verify` or
   `verus_spec` attribute, or inside a `cfg_attr` that carries one of those;
 - any unqualified vocabulary word in a file that imports from `kani`, `vstd` or
@@ -793,12 +811,19 @@ literals that never terminate, and the macros `include!`, `paste!` and
 
 Useful options are:
 
-- `--repo-root PATH`: the directory every reported location is relative to, and
-  which bounds the audit. Defaults to the working directory.
-- `--procedural-macro`: read string literals as well as code, for a proc-macro
-  crate that can turn a literal into code.
+- `--repo-root PATH` (also `--root`): the directory every reported location is
+  relative to, and which bounds the audit. Defaults to the working directory.
+- `--prover PROVER`: apply one prover's vocabulary, named `kani` or `verus`.
+  This option may be repeated; without it both vocabularies are applied, which
+  is the fail-closed default.
+- `--procedural-macro` / `--no-procedural-macro`: state whether string
+  literals are code. By default the audit reads the nearest `Cargo.toml` above
+  each source and scans literals only for a crate that declares
+  `[lib] proc-macro = true`, because such a crate can turn a literal into code.
+  Either flag overrides the manifest for every source.
 - `--format text|json`: choose the readable report or a stable JSON object for
-  automation. The JSON form carries `schema_version: 1`.
+  automation. The JSON form carries `schema_version: 1` and names the selected
+  provers.
 
 A relative path is read as repository-relative; an absolute one must already be
 beneath the root. The command exits `0` when every source was audited — a

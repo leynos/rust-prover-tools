@@ -1,4 +1,45 @@
 # serializer version: 1
+# name: test_audit_help_snapshot
+  '''
+  Usage: prover-tools audit COMMAND
+  
+  Report what the sources of a proof ask a verifier to accept
+  
+  ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ trust  Audit Rust sources for items the verifier was told to accept.         │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_audit_trust_help_snapshot
+  '''
+  Usage: prover-tools audit trust [OPTIONS] PATHS
+  
+  Audit Rust sources for items the verifier was told to accept.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ *  PATHS --paths --empty-paths  Rust files to start from [required]          │
+  │    --repo-root --root PATH      Repository root that bounds the audit and    │
+  │                                 anchors every reported                       │
+  │                                 location. Defaults to the current working    │
+  │                                 directory. [env var: INPUT_REPO_ROOT]        │
+  │    --procedural-macro           Scan string literals as well as code, for a  │
+  │      --no-procedural-macro      proc-macro crate that can                    │
+  │                                 turn them into code.  By default the crate   │
+  │                                 kind is read from the nearest                │
+  │                                 `Cargo.toml` above each source; either flag  │
+  │                                 states it for every source                   │
+  │                                 instead. [env var: INPUT_PROCEDURAL_MACRO]   │
+  │    --prover STR...              Provers whose vocabularies to apply, named   │
+  │                                 `kani` or `verus`. This                      │
+  │                                 option may be repeated; without it both      │
+  │                                 vocabularies are applied.                    │
+  │    --format CHOICE              Output form, defaulting to text. [choices:   │
+  │                                 text, json] [default: text]                  │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
 # name: test_kani_analyse_log_help_snapshot
   '''
   Usage: prover-tools kani analyse-log --log PATH --manifest PATH [OPTIONS]
@@ -152,6 +193,50 @@
   │ z3           Install the pinned Z3 solver used by Verus                      │
   │ --help (-h)  Display this message and exit.                                  │
   │ --version    Display application version.                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_verus_analyse_log_help_snapshot
+  '''
+  Usage: prover-tools verus analyse-log --log PATH [OPTIONS]
+  
+  Analyse a captured Verus log.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ *  --log PATH            Complete captured output of one Verus invocation,   │
+  │                          with both streams. [required]                       │
+  │    --expect-failure STR  ``path[:start[-end]]`` where a negative-control run │
+  │                          was required to                                     │
+  │                          fail.  Exactly one located failure must land inside │
+  │                          it.                                                 │
+  │    --require-full        Whether to fail unless the run verified the whole   │
+  │      --no-require-full   crate rather than a                                 │
+  │                          selection made with ``--verify-*``. [default:       │
+  │                          False]                                              │
+  │    --verus-release STR   The Verus release the log was captured from.        │
+  │                          Defaults to the consumer's                          │
+  │                          ``tools/verus/VERSION`` pin when one exists;        │
+  │                          without either, the                                 │
+  │                          release is left unnamed rather than guessed.        │
+  │    --repo-root PATH      Repository root holding the pin.  Defaults to the   │
+  │                          working directory.                                  │
+  │    --format CHOICE       Output form, defaulting to text. [choices: text,    │
+  │                          json] [default: text]                               │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_verus_help_snapshot
+  '''
+  Usage: prover-tools verus COMMAND
+  
+  Manage Verus verifier installation and proof execution
+  
+  ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ analyse-log  Analyse a captured Verus log.                                   │
+  │ install      Install the pinned Verus verifier.                              │
+  │ run          Run Verus against one or more proof files.                      │
   ╰──────────────────────────────────────────────────────────────────────────────╯
   
   '''

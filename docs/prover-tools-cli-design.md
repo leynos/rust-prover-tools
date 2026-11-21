@@ -609,8 +609,8 @@ separate commands:
 
 - `kani analyse-log` with `--log`, `--manifest`, a repeatable `--harness`,
   `--require-full-profile` and `--format text|json`.
-- `verus analyse-log` with `--log`, `--expect-failure`, `--require-full` and
-  `--format text|json`.
+- `verus analyse-log` with `--log`, `--expect-failure`, `--require-full`,
+  `--verus-release`, `--repo-root` and `--format text|json`.
 
 A separate command defines its own input, output and status semantics without
 touching how a verifier runs.
@@ -671,7 +671,11 @@ about whatever the second run reported.
 
 The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
-manifest or digest binding.
+manifest or digest binding. Each `Vocabulary` names the prover, its words, the
+crate roots that qualify a path, and whether a `verus!` body or attribute gives
+its words meaning. The matcher takes the records it is given rather than naming
+a prover itself, so `--prover` narrows an audit and a later user-supplied
+vocabulary can be passed in the same shape without changing the matcher.
 
 ### Trust audit command
 
@@ -682,19 +686,29 @@ item it found:
 - `PATHS` are crate roots, usually each crate's `lib.rs` or `main.rs`. A
   relative path is read as repository-relative so the answer does not depend on
   the working directory; an absolute path must already sit beneath the root.
-- `--repo-root` anchors every reported location and bounds the walk. Defaults
-  to the working directory.
-- `--procedural-macro` reads string literals as well as code, for a crate that
-  can expand a literal into code.
+- `--repo-root` (alias `--root`) anchors every reported location and bounds the
+  walk. Defaults to the working directory.
+- `--prover PROVER` applies one prover's vocabulary, named `kani` or `verus`.
+  It may be repeated; without it both vocabularies are applied, which is the
+  fail-closed direction for an audit.
+- `--procedural-macro` / `--no-procedural-macro` states whether string
+  literals are code. By default the walk reads `[lib] proc-macro = true` from
+  the nearest `Cargo.toml` above each driver with `tomllib`, because a crate
+  that expands literals turns them into code the lexer never sees. Either flag
+  overrides the manifest, so a caller can correct a crate kind the audit cannot
+  read without editing the manifest. A manifest that exists but cannot be
+  parsed is refused rather than guessed at.
 - `--format text|json` chooses the readable report or the schema-versioned
-  object.
+  object. Both forms name the selected provers, because the selection changes
+  what the report can contain.
 
 The status reports whether the audit _completed_: `0` when every source was
-audited and `1` when a source was missing, unreadable or outside the root. A
-non-empty report is not a failure, because the audit keeps no record of which
-requests were justified — the evidence gate that would compare items against
-such a record is excluded machinery. A command that failed on every legitimate
-`assume` would be a gate this repository cannot satisfy.
+audited and `1` when a source was missing, unreadable or outside the root, or a
+prover name is not one the audit knows. A non-empty report is not a failure,
+because the audit keeps no record of which requests were justified — the
+evidence gate that would compare items against such a record is excluded
+machinery. A command that failed on every legitimate `assume` would be a gate
+this repository cannot satisfy.
 
 The audit follows `mod` declarations rather than sweeping a directory. A file no
 `mod` names is not compiled, so scanning it would report dead code as though
@@ -730,6 +744,12 @@ root or a parent. A further rename of the local name — `use self::a as b;` aft
 reason: the binding is the same request for trust under another spelling.
 
 ### Verus outcome vocabulary
+
+The Verus parser is a new design, not a port. Combobulate has no Verus log
+parser --- its evidence code notes that no adapter exists --- so the grammar is
+derived only from the captured corpus under `tests/fixtures/verus_logs/`. That
+is why two releases are captured: the parser is qualified against output a real
+release printed, and the corpus records the one wording difference between them.
 
 Verus prints one `verification results:: N verified, M errors` summary to
 standard output and each diagnostic to standard error, so a capture may merge
@@ -778,6 +798,31 @@ from `mutant.rs`; collapsing it would let one diagnostic satisfy an expectation
 for a file the run never read. Nothing is resolved against the filesystem,
 because the log and the expectation may describe a machine that is gone.
 
+### Verus release qualification
+
+The grammar is qualified against named releases, and a transcript does not
+state which release printed it. `verus analyse-log` therefore takes the release
+from `--verus-release`, or from the consumer's `tools/verus/VERSION` pin when
+the flag is absent. A release outside `SUPPORTED_VERUS_VERSIONS` is refused
+before the log is read, with status `1`, because reading it anyway would report
+facts from a grammar the release was never captured against. A pin that exists
+but is empty is refused for the same reason: its presence says a release was
+meant to be recorded.
+
+When neither the flag nor a pin supplies a release, the log is analysed with
+the release unnamed. Analysing a transcript needs no Verus installation, and
+requiring a pin would make the command unusable in the case it exists for: a
+log copied to a machine that has never installed Verus. The two forms that do
+name a release report it in both the text and the JSON output, so a reader can
+tell "checked against this release" from "checked against none".
+
+Two releases have corpora today: `0.2026.09.06.8dea4a2`, the release the
+repository README teaches a consumer to pin, and `0.2026.11.02.8bf68ee`, the
+newest capture. Their transcripts agree except for the driver's option-error
+spelling, which the grammar accepts in both forms; the older form is
+capitalized and was previously skipped as chatter, hiding the only diagnostic a
+refused invocation prints.
+
 ### Solver selection for Verus runs
 
 Verus runs whichever Z3 `VERUS_Z3_PATH` names, so two runs that differ only in
@@ -797,7 +842,8 @@ manage the variable themselves.
 Both analysis commands share one status contract:
 
 - `0` when the analysis passes and any full-profile requirement holds.
-- `1` for unreadable or invalid input, following the ordinary error convention.
+- `1` for unreadable or invalid input, including a Verus release the parser is
+  not qualified against, following the ordinary error convention.
 - `2` when the analysis completes with a non-passing result.
 
 A structurally invalid log is a completed analysis with outcome `tool-error`

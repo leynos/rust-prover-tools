@@ -99,3 +99,43 @@ def test_kani_run_help_snapshot(
     app(["kani", "run", "--help"], exit_on_error=False)
     captured = capsys.readouterr()
     assert captured.out == snapshot, "Kani run help does not match snapshot"
+
+
+def test_verus_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Verus subcommands expose stable names and summaries."""
+    app(["verus", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Verus help output does not match snapshot"
+
+
+def test_verus_analyse_log_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Verus log analysis exposes stable documented CLI options."""
+    app(["verus", "analyse-log", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Verus analyse-log help does not match snapshot"
+
+
+def test_audit_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """The audit namespace exposes its command and summary."""
+    app(["audit", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Audit help output does not match snapshot"
+
+
+def test_audit_trust_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """The trust audit exposes stable documented CLI options."""
+    app(["audit", "trust", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Audit trust help does not match snapshot"

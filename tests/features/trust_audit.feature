@@ -32,3 +32,18 @@ Feature: Audit Rust sources for trusted items
     When the user audits the crate
     Then the command fails
     And stderr reports the file as outside the repository root
+
+  Scenario: Select one prover's vocabulary
+    Given a crate whose single module asks both provers for trust
+    And the prover "kani" is selected
+    When the user audits the crate
+    Then the command succeeds
+    And stdout reports the selected provers "kani"
+    And stdout names the trusted item "src/lib.rs:3:16: assume"
+    And stdout does not report the trusted word "admit"
+
+  Scenario: Read the crate kind from the manifest
+    Given a proc-macro crate whose literal holds a Kani call
+    When the user audits the crate
+    Then the command succeeds
+    And stdout names the trusted item "src/lib.rs:1:25: assume"

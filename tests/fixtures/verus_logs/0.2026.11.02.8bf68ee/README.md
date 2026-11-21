@@ -51,3 +51,9 @@ it in `SUPPORTED_VERUS_VERSIONS`.
 The corpus was captured on Linux x86-64. Paths appear exactly as Verus echoed
 them: relative to the directory each command ran in, which is why they name a
 file rather than an absolute location.
+
+## Licence
+
+The `*.rs` sources in this directory were written for this corpus, and the
+transcripts are Verus output from those sources. Both are distributed under
+this repository's ISC licence; see `LICENSE` at the repository root.
