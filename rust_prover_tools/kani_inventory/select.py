@@ -232,7 +232,7 @@ def compose_arguments(
             f"supervised selection or output: {list(conflicts)}"
         )
         raise SelectionError(msg)
-    target_arguments = ("--tests",) if harness.target_kind == "test" else ()
+    target_arguments = _target_arguments(harness)
     return (
         "--package",
         harness.package,
@@ -243,6 +243,15 @@ def compose_arguments(
         *grammar.output_arguments,
         *caller_arguments,
     )
+
+
+def _target_arguments(harness: InventoryHarness) -> tuple[str, ...]:
+    """Return the Cargo target selector recorded for this harness."""
+    if harness.target_kind == "lib":
+        return ("--lib",)
+    if harness.target_kind == "bin":
+        return ("--bin", harness.target)
+    return ("--tests",)
 
 
 def selections(

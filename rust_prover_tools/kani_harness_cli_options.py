@@ -9,6 +9,8 @@ route, policy, and diagnostics the composition root consumes.
 from __future__ import annotations
 
 import dataclasses as dc
+import os
+import stat
 import sys
 import typing as typ
 from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
@@ -222,6 +224,9 @@ def supervision_policy(
         jsonl_path=destinations.jsonl,
         report_path=destinations.report,
     )
+    if destinations.human is None:
+        _require_stdout_free(destinations.jsonl, "--jsonl")
+        _require_stdout_free(destinations.report, "--report")
     threshold = policy.watchdog_mib * 1024 * 1024 if policy.watchdog else None
     return SupervisionConfig(
         timeout_seconds=policy.timeout_seconds,
@@ -273,3 +278,19 @@ def open_run_diagnostics(
             start_offset=existing,
         )
     return Diagnostics(human=human_sink, jsonl=jsonl_sink)
+
+
+def _require_stdout_free(path: Path | None, option: str) -> None:
+    """Refuse a destination that is also the standard-output file."""
+    if path is None:
+        return
+    try:
+        stream = os.fstat(sys.stdout.fileno())
+        target = path.stat()
+    except (AttributeError, OSError, ValueError):  # fmt: skip
+        return
+    if not stat.S_ISREG(stream.st_mode):
+        return
+    if (stream.st_dev, stream.st_ino) == (target.st_dev, target.st_ino):
+        msg = f"standard output already names the {option} destination: {path}"
+        raise ValueError(msg)

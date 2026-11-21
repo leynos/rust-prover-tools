@@ -219,10 +219,12 @@ class AttemptSupervisor:
                 waiters = (
                     {done, sleep} if interrupt is None else {done, sleep, interrupt}
                 )
-                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-                sleep.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await sleep
+                try:
+                    await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    sleep.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await sleep
                 if done.done():
                     return
                 if interrupt is not None and interrupt.done():
@@ -258,6 +260,8 @@ class AttemptSupervisor:
         bool
             `True` when a stop was requested.
         """
+        if running.done:
+            return False
         elapsed = max(0.0, self.clock.monotonic() - started_monotonic)
         sample = self.probe.sample(
             self.spec,
@@ -289,19 +293,15 @@ class AttemptSupervisor:
                 threshold_bytes=self.config.watchdog_threshold_bytes,
             ),
         )
-        if recorded or verdict.reason is not None:
-            self._retain_sample(sample)
+        self._samples.append(sample)
+        if recorded:
+            self.diagnostics.emit(sample_record(run_id=self.run_id, sample=sample))
         if verdict.reason is None:
             return False
         self._stop_reason = verdict.reason
         self._stop_detail = verdict.detail
         running.stop(verdict.reason)
         return True
-
-    def _retain_sample(self, sample: ResourceSample) -> None:
-        """Keep and emit one sample, including a watchdog-triggering sample."""
-        self._samples.append(sample)
-        self.diagnostics.emit(sample_record(run_id=self.run_id, sample=sample))
 
     def _recognised_progress(self) -> str | None:
         """Return the adapter's last recognised progress line, if any."""

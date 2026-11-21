@@ -105,6 +105,7 @@ class _Attributes:
     proof: tuple[str, ...] = ()
     path: str | None = None
     conditional: bool = False
+    inner_conditional: bool = False
 
 
 @dc.dataclass(slots=True)
@@ -114,6 +115,7 @@ class _AttributeFacts:
     proof: list[str] = dc.field(default_factory=list)
     path: str | None = None
     conditional: bool = False
+    inner_conditional: bool = False
 
     def record(self, original: str, masked: str) -> None:
         """Record one attribute's facts, ignoring inner attributes."""
@@ -134,12 +136,18 @@ class _AttributeFacts:
         if name == "cfg" and normalise(masked) != "cfg(kani)":
             self.conditional = True
         if name == "cfg_attr":
-            nested = cfg_attr_facts(masked)
-            if nested is not None:
-                proofs, conditional = nested
-                self.proof.extend(proofs)
-                if conditional:
-                    self.conditional = True
+            self._record_cfg_attr(masked, original)
+
+    def _record_cfg_attr(self, masked: str, original: str) -> None:
+        """Record the proof, condition, and path facts inside ``cfg_attr``."""
+        nested = cfg_attr_facts(masked, original)
+        if nested is None:
+            return
+        proofs, conditional, path = nested
+        self.proof.extend(proofs)
+        self.conditional = self.conditional or conditional
+        if path is not None:
+            self.path = path
 
 
 def parse_level(
@@ -168,12 +176,14 @@ def parse_level(
         Proofs, file modules, and inline modules in source order.
     """
     items: list[Item] = []
+    level_conditional = conditional
     position = start
     while position < end:
         position = _skip_space(source.masked, position)
         if position >= end:
             break
         attributes, after = _attributes(source, position)
+        level_conditional = level_conditional or attributes.inner_conditional
         if after >= end:
             break
         keyword_at = _skip_modifiers(source.masked, after)
@@ -184,7 +194,7 @@ def parse_level(
         combined = _Attributes(
             attributes.proof,
             attributes.path,
-            attributes.conditional or conditional,
+            attributes.conditional or level_conditional,
         )
         item, position = _parse_item(source, after, word, combined)
         if item is not None:
@@ -291,13 +301,26 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         if bracket >= len(masked) or masked[bracket] != "[":
             break
         end = _matching(masked, bracket, "[", "]")
-        if not inner:
+        content = masked[bracket + 1 : end - 1].strip()
+        if inner:
+            inner_name, _ = attribute_name(content)
+            if inner_name == "cfg" and normalise(content) != "cfg(kani)":
+                facts.inner_conditional = True
+        else:
             facts.record(
                 source.original[bracket + 1 : end - 1].strip(),
-                masked[bracket + 1 : end - 1].strip(),
+                content,
             )
         position = _skip_space(masked, end)
-    return _Attributes(tuple(facts.proof), facts.path, facts.conditional), position
+    return (
+        _Attributes(
+            tuple(facts.proof),
+            facts.path,
+            facts.conditional,
+            facts.inner_conditional,
+        ),
+        position,
+    )
 
 
 def _starts_string(masked: str, position: int) -> bool:

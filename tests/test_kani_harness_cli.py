@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import io
+import sys
 import typing as typ
 
+import pytest
+
 from rust_prover_tools.cli import app
+from rust_prover_tools.kani_harness_cli_options import (
+    DestinationFlags,
+    PolicyFlags,
+    supervision_policy,
+)
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessPreparation,
     KaniHarnessRun,
@@ -23,8 +31,6 @@ from tests.kani_harness_cli_support import (
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def test_run_requires_exactly_one_route(
@@ -377,3 +383,16 @@ def test_the_legacy_route_refuses_a_snapshot_cache_dir(
 
     assert status == 1
     assert "--cache-dir is only valid" in capsys.readouterr().err
+
+
+def test_standard_output_cannot_alias_a_jsonl_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redirecting stdout onto the JSONL file would interleave two grammars."""
+    path = tmp_path / "evidence.jsonl"
+    path.touch()
+    with path.open("a", encoding="utf-8") as handle:
+        monkeypatch.setattr(sys, "stdout", handle)
+        with pytest.raises(ValueError, match="standard output"):
+            supervision_policy(PolicyFlags(), DestinationFlags(jsonl=path))

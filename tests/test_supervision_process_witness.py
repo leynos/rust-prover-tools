@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import json
 import os
 import signal
 import sys
@@ -162,27 +163,29 @@ def test_a_real_stop_reaches_the_whole_group_and_heartbeats_fire(
         watchdog_threshold_bytes=None,
     )
 
-    report = run_supervised_sync((spec(),), config, environment, run_id="w" * 16)
-
-    assert report.results[0].stop_reason is StopReason.TIMEOUT
-    assert report.outcome is RunOutcome.FAILED
-    assert pid_path.exists(), "the grandchild never started"
-    pid = int(pid_path.read_text(encoding="utf-8"))
     try:
+        report = run_supervised_sync((spec(),), config, environment, run_id="w" * 16)
+
+        assert report.results[0].stop_reason is StopReason.TIMEOUT
+        assert report.outcome is RunOutcome.FAILED
+        assert pid_path.exists(), "the grandchild never started"
+        pid = int(pid_path.read_text(encoding="utf-8"))
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline and _is_running(pid):
             time.sleep(0.05)
         assert not _is_running(pid), "a descendant survived the stopped group"
-    finally:
-        if _is_running(pid):
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGKILL)
 
-    kinds = [record["record"] for record in sink.records]
-    assert "output" in kinds, "the child's output was never recorded"
-    assert "heartbeat" in kinds, "a silent run produced no heartbeat"
-    assert "sample" in kinds, "a running harness produced no sample"
-    assert kinds[-1] == "run-finish", "the run was not finalized"
+        kinds = [record["record"] for record in sink.records]
+        assert "output" in kinds, "the child's output was never recorded"
+        assert "heartbeat" in kinds, "a silent run produced no heartbeat"
+        assert "sample" in kinds, "a running harness produced no sample"
+        assert kinds[-1] == "run-finish", "the run was not finalized"
+    finally:
+        if pid_path.exists():
+            pid = int(pid_path.read_text(encoding="utf-8"))
+            if _is_running(pid):
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(pid, signal.SIGKILL)
 
 
 @pytest.mark.timeout(120)
@@ -213,7 +216,14 @@ def test_the_human_and_jsonl_sinks_agree_on_a_real_run(tmp_path: Path) -> None:
         run_supervised_sync((spec(),), SupervisionConfig(), environment)
 
     assert "hello from the child" in human_path.read_text(encoding="utf-8")
-    assert '"record": "output"' in jsonl_path.read_text(encoding="utf-8")
+    records = [
+        json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(
+        record.get("record") == "output"
+        and "hello from the child" in str(record.get("text"))
+        for record in records
+    ), "the JSONL output record did not carry the child's payload"
 
 
 def _passing(evidence: AttemptEvidence) -> HarnessClassification:

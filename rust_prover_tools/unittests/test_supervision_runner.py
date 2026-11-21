@@ -222,7 +222,8 @@ async def test_an_interrupted_run_reports_the_rest_as_not_run() -> None:
     """An interruption finalizes the report and accounts for unexecuted work."""
     clock = VirtualClock()
     interrupts = StepInterrupts()
-    launcher = ScriptedLauncher(script=Script(block=True))
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(script=Script(block=True), ready=ready)
     first, second = spec("harnesses::a"), spec("harnesses::b")
     environment = _environment(
         launcher,
@@ -237,8 +238,7 @@ async def test_an_interrupted_run_reports_the_rest_as_not_run() -> None:
             environment,
         )
     )
-    for _ in range(20):
-        await asyncio.sleep(0)
+    await asyncio.wait_for(ready.wait(), timeout=1)
     interrupts.fire(15)
     report = await task
 

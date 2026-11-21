@@ -65,6 +65,8 @@ class HarnessBlock:
         Total cover count, when a cover count was printed.
     covered_unreachable : int | None
         Unreachable cover count, when Kani printed one.
+    covered_other_counts : tuple[tuple[int, str], ...]
+        Every other cover-result pair, in log order.
     verdict : str | None
         ``SUCCESSFUL`` or ``FAILED`` from ``VERIFICATION:``.
     panics_as_expected : bool
@@ -92,6 +94,7 @@ class HarnessBlock:
     covered_satisfied: int | None = None
     covered_total: int | None = None
     covered_unreachable: int | None = None
+    covered_other_counts: tuple[tuple[int, str], ...] = ()
     verdict: str | None = None
     panics_as_expected: bool = False
     solver_command: str | None = None

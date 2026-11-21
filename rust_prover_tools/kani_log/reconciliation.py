@@ -6,6 +6,7 @@ import typing as typ
 
 from rust_prover_tools.kani_log.issues import Issue, IssueKind
 from rust_prover_tools.kani_log.other_counts import reconcile_other
+from rust_prover_tools.kani_log.syntax import ASSERTION_KIND, OTHER_STATUS
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_log.model import HarnessBlock
@@ -72,10 +73,13 @@ def _reconcile_checks(block: HarnessBlock) -> list[Issue]:
 
 
 def _unexpected_failure(block: HarnessBlock, failed: int) -> bool:
-    """Whether a successful verdict contradicts a non-panic failure."""
-    if block.verdict != "SUCCESSFUL":
+    """Whether a successful verdict contradicts a failure it cannot excuse."""
+    if block.verdict != "SUCCESSFUL" or not failed:
         return False
-    return bool(failed) and not block.panics_as_expected
+    if not block.panics_as_expected:
+        return True
+    failed_checks = [item for item in block.checks if item.status == "FAILURE"]
+    return any(item.kind != ASSERTION_KIND for item in failed_checks)
 
 
 def _reconcile_failures(block: HarnessBlock) -> list[Issue]:
@@ -131,17 +135,16 @@ def _reconcile_covers(block: HarnessBlock) -> list[Issue]:
                 f"{satisfied}",
             )
         )
-    unreachable = sum(1 for item in covers if item.status == "UNREACHABLE")
-    if (
-        block.covered_unreachable is not None
-        and block.covered_unreachable != unreachable
-    ):
-        reasons.append(
-            Issue(
-                IssueKind.CONTRADICTION,
-                f"the block for {name!r} counts "
-                f"{block.covered_unreachable} unreachable covers but "
-                f"lists {unreachable}",
+    expected = {kind: count for count, kind in block.covered_other_counts}
+    for kind, status in OTHER_STATUS.items():
+        count = expected.get(kind, 0)
+        observed = sum(1 for item in covers if item.status == status)
+        if count != observed:
+            reasons.append(
+                Issue(
+                    IssueKind.CONTRADICTION,
+                    f"the block for {name!r} counts {count} {kind} covers "
+                    f"but lists {observed}",
+                )
             )
-        )
     return reasons

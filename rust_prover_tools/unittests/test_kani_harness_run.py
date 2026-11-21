@@ -397,5 +397,5 @@ def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
         dependencies=dependencies,
     )
 
-    with pytest.raises(ProverToolError, match="inside the repository root"):
+    with pytest.raises(ProverToolError, match="repository root"):
         prepare_harnesses(options)

@@ -57,9 +57,10 @@ def reconcile_other(block: HarnessBlock) -> list[Issue]:
     pairs = block.other_counts or (
         ((block.other_count, block.other_kind),) if block.other_kind is not None else ()
     )
+    expected = {kind: count for count, kind in pairs}
     reasons: list[Issue] = []
-    for count, kind in pairs:
-        status = OTHER_STATUS.get(kind, "")
+    for kind, status in OTHER_STATUS.items():
+        count = expected.get(kind, 0)
         observed = sum(1 for item in block.checks if item.status == status)
         if count != observed:
             reasons.append(

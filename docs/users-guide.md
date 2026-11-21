@@ -9,8 +9,9 @@ Verus workflows that were previously handled by repository shell scripts.
 ```bash
 prover-tools kani install
 prover-tools kani check-version
-prover-tools kani harnesses list --repo-root . --package <name>
-prover-tools kani harnesses run --repo-root . --package <name> --installation <path> --cwd <path>
+prover-tools kani harnesses list --repo-root . --package cuprum-native-io
+prover-tools kani harnesses run --repo-root . --package cuprum-native-io \
+  --installation "$HOME/.kani/kani-0.67.0" --cwd .
 prover-tools verus install
 prover-tools z3 install
 prover-tools verus run --proof-file verus/edge_harvest_proofs.rs

@@ -564,3 +564,59 @@ def test_a_unicode_escape_with_underscores_names_the_file(tmp_path: Path) -> Non
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "proofs::h"
     ]
+
+
+def test_comments_around_a_path_value_are_whitespace(tmp_path: Path) -> None:
+    """A comment before or after the literal does not change the path."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[path = /* before */ "proofs.rs" /* after */]\nmod proofs;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::h"
+    ]
+
+
+def test_inner_cfg_applies_to_every_sibling_proof(tmp_path: Path) -> None:
+    """An inner `cfg` configures the module, not only the next item."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "mod proofs {\n"
+        '    #![cfg(feature = "proofs")]\n'
+        "    #[kani::proof] fn first() {}\n"
+        "    #[kani::proof] fn second() {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    assert [
+        (proof.pretty_name, proof.conditional)
+        for proof in collect_proofs(root, tmp_path)
+    ] == [("proofs::first", True), ("proofs::second", True)]
+
+
+def test_a_cfg_attr_path_selects_the_module_file(tmp_path: Path) -> None:
+    """An active `cfg_attr` path overrides the conventional module file."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[cfg_attr(kani, path = "kani_proofs.rs")]\nmod proofs;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn wrong() {}\n", encoding="utf-8"
+    )
+    (tmp_path / "src" / "kani_proofs.rs").write_text(
+        "#[kani::proof]\nfn right() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::right"
+    ]

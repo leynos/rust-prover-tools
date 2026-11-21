@@ -420,3 +420,20 @@ def test_layout_paths_are_absolute_and_private(tmp_path: Path) -> None:
 
     assert all(path.is_absolute() for path in values)
     assert isinstance(layout, SnapshotLayout)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--manifest-path", "other/Cargo.toml"),
+        ("--manifest-path=other/Cargo.toml",),
+        ("--config", "other.toml"),
+        ("--profile=release",),
+    ],
+)
+def test_a_cargo_routing_override_is_refused(
+    arguments: tuple[str, ...],
+) -> None:
+    """A forwarded argument cannot select another workspace or profile."""
+    with pytest.raises(ProverToolError, match="Cargo routing override"):
+        validate_forwarded_args(arguments)

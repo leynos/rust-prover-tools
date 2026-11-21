@@ -22,6 +22,7 @@ from rust_prover_tools.kani_log.blocks import BlockCursor, Issue
 from rust_prover_tools.kani_log.budget import (
     MAX_RETAINED_RECORDS,
     IssueBudget,
+    RecordBudget,
     retention_issue,
 )
 from rust_prover_tools.kani_log.issues import second_banner_issue, structural_issue
@@ -87,7 +88,7 @@ class KaniLogReader:
         self._blocks_exhausted = False
         self._manual_exhausted = False
         self._unsupported_exhausted = False
-        self._cursor = BlockCursor()
+        self._cursor = BlockCursor(RecordBudget())
         self._manual: ManualSummary | None = None
         self._manual_failed: list[str] = []
         self._unsupported: list[str] = []
@@ -374,6 +375,7 @@ class KaniLogReader:
     def _begin_manual(self) -> None:
         """Start the final manual harness summary."""
         self._manual_failed = []
+        self._manual_exhausted = False
         self._state = State.MANUAL
         self._last_progress = "Manual Harness Summary:"
 

@@ -168,7 +168,8 @@ can match several proofs. The supervisor therefore composes every invocation as:
 
 ```plaintext
 --package <package> --harness <pretty-name> --exact \
-  --output-format=regular <caller arguments>
+  <--lib | --bin <target> | --tests> \
+  --output-format=regular --jobs=1 <caller arguments>
 ```
 
 The selector comes first, the registry's output argument comes next, and caller

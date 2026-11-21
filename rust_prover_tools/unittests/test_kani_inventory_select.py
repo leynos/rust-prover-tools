@@ -113,7 +113,9 @@ def test_the_composed_arguments_put_the_selector_first() -> None:
         "--harness",
         "harnesses::a",
         "--exact",
+        "--lib",
         "--output-format=regular",
+        "--jobs=1",
     )
 
 
@@ -235,3 +237,25 @@ def test_a_qualified_identity_wins_over_an_alias() -> None:
 
     assert chosen.package == "p"
     assert chosen.harness == "x"
+
+
+def test_a_binary_target_composes_its_name() -> None:
+    """A binary selector names the target Kani must build."""
+    arguments = compose_arguments(
+        _harness("bin::proof", target="tool", target_kind="bin"), KANI_067
+    )
+
+    assert (
+        arguments[:9]
+        == (
+            "--package",
+            "alpha",
+            "--harness",
+            "bin::proof",
+            "--exact",
+            "--bin",
+            "tool",
+            "--output-format=regular",
+            "--jobs=1",
+        )[:9]
+    )

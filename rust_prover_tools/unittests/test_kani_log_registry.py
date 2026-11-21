@@ -22,9 +22,12 @@ def test_only_the_qualified_release_is_registered() -> None:
     assert KANI_067.grammar_revision == "combobulate-9dd6e3c"
 
 
-def test_the_registry_forces_the_regular_output() -> None:
-    """The library adds the output argument the grammar was written for."""
-    assert grammar_for("0.67.0").output_arguments == ("--output-format=regular",)
+def test_the_registry_forces_serial_regular_output() -> None:
+    """The library adds the output style and serial jobs the grammar reads."""
+    assert grammar_for("0.67.0").output_arguments == (
+        "--output-format=regular",
+        "--jobs=1",
+    )
 
 
 def test_an_unregistered_release_names_what_is_registered() -> None:

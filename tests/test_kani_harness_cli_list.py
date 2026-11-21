@@ -6,7 +6,7 @@ import json
 import typing as typ
 
 from rust_prover_tools.cli import app
-from tests.kani_harness_cli_support import inventory_file
+from tests.kani_harness_cli_support import inventory_file, make_inventory
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -103,10 +103,18 @@ def test_list_ignores_the_generic_input_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The harnesses subtree disables INPUT_* binding."""
-    path = inventory_file(tmp_path)
+    inventory = make_inventory()
     monkeypatch.setenv("INPUT_INVENTORY", str(tmp_path / "wrong.json"))
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.discover_inventory",
+        lambda root, packages: inventory,
+    )
 
-    status = app(["kani", "harnesses", "list", "--inventory", str(path)])
+    status = app(["kani", "harnesses", "list", "--repo-root", str(tmp_path)])
 
     assert status == 0
-    assert json.loads(capsys.readouterr().out)["schema"] == 1
+    document = json.loads(capsys.readouterr().out)
+    assert [package["package"] for package in document["packages"]] == [
+        "alpha",
+        "beta",
+    ]

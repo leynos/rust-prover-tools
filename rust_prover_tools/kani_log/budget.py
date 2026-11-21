@@ -20,6 +20,7 @@ __all__ = (
     "MAX_RETAINED_ISSUES",
     "MAX_RETAINED_RECORDS",
     "IssueBudget",
+    "RecordBudget",
     "retention_issue",
 )
 
@@ -71,3 +72,18 @@ def retention_issue(subject: str) -> Issue:
         IssueKind.TRUNCATION,
         f"{subject} retention is truncated at {MAX_RETAINED_RECORDS}",
     )
+
+
+class RecordBudget:
+    """One attempt's shared budget for retained evidence records."""
+
+    def __init__(self, limit: int = MAX_RETAINED_RECORDS) -> None:
+        """Create a budget that admits `limit` records."""
+        self._remaining = limit
+
+    def take(self) -> bool:
+        """Consume one record slot, reporting whether one was available."""
+        if self._remaining <= 0:
+            return False
+        self._remaining -= 1
+        return True

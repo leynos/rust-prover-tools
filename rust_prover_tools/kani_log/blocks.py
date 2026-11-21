@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.kani_log.budget import (
-    MAX_RETAINED_RECORDS,
-    retention_issue,
-)
+from rust_prover_tools.kani_log.budget import RecordBudget, retention_issue
 from rust_prover_tools.kani_log.issues import Issue, IssueKind
 from rust_prover_tools.kani_log.model import HarnessBlock
 from rust_prover_tools.kani_log.other_counts import parse_other_pairs
@@ -50,8 +47,9 @@ class BlockCursor:
         reconcilable once the whole block has been read.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, budget: RecordBudget | None = None) -> None:
         """Create a cursor with no block attached."""
+        self._budget = budget or RecordBudget()
         self.block = HarnessBlock(name="")
         self._check_id: str | None = None
         self._check_values: dict[str, str] = {}
@@ -145,7 +143,7 @@ class BlockCursor:
         values: dict[str, str],
     ) -> list[Issue]:
         """Retain one unique property within the block's budget."""
-        if len(self.block.properties) >= MAX_RETAINED_RECORDS:
+        if not self._budget.take():
             if self._checks_truncated:
                 return []
             self._checks_truncated = True
@@ -223,8 +221,19 @@ class BlockCursor:
             ]
         self.block.covered_satisfied = int(match["satisfied"])
         self.block.covered_total = int(match["total"])
-        if match["unreachable"] is not None:
-            self.block.covered_unreachable = int(match["unreachable"])
+        try:
+            pairs = parse_other_pairs(match["others"])
+        except ValueError:
+            return [
+                Issue(
+                    IssueKind.CONTRADICTION,
+                    f"the block for {self.block.name!r} has a malformed "
+                    "cover-result list",
+                )
+            ]
+        self.block.covered_other_counts = pairs
+        counts = {kind: count for count, kind in pairs}
+        self.block.covered_unreachable = counts.get("unreachable")
         return []
 
     def add_verdict(self, verdict: str, note: str | None) -> list[Issue]:
@@ -273,7 +282,7 @@ class BlockCursor:
 
     def _retain_failure(self, failure: FailedCheck) -> None:
         """Retain one failure within the block's budget."""
-        if len(self.block.failures) < MAX_RETAINED_RECORDS:
+        if self._budget.take():
             self.block.failures.append(failure)
         else:
             self._failures_truncated = True

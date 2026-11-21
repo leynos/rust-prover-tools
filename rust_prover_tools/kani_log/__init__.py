@@ -53,6 +53,7 @@ from rust_prover_tools.kani_log.registry import (
     supported_versions,
 )
 from rust_prover_tools.kani_log.syntax import (
+    ASSERTION_KIND,
     BANNER,
     FailedCheck,
     KaniLogError,
@@ -61,6 +62,7 @@ from rust_prover_tools.kani_log.syntax import (
 )
 
 __all__ = [
+    "ASSERTION_KIND",
     "BANNER",
     "KANI_067",
     "MAX_RETAINED_ISSUES",

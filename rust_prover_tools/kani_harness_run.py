@@ -200,10 +200,10 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     """
     root = options.repo_root.resolve()
     route_cwd = route_working_directory(options.route).resolve()
-    if route_cwd != root and root not in route_cwd.parents:
+    if route_cwd != root:
         msg = (
-            "the route working directory must be inside the repository root: "
-            f"{route_cwd} is outside {root}"
+            "the route working directory must be the repository root: "
+            f"{route_cwd} is not {root}"
         )
         raise ProverToolError(msg)
     inventory = _inventory(options)

@@ -261,19 +261,41 @@ class Diagnostics:
 
     human: Sink = dc.field(default_factory=NullSink)
     jsonl: Sink = dc.field(default_factory=NullSink)
+    _errors: list[Exception] = dc.field(default_factory=list)
+
+    @property
+    def error(self) -> Exception | None:
+        """The first destination failure, when one occurred."""
+        return self._errors[0] if self._errors else None
+
+    def _remember(self, error: Exception) -> None:
+        """Retain the first destination failure without interrupting the other."""
+        if not self._errors:
+            self._errors.append(error)
 
     def emit(self, record: dict[str, object]) -> DiagnosticRef | None:
         """Write `record` to every sink and return its JSONL reference."""
         from rust_prover_tools.supervision.results import DiagnosticRef
 
         start = self.jsonl.offset
-        self.jsonl.write(record)
-        self.human.write(record)
-        if isinstance(self.jsonl, NullSink):
+        jsonl_ok = True
+        try:
+            self.jsonl.write(record)
+        except (OSError, ValueError) as error:
+            self._remember(error)
+            jsonl_ok = False
+        try:
+            self.human.write(record)
+        except (OSError, ValueError) as error:
+            self._remember(error)
+        if not jsonl_ok or isinstance(self.jsonl, NullSink):
             return None
         return DiagnosticRef(sink="jsonl", offset=start)
 
     def flush(self) -> None:
-        """Flush both sinks."""
-        self.jsonl.flush()
-        self.human.flush()
+        """Flush both sinks, retaining the first destination failure."""
+        for sink in (self.jsonl, self.human):
+            try:
+                sink.flush()
+            except (OSError, ValueError) as error:
+                self._remember(error)

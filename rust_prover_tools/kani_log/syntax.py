@@ -32,6 +32,7 @@ import re
 import typing as typ
 
 __all__ = (
+    "ASSERTION_KIND",
     "BANNER",
     "CBMC_FAILED",
     "CHECK",
@@ -87,7 +88,7 @@ TOTAL = re.compile(
 )
 COVER = re.compile(
     r"^ \*\* (?P<satisfied>\d+) of (?P<total>\d+) cover properties satisfied"
-    r"(?: \((?P<unreachable>\d+) unreachable\))?$"
+    r"(?: \((?P<others>[^)]*)\))?$"
 )
 COMPLETE = re.compile(
     r"^Complete - (?P<verified>\d+) successfully verified harnesses, "
@@ -133,6 +134,7 @@ CHECK_STATUSES = frozenset({
 })
 # Map the word Kani prints in parentheses to the status the checks carry.
 OTHER_STATUS = {"undetermined": "UNDETERMINED", "unreachable": "UNREACHABLE"}
+ASSERTION_KIND = "assertion"
 # A property identifier is ``harness::fn.kind.N``; fewer than three
 # dot-separated parts name no harness, and fewer than two name no property.
 _MIN_IDENTIFIER_PARTS = 3

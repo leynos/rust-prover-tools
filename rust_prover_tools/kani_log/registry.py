@@ -111,8 +111,9 @@ KANI_067: typ.Final[KaniGrammar] = KaniGrammar(
     grammar_revision="combobulate-9dd6e3c",
     # Kani 0.67.0 defaults to `regular`, but a repository's Cargo configuration
     # can select another style. Naming it explicitly keeps the grammar's
-    # assumption true without changing proof meaning.
-    output_arguments=("--output-format=regular",),
+    # assumption true without changing proof meaning. `--jobs=1` prevents a
+    # manifest setting from prefixing headers with a thread label.
+    output_arguments=("--output-format=regular", "--jobs=1"),
     forbidden_options=(
         ForbiddenOption("--package", "-p", takes_value=True, category="selector"),
         ForbiddenOption("--harness", None, takes_value=True, category="selector"),

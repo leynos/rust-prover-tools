@@ -12,6 +12,7 @@ import typing as typ
 
 from rust_prover_tools.supervision.formatting import (
     JSONL_SCHEMA_VERSION,
+    fit_record,
     normalise,
 )
 
@@ -29,6 +30,7 @@ class MemorySink:
     """
 
     records: list[dict[str, object]] = dc.field(default_factory=list)
+    max_line_bytes: int = 8 * 1024
     _fragments: list[str] = dc.field(default_factory=list)
     _offset: int = 0
 
@@ -41,10 +43,10 @@ class MemorySink:
         """Record one payload and its JSONL rendering."""
         payload = {"schema": JSONL_SCHEMA_VERSION, **record}
         normalised = typ.cast("dict[str, object]", normalise(payload))
-        line = json.dumps(normalised, ensure_ascii=False)
-        self.records.append(normalised)
+        line = fit_record(normalised, self.max_line_bytes)
+        self.records.append(typ.cast("dict[str, object]", json.loads(line)))
         self._fragments.append(line + "\n")
-        self._offset += len(line.encode("utf-8")) + 1
+        self._offset += len((line + "\n").encode("utf-8"))
 
     def flush(self) -> None:
         """Do nothing: a memory sink is never buffered."""

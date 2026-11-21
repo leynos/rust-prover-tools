@@ -27,6 +27,7 @@ import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.kani_log import (
+    ASSERTION_KIND,
     HarnessBlock,
     KaniLog,
     KaniLogError,
@@ -277,7 +278,9 @@ def _is_failed(block: HarnessBlock) -> bool:
     if block.verdict == "FAILED":
         return True
     failed = [item for item in block.checks if item.status == "FAILURE"]
-    return bool(failed) and not block.panics_as_expected
+    if not failed or not block.panics_as_expected:
+        return bool(failed)
+    return any(item.kind != ASSERTION_KIND for item in failed)
 
 
 def _detail(evidence: AttemptEvidence) -> str:

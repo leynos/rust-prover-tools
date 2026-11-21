@@ -238,7 +238,7 @@ class SupervisedRun:
                 finished_at=ledger.finished_at,
             )
         )
-        diagnostic_error = ledger.diagnostic_error
+        diagnostic_error = ledger.diagnostic_error or self.environment.diagnostics.error
         try:
             self.environment.diagnostics.emit(
                 run_finish_record(
@@ -254,6 +254,8 @@ class SupervisedRun:
             # failure, whether it happened during the run or at finalization.
             if diagnostic_error is None:
                 diagnostic_error = error
+        if diagnostic_error is None:
+            diagnostic_error = self.environment.diagnostics.error
         self._write_report(report)
         if diagnostic_error is not None:
             raise diagnostic_error

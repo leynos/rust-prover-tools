@@ -181,6 +181,8 @@ class ScriptedLauncher:
         tick sees plausible elapsed time.
     seconds_per_line : float
         Virtual seconds consumed by each emitted line.
+    ready : asyncio.Event | None
+        Set as soon as a child is launched, for tests that need readiness.
     """
 
     script: Script = dc.field(default_factory=Script)
@@ -189,6 +191,7 @@ class ScriptedLauncher:
     commands: list[LaunchCommand] = dc.field(default_factory=list)
     clock: VirtualClock | None = None
     seconds_per_line: float = 0.0
+    ready: asyncio.Event | None = None
 
     def start(
         self,
@@ -199,6 +202,8 @@ class ScriptedLauncher:
         """Start the scripted child and return its handle."""
         self.commands.append(build(spec))
         script = self.per_harness.get(spec.qualified, self.script)
+        if self.ready is not None:
+            self.ready.set()
         task = asyncio.get_running_loop().create_task(self._run(script, on_line))
         return _ScriptedRunningHarness(task, _PidRecorder(4321), self.stops)
 

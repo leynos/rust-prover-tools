@@ -72,9 +72,77 @@ def attribute_name(content: str) -> tuple[str, str]:
     return normalise(content), ""
 
 
+def _strip_comments(text: str) -> str:
+    """Remove Rust comments while leaving string literals intact."""
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        if text.startswith("//", index):
+            index = _line_comment_end(text, index)
+            continue
+        if text.startswith("/*", index):
+            index = _block_comment_end(text, index)
+            continue
+        copied = _copy_literal(out, text, index)
+        if copied != index:
+            index = copied
+            continue
+        out.append(text[index])
+        index += 1
+    return "".join(out)
+
+
+def _line_comment_end(text: str, index: int) -> int:
+    """Return the position after one line comment."""
+    end = text.find("\n", index)
+    return len(text) if end < 0 else end
+
+
+def _block_comment_end(text: str, index: int) -> int:
+    """Return the position after one nested block comment."""
+    depth = 1
+    position = index + 2
+    while position < len(text) and depth:
+        if text.startswith("/*", position):
+            depth += 1
+            position += 2
+        elif text.startswith("*/", position):
+            depth -= 1
+            position += 2
+        else:
+            position += 1
+    return position
+
+
+def _copy_literal(out: list[str], text: str, index: int) -> int:
+    """Copy one string literal to `out`, returning its new position."""
+    raw = _RAW_STRING.match(text, index)
+    if raw is not None:
+        boundary = index == 0 or not (
+            text[index - 1].isalnum() or text[index - 1] == "_"
+        )
+        if boundary:
+            out.append(raw.group(0))
+            return raw.end()
+    if text[index] != '"':
+        return index
+    start = index
+    index += 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == '"':
+            index += 1
+            break
+        index += 1
+    out.append(text[start:index])
+    return index
+
+
 def path_value(content: str) -> str | None:
     """Extract a Rust string value from a ``path = ...`` attribute."""
-    _, separator, value = content.partition("=")
+    _, separator, value = _strip_comments(content).partition("=")
     if not separator:
         return None
     literal = value.strip()
@@ -156,44 +224,82 @@ def _unicode_escape(text: str, start: int) -> tuple[str, int] | None:
     return chr(value), close + 1
 
 
-def cfg_attr_facts(masked: str) -> tuple[list[str], bool] | None:
-    """Return proof attributes nested in ``cfg_attr`` and their conditionality."""
+def cfg_attr_facts(
+    masked: str,
+    original: str,
+) -> tuple[list[str], bool, str | None] | None:
+    """Return nested proof facts, conditionality, and an active path."""
+    parsed = _parse_cfg_attr(masked, original)
+    if parsed is None:
+        return None
+    predicate, pairs = parsed
+    return _fold_cfg_facts(predicate, pairs)
+
+
+def _parse_cfg_attr(
+    masked: str,
+    original: str,
+) -> tuple[str, list[tuple[str, str]]] | None:
+    """Split one ``cfg_attr`` into its predicate and attribute parts."""
     name, arguments = attribute_name(masked)
+    arguments = arguments.strip()
     if name != "cfg_attr" or not arguments.startswith("("):
         return None
     if not arguments.endswith(")"):
         return None
-    parts = _split_top_level(arguments[1:-1])
-    if len(parts) < _MIN_CFG_ATTR_PARTS:
+    start = masked.index("(") + 1
+    spans = _split_spans(masked[start:-1])
+    if len(spans) < _MIN_CFG_ATTR_PARTS:
         return None
-    predicate = normalise(parts[0])
+    pairs = [
+        (
+            masked[start + left : start + right],
+            original[start + left : start + right],
+        )
+        for left, right in spans
+    ]
+    return normalise(pairs[0][0]), pairs[1:]
+
+
+def _fold_cfg_facts(
+    predicate: str,
+    pairs: list[tuple[str, str]],
+) -> tuple[list[str], bool, str | None] | None:
+    """Combine nested attribute facts under one predicate."""
     proofs: list[str] = []
     conditional = predicate != "kani"
-    for part in parts[1:]:
-        nested = _nested_cfg_attr_facts(part)
+    path: str | None = None
+    for masked_part, original_part in pairs:
+        nested = _nested_cfg_attr_facts(masked_part, original_part)
         if nested is None:
             return None
-        nested_proofs, nested_conditional = nested
-        proofs.extend(nested_proofs)
-        conditional = conditional or nested_conditional
-    return proofs, conditional
+        proofs.extend(nested[0])
+        conditional = conditional or nested[1]
+        if predicate == "kani" and nested[2] is not None:
+            path = nested[2]
+    return proofs, conditional, path
 
 
-def _nested_cfg_attr_facts(part: str) -> tuple[list[str], bool] | None:
+def _nested_cfg_attr_facts(
+    masked: str,
+    original: str,
+) -> tuple[list[str], bool, str | None] | None:
     """Return the facts one attribute inside a ``cfg_attr`` contributes."""
-    nested_name, _ = attribute_name(part)
+    nested_name, _ = attribute_name(masked)
     if nested_name == "cfg_attr":
-        return cfg_attr_facts(part)
+        return cfg_attr_facts(masked, original)
     if nested_name in PROOF_ATTRIBUTES:
-        return [nested_name], False
-    if nested_name == "cfg" and normalise(part) != "cfg(kani)":
-        return [], True
-    return [], False
+        return [nested_name], False, None
+    if nested_name == "path":
+        return [], False, path_value(original)
+    if nested_name == "cfg" and normalise(masked) != "cfg(kani)":
+        return [], True, None
+    return [], False, None
 
 
-def _split_top_level(content: str) -> list[str]:
-    """Split comma-separated text at the top level only."""
-    parts: list[str] = []
+def _split_spans(content: str) -> list[tuple[int, int]]:
+    """Return top-level comma-separated spans in `content`."""
+    spans: list[tuple[int, int]] = []
     start = 0
     depth = [0, 0, 0]
     for index, char in enumerate(content):
@@ -204,7 +310,7 @@ def _split_top_level(content: str) -> list[str]:
                 for value, change in zip(depth, delta, strict=True)
             ]
         if char == "," and depth == [0, 0, 0]:
-            parts.append(content[start:index])
+            spans.append((start, index))
             start = index + 1
-    parts.append(content[start:])
-    return parts
+    spans.append((start, len(content)))
+    return spans
