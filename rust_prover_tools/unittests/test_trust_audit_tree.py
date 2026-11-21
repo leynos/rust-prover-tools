@@ -370,17 +370,37 @@ def test_a_main_rs_module_owns_its_directory(tmp_path: Path) -> None:
     }
 
 
-def test_a_cyclic_path_through_a_symlink_is_refused(tmp_path: Path) -> None:
-    """Refuse a ``#[path]`` that reaches a file already being audited.
+def test_a_cyclic_path_through_a_symlink_terminates(tmp_path: Path) -> None:
+    """Scan a ``#[path]`` cycle once, under the physical file it reaches.
 
-    The symlink keeps a second spelling that lexical normalization cannot
-    collapse, so following it would either walk forever or resolve that file's
-    children under a second owner.
+    The symlink names the declaring file again, so following the raw spelling
+    would walk for ever.  The target is canonicalized before it is claimed, and
+    the second arrival is the same module.
     """
     write(tmp_path, {"src/lib.rs": '#[path = "alias.rs"]\nmod again;'})
     (tmp_path / "src/alias.rs").symlink_to(tmp_path / "src/lib.rs")
 
-    with pytest.raises(TrustAuditError, match="under two spellings"):
+    audited = audit_tree(tmp_path, ["src/lib.rs"])
+
+    assert [file.path for file in audited] == ["src/lib.rs"]
+
+
+def test_one_file_reached_with_two_owners_is_refused(tmp_path: Path) -> None:
+    """Refuse a file whose children would resolve beneath two directories.
+
+    ``mod a;`` makes ``src/a.rs`` own ``src/a``, while the ``#[path]`` names the
+    same file as owning ``src``.  Whichever owner were kept, the other set of
+    child modules would be missed.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": 'mod a;\n#[path = "a.rs"] mod b;',
+            "src/a.rs": "fn f() {}",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="reached both as a file owning"):
         audit_tree(tmp_path, ["src/lib.rs"])
 
 
@@ -621,16 +641,17 @@ def test_a_manifest_symlinked_outside_the_root_is_refused(tmp_path: Path) -> Non
     ``is_file`` follows a symbolic link, so probing before resolving would read
     a file the root does not own and decide the crate kind from it.
     """
-    outside = tmp_path.parent / "outside-Cargo.toml"
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-Cargo.toml"
     outside.write_text(
         '[package]\nname = "p"\nversion = "0.1.0"\n\n[lib]\nproc-macro = true\n',
         encoding="utf-8",
     )
-    write(tmp_path, {"src/lib.rs": "fn f() {}"})
-    (tmp_path / "Cargo.toml").symlink_to(outside)
+    write(repo, {"src/lib.rs": "fn f() {}"})
+    (repo / "Cargo.toml").symlink_to(outside)
 
     with pytest.raises(TrustAuditError, match="resolves outside the repository"):
-        audit_tree(tmp_path, ["src/lib.rs"])
+        audit_tree(repo, ["src/lib.rs"])
 
 
 def test_a_shared_module_takes_the_drivers_crate_kind(tmp_path: Path) -> None:
@@ -795,3 +816,81 @@ def test_a_macro_expansion_with_no_invocation_compiles_no_file(
     )
 
     assert audited(tmp_path, "src/lib.rs") == {"src/lib.rs": []}
+
+
+def test_a_driver_through_a_symlinked_directory_names_the_real_file(
+    tmp_path: Path,
+) -> None:
+    """Resolve the driver before collapsing ``..``, as the filesystem does.
+
+    ``src/link`` points at ``src/actual/nested``, so ``src/link/../entry.rs``
+    names ``src/actual/entry.rs``.  Collapsing lexically would instead read
+    ``src/entry.rs``, which is a different file.
+    """
+    write(
+        tmp_path,
+        {
+            "src/actual/nested/keep.rs": "fn keep() {}",
+            "src/actual/entry.rs": "fn f() { kani::assume(true); }",
+            "src/entry.rs": "fn clean() {}",
+        },
+    )
+    (tmp_path / "src/link").symlink_to(tmp_path / "src/actual/nested")
+
+    result = audit_tree(tmp_path, ["src/link/../entry.rs"])
+
+    assert {file.path: [item.item for item in file.items] for file in result} == {
+        "src/actual/entry.rs": ["assume"]
+    }
+
+
+def test_a_nested_macro_invocation_resolves_from_the_outer_site(
+    tmp_path: Path,
+) -> None:
+    """Follow a macro that invokes another macro inside its expansion.
+
+    ``inner!`` emits ``mod hidden;``, and ``outer!`` emits the call to
+    ``inner!``.  Invoked inside ``mod nested``, the declaration resolves from
+    that directory, not from the definition at the crate root.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "\n".join(
+                (
+                    "macro_rules! inner { () => { mod hidden; }; }",
+                    "macro_rules! outer { () => { inner!(); }; }",
+                    "mod nested { outer!(); }",
+                ),
+            ),
+            "src/nested/hidden.rs": "fn f() { kani::assume(true); }",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/lib.rs": [],
+        "src/nested/hidden.rs": ["assume"],
+    }
+
+
+def test_false_overrides_a_proc_macro_manifest(tmp_path: Path) -> None:
+    """State that literals are not code even when the manifest makes them so.
+
+    The suppression direction must beat the manifest, not merely agree with an
+    ordinary one; otherwise a caller correcting a wrong crate kind would change
+    nothing.
+    """
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    result = audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=False)
+
+    assert {file.path: [item.item for item in file.items] for file in result} == {
+        "src/lib.rs": [],
+    }

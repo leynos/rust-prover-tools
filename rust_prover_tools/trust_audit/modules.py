@@ -16,18 +16,17 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.trust_audit.conditions import conditional_path
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.inline_modules import (
+    DECLARATION_TOKENS,
+    InlineModules,
+    inline_module_names,
+    names_module,
+    path_attribute,
+)
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
-from rust_prover_tools.trust_audit.structure import (
-    attribute_spans,
-    matching,
-    opening_bracket,
-    path_value,
-    previous_closer,
-    skip_visibility,
-)
+from rust_prover_tools.trust_audit.structure import attribute_spans
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 if typ.TYPE_CHECKING:
@@ -35,11 +34,10 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("inline_module_names", "module_references")
 
-# ``mod``, the module's name, and what follows it: a ``;`` for an external
-# module or a ``{`` for an inline one.
-_DECLARATION_TOKENS = 3
-_INLINE = "{"
+# What follows a module name: a ``;`` for an external module.
 _EXTERNAL = ";"
+# The delimiter pairs a macro invocation's body may open.
+_DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 # ``macro_rules``, ``!``, the macro's name and its body.
 
 
@@ -85,20 +83,20 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     spans = dict(attribute_spans(tokens))
     rules = macro_rules(tokens)
     _refuse_metavariable_modules(tokens, rules.expansions)
-    inline = _InlineModules(tokens, rules.patterns)
+    inline = InlineModules(tokens, rules.patterns)
+    contexts = _invocation_contexts(tokens, rules, inline)
     for index, token in enumerate(tokens):
-        head = tokens[index + 1 : index + _DECLARATION_TOKENS]
+        head = tokens[index + 1 : index + DECLARATION_TOKENS]
         if index in rules.patterns:
             continue
-        if not _names_module(token, head) or head[1].text != _EXTERNAL:
+        if not names_module(token, head) or head[1].text != _EXTERNAL:
             continue
         name = head[0]
-        path = _path_attribute(tokens, spans, index)
+        path = path_attribute(tokens, spans, index)
         if index in rules.expansions:
             references.extend(
                 _expanded_references(
-                    rules,
-                    inline,
+                    contexts,
                     index,
                     ModuleReference(
                         name.text,
@@ -122,41 +120,104 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     return tuple(references)
 
 
-def inline_module_names(tokens: tuple[Token, ...]) -> frozenset[str]:
-    """Return the names of the inline modules this file declares.
+def _invocation_contexts(
+    tokens: tuple[Token, ...],
+    rules: MacroRules,
+    inline: InlineModules,
+) -> dict[int, tuple[tuple[InlineModule, ...], ...]]:
+    """Return every context an expansion token compiles under.
 
-    A qualified path such as ``m::a`` names a local binding when ``m`` is an
-    inline module in the same file.  A module declared elsewhere is not shown,
-    so the scan cannot say what its names bind to and does not claim to.
+    A macro invoked inside another macro's expansion expands after the outer
+    call, so the inner declaration resolves from the outer invocation's
+    directory plus whatever inline modules the inner expansion declares.  The
+    traversal follows those calls; a recursive definition is refused, because
+    the chain would never end and the module tree could not be reported.
     """
-    rules = macro_rules(tokens)
-    return _InlineModules(tokens, rules.patterns).names
+    walker = _ContextWalker(tokens, rules, inline)
+    for name in rules.heads:
+        for site in rules.invocations.get(name, ()):
+            if site not in rules.definitions:
+                walker.enter(name, inline.enclosing(site))
+    return walker.frozen()
+
+
+@dc.dataclass(slots=True)
+class _ContextWalker:
+    """Walk macro invocations, recording each expansion's enclosing chains."""
+
+    tokens: tuple[Token, ...]
+    rules: MacroRules
+    inline: InlineModules
+    contexts: dict[int, list[tuple[InlineModule, ...]]] = dc.field(
+        default_factory=dict,
+    )
+    visiting: set[str] = dc.field(default_factory=set)
+
+    def enter(self, name: str, outer: tuple[InlineModule, ...]) -> None:
+        """Record the expansion of ``name`` under one invocation context."""
+        head = self.rules.heads.get(name)
+        if head is None:
+            return
+        if name in self.visiting:
+            msg = (
+                f"the macro {name!r} expands recursively, so the audit cannot "
+                "tell where its module declarations resolve"
+            )
+            raise TrustAuditError(msg)
+        self.visiting.add(name)
+        definition_chain = self.inline.enclosing(head)
+        for token_index in self.rules.expansions_by_name.get(name, ()):
+            self._expand(token_index, outer, definition_chain)
+        self.visiting.remove(name)
+
+    def _expand(
+        self,
+        token_index: int,
+        outer: tuple[InlineModule, ...],
+        definition_chain: tuple[InlineModule, ...],
+    ) -> None:
+        """Record one expansion token and follow a macro it invokes."""
+        local = self.inline.enclosing(token_index)[len(definition_chain) :]
+        chain = (*outer, *local)
+        self.contexts.setdefault(token_index, []).append(chain)
+        invoked = _invoked_macro(self.tokens, self.rules, token_index)
+        if invoked is not None:
+            self.enter(invoked, chain)
+
+    def frozen(self) -> dict[int, tuple[tuple[InlineModule, ...], ...]]:
+        """Freeze the recorded chains into the mapping the caller reads."""
+        return {index: tuple(chains) for index, chains in self.contexts.items()}
+
+
+def _invoked_macro(
+    tokens: tuple[Token, ...],
+    rules: MacroRules,
+    index: int,
+) -> str | None:
+    """Return the macro a token inside an expansion invokes, if it invokes one."""
+    if index not in rules.expansions or index + 2 >= len(tokens):
+        return None
+    token = tokens[index]
+    if token.kind is not Kind.IDENT or tokens[index + 1].text != "!":
+        return None
+    if tokens[index + 2].text not in _DELIMITER_PAIRS:
+        return None
+    return token.text if token.text in rules.heads else None
 
 
 def _expanded_references(
-    rules: MacroRules,
-    inline: _InlineModules,
+    contexts: cabc.Mapping[int, tuple[tuple[InlineModule, ...], ...]],
     token_index: int,
     reference: ModuleReference,
 ) -> tuple[ModuleReference, ...]:
-    """Attribute one expansion's declaration to each invocation in this file.
+    """Attribute one expansion's declaration to each context it compiles in.
 
-    The chain at a definition's own position says nothing about where the
-    expansion compiles.  The chain at each invocation is the one rustc uses,
-    and the inline modules the expansion itself declares are appended to it.
-    A macro no invocation in this file names compiles nothing here, so the
-    reference is dropped.
+    A macro no invocation in this file names has no context, so it compiles
+    nothing here and the reference is dropped.
     """
-    name = rules.owners[token_index]
-    head = rules.heads[name]
-    definition_chain = inline.enclosing(head)
-    local_chain = inline.enclosing(token_index)[len(definition_chain) :]
     return tuple(
-        dc.replace(
-            reference,
-            enclosing=(*inline.enclosing(site), *local_chain),
-        )
-        for site in rules.invocations.get(name, ())
+        dc.replace(reference, enclosing=chain)
+        for chain in contexts.get(token_index, ())
     )
 
 
@@ -188,138 +249,3 @@ def _refuse_metavariable_modules(
                 "so the audit cannot tell which file it compiles"
             )
             raise TrustAuditError(msg)
-
-
-def _names_module(token: Token, head: tuple[Token, ...]) -> bool:
-    """Report whether ``token`` is ``mod`` and ``head`` names what follows it.
-
-    ``head`` holds the module's name and the ``;`` or ``{`` after it. A short
-    slice means the file ends inside a declaration, which names no file.
-    """
-    if token.kind is not Kind.IDENT or token.text != "mod":
-        return False
-    return len(head) == _DECLARATION_TOKENS - 1 and head[0].kind is Kind.IDENT
-
-
-def _opens_inline_module(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether the ``mod`` at ``index`` opens a body rather than a file."""
-    head = tokens[index + 1 : index + _DECLARATION_TOKENS]
-    if not _names_module(tokens[index], head):
-        return False
-    return head[1].text == _INLINE
-
-
-class _InlineModules:
-    """Report the inline ``mod`` names that enclose a token.
-
-    A single left-to-right walk pairs every ``mod name {`` with the ``}`` that
-    closes it.  The chain at any index is rebuilt on demand from parent links
-    rather than copied there: a file with ``D`` nested modules around ``N``
-    ordinary tokens would otherwise retain ``N x D`` references even when the
-    body declares no external module at all.
-    """
-
-    def __init__(
-        self,
-        tokens: tuple[Token, ...],
-        patterns: cabc.Container[int] = frozenset(),
-    ) -> None:
-        """Pair every inline module's braces and record each token's chain."""
-        # Each entry is (module, index of the enclosing entry, closing brace).
-        self._modules: list[tuple[InlineModule, int | None, int]] = []
-        self._innermost: list[int | None] = [None] * len(tokens)
-        stack: list[int] = []
-        spans = dict(attribute_spans(tokens))
-        for index in range(len(tokens)):
-            # A closing brace belongs to the module that *holds* the inline one,
-            # so it is popped before the chain is recorded for that position.
-            if stack and index == self._modules[stack[-1]][2]:
-                stack.pop()
-            self._innermost[index] = stack[-1] if stack else None
-            if index not in patterns and _opens_inline_module(tokens, index):
-                module = InlineModule(
-                    tokens[index + 1].text,
-                    _path_attribute(tokens, spans, index),
-                )
-                parent = stack[-1] if stack else None
-                self._modules.append(
-                    (module, parent, matching(tokens, index + 2, "{", "}")),
-                )
-                stack.append(len(self._modules) - 1)
-
-    @property
-    def names(self) -> frozenset[str]:
-        """Every inline module name this file declares."""
-        return frozenset(module.name for module, _, _ in self._modules)
-
-    def enclosing(self, index: int) -> tuple[InlineModule, ...]:
-        """Return the inline modules enclosing the token at ``index``.
-
-        The chain is rebuilt from parent links, innermost first, and then
-        reversed so a caller reads it outermost first.
-        """
-        chain: list[InlineModule] = []
-        current = self._innermost[index]
-        while current is not None:
-            module, parent, _ = self._modules[current]
-            chain.append(module)
-            current = parent
-        chain.reverse()
-        return tuple(chain)
-
-
-def _path_attribute(
-    tokens: tuple[Token, ...],
-    spans: cabc.Mapping[int, int],
-    mod_index: int,
-) -> str | None:
-    """Return the ``#[path]`` value attached to the item at ``mod_index``.
-
-    The attribute list is the run of ``#[…]`` spans immediately before the
-    declaration, but a visibility modifier may sit between the two:
-    ``#[path = "x.rs"] pub(crate) mod x;`` attaches the attribute to the
-    declaration all the same. So the walk starts by stepping over any
-    ``pub``/``pub(…)`` and only then looks for ``]``.
-
-    Every attribute in the run applies to the declaration, so the walk continues
-    past an attribute that is not ``#[path]``. Missing that step is not a
-    refusal a caller can notice: the module then falls back to Rust's bare
-    ``mod x;`` search, which reads a different file from the one the crate
-    compiles and can report a clean audit of code that is not in the proof.
-
-    The whole run is examined even after a direct ``#[path]`` is found, because
-    a ``cfg_attr`` beside it can still carry one. A ``cfg_attr`` that carries a
-    ``path`` is refused rather than searched for: whether the attribute applies
-    depends on the configuration the crate is built with, and the audit reads
-    one tree.
-
-    When the declaration carries more than one direct ``#[path]``, the first in
-    source order decides, which is the attribute ``rustc`` compiles; the walk
-    runs backwards, so each find overwrites the previous one.
-    """
-    index = skip_visibility(tokens, mod_index - 1)
-    value: str | None = None
-    while index >= 0:
-        if tokens[index].text != "]":
-            return None
-        opener = opening_bracket(tokens, index)
-        if opener is None or opener not in spans:
-            return None
-        found = path_value(tokens, opener, index)
-        if found is not None:
-            value = found
-        if conditional_path(tokens, opener, index):
-            _refuse_conditional_path(tokens, mod_index)
-        index = previous_closer(tokens, opener)
-    return value
-
-
-def _refuse_conditional_path(tokens: tuple[Token, ...], mod_index: int) -> None:
-    """Fail closed on a module whose file a configuration decides."""
-    name = tokens[mod_index + 1]
-    msg = (
-        f"the module {name.text!r} at line {name.line}, column {name.column} "
-        "carries a conditional #[path], so which file it compiles depends on "
-        "the configuration"
-    )
-    raise TrustAuditError(msg)

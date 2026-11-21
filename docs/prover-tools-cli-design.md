@@ -760,12 +760,24 @@ an integration test's declarations resolve beside it rather than in a directory
 named after it. A `mod` written as a `macro_rules!` pattern is a template for
 source the macro is given, not source the crate compiles, so it names no file.
 A declaration an expansion emits does name a file: rustc resolves it from the
-invocation's module directory, which is where the expansion's tokens sit, so
-the enclosing chain the walk records is the one rustc uses. A declaration whose
-name a metavariable supplies is refused, because only the invocation's
-arguments decide that name and the scan never evaluates them. A `#[path]` that a
-`cfg_attr` can select is refused: the configuration decides which file
-compiles, so no single answer would be true.
+invocation's module directory, not from the definition's, so the walk
+attributes the declaration to every invocation it can see and appends the
+expansion's own inline modules to that chain. A macro invoked from another
+macro's expansion is followed through the outer invocation, and a recursive
+definition is refused because its chain would never end. A macro name defined
+more than once is refused: Rust lets a later definition shadow an earlier one,
+and the scan cannot tell which one an invocation expands. An invocation in
+another file is outside the per-file scan, which the user guide states. A
+declaration whose name a metavariable supplies is refused, because only the
+invocation's arguments decide that name and the scan never evaluates them; an
+expansion that invokes a macro through a metavariable is refused for the same
+reason. A target reached through a symbolic link is canonicalized to the
+physical file, so a cyclic `#[path]` terminates, and a file reached with two
+different owners is refused because its children would resolve beneath
+different directories. A `#[path]` that a `cfg_attr` can select is refused: the
+configuration decides which file compiles, so no single answer would be true. A
+nested `cfg_attr` is read through its own payload, so a predicate that merely
+spells `path = …` is not mistaken for an applied path attribute.
 
 The vocabulary is the full set both current releases document, not the subset
 the ticket names. Under-reporting is a soundness failure in an audit, so
@@ -780,7 +792,15 @@ used. A bare call is the ordinary case; `self::`, `crate::` and `super::` name
 the same binding, because each reaches a `use` in the current module, the crate
 root or a parent. A further rename of the local name — `use self::a as b;` after
 `use kani::assume as a;` — is followed to the original item for the same
-reason: the binding is the same request for trust under another spelling.
+reason: the binding is the same request for trust under another spelling. The
+seed is every member a plain import binds, including each leaf of a grouped
+import, so `use kani::{assume, any_where}; use self::assume as a;` reaches
+`assume` rather than only the last leaf. A qualified path is resolved through a
+crate alias first: `use kani as k; use self::k::assume as a;` binds `assume`. A
+use qualified by a module the same file declares is reported too, because the
+import that binds it is visible there; a module declared elsewhere is not
+shown, so its names are left alone. A local alias for the `verus!` macro is the
+same macro, so its body opens a Verus region.
 
 ### Verus outcome vocabulary
 

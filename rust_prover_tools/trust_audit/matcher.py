@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from rust_prover_tools.trust_audit.context import Context
 from rust_prover_tools.trust_audit.errors import TrustAuditError
-from rust_prover_tools.trust_audit.macro_rules import macro_rules
+from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import ScanResult
 from rust_prover_tools.trust_audit.modules import (
     inline_module_names,
@@ -51,6 +51,9 @@ from rust_prover_tools.trust_audit.vocabulary import (
 )
 
 __all__ = ("scan",)
+
+# The delimiters a macro invocation may open.
+_MACRO_DELIMITERS = frozenset({"(", "[", "{"})
 
 
 def scan(
@@ -137,10 +140,11 @@ def _refuse_opaque_macros(
     if procedural_macro:
         base |= PROCEDURAL_OPAQUE_MACROS
     names = _opaque_names(tokens, base)
-    patterns = macro_rules(tokens).patterns
+    rules = macro_rules(tokens)
+    _refuse_metavariable_invocations(tokens, rules)
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
-        if index in patterns:
+        if index in rules.patterns:
             continue
         if token.kind is not Kind.IDENT or token.text not in names:
             continue
@@ -149,6 +153,36 @@ def _refuse_opaque_macros(
         msg = (
             f"{token.text}! at line {token.line}, column {token.column} "
             "generates code the trust audit cannot read"
+        )
+        raise TrustAuditError(msg)
+
+
+def _refuse_metavariable_invocations(
+    tokens: tuple[Token, ...],
+    rules: MacroRules,
+) -> None:
+    """Fail closed on an expansion that invokes a macro by metavariable.
+
+    ``invoke!(include)`` expanding ``$m!("hidden.rs")`` becomes
+    ``include!("hidden.rs")``, which the audit never sees.  The metavariable's
+    value is an invocation argument the lexical scan does not evaluate, so no
+    static answer names the macro; the file is refused instead of reported
+    clean.
+    """
+    for index in rules.expansions:
+        if index < 1 or tokens[index - 1].text != "$":
+            continue
+        token = tokens[index]
+        if token.kind is not Kind.IDENT or index + 2 >= len(tokens):
+            continue
+        if tokens[index + 1].text != "!":
+            continue
+        if tokens[index + 2].text not in _MACRO_DELIMITERS:
+            continue
+        msg = (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} invokes a macro through the metavariable "
+            f"'${token.text}', so the audit cannot tell which macro runs"
         )
         raise TrustAuditError(msg)
 

@@ -21,12 +21,13 @@ from rust_prover_tools.kani_log import CLAIM, KaniOutcome
 from tests import kani_log_corpus as corpus
 from tests import kani_log_fixtures as facts
 from tests import kani_log_properties as props
+from tests import kani_log_rows
 
 
 def test_every_table_row_decides_as_it_declares() -> None:
     """Compare every row's outcome with what the analysis reports."""
     for row in corpus.table()["rows"]:
-        decision = facts.decide_row(row)
+        decision = kani_log_rows.decide_row(row)
         assert decision.outcome == row["outcome"], (
             f"{row['id']} must decide {row['outcome']}: {row['why']}"
         )

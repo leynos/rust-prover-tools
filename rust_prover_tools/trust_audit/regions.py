@@ -11,22 +11,21 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.trust_audit.conditions import payload_start
-from rust_prover_tools.trust_audit.structure import (
-    attribute_spans,
-    matching,
-    texts,
-)
+from rust_prover_tools.trust_audit.structure import attribute_spans, matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
-from rust_prover_tools.trust_audit.vocabulary import VERUS_ATTRIBUTE_HEADS
+from rust_prover_tools.trust_audit.use_bindings import member_bindings
+from rust_prover_tools.trust_audit.vocabulary import (
+    VERUS_ATTRIBUTE_HEADS,
+    VERUS_ROOTS,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 __all__ = ("verus_regions",)
 
-# ``verus`` and ``!``: the head of a ``verus!`` invocation. The macro accepts
-# the same items in any of Rust's three delimiter pairs, so all three are read.
-_VERUS_MACRO_HEAD = ("verus", "!")
+# The macro accepts the same items in any of Rust's three delimiter pairs, so
+# all three are read.
 _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 
 
@@ -70,17 +69,28 @@ def _verus_bodies(tokens: tuple[Token, ...]) -> cabc.Iterator[tuple[int, int]]:
 
     The macro accepts the same items in braces, parentheses or brackets, so
     reading only ``verus! { … }`` would leave the body of ``verus!( … )``
-    ordinary Rust and lose every Verus word in it.
+    ordinary Rust and lose every Verus word in it.  A local alias is the same
+    macro: ``use vstd::prelude::{verus as v, *};`` makes ``v! { … }`` a Verus
+    body, and treating it as an unknown macro would leave its words unread.
     """
-    head_length = len(_VERUS_MACRO_HEAD)
-    for index in range(len(tokens) - head_length):
-        if texts(tokens, index, head_length) != _VERUS_MACRO_HEAD:
+    names = _verus_macro_names(tokens)
+    for index, token in enumerate(tokens[:-2]):
+        if token.text not in names or tokens[index + 1].text != "!":
             continue
-        opening = index + head_length
+        opening = index + 2
         closer = _DELIMITER_PAIRS.get(tokens[opening].text)
         if closer is None:
             continue
         yield opening + 1, matching(tokens, opening, tokens[opening].text, closer)
+
+
+def _verus_macro_names(tokens: tuple[Token, ...]) -> frozenset[str]:
+    """Return ``verus`` and every local name the file binds it to."""
+    names = {"verus"}
+    names.update(
+        alias for item, alias in member_bindings(tokens, VERUS_ROOTS) if item == "verus"
+    )
+    return frozenset(names)
 
 
 def _verus_attribute_regions(

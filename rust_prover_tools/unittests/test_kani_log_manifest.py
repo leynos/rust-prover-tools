@@ -69,9 +69,10 @@ def test_a_valid_manifest_reads_its_claims_and_controls() -> None:
 
 def test_malformed_json_is_refused_with_its_location() -> None:
     """Refuse text that is not JSON, naming the line rather than guessing."""
-    reason = refused("{not json")
+    reason = refused('{\n"schema_version": }')
     assert "Kani harness manifest" in reason
     assert "not valid JSON" in reason
+    assert "at line 2" in reason, "the diagnostic must name the decoder line"
 
 
 def test_a_duplicated_json_key_is_refused() -> None:
@@ -86,7 +87,11 @@ def test_a_duplicated_json_key_is_refused() -> None:
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
 def test_a_non_finite_constant_is_refused(constant: str) -> None:
     """Refuse JSON extensions that would produce an unreadable number."""
-    text = json.dumps(document()).replace("1", constant, 1)
+    text = json.dumps(document()).replace(
+        '"schema_version": 1',
+        f'"schema_version": {constant}',
+        1,
+    )
     assert f"non-finite constant {constant}" in refused(text)
 
 
@@ -207,7 +212,11 @@ def test_a_direct_harness_refuses_a_non_string_role() -> None:
 @pytest.mark.usefixtures("default_int_digit_limit")
 def test_a_number_too_long_to_convert_is_a_manifest_error() -> None:
     """Report an over-long JSON integer as a manifest error, not a ValueError."""
-    text = json.dumps(document()).replace("1", "9" * 4301, 1)
+    text = json.dumps(document()).replace(
+        '"schema_version": 1',
+        '"schema_version": ' + "9" * 4301,
+        1,
+    )
     assert "number this parser cannot read" in refused(text)
 
 

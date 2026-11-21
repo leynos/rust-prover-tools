@@ -162,15 +162,22 @@ def test_every_supported_version_has_a_corpus() -> None:
         assert banners == {version}, f"every {version} log must carry its own banner"
 
 
-def test_every_recorded_log_exists() -> None:
-    """Require each corpus entry to name a log that is on disk."""
-    missing = [
-        f"{version}/{name}.log"
-        for version, entries in EXPECTED.items()
-        for name in entries["logs"]
-        if not (FIXTURES / version / f"{name}.log").is_file()
-    ]
-    assert missing == []
+@pytest.mark.parametrize("version", SUPPORTED_KANI_VERSIONS)
+def test_every_recorded_log_exists(version: str) -> None:
+    """Require the recorded logs and the files on disk to be the same set.
+
+    Comparing in both directions catches a log added without an expectation as
+    well as an expectation left behind by a deleted log; either would otherwise
+    be invisible to the parametrized corpus tests.
+    """
+    recorded = set(EXPECTED[version]["logs"])
+    on_disk = {
+        path.stem for path in (FIXTURES / version).iterdir() if path.suffix == ".log"
+    }
+    assert on_disk == recorded, (
+        f"{version} logs on disk {sorted(on_disk)} do not match the recorded "
+        f"set {sorted(recorded)}"
+    )
 
 
 def test_the_inventory_log_carries_no_verdicts() -> None:

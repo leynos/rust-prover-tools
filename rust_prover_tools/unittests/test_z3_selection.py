@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import typing as typ
+from pathlib import Path
 
 import pytest
 
 import rust_prover_tools.verus_run_cli as run_cli
 import rust_prover_tools.z3_selection as selection_module
 from rust_prover_tools.binary_assets import Z3_VERSION
-from rust_prover_tools.commands import CommandResult
+from rust_prover_tools.commands import CommandResult, CommandSpec
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.z3_selection import (
     CALIBRATED_Z3_BANNER,
@@ -19,9 +19,6 @@ from rust_prover_tools.z3_selection import (
     qualify_z3,
     resolve_z3,
 )
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_the_calibrated_banner_names_the_pinned_release() -> None:
@@ -265,3 +262,41 @@ def test_probing_refuses_a_solver_that_reports_another_release(
 
     with pytest.raises(ProverToolError, match="must report"):
         run_cli.probe_and_qualify_z3(str(binary), repo_root=tmp_path)
+
+
+def test_a_relative_pinned_install_dir_is_resolved_before_probing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Probe the pinned file, not whatever ``PATH`` calls ``z3``.
+
+    A relative install directory would otherwise yield a bare ``z3`` argv,
+    which the probe resolves through ``PATH``; the qualified selection would
+    then name one binary while recording the version of another.
+    """
+    install_dir = tmp_path / "z3"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_text("", encoding="utf-8")
+    seen: list[tuple[str, ...]] = []
+
+    def observe(spec: CommandSpec) -> CommandResult:
+        """Record the argv the command boundary would execute."""
+        seen.append(spec.argv)
+        return CommandResult(
+            stdout=f"{CALIBRATED_Z3_BANNER}\n",
+            stderr="",
+            exit_code=0,
+        )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(run_cli, "run_command", observe)
+
+    qualified = run_cli.probe_and_qualify_z3(
+        PINNED_Z3,
+        repo_root=tmp_path,
+        install_dir=Path("z3"),
+    )
+
+    assert qualified.executable == binary.resolve()
+    assert seen == [(str(binary.resolve()), "--version")]

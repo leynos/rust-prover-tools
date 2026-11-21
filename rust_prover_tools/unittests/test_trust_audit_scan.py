@@ -397,7 +397,9 @@ def test_an_escaped_quote_ends_the_literal_at_the_right_place() -> None:
 def test_a_lifetime_is_not_a_character_literal() -> None:
     """Read ``'a`` as a lifetime so the code after it stays code."""
     tokens = tokenize("fn f<'a>(x: &'a u8) { kani::assume(true); }")
-    assert "assume" in [token.text for token in tokens]
+    words = [token.text for token in tokens]
+    assert "x" in words, "the parameter between the lifetimes must survive"
+    assert "assume" in words
 
 
 def test_a_character_literal_holding_a_quote_does_not_reopen() -> None:
@@ -589,3 +591,78 @@ def test_include_bytes_is_read_as_trivia_in_an_ordinary_crate() -> None:
     source = 'fn f() { include_bytes!("template.rs"); }'
 
     assert scan(source).items == ()
+
+
+def test_a_grouped_plain_import_seeds_every_member() -> None:
+    """Seed each unrenamed leaf of a grouped import, not only the last.
+
+    ``use kani::{assume, any};`` binds both names, so a later
+    ``use self::assume as a;`` reaches Kani's ``assume``.
+    """
+    source = "\n".join(
+        (
+            "use kani::{assume, any_where};",
+            "use self::assume as a;",
+            "fn f() { a(true); }",
+        ),
+    )
+
+    assert items(source) == [
+        ("assume", 1),
+        ("any_where", 1),
+        ("assume", 2),
+        ("assume", 3),
+    ]
+
+
+def test_a_crate_alias_qualified_through_self_is_followed() -> None:
+    """Resolve the crate alias in ``self::k::assume`` before the member.
+
+    ``use kani as k; use self::k::assume as a;`` binds ``a`` to Kani's
+    ``assume`` just as ``use k::assume as a;`` would.
+    """
+    source = "use kani as k;\nuse self::k::assume as a;\nfn f() { a(true); }"
+
+    assert items(source) == [("assume", 2), ("assume", 3)]
+
+
+def test_an_aliased_verus_macro_opens_a_region() -> None:
+    """Treat a local name bound to ``verus`` as the same macro."""
+    source = "use vstd::prelude::{verus as v, *};\nv! { fn f() { admit(); } }"
+
+    assert items(source) == [("admit", 2)]
+
+
+def test_a_macro_defined_twice_is_refused() -> None:
+    """Refuse a shadowed definition whose invocation cannot be attributed."""
+    source = "\n".join(
+        (
+            "macro_rules! load { () => { mod first; }; }",
+            "macro_rules! load { () => {}; }",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="defines 'load' more than once"):
+        items(source)
+
+
+def test_a_metavariable_macro_invocation_is_refused() -> None:
+    """Refuse an expansion whose invoked macro only the arguments decide."""
+    source = "\n".join(
+        (
+            'macro_rules! invoke { ($m:ident) => { $m!("hidden.rs"); }; }',
+            "invoke!(include);",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="through the metavariable"):
+        items(source)
+
+
+def test_an_inner_attribute_survives_whitespace_after_the_bang() -> None:
+    """Keep an inner attribute when trivia separates ``#!`` from ``[``."""
+    source = "#! [allow(dead_code)]\nkani::assume(x);"
+
+    words = [token.text for token in tokenize(source) if token.kind == "ident"]
+    assert words == ["allow", "dead_code", "kani", "assume", "x"]
+    assert items(source) == [("assume", 2)]

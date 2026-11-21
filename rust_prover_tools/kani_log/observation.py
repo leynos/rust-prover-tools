@@ -116,6 +116,19 @@ class Observed:
         )
 
     @property
+    def unresolved(self) -> bool:
+        """Report whether any check was left undecided, wherever it is owned.
+
+        Unlike :attr:`indeterminate`, this does not count an unreachable
+        check.  It exists for the block whose failure a certified expected
+        panic explains: the code after that panic is unreachable by
+        construction, but a solver that returned no answer still proves
+        nothing.
+        """
+        decided_everywhere = (*self.properties, *self.unattributed)
+        return any(item.status == UNRESOLVED_STATUS for item in decided_everywhere)
+
+    @property
     def indeterminate(self) -> bool:
         """Report whether any check in the block was left undecided.
 

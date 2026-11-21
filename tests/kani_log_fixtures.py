@@ -53,7 +53,6 @@ __all__ = (
     "HarnessFact",
     "block_of",
     "build",
-    "decide_row",
     "decision_for",
     "manifest_of",
 )
@@ -120,6 +119,9 @@ class HarnessFact:
     unwinding_checks: bool = False
     cover_description: str | None = None
     expected_failure: str | None = None
+    #: A second owned check's status, for the interaction between a primary
+    #: failure and another check in the same block.
+    extra: str = NOTHING
 
     @property
     def witness(self) -> str:
@@ -224,6 +226,14 @@ def _checks(fact: HarnessFact) -> list[PropertyResult]:
             checks.append(
                 PropertyResult("assertion.1", "FAILURE", "the assertion fails"),
             )
+    if fact.extra != NOTHING:
+        checks.append(
+            PropertyResult(
+                f"{fact.name}.assertion.2",
+                fact.extra,
+                "a second owned check",
+            ),
+        )
     if fact.cover != NOTHING:
         checks.append(
             PropertyResult(
@@ -352,39 +362,4 @@ def decision_for(
             log_format=log_format,
             unsupported_constructs=unsupported_constructs,
         ),
-    )
-
-
-TABLE_STATUSES = {"UNSUPPORTED_FAILURE": UNSUPPORTED_CHECK}
-
-
-def facts_of_row(row: dict[str, typ.Any]) -> tuple[HarnessFact, ...]:
-    """Translate one decision-table row into the facts that describe it."""
-    facts = []
-    for entry in row["harnesses"]:
-        covers = entry.get("covers") or ()
-        facts.append(
-            HarnessFact(
-                entry["name"],
-                entry.get("role"),
-                TABLE_STATUSES.get(entry["status"], entry["status"]),
-                entry.get("cover_status", NOTHING),
-                AS_INTENDED
-                if entry.get("expected_failure") == "assertion.1"
-                else OTHERWISE,
-                bool(entry.get("should_panic")),
-                bool(entry.get("panics_as_expected")),
-                cover_description=covers[0] if covers else None,
-                expected_failure=entry.get("expected_failure"),
-            ),
-        )
-    return tuple(facts)
-
-
-def decide_row(row: dict[str, typ.Any]) -> KaniAnalysis:
-    """Decide one decision-table row."""
-    return decision_for(
-        facts_of_row(row),
-        log_format=row.get("format", "regular"),
-        unsupported_constructs=tuple(row.get("unsupported_constructs", ())),
     )

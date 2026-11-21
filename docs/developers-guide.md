@@ -157,12 +157,14 @@ Feature modules should own workflow behaviour:
   for; `syntax` lexes Rust so trivia is never read as code; `structure` and
   `conditions` locate brackets and read conditional attributes; `macro_rules`
   collects definitions and invocation sites; `module_paths` resolves a
-  declaration to a file; `use_tree`, `use_paths`, `use_bindings`, `manifests`
-  and `modules` locate imports, crate kinds and module declarations; `context`
-  applies the rules; `matcher` refuses code it cannot see and exposes `scan`;
-  and `tree` walks the crate from a set of entry points and reads each driver's
-  proc-macro flag from the nearest `Cargo.toml` with `tomllib`. `tree` and
-  `manifests` are the only modules that read files.
+  declaration to a file; `inline_modules` finds the enclosing inline chain and
+  the path attribute on a declaration; `use_tree`, `use_paths`,
+  `crate_bindings`, `use_bindings`, `manifests` and `modules` locate imports,
+  crate kinds and module declarations; `context` applies the rules; `matcher`
+  refuses code it cannot see and exposes `scan`; and `tree` walks the crate
+  from a set of entry points and reads each driver's proc-macro flag from the
+  nearest `Cargo.toml` with `tomllib`. `tree` and `manifests` are the only
+  modules that read files.
 - `rust_prover_tools.z3_selection` for resolving a solver selection and
   qualifying an observed version. It runs nothing: the `--version` probe lives
   in `verus_run_cli`.

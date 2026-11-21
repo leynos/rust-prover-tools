@@ -60,8 +60,10 @@ def test_full_profile_requires_every_manifest_harness() -> None:
             unwinding_checks=True,
         )
         for fact in (
-            facts.HarnessFact("h::a", CLAIM, facts.SUCCESS),
-            facts.HarnessFact("h::k", CONTROL, facts.AS_INTENDED),
+            facts.HarnessFact("h::a", CLAIM, facts.SUCCESS, unwinding_checks=True),
+            facts.HarnessFact(
+                "h::k", CONTROL, facts.AS_INTENDED, unwinding_checks=True
+            ),
         )
     )
     assert facts.decision_for(combination).run_mode == FULL_PROFILE
@@ -70,8 +72,8 @@ def test_full_profile_requires_every_manifest_harness() -> None:
 def test_full_profile_requires_enabled_unwinding_checks() -> None:
     """Require a run that disabled unwinding checks to stay focused."""
     combination = (
-        facts.HarnessFact("h::a", CLAIM, facts.SUCCESS),
-        facts.HarnessFact("h::k", CONTROL, facts.AS_INTENDED),
+        facts.HarnessFact("h::a", CLAIM, facts.SUCCESS, unwinding_checks=False),
+        facts.HarnessFact("h::k", CONTROL, facts.AS_INTENDED, unwinding_checks=False),
     )
     assert facts.decision_for(combination).run_mode == FOCUSED
 

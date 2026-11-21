@@ -264,10 +264,25 @@ def _outcome(
         return KaniOutcome.RESOURCE_EXHAUSTED
     if any(_is_unsupported(log, item) for item in reported):
         return KaniOutcome.UNSUPPORTED
-    if any(item.indeterminate for item in reported):
+    if any(_is_indeterminate(item, manifest) for item in reported):
         return KaniOutcome.UNDETERMINED
     complete = len(reported) == len(manifest.claims)
     return KaniOutcome.VERIFIED if complete else KaniOutcome.SKIPPED
+
+
+def _is_indeterminate(seen: Observed, manifest: Manifest) -> bool:
+    """Report whether a block leaves a claim undecided.
+
+    A certified expected panic explains an unreachable check: the code after
+    the panic is unreachable by construction, and Kani's note says the panic
+    was the one the harness declared.  Counting that as undetermined would fail
+    a claim the manifest asked for and Kani certified.  A solver that returned
+    no answer is still undetermined, because the panic note says nothing about
+    it.
+    """
+    if _panics_as_expected(seen, manifest):
+        return seen.unresolved
+    return seen.indeterminate
 
 
 def _unexplained_failure(seen: Observed) -> bool:

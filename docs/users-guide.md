@@ -305,7 +305,10 @@ A redirect of a `kani run` invocation is valid input: the command mirrors both
 streams live, so redirecting them captures the whole run. The 64 KiB tail that
 `kani run` retains for diagnostics is not: it is a truncated view of the run,
 so it loses the banner and the start of the report. Redirect to a file when you
-want to analyse a run afterwards, or capture a fresh run through `kani exec`.
+want to analyse a run afterwards, or capture a fresh run through `kani exec`. A
+complete capture is necessary but not sufficient: the transcript must also come
+from a supported release. Redirecting a 0.68.0 snapshot run still produces
+input this analysis refuses, because no captured corpus qualifies its grammar.
 
 ### Kani snapshot commands
 
@@ -786,11 +789,17 @@ last of those, so no single answer describes what the crate compiles. A `mod`
 written as a `macro_rules!` pattern names no file, because it is a template for
 source the macro is given rather than source the crate compiles; a declaration
 an expansion emits is followed from the invocation's module directory, which is
-where rustc resolves it. A macro no invocation in the file names compiles
-nothing there, so its declaration demands no file. An invocation in another
-file is outside the audit's per-file scan, and the audit does not claim to
-follow it. A declaration whose name comes from a metavariable is refused,
-because only the invocation's arguments decide that name.
+where rustc resolves it. A macro invoked from another macro's expansion is
+followed through the outer invocation's directory. A macro no invocation in the
+file names compiles nothing there, so its declaration demands no file. An
+invocation in another file is outside the audit's per-file scan, and the audit
+does not claim to follow it. A macro name defined more than once is refused:
+Rust permits a later definition to shadow an earlier one, and the scan cannot
+tell which one an invocation expands. A declaration whose name comes from a
+metavariable is refused, because only the invocation's arguments decide that
+name, and an expansion that invokes a macro through a metavariable is refused
+for the same reason. A target reached through a symbolic link is resolved to
+the physical file before it is reported, so a cyclic `#[path]` is scanned once.
 
 A `#[path]` is resolved from the directory rustc uses at that position. At file
 scope that is the declaring file's own directory; the first inline `#[path]`
@@ -807,8 +816,10 @@ A word counts as trust only in a context that gives it meaning:
 - an item reached through a path rooted at the prover's crate — `kani` for
   Kani, `vstd` or `verus_builtin` for Verus — including one the file renamed
   with `use kani as k;` or `extern crate kani as k;`;
-- a Verus word inside a `verus!` body, inside a `verifier`, `verus_verify` or
-  `verus_spec` attribute, or inside a `cfg_attr` that carries one of those;
+- a Verus word inside a `verus!` body — including one reached through a local
+  alias such as `use vstd::prelude::{verus as v, *};` — inside a `verifier`,
+  `verus_verify` or `verus_spec` attribute, or inside a `cfg_attr` that carries
+  one of those;
 - any unqualified vocabulary word in a file that imports from `kani`, `vstd` or
   `verus_builtin`.
 

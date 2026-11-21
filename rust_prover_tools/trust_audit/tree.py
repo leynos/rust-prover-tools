@@ -14,9 +14,11 @@ Two policies live here rather than in the matcher, because both need that root:
   under a directory. A file no ``mod`` names is not compiled, so scanning it
   would report items in dead code as though they were part of the proof.
 
-The walk also refuses a path that reaches one file under two spellings, which
-is how a cyclic ``#[path]`` presents itself. Auditing once and moving on would
-resolve the file's children under whichever spelling happened to come first.
+A module target is canonicalized to the physical file it reaches, so a cyclic
+``#[path]`` through a symbolic link is scanned once rather than walked under a
+fresh spelling for ever. A file reached with two different owners is still
+refused: its children would resolve beneath one directory or the other, and
+the audit cannot say which files the crate compiles.
 
 This is I/O, so it sits at the edge: everything it decides is a pure function
 of a repository root and repository-relative paths.
@@ -25,7 +27,6 @@ of a repository root and repository-relative paths.
 from __future__ import annotations
 
 import pathlib
-import posixpath
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
@@ -41,6 +42,7 @@ from rust_prover_tools.trust_audit.module_paths import (
     Module,
     module_target,
     parent_directory,
+    physical_relative,
     resolve_repository_path,
 )
 from rust_prover_tools.trust_audit.vocabulary import (
@@ -103,27 +105,17 @@ def audit_tree(
     # a crate root, so its declarations are searched for beside it rather than
     # in a subdirectory named after it — however Cargo chose to name the file.
     pending = [
-        Module(
-            relative=_normalize(driver),
-            owner=parent_directory(driver),
-            directory=parent_directory(driver),
-            procedural_macro=(
-                is_procedural_macro(root, driver)
-                if procedural_macro is None
-                else procedural_macro
-            ),
-        )
+        _driver_module(root, driver, procedural_macro=procedural_macro)
         for driver in drivers
     ]
     scanned: dict[str, tuple[TrustItem, ...]] = {}
     owners: dict[str, str] = {}
-    identities: dict[pathlib.Path, str] = {}
     while pending:
         module = pending.pop()
         # Every arrival is claimed before the deduplication below: skipping a
         # file already scanned would hide that it was reached a second way,
         # which is exactly the ambiguity ``_claim`` exists to refuse.
-        _claim(root, module, owners, identities)
+        _claim(module, owners)
         if module.relative in scanned:
             continue
         result = scan(
@@ -136,6 +128,32 @@ def audit_tree(
     return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
 
 
+def _driver_module(
+    root: pathlib.Path,
+    driver: str,
+    *,
+    procedural_macro: bool | None,
+) -> Module:
+    """Build the module record for one entry point.
+
+    The driver is canonicalized to the file it reaches, so a path through a
+    symbolic link is read and reported as the file the compiler reads.  Its
+    crate kind comes from the manifest above the driver itself, never from a
+    module it later reaches through ``#[path]``.
+    """
+    relative = physical_relative(root, _normalize(driver))
+    return Module(
+        relative=relative,
+        owner=parent_directory(relative),
+        directory=parent_directory(relative),
+        procedural_macro=(
+            is_procedural_macro(root, driver)
+            if procedural_macro is None
+            else procedural_macro
+        ),
+    )
+
+
 def _normalize(relative: str) -> str:
     r"""Return one repository-relative path in POSIX form.
 
@@ -144,28 +162,26 @@ def _normalize(relative: str) -> str:
     caller named ``src/proof\\case.rs``, and a clean file at the rewritten path
     would hide the trusted items in the file that was actually asked for.
 
-    ``..`` and ``.`` components are collapsed lexically, without following a
-    symbolic link, so a module reached through a ``#[path]`` is reported at the
-    name a reader can find rather than as ``crate/src/../../shared/helper.rs``.
-    Continuation is still checked by `resolve_repository_path`.
+    Components are preserved as written.  Collapsing ``..`` lexically would
+    change which file the path names whenever a component is a symbolic link:
+    ``src/link/../entry.rs`` names ``actual/entry.rs`` when ``src/link`` points
+    at ``actual/nested``, not ``src/entry.rs``.  A path that escapes the root is
+    refused by `resolve_repository_path` instead, which resolves it the way the
+    filesystem does.
     """
-    return posixpath.normpath(pathlib.PurePosixPath(relative).as_posix())
+    return pathlib.PurePosixPath(relative).as_posix()
 
 
 def _claim(
-    root: pathlib.Path,
     module: Module,
     owners: cabc.MutableMapping[str, str],
-    identities: cabc.MutableMapping[pathlib.Path, str],
 ) -> None:
-    """Record how ``module`` was reached, refusing an ambiguous second way.
+    """Record how ``module`` was reached, refusing an ambiguous owner.
 
-    A file reached twice through the same spelling is ordinary — two
-    declarations may name one module — and is deduplicated by the caller. A
-    file reached through two spellings is not: its child modules would resolve
-    beneath one owner or the other, so the audit cannot say which files the
-    crate compiles. Refusing is what makes a cyclic ``#[path]`` terminate
-    rather than walk forever under fresh spellings of the same file.
+    A file reached twice through the same owner is ordinary — two declarations
+    may name one module — and is deduplicated by the caller.  Two owners are
+    not: the file's child modules would resolve beneath one directory or the
+    other, so the audit cannot say which files the crate compiles.
     """
     owner = owners.setdefault(module.relative, module.owner)
     if owner != module.owner:
@@ -173,17 +189,6 @@ def _claim(
             f"{module.relative} is reached both as a file owning {owner!r} and "
             f"as one owning {module.owner!r}; its child modules would resolve "
             "beneath different directories"
-        )
-        raise TrustAuditError(msg)
-    identity = identities.setdefault(
-        resolve_repository_path(root, module.relative),
-        module.relative,
-    )
-    if identity != module.relative:
-        msg = (
-            f"{module.relative} resolves to the same file as {identity}; the "
-            "module walk refuses one file reached under two spellings, which "
-            "is how a cyclic #[path] would recur"
         )
         raise TrustAuditError(msg)
 

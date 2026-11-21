@@ -1,7 +1,6 @@
 {
   "revision": "0.1",
-  "description": "VO-11b's precedence table as data. Each row is one log shape and the decision every conforming implementation must reach; decide.py and the tests both read this file, so a disagreement is a failure rather than a coincidence.",
-  "bounds": "partial",
+  "description": "The decision precedence table as data. Each row is one log shape and the decision every conforming implementation must reach; the corpus test reads this file, so a disagreement is a failure rather than a coincidence.",
   "outcomes": [
     "verified",
     "counterexample",
@@ -166,6 +165,15 @@
       ],
       "outcome": "verified",
       "why": "Kani's verdict note says the panic was the expected one, so its failed assertion is the claim."
+    },
+    {
+      "id": "should-panic-claim-with-an-unreachable-assertion",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FAILURE", "verdict": "SUCCESSFUL",
+         "panics_as_expected": true, "should_panic": true, "extra_status": "UNREACHABLE"}
+      ],
+      "outcome": "verified",
+      "why": "The certified panic explains the unreachable check after it; the claim is still the panic the manifest asked for."
     },
     {
       "id": "should-panic-claim-without-its-note",

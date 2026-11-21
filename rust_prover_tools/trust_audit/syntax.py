@@ -131,18 +131,59 @@ def _skip_shebang(cursor: Cursor) -> None:
     """Consume a leading shebang, which Rust discards before lexing.
 
     Rust treats a first line beginning ``#!`` as a shebang unless the next
-    character is ``[``, which makes it an inner attribute.  The line is not
-    Rust code, so an apostrophe in the interpreter arguments must not open a
-    character literal and a quote there must not open a string the file never
-    contains.
+    token is ``[``, which makes it an inner attribute; whitespace and comments
+    may sit between the two.  The shebang line is not Rust code, so an
+    apostrophe in the interpreter arguments must not open a character literal
+    and a quote there must not open a string the file never contains.
     """
     if not cursor.starts("#!"):
         return
-    if cursor.text[cursor.index + 2 : cursor.index + 3] == "[":
+    if _next_code_character(cursor.text, cursor.index + 2) == "[":
         return
     newline = cursor.text.find("\n", cursor.index)
     end = len(cursor.text) if newline < 0 else newline
     cursor.take(end - cursor.index)
+
+
+def _next_code_character(text: str, index: int) -> str | None:
+    """Return the next character after whitespace and comments, or ``None``.
+
+    Only the decision between a shebang and an inner attribute needs this
+    lookahead; the cursor is not moved.
+    """
+    while index < len(text):
+        if text[index] in RUST_WHITESPACE:
+            index += 1
+        elif text.startswith("//", index):
+            newline = text.find("\n", index)
+            index = len(text) if newline < 0 else newline
+        elif text.startswith("/*", index):
+            index = _after_block_comment(text, index)
+        else:
+            return text[index]
+    return None
+
+
+def _after_block_comment(text: str, index: int) -> int:
+    """Return the index after the block comment opening at ``index``.
+
+    Rust nests block comments, so the scan counts openers rather than stopping
+    at the first ``*/``.
+    """
+    depth = 0
+    position = index
+    while position < len(text):
+        if text.startswith("/*", position):
+            depth += 1
+            position += 2
+        elif text.startswith("*/", position):
+            depth -= 1
+            position += 2
+            if depth == 0:
+                return position
+        else:
+            position += 1
+    return len(text)
 
 
 def _skip_literal_suffix(cursor: Cursor) -> None:

@@ -6,6 +6,11 @@ expansion is code the crate compiles, but only where the macro is invoked.  The
 invocation site is the directory rustc resolves the expansion's declarations
 from, so the caller needs both halves of that fact.
 
+A name defined more than once is refused.  Rust permits a later definition to
+shadow an earlier one, and the lexical scan cannot tell which definition a
+given invocation expands; returning either module tree would be a guess, and a
+wrong guess can scan a clean file in place of the compiled one.
+
 The collector is pure: it reads the token stream and reports spans and names.
 `rust_prover_tools.trust_audit.modules` turns the result into module references.
 """
@@ -15,6 +20,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.structure import matching, texts
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
@@ -30,13 +36,21 @@ _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 
 @dc.dataclass(frozen=True, slots=True)
 class MacroRules:
-    """Where a ``macro_rules!`` definition's tokens are and who invokes it."""
+    """Where a ``macro_rules!`` definition's tokens are and who invokes it.
+
+    ``owners`` maps every token inside an expansion to the macro that owns it;
+    ``expansions_by_name`` is the same fact grouped for a traversal.
+    ``invocations`` includes calls written inside another expansion, which is
+    what lets the caller follow a macro that invokes a second one.
+    """
 
     patterns: frozenset[int]
     expansions: frozenset[int]
     heads: dict[str, int]
+    expansions_by_name: dict[str, tuple[int, ...]]
     owners: dict[int, str]
     invocations: dict[str, tuple[int, ...]]
+    definitions: frozenset[int]
 
 
 def macro_rules(tokens: tuple[Token, ...]) -> MacroRules:
@@ -45,51 +59,73 @@ def macro_rules(tokens: tuple[Token, ...]) -> MacroRules:
     A rule is a pattern followed by ``=>`` and a body, so the group before each
     arrow is the pattern and the group after it is the expansion.  Only the
     pattern is syntax; an expansion that emits ``mod x;`` is code the crate
-    compiles, at each site the macro is invoked.  The invocation sites are
-    collected here so the caller can attribute the declaration to them.
+    compiles, at each site the macro is invoked.
+
+    Raises
+    ------
+    TrustAuditError
+        If two definitions share a name, because the scan cannot tell which one
+        an invocation expands.
     """
-    patterns, expansions, heads, owners, definitions = _macro_definitions(tokens)
+    heads, definitions = _definition_bounds(tokens)
+    patterns, expansions, owners = _rule_tokens(tokens, heads)
     return MacroRules(
         frozenset(patterns),
         frozenset(expansions),
         heads,
+        _expansions_by_name(owners),
         owners,
-        _macro_invocations(tokens, definitions),
+        _macro_invocations(tokens, patterns),
+        frozenset(definitions),
     )
 
 
-def _macro_definitions(
-    tokens: tuple[Token, ...],
-) -> tuple[set[int], set[int], dict[str, int], dict[int, str], set[int]]:
-    """Return each definition's patterns, expansions, head and owned tokens."""
-    heads, definitions = _definition_bounds(tokens)
-    patterns, expansions, owners = _rule_tokens(tokens, heads)
-    return patterns, expansions, heads, owners, definitions
+def _expansions_by_name(owners: dict[int, str]) -> dict[str, tuple[int, ...]]:
+    """Group an expansion's token indices by the macro that owns them."""
+    grouped: dict[str, list[int]] = {}
+    for index, name in owners.items():
+        grouped.setdefault(name, []).append(index)
+    return {name: tuple(indices) for name, indices in grouped.items()}
+
+
+@dc.dataclass(slots=True)
+class _Definitions:
+    """The definitions found so far, keyed by their name."""
+
+    heads: dict[str, int] = dc.field(default_factory=dict)
+    definitions: set[int] = dc.field(default_factory=set)
 
 
 def _definition_bounds(
     tokens: tuple[Token, ...],
 ) -> tuple[dict[str, int], set[int]]:
     """Return each macro's head index and every token inside a definition."""
-    heads: dict[str, int] = {}
-    definitions: set[int] = set()
+    found = _Definitions()
     for index in range(len(tokens) - len(_MACRO_HEAD)):
-        found = _definition_spans(tokens, index)
-        if found is not None:
-            _record_definition(heads, definitions, index, found)
-    return heads, definitions
+        spans = _definition_spans(tokens, index)
+        if spans is not None:
+            _record_definition(tokens, found, index, spans)
+    return found.heads, found.definitions
 
 
 def _record_definition(
-    heads: dict[str, int],
-    definitions: set[int],
+    tokens: tuple[Token, ...],
+    found: _Definitions,
     index: int,
-    found: tuple[str, int, int],
+    spans: tuple[str, int, int],
 ) -> None:
-    """Record one definition's head and the token range it occupies."""
-    name, _, closing = found
-    heads[name] = index
-    definitions.update(range(index, closing + 1))
+    """Record one definition, refusing a name a second definition reuses."""
+    name, _, closing = spans
+    if name in found.heads:
+        token = tokens[index + len(_MACRO_HEAD)]
+        msg = (
+            f"macro_rules! defines {name!r} more than once, at line "
+            f"{token.line}, column {token.column}; the audit cannot tell which "
+            "definition an invocation expands"
+        )
+        raise TrustAuditError(msg)
+    found.heads[name] = index
+    found.definitions.update(range(index, closing + 1))
 
 
 def _rule_tokens(
@@ -135,17 +171,18 @@ def _definition_spans(
 
 def _macro_invocations(
     tokens: tuple[Token, ...],
-    definitions: cabc.Container[int],
+    patterns: cabc.Container[int],
 ) -> dict[str, tuple[int, ...]]:
     """Return the token index of every invocation, grouped by macro name.
 
-    An invocation is a name followed by ``!`` and a delimited body.  Tokens
-    inside a definition are skipped, so ``macro_rules!`` itself and a macro
-    merely mentioned in a matcher are not counted as invocations.
+    An invocation is a name followed by ``!`` and a delimited body.  Matcher
+    tokens are skipped, so a macro merely described there is not an invocation;
+    an invocation written inside an expansion is kept, because a macro that
+    calls another one still expands at the outer invocation's site.
     """
     invocations: dict[str, list[int]] = {}
     for index, token in enumerate(tokens[:-2]):
-        if index in definitions or token.kind is not Kind.IDENT:
+        if index in patterns or token.kind is not Kind.IDENT:
             continue
         if tokens[index + 1].text != "!":
             continue

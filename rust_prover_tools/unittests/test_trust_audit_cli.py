@@ -94,10 +94,12 @@ def test_a_source_outside_the_root_is_refused(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Refuse a driver the report could not name relative to its root."""
-    outside = tmp_path.parent / "elsewhere.rs"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "elsewhere.rs"
     outside.write_text("fn f() {}", encoding="utf-8")
 
-    status = audit_trust([outside], repo_root=tmp_path / "repo")
+    status = audit_trust([outside], repo_root=repo)
     captured = capsys.readouterr()
 
     assert status == 1

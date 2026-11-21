@@ -94,7 +94,10 @@ def resolve_z3(
     """
     if selection == PINNED_Z3:
         directory = install_dir or default_z3_install_dir(repo_root)
-        executable = directory / "z3"
+        # Resolve before probing.  A relative install directory would
+        # otherwise return a bare ``z3`` that the probe resolves through
+        # PATH, qualifying one binary and later binding another.
+        executable = (directory / "z3").resolve()
         if not executable.is_file():
             msg = (
                 f"the pinned Z3 {Z3_VERSION} is not installed at {executable}; "

@@ -11,6 +11,7 @@ state those rules read.  A note on the constants:
 
 from __future__ import annotations
 
+import bisect
 import re
 import typing as typ
 
@@ -22,6 +23,8 @@ from rust_prover_tools.trust_audit.use_bindings import alias_bindings, member_bi
 from rust_prover_tools.trust_audit.use_tree import LOCAL_QUALIFIERS, imported_roots
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from rust_prover_tools.trust_audit.vocabulary import Vocabulary
 
 __all__ = ("Context",)
@@ -222,8 +225,9 @@ class Context:
             for match in _WORD.finditer(body)
             if match[0] in self.words
         )
+        newlines = _newline_positions(token.text)
         for start, item in sorted(found):
-            self._record(_literal_item(item, token, positions[start]))
+            self._record(_literal_item(item, token, positions[start], newlines))
 
 
 def _qualified_pattern(roots: frozenset[str]) -> re.Pattern[str] | None:
@@ -245,18 +249,36 @@ def _qualified_pattern(roots: frozenset[str]) -> re.Pattern[str] | None:
     return re.compile(rf"\b(?:{alternatives})\s*::\s*([A-Za-z_][A-Za-z0-9_]*)")
 
 
-def _literal_item(item: str, token: Token, offset: int) -> TrustItem:
+def _newline_positions(text: str) -> list[int]:
+    """Return the offset of every newline in ``text``, in ascending order.
+
+    Built once per literal.  Rebuilding a prefix for every match would copy the
+    literal's text once per vocabulary word, which is quadratic in a
+    generated literal holding many matches.
+    """
+    return [index for index, character in enumerate(text) if character == "\n"]
+
+
+def _literal_item(
+    item: str,
+    token: Token,
+    offset: int,
+    newlines: cabc.Sequence[int],
+) -> TrustItem:
     """Locate a literal match precisely enough that two of them stay distinct.
 
     Positions outside a literal are token positions, which the lexer already
     counts. Inside one, the token is opaque, so the offset is measured from the
-    token's start and advanced over any newline the literal contains.
+    token's start and mapped through the literal's newline index.
     """
-    prefix = token.text[:offset]
-    if "\n" not in prefix:
+    preceding = bisect.bisect_left(newlines, offset)
+    if not preceding:
         return TrustItem(item, token.line, token.column + offset)
-    line = token.line + prefix.count("\n")
-    return TrustItem(item, line, len(prefix) - prefix.rindex("\n"))
+    return TrustItem(
+        item,
+        token.line + preceding,
+        offset - newlines[preceding - 1],
+    )
 
 
 def _is_bare_use(tokens: tuple[Token, ...], index: int) -> bool:

@@ -72,6 +72,13 @@ def claim_variants(name: str = "h::c") -> tuple[HarnessFact, ...]:
     witnesses = tuple(
         HarnessFact(name, CLAIM, SUCCESS, cover) for cover in COVER_STATUSES[1:]
     )
+    # A failed assertion and a cover can sit in the same harness.  The witness
+    # variants above all succeed, and the failure variants carry no cover, so
+    # without these the interaction between a disproof and a witness is never
+    # enumerated.
+    failures_with_witnesses = tuple(
+        HarnessFact(name, CLAIM, FAILURE, cover) for cover in COVER_STATUSES[1:]
+    )
     panics = tuple(
         HarnessFact(name, CLAIM, FAILURE, should_panic=True, note=note)
         for note in (True, False)
@@ -79,7 +86,7 @@ def claim_variants(name: str = "h::c") -> tuple[HarnessFact, ...]:
     absent = tuple(
         HarnessFact(name, CLAIM, ABSENT, cover) for cover in (NOTHING, SATISFIED)
     )
-    return outcomes + witnesses + panics + absent
+    return outcomes + witnesses + failures_with_witnesses + panics + absent
 
 
 def control_variants(name: str = "h::k") -> tuple[HarnessFact, ...]:

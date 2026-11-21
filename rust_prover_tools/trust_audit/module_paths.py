@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 import pathlib
-import posixpath
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
@@ -42,6 +41,7 @@ __all__ = (
     "Module",
     "module_target",
     "parent_directory",
+    "physical_relative",
     "resolve_repository_path",
 )
 
@@ -118,7 +118,7 @@ def module_target(
     module that resolves to no file is a structural failure: the crate would not
     compile, and the audit would report a clean scan of code it never read.
     """
-    candidates, owner = _module_candidates(module, reference)
+    candidates = _module_candidates(module, reference)
     # Containment is checked before existence so an escaping `#[path]` is
     # refused for what it is. Reporting only that the file is absent would
     # invite someone to create it outside the repository and call the audit
@@ -141,40 +141,70 @@ def module_target(
             f"{list(candidates)}"
         )
         raise TrustAuditError(msg)
-    normalized = posixpath.normpath(found)
+    relative = physical_relative(root, found)
     return Module(
-        relative=normalized,
-        owner=posixpath.normpath(owner),
-        directory=parent_directory(normalized),
+        relative=relative,
+        owner=_target_owner(root, module, reference, relative),
+        directory=parent_directory(relative),
         procedural_macro=module.procedural_macro,
     )
+
+
+def physical_relative(root: pathlib.Path, relative: str) -> str:
+    """Return the repository-relative path the filesystem actually reaches.
+
+    The candidate is resolved rather than collapsed lexically.  ``src/link``
+    may be a symbolic link, and ``src/link/../trusted.rs`` then names a
+    different file from ``src/trusted.rs``; the containment and existence
+    checks already used the resolved path, so the reported name must be the
+    same one.
+    """
+    resolved = resolve_repository_path(root, relative)
+    return resolved.relative_to(root.resolve()).as_posix()
+
+
+def _target_owner(
+    root: pathlib.Path,
+    module: Module,
+    reference: ModuleReference,
+    relative: str,
+) -> str:
+    """Return the directory the loaded file owns for its own children.
+
+    A ``#[path]``-loaded file owns the physical directory it sits in.  A bare
+    declaration's target owns the directory named after the module, whether it
+    was found as ``name.rs`` or ``name/mod.rs``; the search directory itself is
+    resolved so a symbolic link in the declaring path cannot name another
+    directory.
+    """
+    if reference.path is not None:
+        return parent_directory(relative)
+    search = (root / _search_directory(module, reference)).resolve()
+    physical = search.relative_to(root.resolve())
+    return (physical / reference.name).as_posix()
 
 
 def _module_candidates(
     module: Module,
     reference: ModuleReference,
-) -> tuple[tuple[str, ...], str]:
-    """Return the paths one declaration may name and the owner of the target.
+) -> tuple[str, ...]:
+    """Return the paths one declaration may name.
 
-    A path attribute names one file, and the loaded file owns the directory it
-    sits in: rustc resolves its children from there, not from the module path
-    the declaration would have had. A bare declaration is searched for beneath
-    the declaration's owner, which may be an inline module's directory, and the
-    loaded file owns the directory named after it — including when the file it
-    found is that directory's ``mod.rs``.
+    A path attribute names one file.  A bare declaration is searched for
+    beneath the declaration's owner, which may be an inline module's directory;
+    the first candidate is the file and the second is the module directory's
+    own ``mod.rs``.
     """
     if reference.path is not None:
         base = pathlib.PurePosixPath(_path_base(module, reference))
-        candidate = (base / reference.path).as_posix()
-        return (candidate,), pathlib.PurePosixPath(candidate).parent.as_posix()
+        return ((base / reference.path).as_posix(),)
     directory = pathlib.PurePosixPath(_search_directory(module, reference))
-    candidates = tuple(
+    return tuple(
         (
             directory / template.format(name=reference.name, suffix=RUST_SUFFIX)
         ).as_posix()
         for template in _MODULE_FILE_CANDIDATES
     )
-    return candidates, (directory / reference.name).as_posix()
 
 
 def _path_base(module: Module, reference: ModuleReference) -> str:

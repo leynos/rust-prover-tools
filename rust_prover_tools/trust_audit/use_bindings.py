@@ -14,10 +14,22 @@ the file as trusting nothing at that use.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.trust_audit.crate_bindings import (
+    alias_bindings,
+)
+from rust_prover_tools.trust_audit.crate_bindings import (
+    merge as _merge,
+)
+from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
-from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
+from rust_prover_tools.trust_audit.use_paths import (
+    statement_end,
+    top_level_members,
+    use_roots,
+)
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
     member_aliases,
@@ -29,118 +41,16 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("alias_bindings", "member_bindings")
 
+
+@dc.dataclass(frozen=True, slots=True)
+class _Scope:
+    """The crate roots and member bindings one pass reads a statement against."""
+
+    roots: cabc.Container[str]
+    bindings: cabc.Mapping[str, cabc.Iterable[str]]
+
+
 # ``extern``, ``crate``, the crate's name, ``as``, and the local name.
-_EXTERN_CRATE_TOKENS = 5
-
-
-def alias_bindings(tokens: tuple[Token, ...], root: str) -> frozenset[str]:
-    """Return every local name a file binds ``root`` to, plus ``root`` itself.
-
-    Parameters
-    ----------
-    tokens : tuple[Token, ...]
-        The lexed source.
-    root : str
-        The crate name to follow, such as ``kani``.
-
-    Returns
-    -------
-    frozenset[str]
-        ``root`` and every name the file binds it to, including a name bound
-        only through a rename of a rename.
-
-    Notes
-    -----
-    Rust lets a crate be renamed on import — ``use kani as k;`` — after which
-    ``k::assume`` is the same call as ``kani::assume``. The audit's location
-    claim is about what the code does, not what the crate is called at the use
-    site, so an alias is matched exactly like the literal root.
-
-    A grouped import can rename the crate as well, through the ``self`` member:
-    ``use kani::{self as k};`` binds ``k`` as another name for the crate. An
-    import that merely renames a *member* — ``use kani::{assume as a};`` — still
-    binds no crate alias: the ``as`` there belongs to ``assume``, and reading it
-    as one would make every ``a::`` path trust.
-
-    A glob import (``use kani::*;``) binds items rather than the crate, so the
-    qualified-path rule does not apply to it.
-
-    ``extern crate`` renames the crate the same way and without a ``use``:
-    ``extern crate kani as k;`` makes ``k::assume`` the Kani call. Missing it
-    would describe a file as trust-free while it assumed exactly what the
-    vocabulary names, which is the fail-open direction this module exists to
-    prevent.
-
-    An alias can itself be renamed — ``use kani as k; use k as kk;`` — so the
-    search repeats until a pass adds no name. Reading the statements once
-    would miss ``kk::assume`` and report the file as trusting nothing.
-
-    Examples
-    --------
-    A file that renames the crate reports both names: ``use kani as k;`` binds
-    ``k`` and ``kani``. An ``extern crate kani as k;`` reports the same pair.
-    """
-    names = {root}
-    while True:
-        discovered = _alias_round(tokens, names)
-        if discovered <= names:
-            return frozenset(names)
-        names |= discovered
-
-
-def _alias_round(
-    tokens: tuple[Token, ...],
-    names: cabc.Container[str],
-) -> set[str]:
-    """Return every name one pass binds to a crate already in ``names``."""
-    discovered: set[str] = set()
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT:
-            continue
-        declared = _extern_crate_alias(tokens, index)
-        if declared is not None:
-            crate, alias = declared
-            if crate in names:
-                discovered.add(alias)
-            continue
-        if token.text != "use":
-            continue
-        end = statement_end(tokens, index + 1)
-        discovered.update(
-            alias
-            for crate, alias in use_roots(tokens, index + 1, end)
-            if crate in names and alias is not None
-        )
-        discovered.update(_requalified_aliases(tokens, index + 1, end, names))
-    return discovered
-
-
-def _requalified_aliases(
-    tokens: tuple[Token, ...],
-    start: int,
-    end: int,
-    names: cabc.Container[str],
-) -> set[str]:
-    """Return crate aliases bound through ``self::``, ``crate::`` or ``super::``.
-
-    ``use kani as k; use self::k as kk;`` binds ``kk`` to the same crate, so a
-    later ``kk::assume`` is Kani's.  The qualifier names the module holding the
-    binding, not a crate, and the member names the alias already in ``names``.
-    The fixpoint in `alias_bindings` makes the order of the two statements
-    irrelevant.
-    """
-    discovered: set[str] = set()
-    for root, span_start, span_stop in rooted_spans(tokens, start, end):
-        if root not in LOCAL_QUALIFIERS:
-            continue
-        discovered.update(
-            alias
-            for member, alias in member_aliases(tokens, span_start, span_stop)
-            if member in names
-        )
-    return discovered
-
-
 def member_bindings(
     tokens: tuple[Token, ...],
     roots: cabc.Container[str],
@@ -219,20 +129,20 @@ def _binding_round(
     those same items, which Rust permits as ``use alias as another;``.
     """
     discovered: dict[str, set[str]] = {}
+    scope = _Scope(roots, bindings)
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or token.text != "use":
             continue
         end = statement_end(tokens, index + 1)
         for span in rooted_spans(tokens, index + 1, end):
-            _merge(discovered, _span_bindings(tokens, span, roots, bindings))
+            _merge(discovered, _span_bindings(tokens, span, scope))
     return discovered
 
 
 def _span_bindings(
     tokens: tuple[Token, ...],
     span: tuple[str, int, int],
-    roots: cabc.Container[str],
-    bindings: cabc.Mapping[str, cabc.Iterable[str]],
+    scope: _Scope,
 ) -> dict[str, set[str]]:
     """Return the names one path of a ``use`` statement binds to which items.
 
@@ -245,12 +155,12 @@ def _span_bindings(
     ``super::`` from a nested module.
     """
     root, start, stop = span
-    if root in roots:
+    if root in scope.roots:
         return _member_bindings(tokens, start, stop)
-    if root in bindings:
-        return _renamed_bindings(tokens, start, stop, bindings[root])
+    if root in scope.bindings:
+        return _renamed_bindings(tokens, start, stop, scope.bindings[root])
     if root in LOCAL_QUALIFIERS:
-        return _requalified_bindings(tokens, start, stop, bindings)
+        return _requalified_bindings(tokens, start, stop, scope)
     return {}
 
 
@@ -269,10 +179,36 @@ def _member_bindings(
     discovered: dict[str, set[str]] = {}
     for member, alias in member_aliases(tokens, start, stop):
         discovered.setdefault(alias, set()).add(member)
-    plain = _plain_member(tokens, start, stop)
-    if plain is not None:
+    for plain in _plain_members(tokens, start, stop):
         discovered.setdefault(plain, set()).add(plain)
     return discovered
+
+
+def _plain_members(tokens: tuple[Token, ...], start: int, stop: int) -> frozenset[str]:
+    """Return every member a path imports without a rename.
+
+    A grouped path binds one member per leaf, so ``use kani::{assume, any};``
+    binds both.  Reading only the last identifier in the span would seed
+    ``any`` and lose ``assume``, and a later ``use self::assume as a;`` would
+    then never reach the item it renames.
+    """
+    opener = _group_opener(tokens, start, stop)
+    if opener is None:
+        member = _plain_member(tokens, start, stop)
+        return frozenset() if member is None else frozenset({member})
+    closer = matching(tokens, opener, "{", "}")
+    members: set[str] = set()
+    for member_start, member_end in top_level_members(tokens, opener, closer + 1):
+        members.update(_plain_members(tokens, member_start, member_end))
+    return frozenset(members)
+
+
+def _group_opener(tokens: tuple[Token, ...], start: int, stop: int) -> int | None:
+    """Return the index of the brace a use path opens, if it opens one."""
+    for index in range(start, stop):
+        if tokens[index].text == "{":
+            return index
+    return None
 
 
 def _plain_member(tokens: tuple[Token, ...], start: int, stop: int) -> str | None:
@@ -311,44 +247,48 @@ def _requalified_bindings(
     tokens: tuple[Token, ...],
     start: int,
     stop: int,
-    bindings: cabc.Mapping[str, cabc.Iterable[str]],
+    scope: _Scope,
 ) -> dict[str, set[str]]:
     """Return the names a ``self::``, ``crate::`` or ``super::`` rename binds.
 
-    The member segment names a local binding rather than a module, so the
-    rename reaches whatever items that binding already denotes.  A member with
-    no local binding names something this scan never saw, and is left alone.
+    Two shapes reach a binding.  ``use self::a as b;`` names a local member
+    binding, so it reaches whatever items ``a`` already denotes.
+    ``use self::k::assume as a;`` names a crate alias first: once ``k`` is a
+    known alias for a trust root, the rest of the path is an ordinary member
+    path, and the import binds ``assume`` just as ``use k::assume as a;`` does.
+    A member with no local binding names something this scan never saw, and is
+    left alone.
     """
     discovered: dict[str, set[str]] = {}
+    qualified = _qualified_root_member(tokens, start, stop)
+    if qualified is not None:
+        member_index, member = qualified
+        if member in scope.roots:
+            _merge(discovered, _member_bindings(tokens, member_index, stop))
     for member, alias in member_aliases(tokens, start, stop):
-        if member in bindings:
-            discovered.setdefault(alias, set()).update(bindings[member])
+        if member in scope.bindings:
+            discovered.setdefault(alias, set()).update(scope.bindings[member])
     return discovered
 
 
-def _merge(target: dict[str, set[str]], extra: dict[str, set[str]]) -> None:
-    """Add every ``(name, item)`` pair in ``extra`` to ``target``."""
-    for alias, items in extra.items():
-        target.setdefault(alias, set()).update(items)
-
-
-def _extern_crate_alias(
+def _qualified_root_member(
     tokens: tuple[Token, ...],
     start: int,
-) -> tuple[str, str] | None:
-    """Return the crate and name ``extern crate <crate> as <name>;`` binds.
+    stop: int,
+) -> tuple[int, str] | None:
+    """Return the first member a local qualifier names, and its index.
 
-    ``None`` covers every other shape, including an ``extern crate`` without a
-    rename: that spelling binds the crate under its own name, which is already
-    in the result set.
+    ``self::k::assume`` yields ``k`` at its own index: the segment a crate
+    alias would occupy.  A path that stops at the qualifier names no member.
     """
-    head = tokens[start : start + _EXTERN_CRATE_TOKENS]
-    if len(head) < _EXTERN_CRATE_TOKENS:
+    index = start
+    while index < stop and tokens[index].text == "::":
+        index += 1
+    if index + 2 >= stop or tokens[index].text not in LOCAL_QUALIFIERS:
         return None
-    if tuple(token.text for token in head[:2]) != ("extern", "crate"):
+    if tokens[index + 1].text != "::":
         return None
-    if head[2].kind is not Kind.IDENT:
+    member = tokens[index + 2]
+    if member.kind is not Kind.IDENT:
         return None
-    if head[3].text != "as" or head[4].kind is not Kind.IDENT:
-        return None
-    return head[2].text, head[4].text
+    return index + 2, member.text
