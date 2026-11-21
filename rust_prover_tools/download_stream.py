@@ -6,6 +6,13 @@ rejects an oversized `Content-Length` before the destination opens, counts
 streamed bytes so a response without a length header cannot fill the disk, and
 rejects a body shorter than its declared length.
 
+One monotonic deadline covers the request that opens a hop, the header parse
+and every body read. Each read re-arms the socket with the time that is left,
+and a read that fails at or after the deadline, including the end of stream a
+shut-down socket produces, is reported as the deadline rather than as a
+transport fault. A body written to disk is not itself supervised: local file
+I/O can still block past the deadline.
+
 The connection and redirect policy stays in
 `rust_prover_tools.download_transport`; this module owns nothing about how the
 response was obtained.
@@ -58,6 +65,19 @@ class _TimeoutSocket(typ.Protocol):
 
     def settimeout(self, value: float) -> None:
         """Apply `value` seconds as the socket's timeout."""
+        ...
+
+
+class _DeadlineSocket(_TimeoutSocket, typ.Protocol):
+    """A timeout socket that can also be released at the deadline.
+
+    `settimeout` arms one blocking call, while `shutdown` releases a call that
+    is already blocked. A shut-down socket reads as end of stream, which is why
+    a late EOF is classified as the deadline too.
+    """
+
+    def shutdown(self, how: int) -> None:
+        """Shut the socket down, waking any call blocked on it."""
         ...
 
 
@@ -205,13 +225,17 @@ def _copy_body(
             _raise_deadline(limits, written)
         try:
             chunk = response.read(READ_CHUNK_SIZE)
-        except TimeoutError as exc:
-            # The response bounds each read by the remaining time, so a timeout
-            # at the deadline is the deadline expiring, not a transport fault.
+        except (OSError, http.client.HTTPException) as exc:
+            # The watchdog shuts the socket down at the deadline, so the
+            # resulting `TimeoutError` or reset is the deadline expiring, not a
+            # transport fault. Before the deadline it is the server's failure.
             if monotonic() < limits.deadline:
                 raise
             _raise_deadline(limits, written, cause=exc)
         if not chunk:
+            # A socket shut down at the deadline reads as EOF, so the deadline
+            # is checked again before a short body is accepted as complete.
+            _require_time_left(limits, written)
             return written
         written += len(chunk)
         if written > limits.max_bytes:
@@ -233,6 +257,12 @@ def _copy_body(
             _log_failure(_LOGGER, "store_error", written=written)
             msg = f"failed to store {limits.name}: {exc}"
             raise ProverToolError(msg) from exc
+
+
+def _require_time_left(limits: _StreamLimits, written: int) -> None:
+    """Raise the deadline failure once the transfer has no time left."""
+    if monotonic() >= limits.deadline:
+        _raise_deadline(limits, written)
 
 
 def _raise_deadline(

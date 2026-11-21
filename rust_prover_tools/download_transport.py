@@ -6,7 +6,19 @@ number of redirects, and applies one monotonic deadline that starts before the
 first connection. The body rules live in
 `rust_prover_tools.download_stream`: it rejects an oversized `Content-Length`
 before reading, counts streamed bytes so a response without a length header
-cannot fill the disk, and stops a body read at the deadline.
+cannot fill the disk, and stops a body read at the deadline. The deadline
+budget and the watchdog that releases a blocked call live in
+`rust_prover_tools.download_deadline`.
+
+Each hop opens its connection explicitly, then re-arms the socket with the time
+the connect phase and TLS handshake left, so the send is not bounded by a
+budget the connection setup has already spent. A watchdog armed before the send
+shuts the socket down when the deadline passes, which releases a blocked send,
+a blocked header parse and a blocked body read alike; the hop stops its
+watchdog before the connection closes. A socket timeout bounds one blocking
+call rather than a sequence of them, so DNS resolution, the per-address
+connection attempts inside one call, and local file I/O can still overrun the
+deadline.
 """
 
 from __future__ import annotations
@@ -18,13 +30,21 @@ import typing as typ
 import urllib.parse
 from time import monotonic
 
+from rust_prover_tools.download_deadline import (
+    _arm_socket,
+    _close_hop,
+    _deadline_reached,
+    _DeadlineWatchdog,
+    _hop_timeout,
+    _HopHandle,
+    _raise_deadline,
+)
 from rust_prover_tools.download_stream import (
     HTTPResponseLike,
     _DeadlineResponse,
     _log_failure,
     _stream,
     _StreamLimits,
-    _TimeoutSocket,
 )
 from rust_prover_tools.download_url import _parse_https_url, _validate_url
 from rust_prover_tools.errors import ProverToolError, TransientDownloadError
@@ -112,12 +132,12 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
     current = _validate_url(request.url)
     _check_policy(request.url_policy, request.url, redirect=False)
     log_event(_LOGGER, "download.start", max_bytes=request.max_bytes)
-    for hop in range(limits.max_redirects + 1):
-        response, connection = _open(current, limits, deadline)
+    for hop_index in range(limits.max_redirects + 1):
+        response, hop = _open(current, limits, deadline)
         try:
             location = _redirect_location(response, current)
             if location is not None:
-                if hop >= limits.max_redirects:
+                if hop_index >= limits.max_redirects:
                     _log_failure(_LOGGER, "redirect_limit")
                     msg = f"too many redirects while downloading {request.url}"
                     raise ProverToolError(msg)
@@ -140,12 +160,12 @@ def _download(request: _DownloadRequest, limits: DownloadLimits) -> None:
                 _LOGGER,
                 "download.complete",
                 written=written,
-                redirects=hop,
+                redirects=hop_index,
                 elapsed_seconds=monotonic() - started,
             )
             return
         finally:
-            connection.close()
+            hop.close()
     _log_failure(_LOGGER, "redirect_limit")
     msg = f"too many redirects while downloading {request.url}"
     raise ProverToolError(msg)
@@ -174,24 +194,35 @@ def _open(
     url: str,
     limits: DownloadLimits,
     deadline: float,
-) -> tuple[HTTPResponseLike, http.client.HTTPSConnection]:
-    """Request `url` and return the response with its connection."""
+) -> tuple[HTTPResponseLike, _HopHandle]:
+    """Request `url` and return the response with its closeable hop handle."""
     parsed = _parse_https_url(url)
-    remaining = deadline - monotonic()
-    if remaining <= 0:
-        _log_failure(_LOGGER, "deadline")
-        msg = f"download of {url} exceeded the transfer deadline"
-        raise ProverToolError(msg)
-    timeout = min(limits.connect_timeout_seconds, remaining)
+    # The constructor timeout bounds the connect phase only; the socket is
+    # re-armed before the send with whatever connecting and the TLS handshake
+    # left.
     connection = http.client.HTTPSConnection(
         parsed.host,
         parsed.port,
-        timeout=timeout,
+        timeout=_hop_timeout(url, limits.connect_timeout_seconds, deadline),
     )
     target = urllib.parse.urlunsplit(
         ("", "", parsed.path or "/", parsed.query, ""),
     )
+    watchdog: _DeadlineWatchdog | None = None
+    handed_over = False
     try:
+        # Connecting explicitly keeps the setup inside this hop: `request()`
+        # would otherwise connect lazily under the constructor timeout alone,
+        # with no watchdog to shut a stalled handshake down.
+        connection.connect()
+        sock = _arm_socket(
+            connection,
+            url,
+            limits.connect_timeout_seconds,
+            deadline,
+        )
+        watchdog = _DeadlineWatchdog(sock, deadline)
+        watchdog.start()
         connection.request(
             "GET",
             target,
@@ -200,25 +231,29 @@ def _open(
                 "User-Agent": USER_AGENT,
             },
         )
-        # Capture the socket before `getresponse()`: a response that cannot be
-        # reused closes the connection and clears `connection.sock`, although
-        # the response still reads from the same socket.
-        sock = typ.cast("_TimeoutSocket | None", getattr(connection, "sock", None))
         response = connection.getresponse()
+        hop = _HopHandle(watchdog, connection)
+        handed_over = True
+        return (
+            _DeadlineResponse(
+                response,
+                deadline=deadline,
+                read_timeout_seconds=limits.connect_timeout_seconds,
+                sock=sock,
+            ),
+            hop,
+        )
     except (OSError, http.client.HTTPException) as exc:
-        connection.close()
+        if _deadline_reached(watchdog, deadline):
+            _raise_deadline(url, cause=exc)
         _log_failure(_LOGGER, "transport_error")
         msg = f"failed to download {url}: {exc}"
         raise TransientDownloadError(msg) from exc
-    return (
-        _DeadlineResponse(
-            response,
-            deadline=deadline,
-            read_timeout_seconds=limits.connect_timeout_seconds,
-            sock=sock,
-        ),
-        connection,
-    )
+    finally:
+        if not handed_over:
+            # A refused, failed or cancelled hop must leave neither a watchdog
+            # thread nor an open connection behind.
+            _close_hop(watchdog, connection)
 
 
 def _redirect_location(
