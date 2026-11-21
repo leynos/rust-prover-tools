@@ -221,15 +221,16 @@ def test_a_number_too_long_to_convert_is_a_manifest_error() -> None:
 
 
 def test_a_deeply_nested_document_is_a_manifest_error() -> None:
-    """Report a document past the decoder's limit as a manifest error.
+    """Report a deeply nested document as a manifest error, never a traceback.
 
-    JSON sets no nesting limit, but the decoder's recursion does, and it raises
-    :class:`RecursionError` where every other unreadable document raises
-    something the parser already converts.  A manifest is input, so it leaves
-    the same way all the rest do rather than as a traceback.
+    A decoder with a recursive limit raises :class:`RecursionError`; a newer
+    decoder that parses the text iteratively returns an array, which the
+    manifest still refuses.  Both are input errors, so the test states the
+    contract rather than one decoder's limit.
     """
     text = "[" * 100_000 + "]" * 100_000
-    assert "nested too deeply" in refused(text)
+    reason = refused(text)
+    assert "nested too deeply" in reason or "must be a JSON object" in reason
 
 
 def test_a_direct_manifest_refuses_a_duplicate_name() -> None:
