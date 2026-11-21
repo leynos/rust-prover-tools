@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import pathlib
@@ -30,6 +32,8 @@ if typ.TYPE_CHECKING:
 # unsupported-host test overrides the fixture's platform attributes itself.
 pytestmark = pytest.mark.usefixtures("linux_x86_64_host")
 
+_VALID_DIGEST = hashlib.sha256(b"z3-binary").hexdigest()
+
 
 def write_z3_zip(path: Path, *, payload: bytes = b"z3-binary") -> Path:
     """Write a minimal Z3-shaped zip archive."""
@@ -37,6 +41,23 @@ def write_z3_zip(path: Path, *, payload: bytes = b"z3-binary") -> Path:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(Z3_MEMBER, payload)
     return path
+
+
+def write_marker(
+    install_dir: Path,
+    *,
+    digest: str | None = None,
+    version: str = Z3_VERSION,
+) -> Path:
+    """Write the canonical digest-bound installation marker."""
+    if digest is None:
+        digest = hashlib.sha256(b"z3-binary").hexdigest()
+    marker = install_dir / ".z3-version"
+    marker.write_text(
+        json.dumps({"version": version, "sha256": digest}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return marker
 
 
 def stub_download(
@@ -112,9 +133,17 @@ def test_install_z3_extracts_only_the_pinned_binary(
         "the pinned archive member should be extracted verbatim"
     )
     assert os.access(binary, os.X_OK), "z3 must be executable"
-    assert (install_dir / ".z3-version").read_text(encoding="utf-8").strip() == (
-        Z3_VERSION
-    ), "the version marker should record the pinned Z3 version"
+    marker_text = (install_dir / ".z3-version").read_text(encoding="utf-8")
+    assert marker_text == (
+        json.dumps(
+            {
+                "sha256": hashlib.sha256(b"z3-binary").hexdigest(),
+                "version": Z3_VERSION,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    ), "the marker should bind the version to the extracted digest"
 
 
 def test_install_z3_resolves_relative_paths_below_the_repository(
@@ -226,7 +255,7 @@ def test_install_z3_reports_a_marker_read_failure(
     binary = install_dir / "z3"
     binary.write_bytes(b"z3-binary")
     binary.chmod(0o755)
-    (install_dir / ".z3-version").write_text(Z3_VERSION, encoding="utf-8")
+    write_marker(install_dir)
     original_read_text = pathlib.Path.read_text
 
     def deny_marker(
@@ -267,7 +296,7 @@ def test_install_z3_reinstalls_when_the_binary_is_not_executable(
     binary = install_dir / "z3"
     binary.write_bytes(b"stale")
     binary.chmod(0o644)
-    (install_dir / ".z3-version").write_text(Z3_VERSION, encoding="utf-8")
+    write_marker(install_dir, digest=hashlib.sha256(b"stale").hexdigest())
     cache_dir = tmp_path / "cache"
     archive = write_z3_zip(cache_dir / Z3_ASSET.name)
     stub_download(
@@ -288,6 +317,243 @@ def test_install_z3_reinstalls_when_the_binary_is_not_executable(
         "a non-executable binary must be reinstalled"
     )
     assert os.access(binary, os.X_OK), "the reinstalled binary must be executable"
+
+
+def test_install_z3_reinstalls_when_a_binary_changed_after_installation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A solver modified after installation no longer matches its marker."""
+    install_dir = tmp_path / "z3-install"
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+    options = Z3InstallOptions(
+        repo_root=tmp_path,
+        install_dir=install_dir,
+        cache_dir=cache_dir,
+    )
+    install_z3(options)
+    binary = install_dir / "z3"
+    installed_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    binary.write_bytes(b"tampered")
+    binary.chmod(0o755)
+
+    def serve_archive(asset: PinnedAsset, destination: Path) -> Path:
+        """Serve the local archive for the reinstall."""
+        del asset, destination
+        return archive
+
+    monkeypatch.setattr(z3_module, "download_pinned", serve_archive)
+
+    lines = install_z3(options)
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}", (
+        "a modified solver must be reinstalled"
+    )
+    assert binary.read_bytes() == b"z3-binary", (
+        "the original solver bytes should be restored"
+    )
+    assert json.loads((install_dir / ".z3-version").read_text(encoding="utf-8")) == {
+        "sha256": installed_digest,
+        "version": Z3_VERSION,
+    }, "the marker should record the restored binary's digest"
+
+
+def test_install_z3_reinstalls_when_the_marker_digest_does_not_match(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker digest recorded for other bytes forces a reinstall."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"different")
+    binary.chmod(0o755)
+    write_marker(install_dir)
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+
+    lines = install_z3(
+        Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}", (
+        "a valid marker for other bytes must not permit reuse"
+    )
+    assert binary.read_bytes() == b"z3-binary", (
+        "the mismatched binary should be replaced from the archive"
+    )
+
+
+def test_install_z3_reinstalls_on_a_version_only_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker written by an earlier release causes one reinstall."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"z3-binary")
+    binary.chmod(0o755)
+    (install_dir / ".z3-version").write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+
+    lines = install_z3(
+        Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}", (
+        "a legacy version-only marker must be treated as a cache miss"
+    )
+
+
+@pytest.mark.parametrize(
+    "marker_content",
+    [
+        pytest.param(b"not json", id="invalid-json"),
+        pytest.param(b"[]", id="non-object"),
+        pytest.param(
+            json.dumps({"version": Z3_VERSION}).encode("utf-8"),
+            id="missing-digest",
+        ),
+        pytest.param(
+            json.dumps({"sha256": _VALID_DIGEST}).encode("utf-8"),
+            id="missing-version",
+        ),
+        pytest.param(
+            json.dumps(
+                {"version": Z3_VERSION, "sha256": _VALID_DIGEST, "extra": True},
+            ).encode("utf-8"),
+            id="extra-key",
+        ),
+        pytest.param(
+            json.dumps({"version": Z3_VERSION, "sha256": 1}).encode("utf-8"),
+            id="non-string-digest",
+        ),
+        pytest.param(
+            json.dumps(
+                {"version": Z3_VERSION, "sha256": "0" * 63},
+            ).encode("utf-8"),
+            id="short-digest",
+        ),
+        pytest.param(
+            json.dumps(
+                {"version": Z3_VERSION, "sha256": "A" * 64},
+            ).encode("utf-8"),
+            id="uppercase-digest",
+        ),
+        pytest.param(
+            json.dumps(
+                {"version": "0.0.0", "sha256": _VALID_DIGEST},
+            ).encode("utf-8"),
+            id="version-mismatch",
+        ),
+        pytest.param(b"\xff\xfe", id="invalid-utf-8"),
+    ],
+)
+def test_install_z3_reinstalls_on_an_unusable_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    marker_content: bytes,
+) -> None:
+    """Any marker that does not bind the pinned version and digest is a miss."""
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"z3-binary")
+    binary.chmod(0o755)
+    (install_dir / ".z3-version").write_bytes(marker_content)
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+
+    lines = install_z3(
+        Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}", (
+        "an unusable marker must be replaced by a fresh installation"
+    )
+    assert json.loads((install_dir / ".z3-version").read_text(encoding="utf-8")) == {
+        "sha256": _VALID_DIGEST,
+        "version": Z3_VERSION,
+    }, "the reinstall should rewrite a canonical digest-bound marker"
+
+
+def test_install_z3_reports_a_digest_read_failure_during_inspection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure to hash the installed binary is an inspection failure."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
+    install_dir = tmp_path / "z3-install"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_bytes(b"z3-binary")
+    binary.chmod(0o755)
+    write_marker(install_dir)
+
+    def fail_hash(path: Path) -> str:
+        """Raise the caller-visible error for an unreadable binary."""
+        del path
+        msg = "failed to read installed solver"
+        raise ProverToolError(msg)
+
+    def fail_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Fail the test if a failed digest read leads to a download."""
+        del asset, destination
+        msg = "a failed digest read must not download the archive"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(z3_module, "sha256_file", fail_hash)
+    monkeypatch.setattr(z3_module, "download_pinned", fail_download)
+
+    with pytest.raises(ProverToolError, match="failed to read installed solver"):
+        install_z3(
+            Z3InstallOptions(
+                repo_root=tmp_path,
+                install_dir=install_dir,
+                cache_dir=tmp_path / "cache",
+            ),
+        )
+
+    assert events_from(caplog) == [
+        {"event": "z3.install.start", "version": Z3_VERSION},
+        {"event": "z3.install.failed", "reason": "inspect"},
+    ], "a digest read failure must report the inspect stage"
 
 
 def test_install_z3_reports_a_binary_inspection_failure(

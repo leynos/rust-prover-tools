@@ -3,13 +3,16 @@
 Verus downloads Z3 separately from its own release archive. This module
 downloads the pinned official Z3 zip through the bounded verifier in
 `rust_prover_tools.downloads`, extracts only `<release>/bin/z3`, and records
-the installed version so repeated CI runs can reuse the binary.
+the installed version together with the extracted binary's SHA-256. Repeated
+CI runs reuse the binary only after rehashing it and matching that digest.
 """
 
 from __future__ import annotations
 
 import contextlib
 import dataclasses as dc
+import hashlib
+import json
 import logging
 import stat
 import typing as typ
@@ -23,7 +26,7 @@ from rust_prover_tools.binary_assets import (
     Z3_MEMBER,
     Z3_VERSION,
 )
-from rust_prover_tools.downloads import download_pinned
+from rust_prover_tools.downloads import download_pinned, sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.observability import log_event
 from rust_prover_tools.path_resolution import resolve_configured_path
@@ -43,8 +46,26 @@ __all__ = (
 
 MARKER_NAME = ".z3-version"
 _EXECUTE_BITS: typ.Final[int] = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+_MARKER_KEYS: typ.Final[frozenset[str]] = frozenset({"version", "sha256"})
+_SHA256_HEX_CHARS: typ.Final[frozenset[str]] = frozenset("0123456789abcdef")
+_SHA256_HEX_LENGTH: typ.Final[int] = 64
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _Extraction(typ.NamedTuple):
+    """Size and digest of one extracted archive member.
+
+    Attributes
+    ----------
+    size : int
+        Number of bytes written to the installed binary.
+    sha256 : str
+        Lowercase hexadecimal SHA-256 digest of those bytes.
+    """
+
+    size: int
+    sha256: str
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -152,12 +173,12 @@ def install_z3(options: Z3InstallOptions) -> tuple[str, ...]:
         _log_failure("download")
         raise
     try:
-        extracted_bytes = _extract_z3(archive, install_dir, binary)
+        extracted = _extract_z3(archive, install_dir, binary)
     except ProverToolError:
         _log_failure("extract")
         raise
     try:
-        _write_marker(marker)
+        _write_marker(marker, extracted.sha256)
     except ProverToolError:
         _log_failure("marker")
         raise
@@ -165,7 +186,7 @@ def install_z3(options: Z3InstallOptions) -> tuple[str, ...]:
         _LOGGER,
         "z3.install.complete",
         version=Z3_VERSION,
-        bytes=extracted_bytes,
+        bytes=extracted.size,
         elapsed_seconds=monotonic() - started,
     )
     return (
@@ -180,15 +201,49 @@ def _log_failure(reason: str) -> None:
 
 
 def _is_installed(binary: Path, marker: Path) -> bool:
-    """Return whether an executable binary and matching marker are present."""
+    """Return whether an executable binary matches its digest-bound marker."""
     # Only a missing path means "absent"; other OS errors are reported.
     binary_status = _optional_stat(binary)
     if binary_status is None or not stat.S_ISREG(binary_status.st_mode):
         return False
     if not _has_execute_bit(binary_status):
         return False
-    marker_version = _optional_text(marker)
-    return marker_version is not None and marker_version.strip() == Z3_VERSION
+    marker_text = _optional_text(marker)
+    if marker_text is None:
+        return False
+    recorded_digest = _recorded_digest(marker_text)
+    if recorded_digest is None:
+        return False
+    # Rehashing the installed binary makes a modified or replaced solver a
+    # cache miss. A read failure is reported by the caller as an inspect
+    # failure rather than silently reinstalling over a broken environment.
+    return sha256_file(binary) == recorded_digest
+
+
+def _recorded_digest(text: str) -> str | None:
+    """Return the digest recorded by a well-formed marker, or `None`.
+
+    A marker is usable only when it is a JSON object with exactly the
+    `version` and `sha256` keys, both holding strings, the current pinned
+    version, and a 64-character lowercase hexadecimal digest. Everything else
+    is a cache miss, so a marker from an earlier release, a hand-edited marker,
+    or a truncated write is repaired by a fresh installation.
+    """
+    try:
+        parsed: object = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or set(parsed) != _MARKER_KEYS:
+        return None
+    version = parsed["version"]
+    digest = parsed["sha256"]
+    if not isinstance(version, str) or not isinstance(digest, str):
+        return None
+    if version != Z3_VERSION:
+        return None
+    if len(digest) != _SHA256_HEX_LENGTH or not set(digest) <= _SHA256_HEX_CHARS:
+        return None
+    return digest
 
 
 def _has_execute_bit(status: os.stat_result) -> bool:
@@ -208,10 +263,14 @@ def _optional_stat(path: Path) -> os.stat_result | None:
 
 
 def _optional_text(path: Path) -> str | None:
-    """Return the text of `path`, or `None` when it does not exist."""
+    """Return the text of `path`, or `None` when it is absent or not UTF-8."""
     try:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
+        return None
+    except UnicodeDecodeError:
+        # A marker that is not UTF-8 cannot describe an installation this
+        # release produced, so it is a cache miss, not a hard failure.
         return None
     except OSError as exc:
         msg = f"failed to read Z3 installation state '{path}': {exc}"
@@ -245,18 +304,22 @@ def _discard_temporary(path: Path, *, has_prior_failure: bool) -> None:
         raise ProverToolError(msg) from exc
 
 
-def _extract_z3(archive_path: Path, install_dir: Path, binary: Path) -> int:
-    """Extract the pinned `z3` member and return the bytes written."""
+def _extract_z3(
+    archive_path: Path,
+    install_dir: Path,
+    binary: Path,
+) -> _Extraction:
+    """Extract the pinned `z3` member and return its size and digest."""
     temporary = install_dir / ".z3.download"
     with _temporary_file(temporary):
-        written = _write_z3_member(archive_path, install_dir, temporary, binary)
+        extracted = _write_z3_member(archive_path, install_dir, temporary, binary)
     log_event(
         _LOGGER,
         "z3.extract.complete",
         asset=Z3_ASSET.name,
-        bytes=written,
+        bytes=extracted.size,
     )
-    return written
+    return extracted
 
 
 def _write_z3_member(
@@ -264,8 +327,9 @@ def _write_z3_member(
     install_dir: Path,
     temporary: Path,
     binary: Path,
-) -> int:
+) -> _Extraction:
     """Write the bounded member to `temporary` and install it as `binary`."""
+    digest = hashlib.sha256()
     written = 0
     try:
         install_dir.mkdir(parents=True, exist_ok=True)
@@ -280,13 +344,14 @@ def _write_z3_member(
                             f"{Z3_EXTRACTED_MAX_BYTES}-byte extraction limit"
                         )
                         raise ProverToolError(msg)
+                    digest.update(chunk)
                     output.write(chunk)
         temporary.chmod(0o755)
         temporary.replace(binary)
     except (OSError, zipfile.BadZipFile) as exc:
         msg = f"failed to extract Z3 archive '{archive_path}': {exc}"
         raise ProverToolError(msg) from exc
-    return written
+    return _Extraction(size=written, sha256=digest.hexdigest())
 
 
 def _z3_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo:
@@ -308,12 +373,21 @@ def _z3_member(archive: zipfile.ZipFile) -> zipfile.ZipInfo:
     return member
 
 
-def _write_marker(marker: Path) -> None:
-    """Record the installed version beside the binary."""
+def _write_marker(marker: Path, digest: str) -> None:
+    """Record the installed version and binary digest beside the binary."""
     temporary = marker.with_name(f".{marker.name}.download")
+    # Sorted keys keep the marker byte-for-byte canonical, so an unchanged
+    # installation never looks different to a later run.
+    payload = (
+        json.dumps(
+            {"version": Z3_VERSION, "sha256": digest},
+            sort_keys=True,
+        )
+        + "\n"
+    )
     with _temporary_file(temporary):
         try:
-            temporary.write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+            temporary.write_text(payload, encoding="utf-8")
             temporary.replace(marker)
         except OSError as exc:
             msg = f"failed to record Z3 installation in '{marker}': {exc}"
