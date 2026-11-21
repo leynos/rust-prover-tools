@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.trust_audit.conditions import payload_start
+from rust_prover_tools.trust_audit.conditions import attribute_items, payload_start
 from rust_prover_tools.trust_audit.structure import attribute_spans, matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_bindings import member_bindings
@@ -120,21 +120,39 @@ def _cfg_attr_regions(
     applies ``inline``: its predicate merely asks whether the ``verifier``
     configuration is set, so reading the predicate as an attribute would report
     ``external`` for a word that is only a condition.
+
+    Each payload item is a whole attribute, so an unrelated attribute's
+    arguments are skipped rather than swept into a region.  A literal such as
+    ``doc = stringify!(verifier::external_body)`` is documentation, not an
+    applied Verus attribute, and is not read.  A nested ``cfg_attr`` is
+    recursed into through its own payload.
     """
     start = payload_start(tokens, open_index, close_index)
     if start is None:
         return ()
     regions = []
-    index = start
-    while index < close_index - 1:
-        token = tokens[index]
-        if token.kind is not Kind.IDENT or token.text not in VERUS_ATTRIBUTE_HEADS:
-            index += 1
+    for item_start, item_end in attribute_items(tokens, start, close_index):
+        head = tokens[item_start]
+        if head.kind is not Kind.IDENT:
             continue
-        end = _attribute_end(tokens, index, close_index)
-        regions.append((index, end))
-        index = end + 1
+        end = _attribute_end(tokens, item_start, item_end)
+        if head.text in VERUS_ATTRIBUTE_HEADS:
+            regions.append((item_start, end))
+        elif _is_nested_cfg_attr(tokens, item_start, item_end):
+            inner_close = matching(tokens, item_start + 1, "(", ")")
+            regions.extend(_cfg_attr_regions(tokens, item_start + 1, inner_close))
     return tuple(regions)
+
+
+def _is_nested_cfg_attr(
+    tokens: tuple[Token, ...],
+    item_start: int,
+    item_end: int,
+) -> bool:
+    """Report whether one payload item is a nested ``cfg_attr(…)`` call."""
+    if tokens[item_start].text != "cfg_attr":
+        return False
+    return item_start + 1 < item_end and tokens[item_start + 1].text == "("
 
 
 def _attribute_end(

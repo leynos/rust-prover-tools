@@ -206,7 +206,14 @@ def _relative_to(root: Path, path: Path) -> str:
     if not path.is_absolute():
         return pathlib.PurePosixPath(path.as_posix()).as_posix()
     try:
-        return path.resolve().relative_to(root).as_posix()
+        resolved = path.resolve().relative_to(root)
     except ValueError as error:
         msg = f"{path} is outside the repository root {root}"
         raise TrustAuditError(msg) from error
+    try:
+        # Keep the spelling the caller supplied when it already sits beneath
+        # the root; the resolved form is only the fallback for a path that
+        # reaches the root through a symbolic link.
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return resolved.as_posix()

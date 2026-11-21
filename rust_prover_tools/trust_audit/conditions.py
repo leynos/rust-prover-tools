@@ -23,7 +23,7 @@ from rust_prover_tools.trust_audit.syntax import Kind, Token
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("conditional_path", "payload_start")
+__all__ = ("attribute_items", "conditional_path", "payload_start")
 
 #: The tokens between ``#[`` and a path attribute's value.
 _PATH_HEAD = ("path", "=")
@@ -110,7 +110,7 @@ def conditional_path(
 
 def _payload_selects_path(tokens: tuple[Token, ...], start: int, end: int) -> bool:
     """Report whether an attribute payload applies a ``path`` attribute."""
-    for item_start, item_end in _attribute_items(tokens, start, end):
+    for item_start, item_end in attribute_items(tokens, start, end):
         if _is_path_item(tokens, item_start, item_end):
             return True
         if _is_nested_cfg_attr(tokens, item_start, item_end):
@@ -144,7 +144,7 @@ def _is_nested_cfg_attr(tokens: tuple[Token, ...], start: int, end: int) -> bool
     )
 
 
-def _attribute_items(
+def attribute_items(
     tokens: tuple[Token, ...],
     start: int,
     end: int,

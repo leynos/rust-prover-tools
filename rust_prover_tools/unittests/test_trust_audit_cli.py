@@ -7,6 +7,7 @@ import typing as typ
 from pathlib import Path
 
 from rust_prover_tools.trust_audit_cli import audit_trust
+from rust_prover_tools.unittests import conftest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -106,6 +107,7 @@ def test_a_source_outside_the_root_is_refused(
     assert "is outside the repository root" in captured.err
 
 
+@conftest.SKIP_CHDIR_UNDER_MUTMUT
 def test_a_relative_driver_is_read_from_the_repository_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -295,3 +297,19 @@ def test_the_root_alias_and_repeated_prover_parse(
     assert "provers: verus, kani\n" in captured.out
     assert ": admit\n" in captured.out
     assert ": assume\n" in captured.out
+
+
+def test_an_absolute_driver_through_a_symlink_names_the_compiled_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Accept an absolute driver and report the file it physically reaches."""
+    repo = tmp_path / "repo"
+    write(repo, {"src/lib.rs": "kani::assume(true);"})
+    (repo / "alias.rs").symlink_to(repo / "src/lib.rs")
+
+    status = audit_trust([repo / "alias.rs"], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 0
+    assert "src/lib.rs:1:7: assume\n" in captured.out

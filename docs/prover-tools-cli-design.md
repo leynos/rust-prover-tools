@@ -671,6 +671,13 @@ deny a claim and included in the failures that report resource exhaustion. A
 failed `unsupported_construct` check owned by a called routine is unsupported
 too: the harness's verdict rests on that routine, so reading only the harness's
 own checks would report the claim verified beside a construct nobody modelled.
+The crate-wide pre-flight warning is read through the same expected-panic
+exemption as the outcome: an unreachable check beside a certified panic is
+explained, so the warning alone does not make such a claim unsupported.
+
+A manifest that declares no claim cannot pass. Controls are guards rather than
+claims, and `all()` over an empty claim set would otherwise read as success; a
+control-only manifest therefore decides `skipped`, and `passed` remains false.
 
 Kani's renderer rewrites a cover CBMC reported as `FAILURE` into `SATISFIED`
 before printing it, and a listed cover is not one of the checks whose count is
@@ -696,13 +703,15 @@ description of the failed check it repeats, because the results section has
 already said how many lines it occupies. A blank line inside a description is
 content too, so it closes the entry only when the next line that is not blank
 is a report construct. Closing at the blank line would cut a description at an
-embedded quote and leave its continuation to be refused as an unrecognized
-line. An echoed `cbmc` command is split at Kani's own boundaries rather than as
-shell text: the driver wraps an argument in double quotes exactly when it holds
-a space, and an apostrophe is an ordinary character, so shell splitting would
-let one apostrophe hide a flag. The expected-panic note and the description
-rule are both read from the pinned release's source rather than inferred from a
-sample.
+embedded quote and leave its continuation to be refused as an unrecognized line.
+`RESULTS:` is the one marker a description can also print, so it closes the
+entry only when a `Check N:` entry follows, which is what a real results
+section starts with. An echoed `cbmc` command is split at Kani's own boundaries
+rather than as shell text: the driver wraps an argument in double quotes
+exactly when it holds a space, and an apostrophe is an ordinary character, so
+shell splitting would let one apostrophe hide a flag. The expected-panic note
+and the description rule are both read from the pinned release's source rather
+than inferred from a sample.
 
 A second banner means the capture holds two invocations. The parser refuses it
 rather than returning the first run's facts, because those facts say nothing
@@ -770,14 +779,21 @@ and the scan cannot tell which one an invocation expands. An invocation in
 another file is outside the per-file scan, which the user guide states. A
 declaration whose name a metavariable supplies is refused, because only the
 invocation's arguments decide that name and the scan never evaluates them; an
-expansion that invokes a macro through a metavariable is refused for the same
-reason. A target reached through a symbolic link is canonicalized to the
-physical file, so a cyclic `#[path]` terminates, and a file reached with two
-different owners is refused because its children would resolve beneath
-different directories. A `#[path]` that a `cfg_attr` can select is refused: the
+expansion that invokes a macro through a metavariable, or reaches a trust item
+through one such as `$p::assume`, is refused for the same reason. A target
+reached through a symbolic link is reported as the physical file, so a cyclic
+`#[path]` terminates, while the children of that module resolve from the
+pathname the compiler loaded rather than the link's target. A file reached with
+two owners that name different directories is refused, because its children
+would resolve beneath one or the other. When a plain crate and a proc-macro
+crate both reach one file, the stronger literal-reading policy wins and the
+file is rescanned. A `#[path]` that a `cfg_attr` can select is refused: the
 configuration decides which file compiles, so no single answer would be true. A
 nested `cfg_attr` is read through its own payload, so a predicate that merely
-spells `path = …` is not mistaken for an applied path attribute.
+spells `path = …` is not mistaken for an applied path attribute; an unrelated
+attribute's arguments are skipped, so
+`doc = stringify!(verifier::external_body)` is documentation rather than an
+applied Verus attribute.
 
 The vocabulary is the full set both current releases document, not the subset
 the ticket names. Under-reporting is a soundness failure in an audit, so
@@ -795,12 +811,19 @@ root or a parent. A further rename of the local name — `use self::a as b;` aft
 reason: the binding is the same request for trust under another spelling. The
 seed is every member a plain import binds, including each leaf of a grouped
 import, so `use kani::{assume, any_where}; use self::assume as a;` reaches
-`assume` rather than only the last leaf. A qualified path is resolved through a
-crate alias first: `use kani as k; use self::k::assume as a;` binds `assume`. A
-use qualified by a module the same file declares is reported too, because the
-import that binds it is visible there; a module declared elsewhere is not
-shown, so its names are left alone. A local alias for the `verus!` macro is the
-same macro, so its body opens a Verus region.
+`assume` rather than only the last leaf. A renamed import binds only its new
+name, so `use kani::assume as a;` does not seed `assume`. A qualified path is
+resolved through a crate alias first:
+`use kani as k; use self::k::assume as a;` binds `assume`, and repeated
+`super::` segments are skipped before the alias. A crate alias re-exported by a
+module the file declares is followed (`use m::k as kk;`), while a name imported
+from the crate root with `use crate::k;` is treated as a possible alias because
+the declaration is outside the file. A use qualified by a module the same file
+declares is reported too, because the import that binds it is visible there; a
+module declared elsewhere is not shown, so its names are left alone. A
+turbofish call such as `a::<u32, _>(..)` calls the renamed item rather than
+taking a path through it. A local alias for the `verus!` macro is the same
+macro, so its body opens a Verus region.
 
 ### Verus outcome vocabulary
 

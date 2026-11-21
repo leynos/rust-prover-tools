@@ -141,11 +141,13 @@ def module_target(
             f"{list(candidates)}"
         )
         raise TrustAuditError(msg)
-    relative = physical_relative(root, found)
     return Module(
-        relative=relative,
-        owner=_target_owner(root, module, reference, relative),
-        directory=parent_directory(relative),
+        relative=physical_relative(root, found),
+        owner=_target_owner(module, reference, found),
+        # The compiler derives a child's directory from the pathname it
+        # loaded, not from the file a symbolic link reaches, so this stays the
+        # declaring pathname's parent.
+        directory=parent_directory(found),
         procedural_macro=module.procedural_macro,
     )
 
@@ -164,24 +166,21 @@ def physical_relative(root: pathlib.Path, relative: str) -> str:
 
 
 def _target_owner(
-    root: pathlib.Path,
     module: Module,
     reference: ModuleReference,
-    relative: str,
+    found: str,
 ) -> str:
     """Return the directory the loaded file owns for its own children.
 
-    A ``#[path]``-loaded file owns the physical directory it sits in.  A bare
+    A ``#[path]``-loaded file owns the directory its pathname sits in.  A bare
     declaration's target owns the directory named after the module, whether it
-    was found as ``name.rs`` or ``name/mod.rs``; the search directory itself is
-    resolved so a symbolic link in the declaring path cannot name another
-    directory.
+    was found as ``name.rs`` or ``name/mod.rs``.  Both keep the compiler's
+    spelling, including any ``..`` it resolves at lookup time.
     """
     if reference.path is not None:
-        return parent_directory(relative)
-    search = (root / _search_directory(module, reference)).resolve()
-    physical = search.relative_to(root.resolve())
-    return (physical / reference.name).as_posix()
+        return parent_directory(found)
+    search = pathlib.PurePosixPath(_search_directory(module, reference))
+    return (search / reference.name).as_posix()
 
 
 def _module_candidates(

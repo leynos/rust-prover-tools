@@ -30,9 +30,10 @@ def test_a_control_never_becomes_a_claim() -> None:
     combination = (facts.HarnessFact("h::k", CONTROL, facts.AS_INTENDED),)
     decision = facts.decision_for(combination)
     assert (decision.outcome, decision.control_statuses) == (
-        KaniOutcome.VERIFIED,
+        KaniOutcome.SKIPPED,
         ("rejected-as-intended",),
     )
+    assert not decision.passed, "a control alone proves no claim"
 
 
 def _control_log(*checks: PropertyResult) -> KaniLog:

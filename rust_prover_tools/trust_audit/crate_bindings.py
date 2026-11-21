@@ -9,8 +9,11 @@ search here repeats until a pass adds no name.  Member bindings live in
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.trust_audit.inline_modules import inline_module_names
+from rust_prover_tools.trust_audit.modules import module_references
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import (
@@ -76,17 +79,89 @@ def alias_bindings(tokens: tuple[Token, ...], root: str) -> frozenset[str]:
     search repeats until a pass adds no name. Reading the statements once
     would miss ``kk::assume`` and report the file as trusting nothing.
 
+    A child module's ``use crate::k;`` names an item the crate root declares,
+    and the per-file scan cannot see that declaration.  The local name is
+    therefore treated as a possible crate alias, which is the fail-closed
+    direction: the scan has no evidence that ``k::assume`` is *not* Kani.
+    Over-reporting asks a reviewer to read one more line; staying silent would
+    hide the assumption.
+
     Examples
     --------
     A file that renames the crate reports both names: ``use kani as k;`` binds
     ``k`` and ``kani``. An ``extern crate kani as k;`` reports the same pair.
     """
-    names = {root}
+    names = {root} | _crate_root_imports(tokens)
     while True:
         discovered = _alias_round(tokens, names)
         if discovered <= names:
             return frozenset(names)
         names |= discovered
+
+
+def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
+    """Return the local names ``use crate::name;`` binds in this file.
+
+    A single-segment import from the crate root may name an alias the root
+    declares; a deeper path names a member and is left to the member rules.
+    The local spelling is what a qualified use would carry.
+    """
+    names: set[str] = set()
+    for index, token in enumerate(tokens):
+        if token.kind is not Kind.IDENT or token.text != "use":
+            continue
+        end = statement_end(tokens, index + 1)
+        local = _crate_root_binding(tokens, index + 1, end)
+        if local is not None:
+            names.add(local)
+    return frozenset(names)
+
+
+def _crate_root_binding(
+    tokens: tuple[Token, ...],
+    start: int,
+    end: int,
+) -> str | None:
+    """Return the local name a single-segment ``crate::`` import binds.
+
+    A deeper path names a member rather than an alias, and a path that names
+    only the crate root binds nothing this rule reads, so both report ``None``.
+    """
+    index = start
+    while index < end and tokens[index].text == "::":
+        index += 1
+    if index + 2 >= end or tokens[index].text != "crate":
+        return None
+    if tokens[index + 1].text != "::" or tokens[index + 2].kind is not Kind.IDENT:
+        return None
+    member = tokens[index + 2]
+    following = index + 3
+    if following < end and tokens[following].text == "::":
+        return None
+    return _local_name(tokens, member, following, end)
+
+
+def _local_name(
+    tokens: tuple[Token, ...],
+    member: Token,
+    following: int,
+    end: int,
+) -> str:
+    """Return the name an import binds: the alias after ``as``, or the member."""
+    alias = _renamed_to(tokens, following, end)
+    return member.text if alias is None else alias
+
+
+def _renamed_to(
+    tokens: tuple[Token, ...],
+    following: int,
+    end: int,
+) -> str | None:
+    """Return the identifier after a trailing ``as``, if the import has one."""
+    if following + 1 >= end or tokens[following].text != "as":
+        return None
+    alias = tokens[following + 1]
+    return alias.text if alias.kind is Kind.IDENT else None
 
 
 def _alias_round(
@@ -95,6 +170,7 @@ def _alias_round(
 ) -> set[str]:
     """Return every name one pass binds to a crate already in ``names``."""
     discovered: set[str] = set()
+    modules = _declared_modules(tokens)
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT:
             continue
@@ -113,6 +189,60 @@ def _alias_round(
             if crate in names and alias is not None
         )
         discovered.update(_requalified_aliases(tokens, index + 1, end, names))
+        discovered.update(
+            _module_path_aliases(
+                tokens,
+                index + 1,
+                end,
+                _AliasScope(names, modules),
+            ),
+        )
+    return discovered
+
+
+def _declared_modules(tokens: tuple[Token, ...]) -> frozenset[str]:
+    """Return the modules this file declares, inline and external.
+
+    A file cannot resolve another module's exports, but it can see that a
+    module it declares re-exports a crate alias; that is the case this set
+    covers.
+    """
+    return inline_module_names(tokens) | frozenset(
+        reference.name for reference in module_references(tokens)
+    )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _AliasScope:
+    """The crate aliases and declared modules one pass reads against."""
+
+    names: cabc.Container[str]
+    modules: cabc.Container[str]
+
+
+def _module_path_aliases(
+    tokens: tuple[Token, ...],
+    start: int,
+    end: int,
+    scope: _AliasScope,
+) -> set[str]:
+    """Return aliases bound through a module this file declares.
+
+    ``mod m { pub use kani as k; } use m::k as kk;`` binds ``kk`` to the same
+    crate.  The module's export is visible in this file, so the rename is
+    followed; a module declared elsewhere cannot be resolved and is not read.
+    Only a member that already names a crate alias counts, which keeps
+    ``use kani::{assume as a};`` from binding a crate alias.
+    """
+    discovered: set[str] = set()
+    for root, span_start, span_stop in rooted_spans(tokens, start, end):
+        if root not in scope.modules:
+            continue
+        discovered.update(
+            alias
+            for member, alias in member_aliases(tokens, span_start, span_stop)
+            if member in scope.names
+        )
     return discovered
 
 

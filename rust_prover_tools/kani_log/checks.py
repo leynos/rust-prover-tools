@@ -207,15 +207,31 @@ def _ends_entry(reader: Reader) -> bool:
 
 
 def _blank_closes_entry(reader: Reader) -> bool:
-    """Report whether the blank line at the cursor ends the check entry."""
+    """Report whether the blank line at the cursor ends the check entry.
+
+    ``RESULTS:`` is the one report marker a description can also contain:
+    Kani escapes nothing, so a value may print that word on its own line.
+    A real results section is followed by a ``Check N:`` entry, so the marker
+    closes the description only when that entry is actually there; otherwise
+    it is description text and the frame stays open.
+    """
     offset = 1
     while (following := reader.peek_at(offset)) is not None and not following.strip():
         offset += 1
     if following is None:
         return True
+    if following == "RESULTS:":
+        return _starts_results(reader, offset + 1)
     return following in _ENTRY_LINES or any(
         pattern.match(following) is not None for pattern in _ENTRY_HEADS
     )
+
+
+def _starts_results(reader: Reader, offset: int) -> bool:
+    """Report whether a real results section follows the ``RESULTS:`` marker."""
+    while (following := reader.peek_at(offset)) is not None and not following.strip():
+        offset += 1
+    return following is not None and CHECK.match(following) is not None
 
 
 def _unquote(value: str) -> str:

@@ -674,7 +674,7 @@
       "run_mode": "full-profile"
     },
     "seeded_wrapping_mutant": {
-      "outcome": "verified",
+      "outcome": "skipped",
       "witnesses": [],
       "controls": [
         [

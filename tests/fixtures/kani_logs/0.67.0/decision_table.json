@@ -176,6 +176,15 @@
       "why": "The certified panic explains the unreachable check after it; the claim is still the panic the manifest asked for."
     },
     {
+      "id": "control-only-manifest-is-skipped",
+      "harnesses": [
+        {"name": "h::k", "role": "control", "status": "FAILURE", "verdict": "FAILED",
+         "expected_failure": "assertion.1"}
+      ],
+      "outcome": "skipped",
+      "why": "A manifest of controls alone declares no claim, so the run has verified nothing and cannot pass."
+    },
+    {
       "id": "should-panic-claim-without-its-note",
       "harnesses": [
         {"name": "h::claim", "role": "claim", "status": "FAILURE", "verdict": "FAILED",

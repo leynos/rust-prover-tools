@@ -75,8 +75,13 @@ def stands(fact: facts.HarnessFact) -> bool:
 
 
 def claims_stand(combination: cabc.Sequence[facts.HarnessFact]) -> bool:
-    """Report whether every claim in one combination stands, vacuously included."""
-    return all(stands(fact) for fact in claims_of(combination))
+    """Report whether at least one claim stands and every claim stands.
+
+    A combination of controls alone has no claim to verify, so it cannot be
+    the thing ``verified`` describes; the empty ``all`` must not pass.
+    """
+    claims = claims_of(combination)
+    return bool(claims) and all(stands(fact) for fact in claims)
 
 
 def witness_of(fact: facts.HarnessFact) -> str:

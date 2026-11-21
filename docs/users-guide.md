@@ -238,12 +238,17 @@ supports. In decreasing precedence:
    attributable failure.
 2. `resource-exhausted` — a harness timed out, or an unwinding assertion ran
    out of bound.
-3. `unsupported` — Kani could not model a construct the harness reached.
+3. `unsupported` — Kani could not model a construct the harness reached, or a
+   crate-wide pre-flight warning stands beside a harness that remains
+   undecided. A certified expected panic explains an unreachable check, so it
+   does not turn the warning into this outcome.
 4. `undetermined` — a check the solver left undecided anywhere in the call
    tree, or an unreachable cover this harness owns or CBMC printed without an
    owner.
-5. `skipped` — a declared claim never reported a block.
-6. `verified` — every declared claim ran and nothing disproved it.
+5. `skipped` — a declared claim never reported a block, or the manifest
+   declares no claim at all.
+6. `verified` — the manifest declares at least one claim, every declared claim
+   ran and nothing disproved it.
 
 An unwinding failure is a bound, not a counterexample. A `should_panic` claim
 is excused only when Kani also reported that the panic matched, and then only
@@ -251,8 +256,9 @@ for the checks it counts as a panic: the driver prints that note only when
 every failed property is an assertion, so a failure of any other kind beside it
 is an independent failure and still a counterexample. The exemption reaches a
 failed assertion under a called routine, which is the same panic seen one frame
-down. The run is still bounded: none of these outcomes proves a property over
-every execution.
+down, and an unreachable check after the panic is explained the same way rather
+than reported as undetermined. The run is still bounded: none of these outcomes
+proves a property over every execution.
 
 `tool-error` covers a log that cannot be decided from at all: truncated or
 otherwise structurally invalid output, two invocations concatenated so a second
@@ -798,8 +804,12 @@ Rust permits a later definition to shadow an earlier one, and the scan cannot
 tell which one an invocation expands. A declaration whose name comes from a
 metavariable is refused, because only the invocation's arguments decide that
 name, and an expansion that invokes a macro through a metavariable is refused
-for the same reason. A target reached through a symbolic link is resolved to
-the physical file before it is reported, so a cyclic `#[path]` is scanned once.
+for the same reason, as is one that reaches a trust item through a metavariable
+path such as `$p::assume`. A target reached through a symbolic link is reported
+as the physical file it reaches, so a cyclic `#[path]` is scanned once; a
+`#[path]` inside that module still resolves from the pathname the compiler
+loaded. When a plain crate and a proc-macro crate both reach one file through
+`#[path]`, the file is rescanned with the stronger literal-reading policy.
 
 A `#[path]` is resolved from the directory rustc uses at that position. At file
 scope that is the declaring file's own directory; the first inline `#[path]`
@@ -831,7 +841,12 @@ request for proof by assumption. A renamed import is reported under the item it
 names when the use is bare, is reached through `self::`, `crate::` or
 `super::`, or is qualified by a module the same file declares —
 `mod m { pub use kani::assume as a; } m::a(..)` reaches the binding the file
-shows. A module declared elsewhere is not shown, so its names are left alone.
+shows. A module declared elsewhere is not shown, so its names are left alone,
+except that a name imported from the crate root (`use crate::k;`) is treated as
+a possible crate alias because the declaration it names is outside the file. A
+crate alias re-exported by a module the file declares is followed
+(`use m::k as kk;`). A turbofish call such as `a::<u32, _>(..)` is a call on
+the renamed item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a

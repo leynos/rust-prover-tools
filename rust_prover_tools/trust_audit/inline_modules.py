@@ -154,15 +154,20 @@ def path_attribute(
     When the declaration carries more than one direct ``#[path]``, the first in
     source order decides, which is the attribute ``rustc`` compiles; the walk
     runs backwards, so each find overwrites the previous one.
+
+    A bracket that is not an attribute ends the run.  It may belong to ordinary
+    code before the declaration, such as an array type, and the ``#[path]``
+    already found is still the one the declaration carries; returning nothing
+    there would fall back to the bare search and read a different file.
     """
     index = skip_visibility(tokens, mod_index - 1)
     value: str | None = None
     while index >= 0:
         if tokens[index].text != "]":
-            return None
+            break
         opener = opening_bracket(tokens, index)
         if opener is None or opener not in spans:
-            return None
+            break
         found = path_value(tokens, opener, index)
         if found is not None:
             value = found

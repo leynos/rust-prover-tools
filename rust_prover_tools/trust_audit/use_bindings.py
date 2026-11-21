@@ -214,16 +214,15 @@ def _group_opener(tokens: tuple[Token, ...], start: int, stop: int) -> int | Non
 def _plain_member(tokens: tuple[Token, ...], start: int, stop: int) -> str | None:
     """Return the member a path imports without a rename, if it names one.
 
-    The last identifier before any ``as`` is the member; a path ending in a
-    glob names none.  A path that names only the crate roots itself, which the
-    vocabulary does not list, so seeding it is harmless.
+    A renamed import binds only the new name: ``use kani::assume as a;`` binds
+    ``a``, not ``assume``, and seeding ``assume`` would let an unrelated
+    ``use self::assume as b;`` be read as Kani's item.  A path ending in a glob
+    names no member either.  A path that names only the crate roots itself,
+    which the vocabulary does not list, so seeding it is harmless.
     """
-    end = stop
-    for index in range(start, stop):
-        if tokens[index].text == "as":
-            end = index
-            break
-    for index in range(end - 1, start - 1, -1):
+    if any(tokens[index].text == "as" for index in range(start, stop)):
+        return None
+    for index in range(stop - 1, start - 1, -1):
         if tokens[index].kind is Kind.IDENT:
             return tokens[index].text
     return None
@@ -279,16 +278,17 @@ def _qualified_root_member(
     """Return the first member a local qualifier names, and its index.
 
     ``self::k::assume`` yields ``k`` at its own index: the segment a crate
-    alias would occupy.  A path that stops at the qualifier names no member.
+    alias would occupy.  ``super`` may repeat — ``use super::super::k::assume``
+    is valid Rust — so every leading qualifier is skipped.  A path that stops
+    at a qualifier names no member.
     """
     index = start
     while index < stop and tokens[index].text == "::":
         index += 1
-    if index + 2 >= stop or tokens[index].text not in LOCAL_QUALIFIERS:
+    while index + 1 < stop and tokens[index + 1].text == "::":
+        if tokens[index].text not in LOCAL_QUALIFIERS:
+            break
+        index += 2
+    if index >= stop or tokens[index].kind is not Kind.IDENT:
         return None
-    if tokens[index + 1].text != "::":
-        return None
-    member = tokens[index + 2]
-    if member.kind is not Kind.IDENT:
-        return None
-    return index + 2, member.text
+    return index, tokens[index].text

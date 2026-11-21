@@ -94,8 +94,13 @@ def scan(
     no code token.
     """
     tokens = tokenize(text)
+    words = frozenset(item for vocabulary in vocabularies for item in vocabulary.items)
     try:
-        _refuse_opaque_macros(tokens, procedural_macro=procedural_macro)
+        _refuse_opaque_macros(
+            tokens,
+            procedural_macro=procedural_macro,
+            words=words,
+        )
         modules = module_references(tokens)
         context = Context(
             tokens,
@@ -118,6 +123,7 @@ def _refuse_opaque_macros(
     tokens: tuple[Token, ...],
     *,
     procedural_macro: bool,
+    words: frozenset[str],
 ) -> None:
     """Fail closed on a macro whose expansion the scan cannot read.
 
@@ -141,7 +147,7 @@ def _refuse_opaque_macros(
         base |= PROCEDURAL_OPAQUE_MACROS
     names = _opaque_names(tokens, base)
     rules = macro_rules(tokens)
-    _refuse_metavariable_invocations(tokens, rules)
+    _refuse_metavariable_invocations(tokens, rules, words)
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
         if index in rules.patterns:
@@ -160,31 +166,40 @@ def _refuse_opaque_macros(
 def _refuse_metavariable_invocations(
     tokens: tuple[Token, ...],
     rules: MacroRules,
+    words: frozenset[str],
 ) -> None:
-    """Fail closed on an expansion that invokes a macro by metavariable.
+    """Fail closed on an expansion whose metavariable hides a trust use.
 
     ``invoke!(include)`` expanding ``$m!("hidden.rs")`` becomes
-    ``include!("hidden.rs")``, which the audit never sees.  The metavariable's
-    value is an invocation argument the lexical scan does not evaluate, so no
-    static answer names the macro; the file is refused instead of reported
-    clean.
+    ``include!("hidden.rs")``, and ``call!(kani)`` expanding ``$p::assume(..)``
+    becomes a Kani call.  The metavariable's value is an invocation argument the
+    lexical scan does not evaluate, so no static answer names the macro or the
+    path; the file is refused instead of reported clean.  ``$crate`` is the
+    defining crate rather than an argument, so it is not refused.
     """
     for index in rules.expansions:
         if index < 1 or tokens[index - 1].text != "$":
             continue
         token = tokens[index]
-        if token.kind is not Kind.IDENT or index + 2 >= len(tokens):
+        if token.kind is not Kind.IDENT or token.text == "crate":
             continue
-        if tokens[index + 1].text != "!":
+        if index + 2 >= len(tokens):
             continue
-        if tokens[index + 2].text not in _MACRO_DELIMITERS:
-            continue
-        msg = (
-            f"the macro_rules! expansion at line {token.line}, column "
-            f"{token.column} invokes a macro through the metavariable "
-            f"'${token.text}', so the audit cannot tell which macro runs"
-        )
-        raise TrustAuditError(msg)
+        following = tokens[index + 1].text
+        if following == "!" and tokens[index + 2].text in _MACRO_DELIMITERS:
+            msg = (
+                f"the macro_rules! expansion at line {token.line}, column "
+                f"{token.column} invokes a macro through the metavariable "
+                f"'${token.text}', so the audit cannot tell which macro runs"
+            )
+            raise TrustAuditError(msg)
+        if following == "::" and tokens[index + 2].text in words:
+            msg = (
+                f"the macro_rules! expansion at line {token.line}, column "
+                f"{token.column} reaches a trust item through the metavariable "
+                f"'${token.text}', so the audit cannot tell which crate it names"
+            )
+            raise TrustAuditError(msg)
 
 
 def _opaque_names(

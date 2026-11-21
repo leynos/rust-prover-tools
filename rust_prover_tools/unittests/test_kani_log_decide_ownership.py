@@ -10,10 +10,13 @@ decided on evidence it does not have.
 
 from __future__ import annotations
 
+import dataclasses as dc
+
 import pytest
 
 from rust_prover_tools.kani_log import (
     CLAIM,
+    CONTROL,
     Harness,
     KaniOutcome,
     Manifest,
@@ -328,3 +331,54 @@ def test_the_harness_own_recursion_bound_counts_as_resource_exhaustion() -> None
     manifest = Manifest((Harness(name, CLAIM),))
 
     assert analyse_kani_log(log, manifest).outcome == KaniOutcome.RESOURCE_EXHAUSTED
+
+
+def test_a_manifest_with_only_controls_cannot_pass() -> None:
+    """A run that declares no claim has verified no claim.
+
+    Controls are guards rather than claims, so an empty set of claims must not
+    let the run report ``verified`` or count as a pass.
+    """
+    name = "h::k"
+    block = shapes.block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "FAILURE", "the seeded fault"),
+        failed_count=1,
+        total_count=1,
+        verdict="FAILED",
+    )
+    log = shapes.verified_log(block)
+    manifest = Manifest(
+        (Harness(name, CONTROL, expected_failure="assertion.1"),),
+    )
+
+    decision = analyse_kani_log(log, manifest)
+
+    assert decision.outcome == KaniOutcome.SKIPPED
+    assert not decision.passed
+
+
+def test_a_certified_panic_ignores_a_crate_wide_unsupported_warning() -> None:
+    """A warning for the whole crate does not deny a certified panic.
+
+    The block's only undecided check is an unreachable assertion after the
+    panic, which the note explains; the crate-wide pre-flight warning alone
+    proves nothing about this harness.
+    """
+    name = "h::c"
+    block = shapes.block(
+        name,
+        PropertyResult(f"{name}.assertion.1", "FAILURE", "the expected panic"),
+        PropertyResult(f"{name}.assertion.2", "UNREACHABLE", "after the panic"),
+        failed_count=1,
+        total_count=2,
+        verdict="SUCCESSFUL",
+        panics_as_expected=True,
+    )
+    log = dc.replace(
+        shapes.verified_log(block),
+        unsupported_constructs=("TerminatorKind::InlineAsm",),
+    )
+    manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
+
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED

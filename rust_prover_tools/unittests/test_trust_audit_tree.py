@@ -894,3 +894,58 @@ def test_false_overrides_a_proc_macro_manifest(tmp_path: Path) -> None:
     assert {file.path: [item.item for item in file.items] for file in result} == {
         "src/lib.rs": [],
     }
+
+
+def test_an_array_bracket_before_a_path_attribute_keeps_the_value() -> None:
+    """Stop the attribute walk at non-attribute code, keeping what it found."""
+    source = 'type Block = [u8; 4];\n#[path = "selected.rs"]\nmod child;'
+
+    assert references(source) == [("child", "selected.rs", ())]
+
+
+def test_a_symlinked_module_resolves_children_from_its_pathname(
+    tmp_path: Path,
+) -> None:
+    """Derive a child's directory from the pathname the compiler loaded.
+
+    ``src/alias.rs`` points at ``shared/module.rs``; a ``#[path]`` inside it is
+    relative to ``src``, not to the link target's directory.
+    """
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "mod alias;",
+            "shared/module.rs": '#[path = "child.rs"]\nmod child;',
+            "src/child.rs": "fn f() { kani::assume(true); }",
+            "shared/child.rs": "fn clean() {}",
+        },
+    )
+    (tmp_path / "src/alias.rs").symlink_to(tmp_path / "shared/module.rs")
+
+    result = audited(tmp_path, "src/lib.rs")
+
+    assert result["src/child.rs"] == ["assume"]
+    assert "shared/child.rs" not in result
+
+
+def test_a_later_procedural_crate_rescans_a_shared_file(tmp_path: Path) -> None:
+    """Apply the stronger policy when a second crate scans the same file.
+
+    The plain driver is first in the stack order, so the shared literal is
+    initially read as trivia; the proc-macro arrival must rescan it.
+    """
+    write(
+        tmp_path,
+        {
+            "plain/Cargo.toml": '[package]\nname = "plain"\nversion = "0.1.0"\n',
+            "proc/Cargo.toml": '[package]\nname = "proc"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "plain/src/lib.rs": '#[path = "../../shared/helper.rs"]\nmod h;',
+            "proc/src/lib.rs": '#[path = "../../shared/helper.rs"]\nmod h;',
+            "shared/helper.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    result = audited(tmp_path, "proc/src/lib.rs", "plain/src/lib.rs")
+
+    assert result["shared/helper.rs"] == ["assume"]

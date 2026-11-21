@@ -11,6 +11,7 @@ import rust_prover_tools.z3_selection as selection_module
 from rust_prover_tools.binary_assets import Z3_VERSION
 from rust_prover_tools.commands import CommandResult, CommandSpec
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.unittests import conftest
 from rust_prover_tools.z3_selection import (
     CALIBRATED_Z3_BANNER,
     EXPLICIT_SOURCE,
@@ -69,6 +70,7 @@ def test_a_command_name_is_looked_up_on_the_path(
     assert resolve_z3("z3", repo_root=tmp_path) == located.resolve()
 
 
+@conftest.SKIP_CHDIR_UNDER_MUTMUT
 def test_a_bare_command_name_ignores_a_same_named_working_directory_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -264,6 +266,7 @@ def test_probing_refuses_a_solver_that_reports_another_release(
         run_cli.probe_and_qualify_z3(str(binary), repo_root=tmp_path)
 
 
+@conftest.SKIP_CHDIR_UNDER_MUTMUT
 def test_a_relative_pinned_install_dir_is_resolved_before_probing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

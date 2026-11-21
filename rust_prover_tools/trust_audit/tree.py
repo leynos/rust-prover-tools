@@ -110,13 +110,18 @@ def audit_tree(
     ]
     scanned: dict[str, tuple[TrustItem, ...]] = {}
     owners: dict[str, str] = {}
+    policies: dict[str, bool] = {}
     while pending:
         module = pending.pop()
         # Every arrival is claimed before the deduplication below: skipping a
         # file already scanned would hide that it was reached a second way,
         # which is exactly the ambiguity ``_claim`` exists to refuse.
-        _claim(module, owners)
-        if module.relative in scanned:
+        _claim(root, module, owners)
+        first_arrival = module.relative not in scanned
+        if not first_arrival and not _needs_rescan(
+            scanned_as_procedural=policies[module.relative],
+            required=module.procedural_macro,
+        ):
             continue
         result = scan(
             _read_source(root, module.relative),
@@ -124,8 +129,25 @@ def audit_tree(
             vocabularies=vocabularies,
         )
         scanned[module.relative] = result.items
-        pending.extend(_module_targets(root, module, result.modules))
+        policies[module.relative] = module.procedural_macro
+        if first_arrival:
+            pending.extend(_module_targets(root, module, result.modules))
     return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
+
+
+def _needs_rescan(
+    *,
+    scanned_as_procedural: bool,
+    required: bool,
+) -> bool:
+    """Report whether a second arrival needs a stronger scan policy.
+
+    One file can be reachable from a plain crate and from a proc-macro crate
+    through ``#[path]``.  The procedural scan reads literals as code, so it is
+    a superset; when the plain arrival was scanned first, the file must be
+    rescanned rather than left with the weaker result.
+    """
+    return required and not scanned_as_procedural
 
 
 def _driver_module(
@@ -136,16 +158,18 @@ def _driver_module(
 ) -> Module:
     """Build the module record for one entry point.
 
-    The driver is canonicalized to the file it reaches, so a path through a
-    symbolic link is read and reported as the file the compiler reads.  Its
-    crate kind comes from the manifest above the driver itself, never from a
-    module it later reaches through ``#[path]``.
+    The driver is reported and read as the physical file it reaches, so a path
+    through a symbolic link names the compiled file.  Its children, though,
+    resolve from the directory the compiler derived from the pathname it
+    loaded, which is the spelling the caller supplied.  Its crate kind comes
+    from the manifest above the driver itself, never from a module it later
+    reaches through ``#[path]``.
     """
-    relative = physical_relative(root, _normalize(driver))
+    spelling = _normalize(driver)
     return Module(
-        relative=relative,
-        owner=parent_directory(relative),
-        directory=parent_directory(relative),
+        relative=physical_relative(root, spelling),
+        owner=parent_directory(spelling),
+        directory=parent_directory(spelling),
         procedural_macro=(
             is_procedural_macro(root, driver)
             if procedural_macro is None
@@ -173,24 +197,36 @@ def _normalize(relative: str) -> str:
 
 
 def _claim(
+    root: pathlib.Path,
     module: Module,
     owners: cabc.MutableMapping[str, str],
 ) -> None:
     """Record how ``module`` was reached, refusing an ambiguous owner.
 
     A file reached twice through the same owner is ordinary — two declarations
-    may name one module — and is deduplicated by the caller.  Two owners are
-    not: the file's child modules would resolve beneath one directory or the
-    other, so the audit cannot say which files the crate compiles.
+    may name one module — and is deduplicated by the caller.  Two *different*
+    owners are not: the file's child modules would resolve beneath one
+    directory or the other, so the audit cannot say which files the crate
+    compiles.  Owners are compared after resolution, because two spellings such
+    as ``plain/src/../shared`` and ``proc/src/../shared`` may name one
+    directory.
     """
     owner = owners.setdefault(module.relative, module.owner)
-    if owner != module.owner:
+    if owner != module.owner and _owner_directory(
+        root,
+        owner,
+    ) != _owner_directory(root, module.owner):
         msg = (
             f"{module.relative} is reached both as a file owning {owner!r} and "
             f"as one owning {module.owner!r}; its child modules would resolve "
             "beneath different directories"
         )
         raise TrustAuditError(msg)
+
+
+def _owner_directory(root: pathlib.Path, owner: str) -> pathlib.Path:
+    """Return the directory an owner spelling names, with links resolved."""
+    return (root / owner).resolve()
 
 
 def _read_source(root: pathlib.Path, relative: str) -> str:

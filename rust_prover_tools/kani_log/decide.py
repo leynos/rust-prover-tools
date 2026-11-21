@@ -262,12 +262,30 @@ def _outcome(
         return KaniOutcome.COUNTEREXAMPLE
     if _has_resource_exhaustion(reported):
         return KaniOutcome.RESOURCE_EXHAUSTED
-    if any(_is_unsupported(log, item) for item in reported):
+    if any(_is_unsupported(log, item, manifest) for item in reported):
         return KaniOutcome.UNSUPPORTED
     if any(_is_indeterminate(item, manifest) for item in reported):
         return KaniOutcome.UNDETERMINED
-    complete = len(reported) == len(manifest.claims)
-    return KaniOutcome.VERIFIED if complete else KaniOutcome.SKIPPED
+    return _final_outcome(reported, manifest)
+
+
+def _final_outcome(
+    reported: list[Observed],
+    manifest: Manifest,
+) -> KaniOutcome:
+    """Decide between verified and skipped once no stronger fact applies.
+
+    Controls are guards, not claims.  A manifest declaring only controls asks
+    the run to prove nothing, and an empty ``all()`` over the claims must not be
+    read as success, so it is skipped rather than verified.
+    """
+    if not manifest.claims:
+        return KaniOutcome.SKIPPED
+    return (
+        KaniOutcome.VERIFIED
+        if len(reported) == len(manifest.claims)
+        else KaniOutcome.SKIPPED
+    )
 
 
 def _is_indeterminate(seen: Observed, manifest: Manifest) -> bool:
@@ -352,7 +370,11 @@ def _panics_as_expected(seen: Observed, manifest: Manifest) -> bool:
     return entry.should_panic
 
 
-def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:
+def _is_unsupported(
+    log: ParsedLog,
+    seen: Observed,
+    manifest: Manifest,
+) -> bool:
     """Report whether Kani could not model a construct this harness reached.
 
     Three shapes say so.  A failed ``unsupported_construct`` check is
@@ -361,7 +383,8 @@ def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:
     routine.  A failure whose message names the unsupported marker is the
     shape the corpus records.  The pre-flight warning alone proves nothing - it
     covers the whole crate - so it counts only when this harness was left
-    undecided.
+    undecided, with the same expected-panic exemption the outcome applies: an
+    unreachable check beside a certified panic is explained, not undecided.
     """
     if any(
         item.kind == UNSUPPORTED_KIND and item.status == "FAILURE"
@@ -370,4 +393,4 @@ def _is_unsupported(log: ParsedLog, seen: Observed) -> bool:
         return True
     if any(UNSUPPORTED_MARKER in text.lower() for text in seen.failure_messages):
         return True
-    return bool(log.unsupported_constructs) and seen.indeterminate
+    return bool(log.unsupported_constructs) and _is_indeterminate(seen, manifest)

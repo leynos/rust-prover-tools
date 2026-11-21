@@ -666,3 +666,103 @@ def test_an_inner_attribute_survives_whitespace_after_the_bang() -> None:
     words = [token.text for token in tokenize(source) if token.kind == "ident"]
     assert words == ["allow", "dead_code", "kani", "assume", "x"]
     assert items(source) == [("assume", 2)]
+
+
+def test_a_turbofish_call_to_a_renamed_member_is_reported() -> None:
+    """Treat ``::<`` as explicit generic arguments, not a path separator.
+
+    ``a::<u32, _>(..)`` calls the imported item, so its position is a trust
+    use even though the item is renamed.
+    """
+    source = "use kani::any_where as a;\nfn f() { a::<u32, _>(|_| true); }"
+
+    assert items(source) == [("any_where", 1), ("any_where", 2)]
+
+
+def test_a_crate_alias_through_a_declared_module_is_followed() -> None:
+    """Follow a crate alias re-exported by a module this file declares."""
+    source = "\n".join(
+        (
+            "mod m { pub use kani as k; }",
+            "use m::k as kk;",
+            "fn f() { kk::assume(true); }",
+        ),
+    )
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_metavariable_path_to_a_trust_item_is_refused() -> None:
+    """Refuse an expansion whose path qualifier only its arguments decide."""
+    source = "macro_rules! call { ($p:path) => { $p::assume(true); }; }"
+
+    with pytest.raises(TrustAuditError, match="reaches a trust item"):
+        items(source)
+
+
+def test_a_renamed_import_does_not_seed_its_original_name() -> None:
+    """Bind only the new name, as Rust does.
+
+    ``use kani::assume as a;`` does not also bind ``assume``, so a later
+    ``use self::assume as b;`` must not be read as a rename of Kani's item.
+    """
+    source = "\n".join(
+        (
+            "use kani::assume as a;",
+            "use self::assume as b;",
+            "fn f() { b(true); }",
+        ),
+    )
+
+    assert items(source) == [("assume", 1)]
+
+
+def test_a_crate_alias_through_repeated_super_segments_is_followed() -> None:
+    """Skip every leading ``super`` before the crate alias."""
+    source = "\n".join(
+        (
+            "use kani as k;",
+            "mod a {",
+            "    mod b {",
+            "        use super::super::k::assume as c;",
+            "        fn f() { c(true); }",
+            "    }",
+            "}",
+        ),
+    )
+
+    assert items(source) == [("assume", 4), ("assume", 5)]
+
+
+def test_a_crate_root_import_is_treated_as_a_possible_alias() -> None:
+    """Fail closed on a name imported from the crate root.
+
+    The declaring file is outside this per-file scan, so the local name is
+    reported as a possible trust alias rather than assumed harmless.
+    """
+    source = "use crate::k;\nfn f() { k::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_attribute_value_is_not_read_as_a_verus_attribute() -> None:
+    """Skip an unrelated attribute's arguments in a ``cfg_attr`` payload.
+
+    ``doc = stringify!(verifier::external_body)`` is documentation text, not
+    an applied Verus attribute.
+    """
+    source = (
+        '#[cfg_attr(feature = "docs", doc = stringify!(verifier::external_body))]\n'
+        "fn f() {}"
+    )
+
+    assert items(source) == []
+
+
+def test_a_nested_cfg_attr_payload_is_still_read() -> None:
+    """Recurse into a nested ``cfg_attr`` that applies a Verus attribute."""
+    source = (
+        '#[cfg_attr(unix, cfg_attr(feature = "x", verifier::external_body))]\nfn f() {}'
+    )
+
+    assert [item for item, _ in items(source)] == ["external_body"]

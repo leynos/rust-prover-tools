@@ -857,3 +857,18 @@ def test_a_description_with_an_embedded_quote_then_a_blank_line_is_read_in_full(
     )
     block = parse_text(text).blocks[0]
     assert block.covers[0].description == '"ready"\n\nand continued'
+
+
+def test_a_description_holding_a_results_marker_is_read_in_full() -> None:
+    """Keep a report-shaped word inside a description when it is content.
+
+    Kani escapes nothing, so a description may print ``RESULTS:`` on its own
+    line.  A real results section is followed by a ``Check N:`` entry; this one
+    is followed by more description, so the frame stays open.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: "first"\n\nRESULTS:\nand second"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == 'first"\n\nRESULTS:\nand second'

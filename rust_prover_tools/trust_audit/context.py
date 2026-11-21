@@ -373,10 +373,14 @@ def _is_declared_module_qualified(
 def _is_member_use(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether a renamed import is used as the item it renames.
 
-    Only the bare call counts. The name at its own definition follows ``as``,
-    and a name in front of ``::`` qualifies a path rather than calling the
-    item, so neither is a request for trust under another spelling.
+    Only a call counts.  The name at its own definition follows ``as``, and a
+    name in front of ``::`` qualifies a path rather than calling the item, so
+    neither is a request for trust under another spelling.  A turbofish call
+    such as ``a::<u32, _>(..)`` is the exception: Rust writes ``::`` before
+    explicit generic arguments, so the ``::`` is part of the call.
     """
     if index and tokens[index - 1].text == "as":
         return False
-    return index + 1 >= len(tokens) or tokens[index + 1].text != "::"
+    if index + 1 >= len(tokens) or tokens[index + 1].text != "::":
+        return True
+    return index + 2 < len(tokens) and tokens[index + 2].text == "<"
