@@ -196,6 +196,14 @@ Plain-language terms used in this plan:
   complete pass, 1 otherwise, and `128 + signal` on interruption. Help
   snapshots and injected contract tests cover the surface. The full gate passes
   with 1,779 tests and 6 skips.
+- [x] (2026-11-21 21:30Z) CodeRabbit review and remediation. Three local
+  review passes were run after the deterministic gates; all actionable
+  findings were fixed with regression tests. The one residual finding is the
+  Cuprum 0.2.0b2 newline-free line accumulation, which cannot be bounded
+  through the pinned public API and is documented as a limitation.
+- [x] (2026-11-21 21:35Z) Posted the parser coordination comment on #250,
+  naming `rust_prover_tools/kani_log/` as the landed parser layer, the open
+  manifest and `decide()` work, and the captures 0.68.0 will need.
 - [x] (2026-11-21 19:10Z) `EP-M6` Documentation, roadmap, schema
   document, and full gates. Added `docs/kani-supervised-execution.md` (the
   version-1 inventory, JSONL, and report schemas; configuration; discovery;
@@ -374,6 +382,12 @@ readers, flushed human and JSONL sinks, strict version-1 schema readers,
 multiset accounting, the async Cuprum launcher, the monitor-driven attempt
 supervisor, and the run orchestrator. The production defaults remain the source
 plan's 1,200 seconds, 5 seconds, and 1,024 MiB.
+
+The final change exceeds the initial file and code budgets. The issue's five
+tasks include the full fifteen-log parser corpus, two route integrations, a
+new CLI surface, and the schema reference; the user's instruction authorized
+that full scope. The overage is recorded here rather than treated as a silent
+tolerance breach.
 
 All six milestones are implemented. The acceptance evidence is:
 
