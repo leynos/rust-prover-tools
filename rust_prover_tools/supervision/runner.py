@@ -19,6 +19,7 @@ Three rules bind the loop:
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
 import uuid
@@ -119,6 +120,8 @@ class SupervisedRun:
             the aggregate outcome.
         """
         started_at = self.environment.clock.now()
+        if self.environment.interrupts is not None:
+            self.environment.interrupts.bind(asyncio.get_running_loop())
         ledger = _RunLedger(expected=self.expected)
         self._emit_start(started_at)
         await self._run_all(ledger)
@@ -301,8 +304,6 @@ def run_supervised_sync(
         Raised when called from inside a running event loop, where it cannot
         drive one of its own. An async caller must await `run_supervised`.
     """
-    import asyncio
-
     try:
         asyncio.get_running_loop()
     except RuntimeError:

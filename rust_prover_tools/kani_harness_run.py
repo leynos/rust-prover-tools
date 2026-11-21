@@ -37,10 +37,10 @@ from rust_prover_tools.kani_diagnostics import open_diagnostics
 from rust_prover_tools.kani_inventory import (
     CargoPackage,
     HarnessInventory,
-    InventoryDiscoveryError,
     InventoryHarness,
     discover_inventory,
     load_inventory,
+    restrict_inventory,
     select_harnesses,
 )
 from rust_prover_tools.kani_routes import (
@@ -275,20 +275,7 @@ def _inventory(options: KaniHarnessRunOptions) -> HarnessInventory:
         )
     if not options.packages:
         return inventory
-    return _restrict(inventory, options.packages)
-
-
-def _restrict(
-    inventory: HarnessInventory,
-    packages: cabc.Sequence[str],
-) -> HarnessInventory:
-    """Narrow an inventory to the requested packages."""
-    by_name = {package.package: package for package in inventory.packages}
-    unknown = [name for name in packages if name not in by_name]
-    if unknown:
-        msg = f"the inventory does not contain packages {unknown}"
-        raise InventoryDiscoveryError(msg)
-    return HarnessInventory(tuple(by_name[name] for name in packages))
+    return restrict_inventory(inventory, options.packages)
 
 
 def _command_map(

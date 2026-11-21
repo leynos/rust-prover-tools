@@ -105,6 +105,11 @@ class StepInterrupts:
         """The interrupting signal, or `None` while the run may continue."""
         return self._signum
 
+    @staticmethod
+    def bind(loop: asyncio.AbstractEventLoop) -> None:
+        """Accept the run's loop; the double needs no scheduling."""
+        del loop
+
     async def wait(self) -> None:
         """Wait until the test fires a signal."""
         await self._fired.wait()

@@ -18,3 +18,9 @@ pub mod nested {
     #[kani::proof]
     fn proof() {}
 }
+
+/// A deliberately false assertion, so a live run has a failing harness.
+#[kani::proof]
+pub fn failing() {
+    assert!(1 + 1 == 3, "the fixture's seeded failure");
+}

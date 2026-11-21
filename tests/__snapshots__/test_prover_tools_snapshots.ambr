@@ -18,6 +18,75 @@
   
   '''
 # ---
+# name: test_kani_harnesses_help_snapshot
+  '''
+  Usage: prover-tools kani harnesses COMMAND
+  
+  Inspect and run Kani harnesses under supervision
+  
+  ╭─ Commands ───────────────────────────────────────────────────────────────────╮
+  │ list  Print the resolved, package-qualified harness inventory as JSON.       │
+  │ run   Run every selected harness under supervision.                          │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_kani_harnesses_list_help_snapshot
+  '''
+  Usage: prover-tools kani harnesses list [OPTIONS]
+  
+  Print the resolved, package-qualified harness inventory as JSON.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ --repo-root PATH   Repository or workspace root. Defaults to the current     │
+  │                    directory.                                                │
+  │ --package STR...   Packages to discover, repeatable. Empty selects every     │
+  │   --empty-package  package.                                                  │
+  │ --inventory PATH   Authoritative version-1 inventory document, overriding    │
+  │                    discovery.                                                │
+  │ --output PATH      Write the JSON here instead of standard output.           │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
+# name: test_kani_harnesses_run_help_snapshot
+  '''
+  Usage: prover-tools kani harnesses run [OPTIONS]
+  
+  Run every selected harness under supervision.
+  
+  ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
+  │ --repo-root PATH           Repository or workspace root. Defaults to the     │
+  │                            current directory.                                │
+  │ --package STR...           Packages to discover, repeatable.                 │
+  │   --empty-package                                                            │
+  │ --harness STR...           Harness pretty names to run, repeatable.          │
+  │   --empty-harness                                                            │
+  │ --inventory PATH           Authoritative version-1 inventory document.       │
+  │ --installation PATH        Qualified Kani release root, for the legacy       │
+  │                            route.                                            │
+  │ --cwd PATH                 Proof working directory; required with            │
+  │                            `installation`.                                   │
+  │ --snapshot-pin PATH        Reviewed snapshot pin, for the snapshot route.    │
+  │ --cache-dir PATH           Snapshot cache root.                              │
+  │ --timeout-seconds FLOAT    Wall-clock budget per harness. [default: 1200.0]  │
+  │ --sample-interval-seconds  Resource sampling interval. [default: 5.0]        │
+  │   FLOAT                                                                      │
+  │ --heartbeat-seconds FLOAT  Heartbeat interval while the prover is silent.    │
+  │                            [default: 15.0]                                   │
+  │ --watchdog --no-watchdog   Stop a harness when host available memory falls   │
+  │                            below the floor. [default: True]                  │
+  │ --watchdog-mib INT         Available-memory floor in MiB. [default: 1024]    │
+  │ --human PATH               Append the human job log here instead of standard │
+  │                            output.                                           │
+  │ --jsonl PATH               Append versioned JSONL evidence here.             │
+  │ --report PATH              Write the final JSON report here.                 │
+  │ --extra-arg STR...         Additional verifier arguments, preserved          │
+  │   --empty-extra-arg        verbatim.                                         │
+  ╰──────────────────────────────────────────────────────────────────────────────╯
+  
+  '''
+# ---
 # name: test_kani_install_help_snapshot
   '''
   Usage: prover-tools kani install [OPTIONS]

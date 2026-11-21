@@ -67,6 +67,7 @@ def test_alpha_proofs_include_path_and_inline_modules() -> None:
         ("harnesses::bounded", False),
         ("harnesses::conditional_extra", True),
         ("harnesses::nested::proof", False),
+        ("harnesses::failing", False),
         ("path_proofs::via_path", False),
         ("inline::inside", False),
         ("shared::proof", False),

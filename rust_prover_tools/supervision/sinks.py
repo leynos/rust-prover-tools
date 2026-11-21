@@ -21,7 +21,6 @@ import typing as typ
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import io
     from pathlib import Path
 
     from rust_prover_tools.supervision.results import DiagnosticRef
@@ -254,7 +253,7 @@ class JsonlSink:
 
     def __init__(
         self,
-        handle: io.TextIOBase,
+        handle: typ.TextIO,
         *,
         path: Path | None = None,
         max_line_bytes: int = 8 * 1024,
@@ -307,7 +306,7 @@ class HumanSink:
 
     def __init__(
         self,
-        handle: io.TextIOBase,
+        handle: typ.TextIO,
         *,
         max_line_bytes: int = 8 * 1024,
     ) -> None:

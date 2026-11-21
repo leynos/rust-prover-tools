@@ -188,9 +188,14 @@ Plain-language terms used in this plan:
   snapshot routes expose one-time qualification and derive every harness
   command from it; `KaniAdapter` applies the documented precedence; and
   `run_harnesses` joins inventory, selection, route, supervision, and report.
-  Existing route tests remain green, and the full gate passes with 1,758
-  tests.
-- [ ] `EP-M5` `kani harnesses list` and `kani harnesses run` CLI contract.
+  Existing route tests remain green, and the full gate passes with 1,758 tests.
+- [x] (2026-11-21 18:20Z) `EP-M5` `kani harnesses list` and
+  `kani harnesses run` CLI contract. The CLI exposes route exclusivity,
+  inventory inspection, budgets, evidence destinations, and verifier
+  arguments; installs SIGINT/SIGTERM only for the duration of a run; returns
+  0 only for a complete pass, 1 otherwise, and `128 + signal` on interruption.
+  Help snapshots and injected contract tests cover the surface. The full gate
+  passes with 1,779 tests and 6 skips.
 - [ ] `EP-M6` Documentation, roadmap, schema document, and full gates.
 
 ## Surprises & discoveries
@@ -291,15 +296,15 @@ Plain-language terms used in this plan:
   Rationale: the repository's 400-line module limit forced a split, and the
   qualification sequence is the part a supervised run must perform once. The
   module-level `run_command` reference remains the shared patch point so
-  existing route tests and callers are unaffected.
-  Date/Author: 2026-11-21, implementation agent.
+  existing route tests and callers are unaffected. Date/Author: 2026-11-21,
+  implementation agent.
 - D12. Decision: the supervision layer's adapter seam is an
-  `observer(spec)` factory plus `classify(evidence, observer)`.
-  Rationale: classification needs facts accumulated while output streams, but
-  the generic runner must not know a prover's grammar. A per-attempt observer
-  keeps the parser state private to the adapter and leaves the runner's timing,
-  measurement, evidence, and accounting untouched.
-  Date/Author: 2026-11-21, implementation agent.
+  `observer(spec)` factory plus `classify(evidence, observer)`. Rationale:
+  classification needs facts accumulated while output streams, but the generic
+  runner must not know a prover's grammar. A per-attempt observer keeps the
+  parser state private to the adapter and leaves the runner's timing,
+  measurement, evidence, and accounting untouched. Date/Author: 2026-11-21,
+  implementation agent.
 - D10. Decision: no new dependency; JSON, hashing, parsing, and process
   inspection use the standard library. Rationale: the capability needs no
   third-party runtime package, and the repository's gates already cover the
@@ -312,6 +317,13 @@ value model, incremental reader, report reconciliation, exact-version registry,
 and the fifteen-log corpus with provenance. `CommandTimedOutError` preserves
 the existing message and chains the Cuprum timeout. The full repository gate
 passes with 1,580 tests and 5 skips.
+
+`EP-M5` is complete: `kani_harness_cli.py` registers `kani harnesses list`
+and `kani harnesses run`, disables `INPUT_*` binding for the subtree, installs
+SIGINT and SIGTERM only for one run, and maps a typed report to the documented
+exit status. Its help snapshots and injected contract tests cover route
+exclusivity, selector conflicts, drift, interruption, and a closed standard
+output.
 
 `EP-M4` is complete: `kani_qualification.py` exposes the one-time legacy
 qualification and `prepare_snapshot_proof` the one-time snapshot preparation;

@@ -18,13 +18,15 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.kani_inventory.models import (
+    HarnessInventory,
+    InventoryDiscoveryError,
+    InventoryHarness,
+)
+
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from rust_prover_tools.kani_inventory.models import (
-        HarnessInventory,
-        InventoryHarness,
-    )
     from rust_prover_tools.kani_log import ForbiddenOption, KaniGrammar
 
 __all__ = (
@@ -32,6 +34,7 @@ __all__ = (
     "SelectionError",
     "compose_arguments",
     "conflicting_options",
+    "restrict_inventory",
     "select_harnesses",
 )
 
@@ -266,3 +269,36 @@ def selections(
         )
         for harness in harnesses
     )
+
+
+def restrict_inventory(
+    inventory: HarnessInventory,
+    packages: cabc.Sequence[str],
+) -> HarnessInventory:
+    """Narrow an inventory to the requested packages.
+
+    Parameters
+    ----------
+    inventory : HarnessInventory
+        Authoritative inventory.
+    packages : cabc.Sequence[str]
+        Package names to keep. An empty sequence keeps everything.
+
+    Returns
+    -------
+    HarnessInventory
+        The narrowed inventory.
+
+    Raises
+    ------
+    InventoryDiscoveryError
+        Raised when a requested package is not in the inventory.
+    """
+    if not packages:
+        return inventory
+    by_name = {package.package: package for package in inventory.packages}
+    unknown = [name for name in packages if name not in by_name]
+    if unknown:
+        msg = f"the inventory does not contain packages {unknown}"
+        raise InventoryDiscoveryError(msg)
+    return HarnessInventory(tuple(by_name[name] for name in packages))

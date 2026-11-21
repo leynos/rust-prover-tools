@@ -17,6 +17,7 @@ from __future__ import annotations
 import typing as typ
 
 if typ.TYPE_CHECKING:
+    import asyncio
     import collections.abc as cabc
     import datetime as dt
 
@@ -239,6 +240,10 @@ class InterruptSource(typ.Protocol):
     @property
     def signum(self) -> int | None:
         """The interrupting signal, or `None` while the run may continue."""
+        ...
+
+    def bind(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the source to the run's event loop."""
         ...
 
     async def wait(self) -> None:

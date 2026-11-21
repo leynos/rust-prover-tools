@@ -48,6 +48,7 @@ from rust_prover_tools.kani_inventory.select import (
     SelectionError,
     compose_arguments,
     conflicting_options,
+    restrict_inventory,
     select_harnesses,
     selections,
 )
@@ -72,6 +73,7 @@ __all__ = [
     "inventory_document",
     "inventory_from_document",
     "load_inventory",
+    "restrict_inventory",
     "select_harnesses",
     "select_packages",
     "selections",
