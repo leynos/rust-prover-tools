@@ -119,6 +119,9 @@ KANI_067: typ.Final[KaniGrammar] = KaniGrammar(
         ForbiddenOption("--harness", None, takes_value=True, category="selector"),
         ForbiddenOption("--exact", None, takes_value=False, category="selector"),
         ForbiddenOption("--tests", None, takes_value=False, category="selector"),
+        ForbiddenOption("--lib", None, takes_value=False, category="selector"),
+        ForbiddenOption("--bins", None, takes_value=False, category="selector"),
+        ForbiddenOption("--bin", None, takes_value=True, category="selector"),
         ForbiddenOption("--workspace", None, takes_value=False, category="selector"),
         ForbiddenOption("--jobs", "-j", takes_value=False, category="selector"),
         ForbiddenOption(

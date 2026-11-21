@@ -13,7 +13,6 @@ everything nested inside it as conditional.
 from __future__ import annotations
 
 import dataclasses as dc
-import re
 
 from rust_prover_tools.kani_inventory.attribute_values import (
     DEPTH_DELTAS,
@@ -35,9 +34,6 @@ __all__ = (
     "parse_level",
 )
 
-#: A Rust identifier start is any Unicode letter or an underscore; the rest
-#: are Unicode word characters. Raw identifiers are normalised separately.
-_IDENTIFIER = re.compile(r"[^\W\d]\w*")
 _ESCAPES = {
     "\\": "\\",
     '"': '"',
@@ -301,14 +297,14 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         if bracket >= len(masked) or masked[bracket] != "[":
             break
         end = _matching(masked, bracket, "[", "]")
-        content = masked[bracket + 1 : end - 1].strip()
+        content = masked[bracket + 1 : end - 1]
         if inner:
             inner_name, _ = attribute_name(content)
             if inner_name == "cfg" and normalise(content) != "cfg(kani)":
                 facts.inner_conditional = True
         else:
             facts.record(
-                source.original[bracket + 1 : end - 1].strip(),
+                source.original[bracket + 1 : end - 1],
                 content,
             )
         position = _skip_space(masked, end)

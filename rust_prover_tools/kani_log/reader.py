@@ -1,10 +1,9 @@
 """Walk one Kani log line by line with the grammar in ``syntax``.
 
 The reader records a ``KaniLogError`` reason wherever a line is not one the
-grammar accounts for. Recording rather than raising keeps facts available when
-a proof is stopped mid-report; `finish` still fails closed. The state machine
-is derived from Combobulate's reader at commit ``9dd6e3c`` under the ISC
-licence in ``ATTRIBUTION.md``.
+grammar accounts for, so facts stay available when a proof is stopped
+mid-report while `finish` still fails closed. The state machine derives from
+Combobulate's reader at commit ``9dd6e3c`` under the ISC licence.
 
 Examples
 --------
@@ -75,8 +74,7 @@ class KaniLogReader:
     """An incremental reader for one Kani 0.67.0 log.
 
     Feed decoded lines, then call `finish`. `facts` never raises for an
-    incomplete log, so a supervisor can attribute the last evidence to a
-    stopped harness.
+    incomplete log, so a supervisor can attribute a stopped harness's evidence.
     """
 
     def __init__(self) -> None:
@@ -217,6 +215,9 @@ class KaniLogReader:
         if (match := HARNESS_START.match(text)) is not None:
             self._close_block()
             self._begin_block(match["name"])
+            return
+        if BANNER.match(text) is not None:
+            self._budget.record((second_banner_issue(self._line_number),))
             return
         if self._cursor.needs_summary:
             # The solver's transcript sits between the header and the report.

@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 import string
 
+from rust_prover_tools.kani_inventory.models import InventoryDiscoveryError
+
 __all__ = (
     "DEPTH_DELTAS",
     "PROOF_ATTRIBUTES",
@@ -31,7 +33,7 @@ DEPTH_DELTAS = {
 }
 
 PROOF_ATTRIBUTES = frozenset({"kani::proof", "kani::proof_for_contract"})
-_RAW_STRING = re.compile(r'r(?P<hashes>#*)"(?P<body>.*)"(?P=hashes)', re.DOTALL)
+_RAW_STRING = re.compile(r'r(?P<hashes>#*)"(?P<body>.*?)"(?P=hashes)', re.DOTALL)
 _HEX_DIGITS = 2
 _MIN_CFG_ATTR_PARTS = 2
 _QUOTE_PAIR = 2
@@ -248,7 +250,10 @@ def _parse_cfg_attr(
     if not arguments.endswith(")"):
         return None
     start = masked.index("(") + 1
-    spans = _split_spans(masked[start:-1])
+    close = masked.rfind(")")
+    if close <= start:
+        return None
+    spans = _split_spans(masked[start:close])
     if len(spans) < _MIN_CFG_ATTR_PARTS:
         return None
     pairs = [
@@ -273,10 +278,16 @@ def _fold_cfg_facts(
         nested = _nested_cfg_attr_facts(masked_part, original_part)
         if nested is None:
             return None
+        if nested[2] is not None:
+            if predicate != "kani":
+                msg = (
+                    "a conditional module #[path] cannot be discovered "
+                    "without evaluating its cfg predicate"
+                )
+                raise InventoryDiscoveryError(msg)
+            path = nested[2]
         proofs.extend(nested[0])
         conditional = conditional or nested[1]
-        if predicate == "kani" and nested[2] is not None:
-            path = nested[2]
     return proofs, conditional, path
 
 

@@ -147,6 +147,7 @@ class JsonlSink:
         self.path = path
         self._limit = max_line_bytes
         self._offset = start_offset
+        self._failed = False
 
     def write(self, record: dict[str, object]) -> None:
         """Write one record and flush it.
@@ -167,15 +168,28 @@ class JsonlSink:
             **typ.cast("dict[str, object]", normalise(record)),
         }
         line = fit_record(payload, self._limit)
-        self._handle.write(line + "\n")
-        self._handle.flush()
+        try:
+            self._handle.write(line + "\n")
+            self._handle.flush()
+        except (OSError, ValueError):  # fmt: skip
+            self._failed = True
+            raise
         # The handle contract is UTF-8 without newline translation, so the
         # emitted bytes are the encoded line plus one newline byte.
         self._offset += len((line + "\n").encode("utf-8"))
 
     def flush(self) -> None:
         """Flush everything written so far."""
-        self._handle.flush()
+        try:
+            self._handle.flush()
+        except (OSError, ValueError):  # fmt: skip
+            self._failed = True
+            raise
+
+    @property
+    def failed(self) -> bool:
+        """Whether a write or flush failed and left the offset uncertain."""
+        return self._failed
 
     @property
     def offset(self) -> int:
@@ -278,12 +292,13 @@ class Diagnostics:
         from rust_prover_tools.supervision.results import DiagnosticRef
 
         start = self.jsonl.offset
-        jsonl_ok = True
-        try:
-            self.jsonl.write(record)
-        except (OSError, ValueError) as error:
-            self._remember(error)
-            jsonl_ok = False
+        jsonl_ok = not (isinstance(self.jsonl, JsonlSink) and self.jsonl.failed)
+        if jsonl_ok:
+            try:
+                self.jsonl.write(record)
+            except (OSError, ValueError) as error:
+                self._remember(error)
+                jsonl_ok = False
         try:
             self.human.write(record)
         except (OSError, ValueError) as error:
@@ -294,7 +309,10 @@ class Diagnostics:
 
     def flush(self) -> None:
         """Flush both sinks, retaining the first destination failure."""
-        for sink in (self.jsonl, self.human):
+        sinks = (self.jsonl, self.human)
+        if isinstance(self.jsonl, JsonlSink) and self.jsonl.failed:
+            sinks = (self.human,)
+        for sink in sinks:
             try:
                 sink.flush()
             except (OSError, ValueError) as error:

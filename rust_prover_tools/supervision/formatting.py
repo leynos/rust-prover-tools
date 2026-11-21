@@ -72,10 +72,14 @@ def bounded_text(text: str, limit: int) -> str:
     str
         The original text, or a UTF-8-safe prefix followed by the marker.
     """
+    marker = TRUNCATION_MARKER.encode("utf-8")
+    if limit < len(marker):
+        msg = f"a truncation budget must be at least {len(marker)} bytes"
+        raise ValueError(msg)
     raw = text.encode("utf-8")
     if len(raw) <= limit:
         return text
-    room = max(0, limit - len(TRUNCATION_MARKER.encode("utf-8")))
+    room = limit - len(marker)
     return raw[:room].decode("utf-8", errors="ignore") + TRUNCATION_MARKER
 
 
@@ -110,7 +114,7 @@ def fit_record(payload: dict[str, object], limit: int) -> str:
         "harness",
         "attempt",
     }
-    for budget in (4096, 2048, 1024, 512, 256, 128, 64, 32, 16, 8, 0):
+    for budget in (4096, 2048, 1024, 512, 256, 128, 64, 32, 16):
         candidate = {
             key: value if key in structural else _bound_strings(value, budget)
             for key, value in payload.items()

@@ -234,7 +234,7 @@ def _child_module(walk: _Walk, parent: _Module, item: ModItem) -> _Module:
 def _module_file(parent: _Module, item: ModItem) -> Path:
     """Resolve one ``mod`` declaration to its file, or refuse an ambiguity."""
     if item.path_attribute is not None:
-        candidate = (parent.path_root / item.path_attribute).resolve()
+        candidate = (parent.path_root / item.path_attribute).absolute()
         if not candidate.is_file():
             msg = (
                 f"the #[path] module {item.path_attribute!r} declared at "

@@ -620,3 +620,93 @@ def test_a_cfg_attr_path_selects_the_module_file(tmp_path: Path) -> None:
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "proofs::right"
     ]
+
+
+def test_a_combining_mark_stays_in_the_identifier(tmp_path: Path) -> None:
+    """A Rust identifier is normalized to NFC without losing its mark."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("#[kani::proof]\nfn cafe\u0301() {}\n", encoding="utf-8")
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["café"]
+
+
+def test_a_comment_before_cfg_attr_keeps_path_offsets(tmp_path: Path) -> None:
+    """Comment masking must not shift the original attribute slice."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[/* note */ cfg_attr(kani, path = "chosen.rs")]\nmod proofs;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "chosen.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::h"
+    ]
+
+
+def test_trailing_space_after_nested_cfg_attr_is_tolerated(
+    tmp_path: Path,
+) -> None:
+    """The closing parenthesis is located, not assumed to be last."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        "#[cfg_attr(kani, cfg_attr(kani, kani::proof) )]\nfn h() {}\n",
+        encoding="utf-8",
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == ["h"]
+
+
+def test_a_conditional_path_is_refused(tmp_path: Path) -> None:
+    """A path behind an unevaluated predicate cannot silently use the default."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[cfg_attr(feature = "x", path = "alternate.rs")]\nmod proofs;\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InventoryDiscoveryError, match="conditional module"):
+        collect_proofs(root, tmp_path)
+
+
+def test_a_symlinked_path_module_resolves_children_lexically(
+    tmp_path: Path,
+) -> None:
+    """A symlink target does not move the child directory."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "outside").mkdir()
+    target = tmp_path / "outside" / "proofs.rs"
+    target.write_text("mod child;\n", encoding="utf-8")
+    (tmp_path / "src" / "proofs.rs").symlink_to(target)
+    (tmp_path / "src" / "child.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text('#[path = "proofs.rs"]\nmod proofs;\n', encoding="utf-8")
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::child::h"
+    ]
+
+
+def test_a_raw_path_followed_by_a_comment_is_accepted(tmp_path: Path) -> None:
+    """The raw literal ends at its own delimiter, not a later quote."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text(
+        '#[path = r"proofs.rs" /* "shared" */]\nmod proofs;\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "src" / "proofs.rs").write_text(
+        "#[kani::proof]\nfn h() {}\n", encoding="utf-8"
+    )
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "proofs::h"
+    ]

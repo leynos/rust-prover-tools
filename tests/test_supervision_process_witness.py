@@ -157,7 +157,7 @@ def test_a_real_stop_reaches_the_whole_group_and_heartbeats_fire(
         interrupts=None,
     )
     config = SupervisionConfig(
-        timeout_seconds=3.0,
+        timeout_seconds=12.0,
         sample_interval_seconds=0.5,
         heartbeat_interval_seconds=1.0,
         watchdog_threshold_bytes=None,

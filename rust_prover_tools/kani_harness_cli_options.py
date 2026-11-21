@@ -224,9 +224,8 @@ def supervision_policy(
         jsonl_path=destinations.jsonl,
         report_path=destinations.report,
     )
-    if destinations.human is None:
-        _require_stdout_free(destinations.jsonl, "--jsonl")
-        _require_stdout_free(destinations.report, "--report")
+    _require_stdout_free(destinations.jsonl, "--jsonl")
+    _require_stdout_free(destinations.report, "--report")
     threshold = policy.watchdog_mib * 1024 * 1024 if policy.watchdog else None
     return SupervisionConfig(
         timeout_seconds=policy.timeout_seconds,

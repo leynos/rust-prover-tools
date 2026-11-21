@@ -272,29 +272,29 @@ class CuprumHarnessLauncher:
     ) -> LaunchResult:
         """Run one invocation on its own task, scoping the pid observer."""
         started = self._monotonic()
-        command = build(spec)
-        program = Program(command.argv[0])
-        project = ProjectSettings(
-            name=_PROJECT_NAME,
-            programs=(program,),
-            documentation_locations=("docs/developers-guide.md",),
-            noise_rules=(),
-        )
-        catalogue = ProgramCatalogue(projects=(project,))
-        cmd = sh.make(program, catalogue=catalogue)(*command.argv[1:])
-        context = ExecutionContext(
-            env=command.env,
-            env_mode=command.env_mode,
-            cwd=command.cwd,
-            process_group=ProcessGroupPolicy.OWN_GROUP,
-        )
-        output = RunOutputOptions(
-            capture=False,
-            echo=False,
-            on_line=self._line_hook(on_line, started),
-            broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
-        )
         try:
+            command = build(spec)
+            program = Program(command.argv[0])
+            project = ProjectSettings(
+                name=_PROJECT_NAME,
+                programs=(program,),
+                documentation_locations=("docs/developers-guide.md",),
+                noise_rules=(),
+            )
+            catalogue = ProgramCatalogue(projects=(project,))
+            cmd = sh.make(program, catalogue=catalogue)(*command.argv[1:])
+            context = ExecutionContext(
+                env=command.env,
+                env_mode=command.env_mode,
+                cwd=command.cwd,
+                process_group=ProcessGroupPolicy.OWN_GROUP,
+            )
+            output = RunOutputOptions(
+                capture=False,
+                echo=False,
+                on_line=self._line_hook(on_line, started),
+                broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
+            )
             with cuprum.observe(recorder):
                 result = await cmd.run(output=output, context=context)
         except (OSError, cuprum.UnknownProgramError) as error:

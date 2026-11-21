@@ -14,17 +14,14 @@ can start a false literal.
 
 from __future__ import annotations
 
-import re
 import typing as typ
+import unicodedata
 
 __all__ = (
     "Identifier",
     "identifier",
     "mask_source",
 )
-
-#: A Rust identifier starts with a Unicode letter or an underscore.
-_IDENTIFIER = re.compile(r"[^\W\d]\w*")
 
 
 def mask_source(text: str) -> str:
@@ -202,11 +199,22 @@ def identifier(masked: str, position: int) -> Identifier | None:
     Identifier | None
         The identifier, or `None` when one does not begin here.
     """
-    if masked.startswith("r#", position):
-        match = _IDENTIFIER.match(masked, position + 2)
-        if match is not None:
-            return Identifier(match.group(), match.end(), is_raw=True)
-    match = _IDENTIFIER.match(masked, position)
-    if match is None:
+    raw = masked.startswith("r#", position)
+    start = position + 2 if raw else position
+    if start >= len(masked) or not _identifier_start(masked[start]):
         return None
-    return Identifier(match.group(), match.end(), is_raw=False)
+    end = start + 1
+    while end < len(masked) and _identifier_continue(masked[end]):
+        end += 1
+    text = unicodedata.normalize("NFC", masked[start:end])
+    return Identifier(text, end, is_raw=raw)
+
+
+def _identifier_start(char: str) -> bool:
+    """Whether `char` can start a Rust identifier."""
+    return char == "_" or char.isalpha()
+
+
+def _identifier_continue(char: str) -> bool:
+    """Whether `char` can continue a Rust identifier."""
+    return char == "_" or char.isalnum() or unicodedata.category(char).startswith("M")

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rust_prover_tools.kani_log.blocks import BlockCursor, IssueKind
 from rust_prover_tools.kani_log.budget import RecordBudget
 from rust_prover_tools.kani_log.model import HarnessBlock
-from rust_prover_tools.kani_log.other_counts import reconcile_other
+from rust_prover_tools.kani_log.other_counts import (
+    parse_other_pairs,
+    reconcile_other,
+)
 from rust_prover_tools.kani_log.reconciliation import reconcile
 from rust_prover_tools.kani_log.syntax import (
     COVER,
@@ -117,3 +122,9 @@ def test_an_expected_assertion_panic_remains_successful() -> None:
     issues = reconcile(block)
 
     assert not any("SUCCESSFUL but lists" in issue.message for issue in issues)
+
+
+def test_a_repeated_other_kind_is_refused() -> None:
+    """Two counts of one kind cannot overwrite each other silently."""
+    with pytest.raises(ValueError, match="repeated other-result kind"):
+        parse_other_pairs("99 unreachable,1 unreachable")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -50,9 +51,6 @@ from rust_prover_tools.supervision.events import (
     sample_record,
 )
 from rust_prover_tools.unittests.supervision_doubles import VirtualClock, spec
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _record(**fields: object) -> dict[str, object]:
@@ -560,3 +558,55 @@ def test_accounting_fields_must_be_arrays() -> None:
 
     with pytest.raises(EvidenceFormatError, match="array"):
         validate_report_document(document)
+
+
+class _FlushFails(io.StringIO):
+    """A stream whose flush always fails, as a full disk would."""
+
+    def flush(self) -> None:
+        """Refuse the flush."""
+        msg = "flush failed"
+        raise OSError(msg)
+
+
+def test_a_failed_jsonl_sink_stops_issuing_offsets() -> None:
+    """A stale offset is worse than no reference after a failed flush."""
+    human = MemorySink()
+    jsonl = JsonlSink(_FlushFails())
+    diagnostics = Diagnostics(human=human, jsonl=jsonl)
+
+    first = diagnostics.emit(_record())
+
+    assert first is None
+    assert jsonl.failed
+    assert diagnostics.emit(_record()) is None
+    assert human.records
+
+
+def test_a_failed_report_publication_keeps_the_previous_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The atomic rename cannot destroy a good report when it fails."""
+    path = tmp_path / "report.json"
+    path.write_text("previous report", encoding="utf-8")
+
+    def fail(self: Path, target: Path) -> None:
+        """Refuse the publication rename."""
+        del self, target
+        msg = "rename failed"
+        raise OSError(msg)
+
+    monkeypatch.setattr(Path, "replace", fail)
+
+    with pytest.raises(OSError, match="rename failed"):
+        write_report(path, _report())
+
+    assert path.read_text(encoding="utf-8") == "previous report"
+    assert not list(tmp_path.glob(".report.json.*.tmp"))
+
+
+def test_a_budget_below_the_truncation_marker_is_refused() -> None:
+    """A caller cannot request a line bound that cannot carry its marker."""
+    with pytest.raises(ValueError, match="at least"):
+        bounded_text("x" * 100, 8)
