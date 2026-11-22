@@ -270,7 +270,26 @@ _DESCRIPTION_BOUNDARIES = (
         'first"\n\n\t - Location: src/harnesses.rs:1:1 in f\nSUMMARY:\nand second',
         id="blank-then-field-then-summary-marker",
     ),
+    pytest.param(
+        '- Description: "first"\n\nCheck this boundary\nand second"',
+        'first"\n\nCheck this boundary\nand second',
+        id="ordinary-check-prose",
+    ),
 )
+
+
+def test_a_malformed_check_header_after_a_blank_line_is_refused() -> None:
+    """A malformed header after a complete description is a structural fault."""
+    lines = log_text("verified").splitlines()
+    location = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("Check 3: ") and index > 0
+    )
+    del lines[location - 2]  # The preceding check's blank separator line.
+    lines[location - 1] = "Check 3: harnesses::verified.assertion"
+
+    assert "unrecognised line in the block" in refused("\n".join(lines))
 
 
 @pytest.mark.parametrize(("replacement", "expected"), _DESCRIPTION_BOUNDARIES)

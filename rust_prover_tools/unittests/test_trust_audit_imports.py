@@ -184,6 +184,13 @@ def test_a_deeper_crate_root_import_is_a_possible_alias() -> None:
     assert [item for item, _ in items(source)] == ["assume"]
 
 
+def test_a_grouped_self_member_binds_its_parent_name() -> None:
+    """Bind the parent name of ``use crate::k::{self};`` as a crate alias."""
+    source = "use crate::k::{self};\nfn f() { k::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
 def test_a_grouped_deeper_crate_import_binds_every_member() -> None:
     """Expand ``prelude::{k, j}`` rather than keeping only its last name."""
     source = "use crate::prelude::{k, j};\nfn f() { k::assume(true); }"

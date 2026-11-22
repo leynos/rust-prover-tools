@@ -51,6 +51,7 @@ from rust_prover_tools.trust_audit.repetitions import (
     MACRO_DELIMITERS,
     repetition_refusal,
 )
+from rust_prover_tools.trust_audit.structure import stringify_arguments
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
 from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import (
@@ -172,10 +173,14 @@ def _refuse_opaque_macros(
         base |= PROCEDURAL_OPAQUE_MACROS
     rules = macro_rules(tokens)
     names = _opaque_names(tokens, base, rules.patterns)
+    # ``stringify!`` turns its argument into text, so an opaque macro inside
+    # one does not run.  A proc-macro crate can parse that text, so there the
+    # refusal stays.
+    stringified = frozenset() if procedural_macro else stringify_arguments(tokens)
     _refuse_metavariable_invocations(tokens, rules, words, qualifiers)
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
-        if index in rules.patterns:
+        if index in rules.patterns or index in stringified:
             continue
         if token.kind is not Kind.IDENT or token.text not in names:
             continue

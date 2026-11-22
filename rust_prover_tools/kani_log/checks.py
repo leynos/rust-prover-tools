@@ -15,6 +15,7 @@ release.
 
 from __future__ import annotations
 
+import re
 import typing as typ
 
 from rust_prover_tools.kani_log.syntax import (
@@ -37,11 +38,11 @@ from rust_prover_tools.kani_log.syntax import (
 )
 
 if typ.TYPE_CHECKING:
-    import re
-
     from rust_prover_tools.kani_log.reader import Reader, _BlockBuilder
 
 __all__ = ("check",)
+
+_MALFORMED_CHECK = re.compile(r"^Check \d+: ")
 
 #: The shortest description that can carry a pair of framing quotes.
 _FRAMED_LENGTH = 2
@@ -258,7 +259,7 @@ def _is_report_line(line: str) -> bool:
     description open would swallow the line and hide the structural fault the
     outer parser reports.
     """
-    if line.startswith("Check "):
+    if _MALFORMED_CHECK.match(line) is not None:
         return True
     return any(pattern.match(line) is not None for pattern in _ENTRY_HEADS)
 

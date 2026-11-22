@@ -23,6 +23,7 @@ __all__ = (
     "path_value",
     "previous_closer",
     "skip_visibility",
+    "stringify_arguments",
     "texts",
 )
 
@@ -304,3 +305,29 @@ def path_value(
         )
         raise TrustAuditError(msg)
     return decoded_literal_body(literal.text)[1]
+
+
+# The delimiters a macro invocation's body may open.
+_MACRO_DELIMITERS = {"(": ")", "[": "]", "{": "}"}
+
+
+def stringify_arguments(tokens: tuple[Token, ...]) -> frozenset[int]:
+    """Return the token indices inside every ``stringify!`` argument group.
+
+    ``stringify!`` returns its argument's spelling and compiles none of it, so
+    a declaration or invocation written there names nothing.  The argument is
+    skipped by its delimiters rather than by matching each line.
+    """
+    skipped: set[int] = set()
+    for index, token in enumerate(tokens[:-2]):
+        if token.kind is not Kind.IDENT or token.text != "stringify":
+            continue
+        if tokens[index + 1].text != "!":
+            continue
+        opening = index + 2
+        closer = _MACRO_DELIMITERS.get(tokens[opening].text)
+        if closer is None:
+            continue
+        closing = matching(tokens, opening, tokens[opening].text, closer)
+        skipped.update(range(opening, closing + 1))
+    return frozenset(skipped)

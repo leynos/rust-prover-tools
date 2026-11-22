@@ -202,7 +202,11 @@ def _crate_member_names(
         None,
     )
     if opener is not None:
-        return _nested_crate_names(tokens, opener)
+        names = _nested_crate_names(tokens, opener)
+        parent = _parent_name_for_self(tokens, start, opener)
+        if parent is not None:
+            names.add(parent)
+        return names
     if start < stop and tokens[stop - 1].text == "*":
         # A wildcard imports names the per-file scan never sees, at any depth:
         # ``use crate::prelude::*`` exports whatever that module re-exports,
@@ -223,6 +227,35 @@ def _crate_member_names(
             continue
         return set() if token.text in LOCAL_QUALIFIERS else {token.text}
     return set()
+
+
+def _parent_name_for_self(
+    tokens: tuple[Token, ...],
+    start: int,
+    opener: int,
+) -> str | None:
+    """Return the parent name an unrenamed ``self`` member binds.
+
+    A renamed ``self`` binds only its alias, which `_nested_crate_names`
+    already reports.
+    """
+    if not _has_unrenamed_self(tokens, opener):
+        return None
+    for index in range(opener - 1, start - 1, -1):
+        token = tokens[index]
+        if token.kind is not Kind.IDENT:
+            continue
+        return None if token.text in LOCAL_QUALIFIERS else token.text
+    return None
+
+
+def _has_unrenamed_self(tokens: tuple[Token, ...], opener: int) -> bool:
+    """Report whether a brace group holds a bare ``self`` member."""
+    closer = matching(tokens, opener, "{", "}")
+    return any(
+        member_end - member_start == 1 and tokens[member_start].text == "self"
+        for member_start, member_end in top_level_members(tokens, opener, closer + 1)
+    )
 
 
 def _trailing_alias(

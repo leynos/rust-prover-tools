@@ -51,6 +51,18 @@ def test_a_nested_declaration_carries_its_inline_chain() -> None:
     assert references(source) == [("x", None, ("outer", "inner"))]
 
 
+def test_a_macro_inside_stringify_compiles_no_module() -> None:
+    """A macro invocation inside ``stringify!`` expands nothing."""
+    source = "\n".join(
+        (
+            "macro_rules! decl { () => { mod hidden; }; }",
+            "const S: &str = stringify!(decl!());",
+        ),
+    )
+
+    assert references(source) == []
+
+
 def test_a_module_inside_stringify_is_not_a_declaration() -> None:
     """Skip a ``mod`` in ``stringify!``, which compiles none of its argument."""
     source = "stringify!(mod ghost;)\nmod real;"

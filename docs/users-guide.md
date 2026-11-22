@@ -252,20 +252,23 @@ supports. In decreasing precedence:
 6. `verified` — the manifest declares at least one claim, every declared claim
    ran and nothing disproved it.
 
-An unwinding failure is a bound, not a counterexample. A `should_panic` claim
-is excused only when Kani also reported that the panic matched, and then only
-for the checks it counts as a panic: the driver prints that note only when
-every failed property is an assertion, so a failure of any other kind beside it
-is an independent failure and still a counterexample. A claim declared to panic
-is verified only when the note is present; a successful block without it is
-reported as `undetermined`, and a block carrying the note with no failed check
-is refused as a report the release cannot print. A block carrying Kani's
-unwinding-failure note whose checks list no failed unwinding check is refused
-for the same reason: the note says a failure exists, and the block does not
-show it. The exemption reaches a failed assertion under a called routine, which
-is the same panic seen one frame down, and an unreachable check after the panic
-is explained the same way rather than reported as undetermined. The run is
-still bounded: none of these outcomes proves a property over every execution.
+A timeout and the unwinding-failure note cannot describe the same block: the
+note states that a check failed, and a timeout aborts before any check is
+reported. An unwinding failure is a bound, not a counterexample. A
+`should_panic` claim is excused only when Kani also reported that the panic
+matched, and then only for the checks it counts as a panic: the driver prints
+that note only when every failed property is an assertion, so a failure of any
+other kind beside it is an independent failure and still a counterexample. A
+claim declared to panic is verified only when the note is present; a successful
+block without it is reported as `undetermined`, and a block carrying the note
+with no failed check is refused as a report the release cannot print. A block
+carrying Kani's unwinding-failure note whose checks list no failed unwinding
+check is refused for the same reason: the note says a failure exists, and the
+block does not show it. The exemption reaches a failed assertion under a called
+routine, which is the same panic seen one frame down, and an unreachable check
+after the panic is explained the same way rather than reported as undetermined.
+The run is still bounded: none of these outcomes proves a property over every
+execution.
 
 `tool-error` covers a log that cannot be decided from at all: truncated or
 otherwise structurally invalid output, two invocations concatenated so a second

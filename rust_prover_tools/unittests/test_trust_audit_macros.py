@@ -97,6 +97,21 @@ def test_include_bytes_is_read_as_trivia_in_an_ordinary_crate() -> None:
     assert scan(source).items == ()
 
 
+def test_an_opaque_macro_inside_stringify_is_not_refused() -> None:
+    """``stringify!`` turns its argument into text; the macro inside does not run."""
+    source = 'const S: &str = stringify!(include!("absent.rs"));'
+
+    assert scan(source).items == ()
+
+
+def test_an_opaque_macro_inside_stringify_is_refused_for_a_proc_macro() -> None:
+    """A proc-macro crate can parse the generated text, so keep the refusal."""
+    source = 'const S: &str = stringify!(include!("absent.rs"));'
+
+    with pytest.raises(TrustAuditError, match="include!"):
+        scan(source, procedural_macro=True)
+
+
 def test_a_procedural_macro_scan_refuses_concat() -> None:
     """Refuse ``concat!`` where literals are read as code.
 

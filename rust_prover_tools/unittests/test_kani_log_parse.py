@@ -307,6 +307,18 @@ def test_a_completed_result_beside_a_timeout_marker_is_refused() -> None:
     assert "timeout alongside a completed result" in refused(text)
 
 
+def test_an_unwinding_note_beside_a_timeout_is_refused() -> None:
+    """Refuse a timeout block carrying the unwinding-failure note."""
+    text = log_text("multiplication_timeout").replace(
+        "CBMC timed out.",
+        "[Kani] info: Verification output shows one or more unwinding failures.\n"
+        "CBMC timed out.",
+        1,
+    )
+
+    assert "timeout alongside a completed result" in refused(text)
+
+
 def test_a_repeated_cover_status_is_refused() -> None:
     """Refuse a cover line that counts the same status twice."""
     text = log_text("verified").replace(

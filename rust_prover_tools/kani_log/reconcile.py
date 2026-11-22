@@ -150,6 +150,7 @@ def _require_timeout(builder: _BlockBuilder) -> None:
         builder.seen_verification_time,
         builder.failed_count is not None,
         builder.covered_total is not None,
+        builder.unwinding_reported,
     )
     if builder.verdict != "FAILED" or any(completed_fields):
         msg = (
