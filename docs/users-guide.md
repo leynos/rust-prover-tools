@@ -430,6 +430,13 @@ or output is refused, including `--harness`, `--exact`, `--tests`, `--package`,
 and their short spellings `-q`, `-j`, and `-p`, whether written as a separate
 value, a joined value, or a short option, on either side of `--`.
 
+A harness that lives in an integration-test target is run only when its package
+declares exactly one such target. Kani 0.67.0 has no flag that selects a single
+test target: its `--tests` option also builds the library and every binary, so
+a harness name alone cannot attribute a record to one test target. With two or
+more test targets the run refuses the selection rather than risk crediting a
+same-named proof to the wrong one. Lib and bin harnesses are unaffected.
+
 See [Kani supervised harness execution](kani-supervised-execution.md) for the
 inventory, JSONL, and report schemas, the adapter contract, and the discovery
 rules.

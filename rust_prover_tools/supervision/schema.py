@@ -10,13 +10,29 @@ from __future__ import annotations
 import json
 import typing as typ
 
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
+from rust_prover_tools.supervision.models import (
+    ExecutionStatus,
+    ProofVerdict,
+    StopReason,
+)
+from rust_prover_tools.supervision.results import RunOutcome
 from rust_prover_tools.supervision.schema_fields import (
     JSONL_FIELDS,
     REPORT_FIELDS,
     REPORT_RESULT_FIELDS,
+)
+from rust_prover_tools.supervision.schema_values import (
+    EvidenceFormatError,
+    decode_measurement,
+    require_bool,
+    require_enum,
+    require_exact,
+    require_int,
+    require_optional,
+    require_optional_int,
+    require_seconds,
+    require_str,
+    validate_cgroup,
 )
 
 __all__ = (
@@ -37,117 +53,6 @@ _TRUNCATED_CONTEXT: typ.Final[frozenset[str]] = frozenset({
     "original_kind",
     "run_id",
 })
-
-
-class EvidenceFormatError(ValueError):
-    """A record or report that does not match the documented schema."""
-
-
-def _require_exact(
-    document: cabc.Mapping[str, object],
-    fields: frozenset[str],
-    *,
-    subject: str,
-) -> None:
-    """Require exactly `fields`, naming the missing and unknown keys."""
-    missing = sorted(fields - set(document))
-    unknown = sorted(set(document) - fields)
-    if missing or unknown:
-        msg = (
-            f"{subject} does not match the schema: missing={missing}, unknown={unknown}"
-        )
-        raise EvidenceFormatError(msg)
-
-
-def _require_optional(
-    document: cabc.Mapping[str, object],
-    permitted: frozenset[str],
-    *,
-    required: frozenset[str],
-) -> None:
-    """Require `required`, permit `permitted`, and reject anything else."""
-    missing = sorted(required - set(document))
-    unknown = sorted(set(document) - permitted)
-    if missing or unknown:
-        msg = f"the record has missing={missing} and unknown={unknown}"
-        raise EvidenceFormatError(msg)
-
-
-def _measurement_keys(document: object, *, subject: str) -> None:
-    """Require a measurement to be exactly one available or absent form."""
-    if not isinstance(document, dict):
-        msg = f"{subject} is not a measurement object"
-        raise EvidenceFormatError(msg)
-    keys = set(document)
-    if keys == {"value"}:
-        value = document["value"]
-        if not isinstance(value, int) or isinstance(value, bool):
-            msg = f"{subject}.value is not an integer"
-            raise EvidenceFormatError(msg)
-        if value < 0:
-            msg = f"{subject}.value is negative"
-            raise EvidenceFormatError(msg)
-        return
-    if keys == {"unavailable_reason"}:
-        if not isinstance(document["unavailable_reason"], str):
-            msg = f"{subject}.unavailable_reason is not a string"
-            raise EvidenceFormatError(msg)
-        return
-    msg = f"{subject} is neither available nor unavailable: {sorted(keys)}"
-    raise EvidenceFormatError(msg)
-
-
-def decode_measurement(document: object, *, subject: str = "measurement") -> None:
-    """Validate one measurement object.
-
-    Parameters
-    ----------
-    document : object
-        Parsed JSON value.
-    subject : str
-        Name used in the refusal.
-
-    Raises
-    ------
-    EvidenceFormatError
-        Raised when the value is neither ``{"value": N}`` nor
-        ``{"unavailable_reason": "..."}``.
-    """
-    _measurement_keys(document, subject=subject)
-
-
-def _validate_cgroup(document: object, *, subject: str) -> None:
-    """Validate the optional cgroup object of a report result."""
-    if document is None:
-        return
-    if not isinstance(document, dict):
-        msg = f"{subject} is not an object"
-        raise EvidenceFormatError(msg)
-    _require_exact(
-        document,
-        frozenset({
-            "path",
-            "start",
-            "finish",
-            "oom_kill_delta",
-            "unavailable_reason",
-        }),
-        subject=subject,
-    )
-    for side in ("start", "finish"):
-        memory = document[side]
-        if memory is None:
-            continue
-        if not isinstance(memory, dict):
-            msg = f"{subject}.{side} is not an object"
-            raise EvidenceFormatError(msg)
-        _require_exact(
-            memory,
-            frozenset({"current", "peak", "oom_kill"}),
-            subject=f"{subject}.{side}",
-        )
-        for field in ("current", "peak", "oom_kill"):
-            decode_measurement(memory[field], subject=f"{subject}.{side}.{field}")
 
 
 def _require_schema(document: dict[str, object], subject: str) -> None:
@@ -204,9 +109,9 @@ def _decode_record(line: str, number: int) -> dict[str, object]:
         raise EvidenceFormatError(msg)
     fields = JSONL_FIELDS[kind]
     if kind == "truncated":
-        _require_optional(document, fields | _TRUNCATED_CONTEXT, required=fields)
+        require_optional(document, fields | _TRUNCATED_CONTEXT, required=fields)
     else:
-        _require_exact(document, fields, subject=f"record {number}")
+        require_exact(document, fields, subject=f"record {number}")
     _validate_record_measurements(kind, document, subject=f"record {number}")
     return typ.cast("dict[str, object]", document)
 
@@ -221,7 +126,7 @@ def _validate_record_measurements(
     if kind == "harness-finish":
         for field in ("peak_group_rss", "min_host_available", "host_total"):
             decode_measurement(document[field], subject=f"{subject}.{field}")
-        _validate_cgroup(document["cgroup"], subject=f"{subject}.cgroup")
+        validate_cgroup(document["cgroup"], subject=f"{subject}.cgroup")
         return
     if kind == "run-finish":
         _validate_accounting(document["accounting"])
@@ -249,7 +154,22 @@ def validate_report_document(document: object) -> None:
         msg = "the report is not an object"
         raise EvidenceFormatError(msg)
     _require_schema(document, "the report")
-    _require_exact(document, REPORT_FIELDS, subject="the report")
+    require_exact(document, REPORT_FIELDS, subject="the report")
+    require_str(document["run_id"], subject="the report run_id")
+    require_str(document["started_at"], subject="the report started_at")
+    require_str(
+        document["finished_at"], subject="the report finished_at", optional=True
+    )
+    require_enum(document["outcome"], RunOutcome, subject="the report outcome")
+    for field in ("complete", "passed", "interrupted"):
+        require_bool(document[field], subject=f"the report {field}")
+    require_optional_int(
+        document["interrupt_signal"], subject="the report interrupt_signal"
+    )
+    notes = document["notes"]
+    if not isinstance(notes, list) or not all(isinstance(note, str) for note in notes):
+        msg = "the report notes are not an array of strings"
+        raise EvidenceFormatError(msg)
     _validate_expected(document["expected"])
     _validate_accounting(document["accounting"])
     _validate_results(document["results"])
@@ -264,7 +184,7 @@ def _validate_expected(expected: object) -> None:
         if not isinstance(entry, dict):
             msg = f"expected entry {index} is not an object"
             raise EvidenceFormatError(msg)
-        _require_exact(
+        require_exact(
             entry,
             frozenset({"package", "harness", "attempt"}),
             subject=f"expected entry {index}",
@@ -288,7 +208,7 @@ def _validate_accounting(accounting: object) -> None:
     if not isinstance(accounting, dict):
         msg = "the report accounting is not an object"
         raise EvidenceFormatError(msg)
-    _require_exact(
+    require_exact(
         accounting,
         frozenset({"missing", "duplicate", "unexpected"}),
         subject="the report accounting",
@@ -308,10 +228,49 @@ def _validate_results(results: object) -> None:
         if not isinstance(result, dict):
             msg = f"result {index} is not an object"
             raise EvidenceFormatError(msg)
-        _require_exact(result, REPORT_RESULT_FIELDS, subject=f"result {index}")
+        require_exact(result, REPORT_RESULT_FIELDS, subject=f"result {index}")
+        require_str(result["package"], subject=f"result {index}.package")
+        require_str(result["harness"], subject=f"result {index}.harness")
+        require_int(result["attempt"], subject=f"result {index}.attempt", minimum=1)
+        require_bool(result["executed"], subject=f"result {index}.executed")
+        require_enum(
+            result["status"], ExecutionStatus, subject=f"result {index}.status"
+        )
+        stop_reason = result["stop_reason"]
+        if stop_reason is not None:
+            require_enum(
+                stop_reason,
+                StopReason,
+                subject=f"result {index}.stop_reason",
+            )
+        require_optional_int(result["exit_code"], subject=f"result {index}.exit_code")
+        require_optional_int(
+            result["signal_number"], subject=f"result {index}.signal_number"
+        )
+        require_enum(
+            result["proof_verdict"],
+            ProofVerdict,
+            subject=f"result {index}.proof_verdict",
+        )
+        require_str(
+            result["started_at"],
+            subject=f"result {index}.started_at",
+            optional=True,
+        )
+        require_str(
+            result["finished_at"],
+            subject=f"result {index}.finished_at",
+            optional=True,
+        )
+        require_seconds(
+            result["duration_seconds"],
+            subject=f"result {index}.duration_seconds",
+        )
+        for field in ("last_output", "last_progress", "detail"):
+            require_str(result[field], subject=f"result {index}.{field}", optional=True)
         for field in ("peak_group_rss", "min_host_available", "host_total"):
             decode_measurement(result[field], subject=f"result {index}.{field}")
-        _validate_cgroup(result["cgroup"], subject=f"result {index}.cgroup")
+        validate_cgroup(result["cgroup"], subject=f"result {index}.cgroup")
         _validate_diagnostic(result["diagnostic"], subject=f"result {index}.diagnostic")
 
 
@@ -322,7 +281,7 @@ def _validate_diagnostic(document: object, *, subject: str) -> None:
     if not isinstance(document, dict):
         msg = f"{subject} is not an object"
         raise EvidenceFormatError(msg)
-    _require_exact(document, frozenset({"sink", "offset"}), subject=subject)
+    require_exact(document, frozenset({"sink", "offset"}), subject=subject)
     if not isinstance(document["sink"], str):
         msg = f"{subject}.sink is not a string"
         raise EvidenceFormatError(msg)

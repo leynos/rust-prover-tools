@@ -131,6 +131,10 @@ class RunningHarnessHandle(typ.Protocol):
         """Wait for the child to finish and return its termination evidence."""
         ...
 
+    async def settle(self) -> LaunchResult:
+        """Join the child after a stop, whatever ended it."""
+        ...
+
 
 class HarnessLauncher(typ.Protocol):
     """Starts one harness invocation and returns a handle to it.

@@ -47,7 +47,7 @@ if typ.TYPE_CHECKING:
         Sleeper,
     )
 
-__all__ = ("async_test", "classify", "config", "environment")
+__all__ = ("NullObserver", "async_test", "classify", "config", "environment")
 
 
 def async_test(
@@ -67,7 +67,7 @@ def async_test(
     return wrapper
 
 
-class _NullObserver:
+class NullObserver:
     """An observer that records nothing, for tests that do not parse output."""
 
     last_progress: str | None = None
@@ -85,7 +85,7 @@ class _ScriptedAdapter:
     def observer(self, spec: HarnessSpec) -> LineObserver:
         """Return the null observer for this attempt."""
         del spec
-        return _NullObserver()
+        return NullObserver()
 
     def classify(
         self,

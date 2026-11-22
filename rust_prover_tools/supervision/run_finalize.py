@@ -34,6 +34,7 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.results import DiagnosticRef
 
 __all__ = (
+    "CANCELLED_DETAIL",
     "INTERRUPTED_DETAIL",
     "NOT_RUN_DETAIL",
     "ReportInput",
@@ -44,6 +45,9 @@ __all__ = (
 
 NOT_RUN_DETAIL: typ.Final[str] = "the run stopped before this harness"
 INTERRUPTED_DETAIL: typ.Final[str] = "a signal interrupted this harness"
+CANCELLED_DETAIL: typ.Final[str] = (
+    "the run task was cancelled before this harness completed"
+)
 
 
 @dc.dataclass(frozen=True, slots=True)

@@ -166,7 +166,7 @@ def _cgroup(tmp_path: Path, *, peak: bool = True) -> tuple[Path, Path]:
     if peak:
         (job / "memory.peak").write_text("134217728\n", encoding="utf-8")
     (job / "memory.events").write_text(
-        "low 0\nhigh 0\nmax 2\noom 0\noom_kill 3\n", encoding="utf-8"
+        "low 0\nhigh 0\nmax 1\noom 2\noom_kill 3\n", encoding="utf-8"
     )
     membership = tmp_path / "self-cgroup"
     membership.write_text("0::/user.slice/job.scope\n", encoding="utf-8")
@@ -174,17 +174,19 @@ def _cgroup(tmp_path: Path, *, peak: bool = True) -> tuple[Path, Path]:
 
 
 def test_cgroup_discovery_and_memory_reads(tmp_path: Path) -> None:
-    """A discovered path yields current, peak, and oom_kill values."""
+    """A discovered path yields current, peak, and event counters."""
     mount, membership = _cgroup(tmp_path)
     reader = CgroupV2Reader(root=mount, self_cgroup=membership)
 
     path = reader.discover()
     memory = reader.read(path)
 
-    assert path == "/user.slice/job.scope"
+    assert path == str(mount / "user.slice/job.scope")
     assert memory.current.value == 64 * 1024 * 1024
     assert memory.peak.value == 128 * 1024 * 1024
     assert memory.oom_kill.value == 3
+    assert memory.oom.value == 2
+    assert memory.max_events.value == 1
 
 
 def test_a_missing_peak_file_is_an_explicit_absence(tmp_path: Path) -> None:
@@ -281,3 +283,41 @@ def test_group_rss_without_a_member_is_unavailable(tmp_path: Path) -> None:
 
     assert measurement.value is None
     assert "no process in the group" in (measurement.unavailable_reason or "")
+
+
+def test_the_cgroup2_mount_is_resolved_from_mountinfo(tmp_path: Path) -> None:
+    """A cgroup mounted at a non-default point and sub-tree is still found."""
+    mount = tmp_path / "host" / "cgroup"
+    job = mount / "leaf"
+    job.mkdir(parents=True)
+    (job / "memory.current").write_text("1024\n", encoding="utf-8")
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/job.scope/leaf\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        (
+            "24 1 8:1 / / rw - ext4 /dev/sda1 rw\n"
+            "36 24 0:32 /job.scope /host/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"
+        ),
+        encoding="utf-8",
+    )
+    reader = CgroupV2Reader(root=mount, self_cgroup=membership, mountinfo=mountinfo)
+
+    path = reader.discover()
+
+    assert path == str(job)
+    assert reader.read(path).current.value == 1024
+
+
+def test_a_membership_outside_the_mount_root_is_unavailable(tmp_path: Path) -> None:
+    """A membership the mounted superblock does not contain is not guessed."""
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/elsewhere/leaf\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "36 24 0:32 /job.scope /host/cgroup rw - cgroup2 cgroup2 rw\n",
+        encoding="utf-8",
+    )
+    reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
+
+    assert reader.discover() is None

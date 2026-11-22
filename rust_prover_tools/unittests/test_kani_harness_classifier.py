@@ -288,3 +288,45 @@ def test_an_unregistered_banner_becomes_typed_evidence() -> None:
 
     assert classification.status is ExecutionStatus.ERROR
     assert "0.68.0" in classification.detail
+
+
+def test_a_stopped_harness_keeps_the_verdict_it_already_reported() -> None:
+    """A timeout outranks the status, but not an observed proof verdict."""
+    identity = "harnesses::verified"
+    evidence = _evidence(identity, stop=StopReason.TIMEOUT, exit_code=None)
+    adapter = KaniAdapter(version="0.67.0")
+
+    classification = adapter.classify(evidence, _observer(identity))
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert classification.proof_verdict is ProofVerdict.PASSED
+
+
+def test_a_nonzero_exit_with_no_output_is_not_a_selection_diagnosis() -> None:
+    """A child that never printed says nothing about which harness matched."""
+    adapter = KaniAdapter(version="0.67.0")
+    identity = "harnesses::x"
+    evidence = _evidence(identity, exit_code=2)
+
+    classification = adapter.classify(evidence, KaniObserver())
+
+    assert classification.status is ExecutionStatus.EXIT_NONZERO
+    assert "no output" in classification.detail
+
+
+def test_a_verifier_that_never_ran_is_not_a_no_match() -> None:
+    """An explicit no-match needs the verifier to have printed its banner."""
+    evidence = _evidence("harnesses::absent", exit_code=1)
+    observer = KaniObserver()
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Kani Rust Verifier 0.67.0 (cargo plugin)",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+
+    classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
+
+    assert classification.status is ExecutionStatus.NO_MATCH

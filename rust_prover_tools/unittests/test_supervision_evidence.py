@@ -626,3 +626,89 @@ def test_a_multiline_detail_stays_on_one_table_row() -> None:
 
     assert all("\n" not in line for line in lines)
     assert any("first second" in line for line in lines)
+
+
+@pytest.mark.parametrize("status", ["passing", "PASSED", "", 7])
+def test_an_unknown_result_status_is_refused(status: object) -> None:
+    """A status outside the documented set is not a report this reader accepts."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["status"] = status
+
+    with pytest.raises(EvidenceFormatError, match="status"):
+        validate_report_document(document)
+
+
+@pytest.mark.parametrize("duration", ["1.5", True, -1.0, float("nan"), None])
+def test_a_non_numeric_duration_is_refused(duration: object) -> None:
+    """A duration is a finite non-negative number of seconds."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["duration_seconds"] = duration
+
+    with pytest.raises(EvidenceFormatError, match="duration_seconds"):
+        validate_report_document(document)
+
+
+def test_an_unknown_outcome_is_refused() -> None:
+    """The aggregate outcome is one of the documented values."""
+    document = report_document(_report())
+    document["outcome"] = "nearly-passed"
+
+    with pytest.raises(EvidenceFormatError, match="outcome"):
+        validate_report_document(document)
+
+
+def test_an_unknown_proof_verdict_is_refused() -> None:
+    """The proof verdict is one of the documented values."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["proof_verdict"] = "probably"
+
+    with pytest.raises(EvidenceFormatError, match="proof_verdict"):
+        validate_report_document(document)
+
+
+def test_an_unknown_stop_reason_is_refused() -> None:
+    """A stop reason outside the documented set is refused."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["stop_reason"] = "killed-somehow"
+
+    with pytest.raises(EvidenceFormatError, match="stop_reason"):
+        validate_report_document(document)
+
+
+@pytest.mark.parametrize("field", ["complete", "passed", "interrupted"])
+def test_a_non_boolean_report_flag_is_refused(field: str) -> None:
+    """A Boolean flag is not an integer or a string."""
+    document = report_document(_report())
+    document[field] = 1
+
+    with pytest.raises(EvidenceFormatError, match=field):
+        validate_report_document(document)
+
+
+def test_a_boolean_attempt_is_refused() -> None:
+    """`True` is an `int` in Python, but it is not an attempt ordinal."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["attempt"] = True
+
+    with pytest.raises(EvidenceFormatError, match="attempt"):
+        validate_report_document(document)
+
+
+def test_a_string_exit_code_is_refused() -> None:
+    """An exit code is an integer or absent, never a string."""
+    document = report_document(_report())
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    results[0]["exit_code"] = "0"
+
+    with pytest.raises(EvidenceFormatError, match="exit_code"):
+        validate_report_document(document)
+
+
+def test_the_shipped_report_still_validates() -> None:
+    """The stricter reader accepts what the producer writes."""
+    validate_report_document(report_document(_report()))

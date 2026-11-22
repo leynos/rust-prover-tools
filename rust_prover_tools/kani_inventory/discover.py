@@ -36,6 +36,8 @@ __all__ = (
     "cargo_metadata",
     "discover_inventory",
     "select_packages",
+    "test_targets",
+    "verify_test_target_attribution",
 )
 
 #: Cargo target kinds Kani can verify, in the order this module prefers them.
@@ -300,3 +302,70 @@ def _target_harnesses(
         )
         for proof in proofs
     ]
+
+
+def test_targets(packages: cabc.Sequence[CargoPackage]) -> dict[str, tuple[str, ...]]:
+    """Return each package's integration-test target names.
+
+    Parameters
+    ----------
+    packages : Sequence[CargoPackage]
+        Packages read from Cargo metadata.
+
+    Returns
+    -------
+    dict[str, tuple[str, ...]]
+        Test target names keyed by package name.
+    """
+    return {
+        package.name: tuple(
+            target.name for target in package.targets if target.kind == "test"
+        )
+        for package in packages
+    }
+
+
+def verify_test_target_attribution(
+    selected: cabc.Sequence[InventoryHarness],
+    packages: cabc.Sequence[CargoPackage],
+) -> None:
+    """Refuse a test-target harness that cannot be attributed exactly.
+
+    Kani 0.67.0 has no flag that selects one integration-test target. Its
+    ``--tests`` option enables verification of test crates and leaves every
+    other target eligible, so a harness name alone does not say which test
+    target produced a record. When the package declares exactly one test
+    target, that target is the only possible source, and a same-named harness
+    in the library or a binary would show up as a second selection record and
+    be classified as a multiple match. With two or more test targets the same
+    reasoning fails, so the run refuses rather than crediting a harness to a
+    target the verifier did not necessarily build.
+
+    Parameters
+    ----------
+    selected : Sequence[InventoryHarness]
+        Harnesses the run intends to execute.
+    packages : Sequence[CargoPackage]
+        Live Cargo metadata, so the refusal reflects the tree being verified
+        rather than only the inventory it was pinned from.
+
+    Raises
+    ------
+    InventoryDiscoveryError
+        Raised when a selected harness belongs to a test target and its
+        package declares more than one test target.
+    """
+    counts = {name: len(names) for name, names in test_targets(packages).items()}
+    for harness in selected:
+        if harness.target_kind != "test":
+            continue
+        declared = counts.get(harness.package, 0)
+        if declared > 1:
+            msg = (
+                f"package {harness.package!r} declares {declared} integration-test "
+                f"targets, so harness {harness.harness!r} in target "
+                f"{harness.target!r} cannot be attributed exactly: Kani 0.67.0 "
+                "has no flag that selects a single test target. Select a lib or "
+                "bin harness, or split the test targets."
+            )
+            raise InventoryDiscoveryError(msg)

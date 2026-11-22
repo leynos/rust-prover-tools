@@ -353,3 +353,78 @@ def test_metadata_can_be_injected_for_tests() -> None:
     inventory = discover_inventory(_WORKSPACE, ("alpha",), metadata=metadata)
 
     assert "alpha::harnesses::verified" in inventory.identities()
+
+
+def _metadata_with_test_targets(*names: str) -> tuple[object, ...]:
+    """Return metadata for one package declaring the given test targets."""
+    from rust_prover_tools.kani_inventory.discover import (
+        CargoPackage,
+        CargoTarget,
+    )
+
+    return (
+        CargoPackage(
+            name="alpha",
+            manifest_path=_WORKSPACE / "alpha" / "Cargo.toml",
+            targets=tuple(
+                CargoTarget(
+                    name=name,
+                    kind="test",
+                    src_path=_WORKSPACE / "alpha" / "tests" / f"{name}.rs",
+                )
+                for name in names
+            ),
+        ),
+    )
+
+
+def test_one_test_target_can_be_attributed() -> None:
+    """A single test target is the only possible source of its harnesses."""
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+
+    harness = InventoryHarness(
+        package="alpha",
+        target="integration",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    metadata = _metadata_with_test_targets("integration")
+
+    verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))
+
+
+def test_two_test_targets_cannot_be_attributed() -> None:
+    """`--tests` builds every test target, so a harness cannot be pinned."""
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+
+    harness = InventoryHarness(
+        package="alpha",
+        target="integration",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    metadata = _metadata_with_test_targets("integration", "second")
+
+    with pytest.raises(InventoryDiscoveryError, match="cannot be attributed"):
+        verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))
+
+
+def test_a_lib_harness_needs_no_test_attribution() -> None:
+    """A lib or bin selector names its target, so no test check applies."""
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+
+    harness = InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness="harnesses::verified",
+        source="src/harnesses.rs",
+        line=5,
+    )
+    metadata = _metadata_with_test_targets("integration", "second")
+
+    verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))

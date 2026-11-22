@@ -125,29 +125,32 @@ class KaniAdapter:
     ) -> HarnessClassification:
         """Classify one settled attempt under the documented precedence."""
         kani = typ.cast("KaniObserver", observer)
-        stopped = _stop_status(evidence, kani)
+        observed = _observed(evidence, kani)
+        stopped = _stop_status(evidence, kani, observed)
         if stopped is not None:
             return stopped
         if evidence.launch_error is not None:
             return _classification(
                 ExecutionStatus.ERROR,
                 detail=f"launch failed: {evidence.launch_error}",
+                observed=observed,
             )
         if kani.banner_error is not None:
             return _classification(
                 ExecutionStatus.ERROR,
                 detail=kani.banner_error,
-                progress=kani.last_progress,
+                observed=observed,
             )
-        selection = _selection_status(evidence, kani)
+        selection = _selection_status(evidence, kani, observed)
         if selection is not None:
             return selection
-        return self._classify_log(evidence, kani)
+        return self._classify_log(evidence, kani, observed)
 
     def _classify_log(
         self,
         evidence: AttemptEvidence,
         observer: KaniObserver,
+        observed: _Observed,
     ) -> HarnessClassification:
         """Classify the attempt from its completed log."""
         banner = observer.reader.facts.banner_version
@@ -158,7 +161,7 @@ class KaniAdapter:
                     f"the log names Kani {banner}, but this adapter is "
                     f"qualified for {self.version}"
                 ),
-                progress=observer.last_progress,
+                observed=observed,
             )
         log = _parse(evidence, observer)
         if log is None:
@@ -166,17 +169,14 @@ class KaniAdapter:
             return _classification(
                 ExecutionStatus.ERROR,
                 detail=f"malformed verifier output: {reason}",
-                progress=observer.last_progress,
+                observed=observed,
             )
         (block,) = log.blocks
-        verdict = _proof_verdict(block)
+        verdict = dc.replace(observed, verdict=_proof_verdict(block))
         detail = _detail(evidence)
         if _is_failed(block):
             return _classification(
-                ExecutionStatus.FAILED,
-                verdict=verdict,
-                detail=detail,
-                progress=observer.last_progress,
+                ExecutionStatus.FAILED, detail=detail, observed=verdict
             )
         if evidence.exit_code is None:
             status, reason = ExecutionStatus.ERROR, "no exit status"
@@ -185,30 +185,69 @@ class KaniAdapter:
         else:
             status = None
         if status is not None:
-            return _classification(
-                status,
-                verdict=verdict,
-                detail=reason,
-                progress=observer.last_progress,
-            )
+            return _classification(status, detail=reason, observed=verdict)
         if block.succeeded:
             return _classification(
                 ExecutionStatus.PASSED,
-                verdict=ProofVerdict.PASSED,
                 detail=detail,
-                progress=observer.last_progress,
+                observed=dc.replace(verdict, verdict=ProofVerdict.PASSED),
             )
         return _classification(
             ExecutionStatus.ERROR,
-            verdict=ProofVerdict.UNKNOWN,
             detail=f"{detail}; verifier reported no verdict",
-            progress=observer.last_progress,
+            observed=dc.replace(verdict, verdict=ProofVerdict.UNKNOWN),
         )
+
+
+def _observed(evidence: AttemptEvidence, observer: KaniObserver) -> _Observed:
+    """Return every fact the attempt produced, independent of its status."""
+    facts = observer.reader.facts
+    return _Observed(
+        verdict=_observed_verdict(evidence, observer),
+        progress=facts.last_progress,
+        identities=tuple(
+            f"{evidence.spec.package}::{name}" for name in facts.selection_records
+        ),
+    )
+
+
+def _observed_verdict(
+    evidence: AttemptEvidence,
+    observer: KaniObserver,
+) -> ProofVerdict:
+    """Return the verdict the attempt's own log already reported, if any.
+
+    A stop outranks the status, but not evidence the verifier already
+    produced. Recording the verdict separately keeps a timeout from erasing
+    the fact that the harness had verified before the supervisor ended it.
+    """
+    records = observer.reader.facts.verdicts
+    matching = [verdict for name, verdict in records if name == evidence.spec.harness]
+    if len(matching) != 1:
+        return ProofVerdict.UNKNOWN
+    return ProofVerdict.PASSED if matching[0] == "SUCCESSFUL" else ProofVerdict.FAILED
+
+
+def _verifier_ran(observer: KaniObserver) -> bool:
+    """Whether the attempt produced any evidence the verifier itself ran.
+
+    A child that exits nonzero without printing a banner or a selection record
+    may never have reached the verifier. Calling that "no match" asserts a
+    selection diagnosis the output does not support.
+    """
+    facts = observer.reader.facts
+    return bool(
+        facts.banner_version
+        or facts.selection_records
+        or facts.verdicts
+        or facts.last_progress
+    )
 
 
 def _stop_status(
     evidence: AttemptEvidence,
     observer: KaniObserver,
+    observed: _Observed,
 ) -> HarnessClassification | None:
     """Return the classification a supervisor stop implies, if any."""
     status = {
@@ -221,40 +260,57 @@ def _stop_status(
     detail = evidence.stop_detail or evidence.stop_reason.value
     if evidence.os_reported_oom_kill is not None:
         detail = f"{detail}; oom_kill_delta={evidence.os_reported_oom_kill}"
-    return _classification(
-        status,
-        detail=detail,
-        progress=observer.last_progress,
-    )
+    del observer
+    return _classification(status, detail=detail, observed=observed)
 
 
 def _selection_status(
     evidence: AttemptEvidence,
     observer: KaniObserver,
+    observed: _Observed,
 ) -> HarnessClassification | None:
     """Return the classification a selection mismatch implies, if any."""
     records = observer.reader.facts.selection_records
     expected = evidence.spec.harness
     matching = [name for name in records if name == expected]
     if not records:
+        if not _verifier_ran(observer):
+            # Nothing was printed, so nothing about the selection is known.
+            # The raw exit status is the only evidence, and inventing a
+            # selection diagnosis would name a cause the output never showed.
+            return _classification(
+                ExecutionStatus.EXIT_NONZERO,
+                detail=_no_output_detail(evidence),
+                observed=observed,
+            )
         return _classification(
             ExecutionStatus.NO_MATCH,
             detail=f"Kani selected no harness; requested {expected}",
-            progress=observer.last_progress,
+            observed=observed,
         )
     if len(records) > 1:
         return _classification(
             ExecutionStatus.MULTIPLE_MATCH,
             detail=f"Kani selected {len(records)} harnesses: {list(records)}",
-            progress=observer.last_progress,
+            observed=observed,
         )
     if matching != [expected]:
         return _classification(
             ExecutionStatus.NO_MATCH,
             detail=f"Kani selected {records[0]!r}; requested {expected!r}",
-            progress=observer.last_progress,
+            observed=observed,
         )
     return None
+
+
+def _no_output_detail(evidence: AttemptEvidence) -> str:
+    """Describe a silent failure without claiming a cause it did not show."""
+    if evidence.signal_number is not None:
+        return f"child ended by signal {evidence.signal_number} with no output"
+    return (
+        f"child exited {evidence.exit_code} with no output; the verifier never "
+        "reported a selection"
+    )
 
 
 def _parse(
@@ -301,17 +357,27 @@ def _detail(evidence: AttemptEvidence) -> str:
     return detail
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _Observed:
+    """The evidence one attempt produced, independent of its status."""
+
+    verdict: ProofVerdict = ProofVerdict.UNKNOWN
+    progress: str | None = None
+    identities: tuple[str, ...] = ()
+
+
 def _classification(
     status: ExecutionStatus,
     *,
-    verdict: ProofVerdict = ProofVerdict.UNKNOWN,
     detail: str,
-    progress: str | None = None,
+    observed: _Observed | None = None,
 ) -> HarnessClassification:
     """Build one adapter classification."""
+    facts = observed or _Observed()
     return HarnessClassification(
         status=status,
-        proof_verdict=verdict,
+        proof_verdict=facts.verdict,
         detail=detail,
-        last_progress=progress,
+        last_progress=facts.progress,
+        observed=facts.identities,
     )

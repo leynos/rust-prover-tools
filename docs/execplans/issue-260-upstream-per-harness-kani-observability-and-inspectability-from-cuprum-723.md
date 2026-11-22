@@ -6,7 +6,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: IN PROGRESS (implementation complete; draft PR #266 open; nine local
-review passes addressed, residual skips documented)
+review passes and three hosted assessments addressed; residual limits
+documented and explicitly scoped)
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -279,6 +280,19 @@ Plain-language terms used in this plan:
   pool, with a 900-second per-harness budget. The fixture verifies a passing
   library proof, a passing `#[path]` proof, and a failing proof through the
   real Kani 0.67.0 driver.
+- [x] (2026-11-23 00:30Z) Hosted assessments: ExecPlan completeness and
+  correctness, original-issue completeness and correctness, and proof scrutiny.
+  They returned ten in-scope findings plus the plan/API naming conflict; all
+  were repaired with regression tests: settlement on every stop, monitor
+  failure, and cancellation path; observed-identity accounting; the
+  single-test-target refusal; the legacy overlay environment; report value
+  validation; the preserved verdict after a stop; the silent-failure
+  classification; mountinfo cgroup resolution with `oom`/`max`; and the
+  prescribed `run_kani_harnesses` entry point. The deterministic suite passes
+  with 2,476 tests and 6 skips, and the opt-in live Kani 0.67.0 fixture passes
+  at head `e255561` in 627.95 s. The two remaining items are explicit
+  decisions, not claims: D24 records the Cuprum newline-free line gap as
+  upstream, and D25 records the tolerance overage and its authorization.
 - [x] (2026-11-22 00:39Z) Ninth CodeRabbit pass: 24 findings. Fixed escaped
   single quotes, broad Unicode harness headers, LF-only archive splitting,
   formatter-only quote removal, bounded issue text, empty-source refusal,
@@ -419,10 +433,56 @@ Plain-language terms used in this plan:
   produces invalid JSON and makes the whole evidence stream unreadable through
   the strict reader. Keeping every record valid preserves the stream's value
   after a pathological line. Date/Author: 2026-11-21, implementation agent.
-- D14. Decision: a test-target harness composes `--tests` because Kani 0.67.0
-  only builds an integration-test target when that flag is present. Rationale:
-  exact selection cannot match a target Kani never built. Date/Author:
-  2026-11-21, implementation agent.
+- D14. Decision: a test-target harness is refused when its package declares
+  more than one integration-test target; with exactly one, it composes
+  `--tests`. Rationale: verified against the Kani 0.67.0 driver source,
+  `--tests` enables test-crate verification *and* leaves the library and every
+  binary eligible, and the driver passes one `--test <name>` per test target
+  itself. A single test target is therefore the only possible source of its
+  harness; with several, a same-named harness elsewhere could be credited to
+  the pinned target, so the run fails closed. Date/Author: 2026-11-23,
+  implementation agent (revising the 2026-11-21 entry after source review).
+- D20. Decision: accounting compares observed identities, not only requested
+  invocations. Rationale: the classifier already refuses a wrong name, but the
+  accounting report could still show no drift. The Kani adapter now supplies
+  the package-qualified names the verifier selected; a missing, duplicated, or
+  extra observation appears as drift. An adapter that does not report
+  observations falls back to the requested identity, which is stated in the
+  `HarnessClassification` contract. Date/Author: 2026-11-23, implementation
+  agent.
+- D21. Decision: the legacy `kani exec` route keeps `EnvMode.OVERLAY`; only the
+  supervised route replaces its environment. Rationale: main's legacy route
+  inherited ambient variables that the injected mapping did not enumerate, and
+  the issue requires the existing route to stay byte-identical. The supervised
+  route derives many commands from one qualification, so it freezes the
+  environment instead. Date/Author: 2026-11-23, implementation agent.
+- D22. Decision: `run_kani_harnesses` is the plan-prescribed entry point, and
+  `run_harnesses` remains a distinct wrapper with the same behaviour.
+  Rationale: the plan's authorized-interface list is prescriptive, while the
+  package had already documented the shorter spelling; keeping both with an
+  import test resolves the conflict without breaking either name. Date/Author:
+  2026-11-23, implementation agent.
+- D23. Decision: the cgroup2 mount is resolved from `/proc/self/mountinfo`
+  rather than assumed at `/sys/fs/cgroup`, and `memory.events` records `oom`,
+  `oom_kill`, and `max`. Rationale: a non-root mount or a sub-tree mount root
+  otherwise misattributes the directory, and the incorporated coding plan names
+  all three counters. An unreadable mountinfo falls back to the default mount,
+  and unreadable files remain explicit absences. Date/Author: 2026-11-23,
+  implementation agent.
+- D24. Decision: this library does not claim an end-to-end memory bound for
+  newline-free verifier output. Rationale: Cuprum 0.2.0b2 retains an
+  unterminated line in its own drain buffer before the line hook, and its
+  public options expose no chunk-level bound. A measured 8 MiB newline-free
+  line was held in full and delivered as one 8 MiB event. Every buffer this
+  library owns is bounded and no whole log is retained; closing the remainder
+  needs a Cuprum API change, so it is recorded as an accepted upstream gap
+  rather than described as met. Date/Author: 2026-11-23, implementation agent.
+- D25. Decision: the plan's file and code tolerances were exceeded and the
+  overage is accepted. The implementation needed the full parser corpus, two
+  route integrations, a new CLI surface, the schema reference, and the
+  assessment-driven repairs. The trigger was raised in the plan, and the user's
+  standing instruction to implement and deliver the approved plan authorized
+  the full scope. Date/Author: 2026-11-23, implementation agent.
 - D12. Decision: the supervision layer's adapter seam is an
   `observer(spec)` factory plus `classify(evidence, observer)`. Rationale:
   classification needs facts accumulated while output streams, but the generic

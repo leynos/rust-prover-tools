@@ -43,10 +43,12 @@ from rust_prover_tools.kani_harness_models import (
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
     InventoryHarness,
+    cargo_metadata,
     discover_inventory,
     load_inventory,
     restrict_inventory,
     select_harnesses,
+    verify_test_target_attribution,
 )
 from rust_prover_tools.kani_routes import (
     KaniRoute,
@@ -73,7 +75,9 @@ from rust_prover_tools.supervision.kani import KaniAdapter
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
+    from rust_prover_tools.kani_inventory import CargoPackage
     from rust_prover_tools.supervision import HarnessSpec
 
 __all__ = (
@@ -87,6 +91,7 @@ __all__ = (
     "execute_harnesses",
     "prepare_harnesses",
     "run_harnesses",
+    "run_kani_harnesses",
 )
 
 
@@ -172,6 +177,40 @@ def run_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
     )
 
 
+def run_kani_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
+    """Discover or load, select, and supervise Kani harnesses.
+
+    This is the name the approved plan prescribes for the one-call entry point,
+    and `run_harnesses` is kept as the shorter alias the package already
+    exported. Both refer to the same implementation, so a consumer may use
+    either without risking a different code path.
+
+    Parameters
+    ----------
+    options : KaniHarnessRunOptions
+        Repository, selection, route, and policy.
+
+    Returns
+    -------
+    KaniHarnessRun
+        The typed report and the inventory it was selected from.
+
+    Raises
+    ------
+    InventoryDiscoveryError
+        Raised when discovery cannot produce a complete inventory.
+    InventoryFormatError
+        Raised when a supplied inventory document is invalid.
+    SelectionError
+        Raised when the harness selection is ambiguous or overridden.
+    ProverToolError
+        Raised when the route cannot be qualified.
+    UnsupportedKaniGrammarError
+        Raised when the route's Kani release has no registered grammar.
+    """
+    return run_harnesses(options)
+
+
 def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     """Discover or load, select, and qualify one route without running it.
 
@@ -208,6 +247,7 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         raise ProverToolError(msg)
     inventory = _inventory(options)
     selected = select_harnesses(inventory, options.harnesses)
+    _verify_test_targets(root, selected, options.metadata)
     dependencies = options.dependencies or KaniHarnessDependencies()
     qualifier = dependencies.prepare or prepare_route
     prepared = qualifier(options.route)
@@ -217,6 +257,24 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         prepared=prepared,
         commands=_command_map(selected, prepared.build),
     )
+
+
+def _verify_test_targets(
+    root: Path,
+    selected: cabc.Sequence[InventoryHarness],
+    metadata: cabc.Sequence[CargoPackage] | None,
+) -> None:
+    """Refuse an unattributable test-target harness against the live tree.
+
+    Kani 0.67.0 cannot select one integration-test target, so the check reads
+    the same Cargo metadata the run will build from rather than trusting a
+    possibly stale inventory. Packages without a selected test-target harness
+    are not inspected.
+    """
+    if not any(harness.target_kind == "test" for harness in selected):
+        return
+    packages = tuple(metadata) if metadata is not None else cargo_metadata(root)
+    verify_test_target_attribution(selected, packages)
 
 
 def execute_harnesses(

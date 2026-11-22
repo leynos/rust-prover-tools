@@ -75,12 +75,19 @@ class HarnessClassification:
         Bounded explanation for the table and report.
     last_progress : str | None
         Last recognised prover progress line, bounded.
+    observed : tuple[str, ...] | None
+        Package-qualified identities the adapter observed the verifier select.
+        `None` means the adapter does not report observations, and the
+        supervisor falls back to the requested identity. An empty tuple means
+        the adapter looked and observed nothing, which the accounting reports
+        as a missing execution.
     """
 
     status: ExecutionStatus
     proof_verdict: ProofVerdict = ProofVerdict.UNKNOWN
     detail: str = ""
     last_progress: str | None = None
+    observed: tuple[str, ...] | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

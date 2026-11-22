@@ -16,6 +16,7 @@ from rust_prover_tools.kani_harness_run import (
     execute_harnesses,
     prepare_harnesses,
     run_harnesses,
+    run_kani_harnesses,
 )
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
@@ -99,6 +100,7 @@ __all__ = [
     "render_table",
     "restrict_inventory",
     "run_harnesses",
+    "run_kani_harnesses",
     "run_supervised",
     "run_supervised_sync",
     "select_harnesses",

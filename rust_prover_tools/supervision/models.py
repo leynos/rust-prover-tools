@@ -251,6 +251,12 @@ class ResourceSample:
     host_total: Measurement
 
 
+#: Shared absence for a counter an older reader did not provide.
+_COUNTER_NOT_READ = Measurement.unavailable(
+    "the reader did not report this memory.events counter"
+)
+
+
 @dc.dataclass(frozen=True, slots=True)
 class CgroupMemory:
     """The cgroup v2 memory files read at one instant.
@@ -263,11 +269,18 @@ class CgroupMemory:
         ``memory.peak``, which older kernels do not provide.
     oom_kill : Measurement
         ``oom_kill`` counter from ``memory.events``.
+    oom : Measurement
+        ``oom`` counter from ``memory.events``.
+    max_events : Measurement
+        ``max`` counter from ``memory.events``: how often the cgroup's
+        ``memory.max`` limit was reached.
     """
 
     current: Measurement
     peak: Measurement
     oom_kill: Measurement
+    oom: Measurement = _COUNTER_NOT_READ
+    max_events: Measurement = _COUNTER_NOT_READ
 
 
 @dc.dataclass(frozen=True, slots=True)

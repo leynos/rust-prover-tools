@@ -244,6 +244,7 @@ class _PidRecorder:
     def __init__(self, pid: int | None) -> None:
         """Record the pid to report."""
         self.pid = pid
+        self.settled_exit_code: int | None = None
 
 
 @dc.dataclass(slots=True)

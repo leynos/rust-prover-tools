@@ -176,10 +176,19 @@ The selector comes first, the registry's output argument comes next, and caller
 arguments are preserved verbatim after it. A caller argument that spells a
 selector or output override is refused, in separate-value form
 (`--harness value`), joined form (`--harness=value`), or short-option form
-(`-pvalue`), on either side of `--`. A test target additionally receives
-`--tests` after `--exact`, because Kani only builds an integration-test target
-when asked; a caller may not supply that flag. Proof-affecting flags such as
-`--unwind`, `--default-unwind`, `-Z`, and `--fail-fast` are preserved.
+(`-pvalue`), on either side of `--`. Proof-affecting flags such as `--unwind`,
+`--default-unwind`, `-Z`, and `--fail-fast` are preserved.
+
+Kani 0.67.0 has no flag that selects one integration-test target. Its `--tests`
+option enables verification of test crates _and_ leaves the library and every
+binary eligible, so a harness name alone does not say which test target
+produced a record. Supervision therefore refuses a selected test-target harness
+when its package declares more than one integration-test target: the same
+pretty name could belong to another target and be credited to the pinned one.
+With exactly one test target that target is the only possible source, and a
+same-named library or binary harness would appear as a second selection record
+and be classified `multiple-match`. Lib and bin selectors name their target
+(`--lib`, `--bin <name>`) and need no such check.
 
 Selection refuses a bare name that matches more than one package, a name the
 inventory does not declare, and a duplicate request. A package-qualified
@@ -197,6 +206,13 @@ settle the owned group before its cancellation surfaces, so every descendant
 that remains in that group is terminated with the child that started it. A
 descendant that creates or joins another process group is outside this
 guarantee.
+
+The attempt owns the child until it has settled. A stop, a monitor failure, or
+a cancellation of the supervising coroutine all stop the child when nothing
+else has and then join its launch task before reporting or propagating. A
+cancelled run task accounts for every harness without a result as `not-run` and
+publishes the available report before the cancellation continues, so a caller
+that cancels a run still gets the evidence collected so far.
 
 A failure, timeout, or watchdog stop does not prevent later harnesses from
 running. Only an interruption stops the sequence; the active harness is
@@ -235,6 +251,13 @@ presented as proof that the kernel killed the process for memory. When the
 cgroup evidence provides an `oom_kill` counter delta, the delta is recorded
 separately in the report and in the detail text.
 
+A stop outranks the status, but not evidence the verifier already produced: a
+harness that reported a verdict before the supervisor ended it keeps that
+verdict in `proof_verdict` while its status records the stop. A child that
+exits nonzero without printing any verifier output is classified
+`exit-nonzero`, not `no-match`: the exit status is the only evidence, and a
+selection diagnosis is never inferred from silence.
+
 ## Evidence
 
 Two destinations receive the same records:
@@ -264,6 +287,15 @@ newline-free line delays delivery until the line ends. This is a documented
 residual limitation of line-oriented observation, not of the supervisor's
 record handling.
 
+**This library does not claim an end-to-end memory bound.** The requirement it
+meets is that it never accumulates a whole proof log: every buffer it owns is
+bounded. The one exception is upstream and was measured: an 8 MiB newline-free
+line was held in full by Cuprum and delivered as one 8 MiB event (peak child
+RSS 29 MiB). Closing that boundary needs a chunk-level line bound in Cuprum's
+public API; it cannot be imposed from outside. A deployment that may face
+newline-free output of unbounded length must treat this as an accepted upstream
+gap, not as satisfied by supervision.
+
 ### JSONL records, version 1
 
 Every record carries `"schema": 1`, a `record` kind, and a `run_id`. Harness
@@ -283,16 +315,24 @@ _Table 3: JSONL record kinds._
 
 A measurement is exactly one of `{"value": <bytes>}` or
 `{"unavailable_reason": "<why>"}`. `rust_prover_tools.supervision.decode_jsonl`
-validates the field sets strictly.
+and `validate_report_document` validate the field sets strictly and check
+documented values: a status, stop reason, proof verdict, or aggregate outcome
+outside its enum, a non-numeric duration, or a string where a Boolean or an
+integer belongs is refused.
 
 ## Resource measurements and limits
 
 On Linux, each sample sums the resident set size of every process in the owned
 process group and reads host `MemAvailable` and `MemTotal` from
-`/proc/meminfo`. The applicable cgroup v2 path is discovered from
-`/proc/self/cgroup`; where readable, `memory.current`, `memory.peak`, and the
-`oom_kill` counter in `memory.events` are recorded at harness start and finish.
-Unreadable optional files produce an explicit absence and never prevent a proof.
+`/proc/meminfo`. The applicable cgroup v2 directory is resolved by joining the
+`0::` membership path in `/proc/self/cgroup` to the cgroup2 superblock's mount
+point and mount root in `/proc/self/mountinfo`; a host that mounts the
+hierarchy at another point or with a non-root sub-tree is therefore resolved
+correctly, and the fallback `/sys/fs/cgroup` is used only when mountinfo itself
+is unreadable. Where readable, `memory.current`, `memory.peak`, and the `oom`,
+`oom_kill`, and `max` counters in `memory.events` are recorded at harness start
+and finish. Unreadable optional files produce an explicit absence and never
+prevent a proof.
 
 The measurements have deliberate limits:
 
@@ -392,10 +432,10 @@ from rust_prover_tools import (
     KaniHarnessRunOptions,
     LegacyRoute,
     SupervisionConfig,
-    run_harnesses,
+    run_kani_harnesses,
 )
 
-run = run_harnesses(
+run = run_kani_harnesses(
     KaniHarnessRunOptions(
         repo_root=Path.cwd(),
         route=LegacyRoute(
@@ -413,11 +453,11 @@ for result in run.report.results:
 raise SystemExit(run.exit_status)
 ```
 
-`run_harnesses` loads or discovers the inventory, selects exact harnesses,
-qualifies one route, runs the generic supervisor, and returns a
-`KaniHarnessRun` with the typed `report`, the `inventory`, the `selected`
-harnesses, the `backend_version`, and a `table`. Async callers may use
-`run_supervised` with a `RunEnvironment` instead.
+`run_kani_harnesses` (also exported as `run_harnesses`) loads or discovers the
+inventory, selects exact harnesses, qualifies one route, runs the generic
+supervisor, and returns a `KaniHarnessRun` with the typed `report`, the
+`inventory`, the `selected` harnesses, the `backend_version`, and a `table`.
+Async callers may use `run_supervised` with a `RunEnvironment` instead.
 
 An application that owns its signal policy can split the two phases.
 `prepare_harnesses` performs discovery, selection, and route qualification

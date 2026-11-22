@@ -126,7 +126,13 @@ class AttemptSupervisor:
     _observer: LineObserver | None = None
 
     async def run(self) -> tuple[AttemptEvidence, HarnessClassification]:
-        """Run the attempt, returning its evidence and classification."""
+        """Run the attempt, returning its evidence and classification.
+
+        The attempt owns the child until it has settled. A monitor failure, a
+        stop, or a cancellation of this coroutine all leave through the same
+        cleanup: stop the child when nothing else has, then join the owned
+        process group before reporting or re-raising.
+        """
         started_at = self.clock.now()
         started_monotonic = self.clock.monotonic()
         self._next_sample = self.config.sample_interval_seconds
@@ -137,35 +143,47 @@ class AttemptSupervisor:
             "RunningHarness",
             self.launcher.start(self.spec, self.build, self._on_line),
         )
-        done = asyncio.get_running_loop().create_task(running.wait())
-        monitor = asyncio.get_running_loop().create_task(
-            self._monitor(running, started_at, started_monotonic)
-        )
-        monitor_failure: BaseException | None = None
-        try:
-            await asyncio.wait({done, monitor}, return_when=asyncio.FIRST_COMPLETED)
-            if monitor.done():
-                # A monitor failure explains why the child was not stopped.
-                # Cancel and join the child first, then surface it. If both
-                # tasks fail, the monitor failure takes precedence.
-                monitor_failure = monitor.exception()
-                done.cancel()
-            try:
-                result = await done
-            except asyncio.CancelledError:
-                if monitor_failure is None:
-                    raise
-                raise monitor_failure from None
-            if monitor_failure is not None:
-                raise monitor_failure
-        finally:
-            monitor.cancel()
-            done.cancel()
-            for task in (done, monitor):
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+        result = await self._drive(running, started_at, started_monotonic)
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
         return evidence, self.adapter.classify(evidence, self._observer)
+
+    async def _drive(
+        self,
+        running: RunningHarness,
+        started_at: dt.datetime,
+        started_monotonic: float,
+    ) -> LaunchResult:
+        """Drive the monitor and join the child before returning or raising."""
+        loop = asyncio.get_running_loop()
+        waiter = loop.create_task(running.wait())
+        monitor = loop.create_task(
+            self._monitor(running, started_at, started_monotonic)
+        )
+        failure: BaseException | None = None
+        result: LaunchResult | None = None
+        try:
+            await asyncio.wait({waiter, monitor}, return_when=asyncio.FIRST_COMPLETED)
+            if monitor.done():
+                # The monitor owns every stop decision, so once it has failed
+                # nothing else will stop the child. Stop it here, then join it
+                # below before the failure is surfaced.
+                failure = monitor.exception()
+                if failure is not None:
+                    running.stop(StopReason.INTERRUPTED)
+            result = await waiter
+        finally:
+            monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor
+            if not running.done and running.stop_reason is None:
+                running.stop(StopReason.INTERRUPTED)
+            joined = await running.settle()
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await waiter
+        if failure is not None:
+            raise failure
+        return joined if result is None else result
 
     @property
     def stop_detail(self) -> str:

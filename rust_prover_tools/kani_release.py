@@ -243,8 +243,16 @@ def _prepare_kani_command(
     environment: cabc.Mapping[str, str],
     *,
     validate_arguments: bool,
+    env_mode: EnvMode = EnvMode.OVERLAY,
 ) -> tuple[CommandSpec, Path]:
-    """Build the validated command and return its release root."""
+    """Build the validated command and return its release root.
+
+    The environment mode belongs to the caller that owns the command's
+    lifetime. `exec_kani` runs one invocation from one mapping, so it keeps the
+    historical overlay; the supervised route derives many commands from a
+    single qualification and replaces instead, so a host change made after
+    qualification cannot reach a command that qualification never saw.
+    """
     root = checked_resolve(options.installation)
     directory = checked_stat(options.cwd)
     if directory is None or not stat.S_ISDIR(directory.st_mode):
@@ -282,10 +290,7 @@ def _prepare_kani_command(
         (str(root / "bin/kani-driver"), "kani", *options.arguments),
         cwd=cwd,
         env=child,
-        # The child environment was resolved once from the injected mapping.
-        # Replacing, rather than overlaying, keeps a later host change from
-        # reaching a derived harness command that qualification never saw.
-        env_mode=EnvMode.REPLACE,
+        env_mode=env_mode,
     )
     return spec, root
 
@@ -312,7 +317,15 @@ def prepare_kani_command(
     ProverToolError
         Installation, arguments, or configuration cannot be qualified safely.
     """
-    return _prepare_kani_command(options, environment, validate_arguments=True)[0]
+    return _prepare_kani_command(
+        options,
+        environment,
+        validate_arguments=True,
+        # One invocation from one caller-supplied mapping keeps the inherited
+        # environment it always had, so `kani exec` still sees ambient
+        # variables the caller did not enumerate.
+        env_mode=EnvMode.OVERLAY,
+    )[0]
 
 
 def prepare_kani_installation(
@@ -333,7 +346,15 @@ def prepare_kani_installation(
     tuple[CommandSpec, Path]
         The validated specification and its release root.
     """
-    return _prepare_kani_command(options, environment, validate_arguments=False)
+    return _prepare_kani_command(
+        options,
+        environment,
+        validate_arguments=False,
+        # The supervised route derives every harness command from this one
+        # qualification, so the child environment is frozen at qualification
+        # time and a later host change cannot reach a derived command.
+        env_mode=EnvMode.REPLACE,
+    )
 
 
 def exec_kani(options: KaniExecOptions, environment: cabc.Mapping[str, str]) -> int:

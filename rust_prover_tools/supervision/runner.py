@@ -20,10 +20,12 @@ Three rules bind the loop:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import typing as typ
 import uuid
 
+from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.supervision.attempt import AttemptSupervisor
 from rust_prover_tools.supervision.events import (
     RunStart,
@@ -38,6 +40,7 @@ from rust_prover_tools.supervision.models import (
 )
 from rust_prover_tools.supervision.report import write_report
 from rust_prover_tools.supervision.run_finalize import (
+    CANCELLED_DETAIL,
     INTERRUPTED_DETAIL,
     ReportInput,
     assemble_report,
@@ -125,8 +128,26 @@ class SupervisedRun:
             self.environment.interrupts.bind(asyncio.get_running_loop())
         ledger = _RunLedger(expected=self.expected)
         self._emit_start(started_at, ledger)
-        await self._run_all(ledger)
+        try:
+            await self._run_all(ledger)
+        except asyncio.CancelledError:
+            # The caller cancelled the run. The active attempt has already
+            # stopped and joined its group; account for the harnesses that
+            # never completed, publish what evidence exists, then let the
+            # cancellation continue.
+            self._account_unrecorded(ledger)
+            ledger.interrupted = True
+            with contextlib.suppress(ProverToolError):
+                self._finalize(ledger, started_at)
+            raise
         return self._finalize(ledger, started_at)
+
+    def _account_unrecorded(self, ledger: _RunLedger) -> None:
+        """Record every identity without a result as cancelled work."""
+        recorded = len(ledger.results)
+        ledger.results.extend(
+            not_run_result(spec, CANCELLED_DETAIL) for spec in self.expected[recorded:]
+        )
 
     def _emit_start(self, started_at: dt.datetime, ledger: _RunLedger) -> None:
         """Write the run's opening evidence record, retaining a sink failure."""
@@ -171,7 +192,13 @@ class SupervisedRun:
             ledger.diagnostic_error = error
         evidence, classification = await self._supervise(spec)
         if evidence.stop_reason is not StopReason.LAUNCH_FAILED:
-            ledger.executed.append(spec.qualified)
+            if classification.observed is None:
+                ledger.executed.append(spec.qualified)
+            else:
+                # Accounting compares what the verifier actually selected, not
+                # only what was requested. A wrong, duplicated, or extra name
+                # therefore shows up as drift even when a result was recorded.
+                ledger.executed.extend(classification.observed)
         if evidence.stop_reason is StopReason.INTERRUPTED:
             ledger.interrupted = True
             ledger.interrupt_signal = self._signum()

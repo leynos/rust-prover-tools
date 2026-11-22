@@ -98,6 +98,8 @@ def _cgroup_memory_document(memory: CgroupMemory | None) -> dict[str, object] | 
         "current": measurement_document(memory.current),
         "peak": measurement_document(memory.peak),
         "oom_kill": measurement_document(memory.oom_kill),
+        "oom": measurement_document(memory.oom),
+        "max_events": measurement_document(memory.max_events),
     }
 
 

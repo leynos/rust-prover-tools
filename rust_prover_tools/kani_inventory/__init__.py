@@ -27,6 +27,8 @@ from rust_prover_tools.kani_inventory.discover import (
     cargo_metadata,
     discover_inventory,
     select_packages,
+    test_targets,
+    verify_test_target_attribution,
 )
 from rust_prover_tools.kani_inventory.document import (
     inventory_document,
@@ -77,5 +79,7 @@ __all__ = [
     "select_harnesses",
     "select_packages",
     "selections",
+    "test_targets",
+    "verify_test_target_attribution",
     "write_inventory",
 ]

@@ -399,3 +399,12 @@ def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(ProverToolError, match="repository root"):
         prepare_harnesses(options)
+
+
+def test_the_plan_prescribed_entry_point_is_public() -> None:
+    """The approved plan names `run_kani_harnesses`; it must be importable."""
+    import rust_prover_tools
+
+    assert callable(rust_prover_tools.run_kani_harnesses)
+    assert "run_kani_harnesses" in rust_prover_tools.__all__
+    assert rust_prover_tools.run_kani_harnesses is not rust_prover_tools.run_harnesses

@@ -109,25 +109,39 @@ type CommandBuilder = cabc.Callable[[HarnessSpec], LaunchCommand]
 
 
 class PidSource(typ.Protocol):
-    """A source of the child's process-group identifier."""
+    """A source of the child's process-group identifier and settled status.
+
+    ``settled_exit_code`` is the status Cuprum's ``settled`` event carried when
+    the run ended. It is often ``None`` for a run the supervisor stopped,
+    because a signalled child has no self-reported status; it is the only
+    termination evidence a cancelled run leaves behind.
+    """
 
     @property
     def pid(self) -> int | None:
         """The reported pid, or `None` when none is known."""
         ...
 
+    @property
+    def settled_exit_code(self) -> int | None:
+        """The status Cuprum settled with, or `None` when it reported none."""
+        ...
+
 
 class _PidRecorder:
-    """Capture the child PID from the run's ``start`` observe event."""
+    """Capture the child PID and settled status from the run's events."""
 
     def __init__(self) -> None:
-        """Create a recorder that has seen no start event."""
+        """Create a recorder that has seen no event."""
         self.pid: int | None = None
+        self.settled_exit_code: int | None = None
 
     def __call__(self, event: ExecEvent) -> None:
-        """Record the pid the run announced."""
+        """Record the pid and any status the run announced."""
         if event.phase == "start" and event.pid is not None:
             self.pid = event.pid
+        if event.phase in {"exit", "settled"} and event.exit_code is not None:
+            self.settled_exit_code = event.exit_code
 
 
 class RunningHarness:
@@ -185,27 +199,66 @@ class RunningHarness:
         -------
         LaunchResult
             The child's status, the signalled status, or the launch failure.
-            A cancelled run reports the status Cuprum recorded before the stop
-            when one exists, and otherwise reports only the stop reason the
-            supervisor already holds.
+            A run the supervisor stopped reports the status Cuprum settled
+            with when one exists, and otherwise reports only the stop reason
+            the supervisor already holds.
+
+        A waiter's own cancellation is not the child's: the launch task is
+        shielded, so this coroutine can be cancelled while the child keeps
+        running. In that case the stop is still joined before any evidence is
+        reported, so no caller can mistake an unsettled group for a finished
+        invocation.
         """
         if self._result is not None:
             return self._result
         try:
             outcome = await asyncio.shield(self._task)
         except asyncio.CancelledError:
-            # Cuprum settles the owned group before its cancellation surfaces,
-            # so by here every descendant has been terminated and reaped. A
-            # stop the supervisor requested is the termination evidence; no
-            # exit status exists for a child that was signalled by the
-            # supervisor rather than by itself.
             if self._reason is None:
                 raise
-            # The supervisor's own stop sent the signal, so no self-inflicted
-            # number is recorded as if the child had terminated itself.
-            outcome = LaunchResult(exit_code=None, signal_number=None)
+            # A stop was requested, but this waiter may have been cancelled
+            # before Cuprum finished settling the owned group. Join the run
+            # before reporting, so the next harness never starts beside a
+            # child that is still being torn down.
+            outcome = await self.settle()
         self._result = outcome
         return outcome
+
+    async def settle(self) -> LaunchResult:
+        """Wait until the launch task has finished, whatever ended it.
+
+        This is the cleanup primitive. Unlike `wait`, it is not tied to one
+        observer's lifetime: a cancellation delivered while this coroutine is
+        joining does not abandon the child. Cuprum's teardown is bounded, so
+        the wait is bounded too.
+
+        Returns
+        -------
+        LaunchResult
+            The settled status, or the stop-only evidence a cancelled run
+            leaves behind.
+        """
+        while not self._task.done():
+            try:
+                await asyncio.wait({self._task})
+            except asyncio.CancelledError:
+                # The group is still being torn down. Keep joining: returning
+                # now would let a later harness start beside this one.
+                continue
+        return self._settled_result()
+
+    def _settled_result(self) -> LaunchResult:
+        """Return the evidence a finished launch task left behind."""
+        if self._result is not None:
+            return self._result
+        if self._task.cancelled():
+            # The supervisor's own stop sent the signal, so no self-inflicted
+            # number is recorded as if the child had terminated itself.
+            return _exit_status(self._recorder.settled_exit_code)
+        exception = self._task.exception()
+        if exception is not None:
+            raise exception
+        return self._task.result()
 
 
 class CuprumHarnessLauncher:
@@ -329,8 +382,10 @@ def _bounded(text: str, limit: int) -> str:
     return bounded_text(text, limit)
 
 
-def _exit_status(code: int) -> LaunchResult:
+def _exit_status(code: int | None) -> LaunchResult:
     """Translate a Cuprum exit status into the typed launch result."""
+    if code is None:
+        return LaunchResult(exit_code=None, signal_number=None)
     if code < 0:
         return LaunchResult(exit_code=code, signal_number=-code)
     return LaunchResult(exit_code=code)
