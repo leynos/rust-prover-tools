@@ -460,10 +460,12 @@ exhaust disk space or hang a CI job:
   for download start, completion, cache hits, verification, and bounded failure
   categories, and for each installer's start, reuse, extraction, setup,
   verification, marker, and completion boundaries. A refused Z3 reuse also
-  reports `z3.install.cache_miss` with one bounded reason, so a reinstall can
-  be told apart from a first install. The library installs no handlers, so
-  output is unchanged unless the application lowers the `rust_prover_tools`
-  logger level.
+  reports `z3.install.cache_miss` with one bounded reason (`binary_missing`,
+  `not_executable`, `marker_missing`, `marker_unusable`, or `digest_mismatch`),
+  so the usual reinstall causes are visible. A first install and a reinstall
+  whose binary was deleted both report `binary_missing`. The library installs
+  no handlers, so output is unchanged unless the application lowers the
+  `rust_prover_tools` logger level.
 
 ### GitHub Actions inputs
 

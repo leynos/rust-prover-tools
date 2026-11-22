@@ -194,9 +194,9 @@ def _reuse_blocker(binary: Path, marker: Path) -> str | None:
         return "binary_missing"
     if not _has_execute_bit(binary_status):
         return "not_executable"
-    marker_text = _optional_text(marker)
+    marker_text, is_present = _marker_text(marker)
     if marker_text is None:
-        return "marker_missing"
+        return "marker_unusable" if is_present else "marker_missing"
     recorded_digest = _recorded_digest(marker_text)
     if recorded_digest is None:
         return "marker_unusable"
@@ -249,16 +249,16 @@ def _optional_stat(path: Path) -> os.stat_result | None:
         raise ProverToolError(msg) from exc
 
 
-def _optional_text(path: Path) -> str | None:
-    """Return the text of `path`, or `None` when it is absent or not UTF-8."""
+def _marker_text(path: Path) -> tuple[str | None, bool]:
+    """Return the marker text, or `None` and whether the file was present."""
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8"), True
     except FileNotFoundError:
-        return None
+        return None, False
     except UnicodeDecodeError:
         # A marker that is not UTF-8 cannot describe an installation this
         # release produced, so it is a cache miss, not a hard failure.
-        return None
+        return None, True
     except OSError as exc:
         msg = f"failed to read Z3 installation state '{path}': {exc}"
         raise ProverToolError(msg) from exc

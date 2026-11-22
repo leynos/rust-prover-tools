@@ -11,12 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import typing as typ
+import zipfile
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import rust_prover_tools.z3 as z3_module
-from rust_prover_tools.binary_assets import Z3_VERSION
+from rust_prover_tools.binary_assets import Z3_MEMBER, Z3_VERSION
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -36,6 +37,14 @@ _REUSABLE_FIXTURES = [HealthCheck.function_scoped_fixture]
 def _marker_text(digest: object) -> str:
     """Return canonical marker text wrapping a digest-shaped value."""
     return json.dumps({"version": Z3_VERSION, "sha256": digest}, sort_keys=True) + "\n"
+
+
+def _write_archive(path: Path, payload: bytes) -> Path:
+    """Write a minimal Z3-shaped zip archive and return its path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(Z3_MEMBER, payload)
+    return path
 
 
 @given(digest=_HEX_DIGESTS)
@@ -118,3 +127,52 @@ def test_install_reuses_a_binary_whose_bytes_match(
     )
 
     assert lines[0] == f"Z3 {Z3_VERSION} already installed at {binary}"
+
+
+@given(payload=st.binary(min_size=1, max_size=256))
+@settings(
+    max_examples=10,
+    deadline=None,
+    suppress_health_check=_REUSABLE_FIXTURES,
+)
+def test_install_refuses_a_binary_whose_bytes_differ(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    linux_x86_64_host: None,
+    payload: bytes,
+) -> None:
+    """An installation is reused only when the marker digest matches the bytes."""
+    del linux_x86_64_host
+    install_dir = tmp_path / "install"
+    install_dir.mkdir(exist_ok=True)
+    binary = install_dir / "z3"
+    binary.write_bytes(payload)
+    binary.chmod(0o755)
+    # Derive a digest that always differs from the installed bytes, so every
+    # example exercises the mismatch branch.
+    wrong_digest = hashlib.sha256(payload)
+    wrong_digest.update(b"not the installed bytes")
+    (install_dir / z3_module.MARKER_NAME).write_text(
+        _marker_text(wrong_digest.hexdigest()),
+        encoding="utf-8",
+    )
+    cache_dir = tmp_path / "cache"
+    archive = _write_archive(cache_dir / "z3.zip", payload)
+
+    def serve_archive(asset: object, destination: Path) -> Path:
+        """Record the reinstall and return the local archive."""
+        del asset, destination
+        return archive
+
+    monkeypatch.setattr(z3_module, "download_pinned", serve_archive)
+
+    lines = z3_module.install_z3(
+        z3_module.Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    assert lines[0] == f"Installed Z3 {Z3_VERSION} at {binary}"
+    assert binary.read_bytes() == payload

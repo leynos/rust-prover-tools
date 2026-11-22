@@ -841,6 +841,7 @@ def test_install_z3_reports_reuse_instead_of_a_reinstall(
         pytest.param("not-executable", "not_executable", id="not-executable"),
         pytest.param("marker-missing", "marker_missing", id="marker-missing"),
         pytest.param("marker-unusable", "marker_unusable", id="marker-unusable"),
+        pytest.param("marker-not-utf8", "marker_unusable", id="marker-not-utf8"),
         pytest.param("digest-mismatch", "digest_mismatch", id="digest-mismatch"),
     ],
 )
@@ -863,6 +864,8 @@ def test_install_z3_reports_the_cache_miss_reason(
         write_marker(install_dir, digest=hashlib.sha256(b"other").hexdigest())
     elif seed == "marker-unusable":
         (install_dir / ".z3-version").write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+    elif seed == "marker-not-utf8":
+        (install_dir / ".z3-version").write_bytes(b"\xff\xfe")
     cache_dir = tmp_path / "cache"
     archive = write_z3_zip(cache_dir / Z3_ASSET.name)
     stub_download(
