@@ -299,3 +299,51 @@ def test_a_shared_module_is_rescanned_in_either_traversal_order(
 
     with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
         audit_tree(tmp_path, ["src/lib.rs", "src/main.rs"])
+
+
+@pytest.mark.parametrize(
+    "drivers",
+    [
+        ("proc/src/lib.rs", "plain/src/lib.rs"),
+        ("plain/src/lib.rs", "proc/src/lib.rs"),
+    ],
+    ids=["proc-first", "plain-first"],
+)
+def test_a_macro_scope_rescan_keeps_the_procedural_policy(
+    tmp_path: Path,
+    drivers: tuple[str, str],
+) -> None:
+    """A rescan under inherited macro scope does not discard literal findings.
+
+    The proc-macro crate scans the shared module's literals as code.  A later
+    arrival from a plain crate needs the inherited macro scope, so the file is
+    rescanned; both policies must survive, including for its child module.
+    """
+    write(
+        tmp_path,
+        {
+            "proc/Cargo.toml": '[package]\nname = "proc"\nversion = "0.1.0"\n\n'
+            "[lib]\nproc-macro = true\n",
+            "proc/src/lib.rs": '#[path = "../../shared/helper.rs"]\nmod helper;',
+            "plain/Cargo.toml": '[package]\nname = "plain"\nversion = "0.1.0"\n',
+            "plain/src/lib.rs": (
+                "#[macro_use]\nmod macros;\n"
+                '#[path = "../../shared/helper.rs"]\nmod helper;'
+            ),
+            "plain/src/macros.rs": "macro_rules! emit { () => {}; }",
+            "shared/helper.rs": 'fn f() { let _ = "kani::assume(x);"; }\nmod child;',
+            "shared/child.rs": 'fn g() { let _ = "kani::assume(y);"; }',
+        },
+    )
+
+    result = {
+        file.path: [item.item for item in file.items]
+        for file in audit_tree(tmp_path, list(drivers))
+    }
+
+    assert result["shared/helper.rs"] == ["assume"], (
+        "the literal finding must survive the macro-scope rescan"
+    )
+    assert result["shared/child.rs"] == ["assume"], (
+        "a child module must inherit both policies from the rescan"
+    )

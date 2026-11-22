@@ -127,19 +127,29 @@ def audit_tree(
             requires_macro_use=module.macro_use,
         ):
             continue
+        required_procedural = module.procedural_macro or (
+            not first_arrival and policies[module.relative]
+        )
+        required_macro_use = module.macro_use or (
+            not first_arrival and macro_scopes[module.relative]
+        )
         result = scan(
             _read_source(root, module.relative),
-            procedural_macro=module.procedural_macro,
+            procedural_macro=required_procedural,
             vocabularies=vocabularies,
-            inherited_macro_use=module.macro_use,
+            inherited_macro_use=required_macro_use,
         )
         scanned[module.relative] = result.items
-        policies[module.relative] = module.procedural_macro
-        macro_scopes[module.relative] = module.macro_use
-        # Re-enqueue after an upgrade too: a child first reached through
-        # the plain crate must still receive the stronger policy.
+        policies[module.relative] = required_procedural
+        macro_scopes[module.relative] = required_macro_use
+        # Re-enqueue after an upgrade too: a child first reached through the
+        # weaker arrival must still receive every policy the rescan needed.
         pending.extend(
-            dc.replace(target, macro_use=module.macro_use or result.macro_use)
+            dc.replace(
+                target,
+                procedural_macro=required_procedural,
+                macro_use=required_macro_use or result.macro_use,
+            )
             for target in _module_targets(root, module, result.modules)
         )
     return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
