@@ -112,6 +112,7 @@ def audit_tree(
     scanned: dict[str, tuple[TrustItem, ...]] = {}
     contexts: dict[str, tuple[str, str]] = {}
     policies: dict[str, bool] = {}
+    macro_scopes: dict[str, bool] = {}
     while pending:
         module = pending.pop()
         # Every arrival is claimed before the deduplication below: skipping a
@@ -122,6 +123,8 @@ def audit_tree(
         if not first_arrival and not _needs_rescan(
             scanned_as_procedural=policies[module.relative],
             required=module.procedural_macro,
+            scanned_with_macro_use=macro_scopes[module.relative],
+            requires_macro_use=module.macro_use,
         ):
             continue
         result = scan(
@@ -132,6 +135,7 @@ def audit_tree(
         )
         scanned[module.relative] = result.items
         policies[module.relative] = module.procedural_macro
+        macro_scopes[module.relative] = module.macro_use
         # Re-enqueue after an upgrade too: a child first reached through
         # the plain crate must still receive the stronger policy.
         pending.extend(
@@ -145,6 +149,8 @@ def _needs_rescan(
     *,
     scanned_as_procedural: bool,
     required: bool,
+    scanned_with_macro_use: bool,
+    requires_macro_use: bool,
 ) -> bool:
     """Report whether a second arrival needs a stronger scan policy.
 
@@ -152,7 +158,14 @@ def _needs_rescan(
     through ``#[path]``.  The procedural scan reads literals as code, so it is
     a superset; when the plain arrival was scanned first, the file must be
     rescanned rather than left with the weaker result.
+
+    The same holds for inherited ``#[macro_use]`` scope.  A module two crates
+    share is scanned once per arrival only while both arrivals agree; an
+    arrival under an imported macro's scope sees invocations the earlier scan
+    could not attribute, so the file and its children are rescanned.
     """
+    if requires_macro_use and not scanned_with_macro_use:
+        return True
     return required and not scanned_as_procedural
 
 

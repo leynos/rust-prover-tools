@@ -252,3 +252,50 @@ def test_two_resolution_contexts_for_one_file_are_refused(
 
     with pytest.raises(TrustAuditError, match="reached both as a file owning"):
         audit_tree(tmp_path, ["src/lib.rs"])
+
+
+def test_a_shared_module_is_rescanned_under_inherited_macro_scope(
+    tmp_path: Path,
+) -> None:
+    """Rescan a shared module when a later arrival sees imported macros.
+
+    ``main.rs`` reaches ``shared.rs`` first without ``#[macro_use]`` scope and
+    defines its own ``emit!``, so the file looks clean.  ``lib.rs`` imports a
+    macro with ``#[macro_use]``, and under that scope ``emit!()`` is a macro the
+    audit cannot attribute, so the second arrival must be refused rather than
+    skipped as already scanned.
+    """
+    write(
+        tmp_path,
+        {
+            "src/main.rs": (
+                "macro_rules! emit { () => {}; }\nmod shared;\nfn main() { emit!(); }"
+            ),
+            "src/lib.rs": "#[macro_use]\nmod macros;\nmod shared;",
+            "src/macros.rs": "macro_rules! emit { () => { mod hidden; }; }",
+            "src/shared.rs": "fn f() { emit!(); }",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
+        audit_tree(tmp_path, ["src/main.rs", "src/lib.rs"])
+
+
+def test_a_shared_module_is_rescanned_in_either_traversal_order(
+    tmp_path: Path,
+) -> None:
+    """The refusal does not depend on which crate root the walk reads first."""
+    write(
+        tmp_path,
+        {
+            "src/main.rs": (
+                "macro_rules! emit { () => {}; }\nmod shared;\nfn main() { emit!(); }"
+            ),
+            "src/lib.rs": "#[macro_use]\nmod macros;\nmod shared;",
+            "src/macros.rs": "macro_rules! emit { () => { mod hidden; }; }",
+            "src/shared.rs": "fn f() { emit!(); }",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
+        audit_tree(tmp_path, ["src/lib.rs", "src/main.rs"])
