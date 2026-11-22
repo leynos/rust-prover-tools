@@ -178,3 +178,9 @@ def test_a_hard_link_alias_is_not_a_distinct_destination(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="distinct"):
         DiagnosticSinks(human_path=first, jsonl_path=second)
+
+
+def test_a_boolean_measurement_is_refused() -> None:
+    """A bool is not a byte count, even though Python treats it as an int."""
+    with pytest.raises(ValueError, match="integer"):
+        Measurement(value=True)

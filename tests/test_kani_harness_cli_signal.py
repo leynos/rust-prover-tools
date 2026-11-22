@@ -105,6 +105,8 @@ def test_the_cli_installs_handlers_only_for_execution(
     class _FakeInterrupt:
         """Record when the CLI believes a handler is installed."""
 
+        signum: int | None = None
+
         @contextlib.contextmanager
         def installed(self) -> cabc.Generator[None]:
             """Mark the execution phase as guarded."""
@@ -297,3 +299,51 @@ def test_an_execution_keyboard_interrupt_is_named(
 
     assert status == 128 + signal.SIGINT
     assert "execution interrupted" in capsys.readouterr().err
+
+
+def test_a_signal_recorded_after_the_report_wins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A late SIGTERM is not hidden by a completed passing report."""
+    from rust_prover_tools.cli import app
+    from tests.kani_harness_cli_support import inventory_file
+    from tests.kani_harness_cli_support import run as make_run
+
+    def prepared(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+        """Reach execution without qualifying a real installation."""
+        del options
+        return typ.cast("KaniHarnessPreparation", object())
+
+    def execute(
+        preparation: KaniHarnessPreparation,
+        config: SupervisionConfig,
+        dependencies: KaniHarnessDependencies | None = None,
+        *,
+        diagnostics: Diagnostics | None = None,
+    ) -> KaniHarnessRun:
+        """Record a signal after producing the completed report."""
+        del preparation, config, diagnostics
+        assert dependencies is not None
+        interrupt = typ.cast("SignalInterrupt", dependencies.interrupts)
+        interrupt._handle(signal.SIGTERM, None)
+        return make_run()
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_cli.prepare_harnesses", prepared
+    )
+    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.execute_harnesses", execute)
+
+    status = app([
+        "kani",
+        "harnesses",
+        "run",
+        "--installation",
+        str(tmp_path / "kani"),
+        "--cwd",
+        str(tmp_path),
+        "--inventory",
+        str(inventory_file(tmp_path)),
+    ])
+
+    assert status == 128 + signal.SIGTERM

@@ -268,3 +268,16 @@ def test_the_probe_refuses_a_non_linux_platform() -> None:
         pytest.raises(NotImplementedError, match="Linux"),
     ):
         ProcfsResourceProbe(clock=VirtualClock())
+
+
+def test_group_rss_without_a_member_is_unavailable(tmp_path: Path) -> None:
+    """An empty group is not a measured zero."""
+    proc = _proc(tmp_path)
+    child = proc / "1234"
+    child.mkdir()
+    (child / "stat").write_text(_stat(1234, 9999, 10), encoding="utf-8")
+
+    measurement = sum_group_rss(1234, proc=proc)
+
+    assert measurement.value is None
+    assert "no process in the group" in (measurement.unavailable_reason or "")

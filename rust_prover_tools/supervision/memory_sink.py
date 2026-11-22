@@ -12,6 +12,7 @@ import typing as typ
 
 from rust_prover_tools.supervision.formatting import (
     JSONL_SCHEMA_VERSION,
+    MIN_LINE_BYTES,
     fit_record,
     normalise,
 )
@@ -33,6 +34,12 @@ class MemorySink:
     max_line_bytes: int = 8 * 1024
     _fragments: list[str] = dc.field(default_factory=list)
     _offset: int = 0
+
+    def __post_init__(self) -> None:
+        """Refuse a record budget below the shared minimum."""
+        if self.max_line_bytes < MIN_LINE_BYTES:
+            msg = f"max_line_bytes must be at least {MIN_LINE_BYTES}"
+            raise ValueError(msg)
 
     @property
     def text(self) -> str:

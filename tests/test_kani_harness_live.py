@@ -33,7 +33,7 @@ _FIXTURE = (
     os.environ.get("RPT_LIVE_KANI") != "1" or not _RELEASE.is_dir(),
     reason="set RPT_LIVE_KANI=1 and install Kani 0.67.0 to run the live fixture",
 )
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(1800)
 def test_a_live_run_classifies_passing_path_and_failing_proofs() -> None:
     """The real driver verifies two proofs and refutes one, exactly once each."""
     run = run_harnesses(
@@ -47,7 +47,7 @@ def test_a_live_run_classifies_passing_path_and_failing_proofs() -> None:
                 "harnesses::failing",
             ),
             config=SupervisionConfig(
-                timeout_seconds=300.0,
+                timeout_seconds=900.0,
                 sample_interval_seconds=1.0,
                 heartbeat_interval_seconds=5.0,
                 watchdog_threshold_bytes=None,

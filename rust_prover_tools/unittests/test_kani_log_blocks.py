@@ -128,3 +128,9 @@ def test_a_repeated_other_kind_is_refused() -> None:
     """Two counts of one kind cannot overwrite each other silently."""
     with pytest.raises(ValueError, match="repeated other-result kind"):
         parse_other_pairs("99 unreachable,1 unreachable")
+
+
+def test_an_unknown_other_result_kind_is_refused() -> None:
+    """A summary kind the grammar does not know cannot be reconciled."""
+    with pytest.raises(ValueError, match="unknown other-result kind"):
+        parse_other_pairs("1 mysterious")

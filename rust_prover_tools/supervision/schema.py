@@ -269,6 +269,18 @@ def _validate_expected(expected: object) -> None:
             frozenset({"package", "harness", "attempt"}),
             subject=f"expected entry {index}",
         )
+        for field in ("package", "harness"):
+            value = entry[field]
+            if not isinstance(value, str) or not value:
+                msg = f"expected entry {index}.{field} is not a non-empty string"
+                raise EvidenceFormatError(msg)
+        attempt = entry["attempt"]
+        if not isinstance(attempt, int) or isinstance(attempt, bool):
+            msg = f"expected entry {index}.attempt is not an integer"
+            raise EvidenceFormatError(msg)
+        if attempt < 1:
+            msg = f"expected entry {index}.attempt is not positive"
+            raise EvidenceFormatError(msg)
 
 
 def _validate_accounting(accounting: object) -> None:

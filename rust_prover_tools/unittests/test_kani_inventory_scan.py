@@ -710,3 +710,14 @@ def test_a_raw_path_followed_by_a_comment_is_accepted(tmp_path: Path) -> None:
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "proofs::h"
     ]
+
+
+def test_an_absolute_kani_attribute_is_a_proof(tmp_path: Path) -> None:
+    """`::kani::proof` names the same path from the crate root."""
+    (tmp_path / "src").mkdir()
+    root = tmp_path / "src" / "lib.rs"
+    root.write_text("#[::kani::proof]\nfn absolute() {}\n", encoding="utf-8")
+
+    assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
+        "absolute"
+    ]

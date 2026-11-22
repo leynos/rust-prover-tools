@@ -256,4 +256,6 @@ def run_command_harnesses(
         print_lines((str(exc),), stream=sys.stderr)
         return 1
     print_lines(run.table)
+    if interrupt.signum is not None:
+        return 128 + interrupt.signum
     return run.exit_status

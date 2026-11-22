@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import json
 import typing as typ
@@ -13,11 +14,13 @@ from rust_prover_tools.supervision import (
     Diagnostics,
     ExecutionStatus,
     HarnessSpec,
+    LaunchResult,
     Measurement,
     MemorySink,
     NullSink,
     OutputLine,
     ResourceSample,
+    RunningHarness,
     RunOutcome,
     StopReason,
     run_supervised,
@@ -586,3 +589,36 @@ async def _harness_finish_failure_scenario(tmp_path: Path) -> None:
     document = json.loads(report_path.read_text(encoding="utf-8"))
     validate_report_document(document)
     assert len(document["results"]) == 1
+
+
+class _FixedPid:
+    """Report a fixed process-group id to a running handle."""
+
+    pid: int | None = 4321
+
+
+def test_cancelling_one_waiter_does_not_cancel_the_launch() -> None:
+    """The monitor and runner can both wait on one child safely."""
+
+    async def scenario() -> None:
+        """Cancel one waiter and prove the child is still alive."""
+        release = asyncio.Event()
+
+        async def child() -> LaunchResult:
+            """Wait for the test to release the child."""
+            await release.wait()
+            return LaunchResult(exit_code=0)
+
+        task = asyncio.create_task(child())
+        running = RunningHarness(task, _FixedPid())
+        waiter = asyncio.create_task(running.wait())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiter
+
+        assert not task.cancelled()
+        release.set()
+        assert (await running.wait()).exit_code == 0
+
+    asyncio.run(scenario())

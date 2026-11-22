@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import io
 import json
 import typing as typ
@@ -610,3 +611,18 @@ def test_a_budget_below_the_truncation_marker_is_refused() -> None:
     """A caller cannot request a line bound that cannot carry its marker."""
     with pytest.raises(ValueError, match="at least"):
         bounded_text("x" * 100, 8)
+
+
+def test_a_multiline_detail_stays_on_one_table_row() -> None:
+    """A detail cannot split its row into unrelated log lines."""
+    report = _report()
+    result = report.results[0]
+    report = dc.replace(
+        report,
+        results=(dc.replace(result, detail="first\nsecond"),),
+    )
+
+    lines = render_table(report)
+
+    assert all("\n" not in line for line in lines)
+    assert any("first second" in line for line in lines)

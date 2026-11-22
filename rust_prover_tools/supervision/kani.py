@@ -64,11 +64,14 @@ class KaniObserver:
         Last structurally recognized report line.
     banner_error : str | None
         Why an opening banner could not be attributed, when it could not be.
+    failure_reason : str | None
+        Why the parser refused the completed log, when it did.
     """
 
     reader: KaniLogReader = dc.field(default_factory=KaniLogReader)
     last_progress: str | None = None
     banner_error: str | None = None
+    failure_reason: str | None = None
 
     def observe(self, line: OutputLine) -> None:
         """Feed one decoded line to the reader and remember its progress.
@@ -159,9 +162,10 @@ class KaniAdapter:
             )
         log = _parse(evidence, observer)
         if log is None:
+            reason = observer.failure_reason or "unknown refusal"
             return _classification(
                 ExecutionStatus.ERROR,
-                detail="malformed verifier output",
+                detail=f"malformed verifier output: {reason}",
                 progress=observer.last_progress,
             )
         (block,) = log.blocks
@@ -260,7 +264,8 @@ def _parse(
     """Complete the parser, returning the log or `None` when it refuses."""
     try:
         return observer.reader.finish(evidence.exit_code or 0)
-    except KaniLogError:
+    except KaniLogError as error:
+        observer.failure_reason = error.reason
         return None
 
 

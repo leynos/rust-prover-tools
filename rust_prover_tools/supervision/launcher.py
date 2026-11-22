@@ -192,7 +192,7 @@ class RunningHarness:
         if self._result is not None:
             return self._result
         try:
-            outcome = await self._task
+            outcome = await asyncio.shield(self._task)
         except asyncio.CancelledError:
             # Cuprum settles the owned group before its cancellation surfaces,
             # so by here every descendant has been terminated and reaped. A

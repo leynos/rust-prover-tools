@@ -54,7 +54,7 @@ def reconcile_report(
         report is consistent.
     """
     if is_inventory:
-        if blocks:
+        if blocks or manual is not None:
             return [
                 Issue(
                     IssueKind.STRUCTURAL,

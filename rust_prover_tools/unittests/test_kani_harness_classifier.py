@@ -249,7 +249,8 @@ def test_a_truncated_log_is_malformed_output() -> None:
 
     assert result.status is ExecutionStatus.ERROR
     assert result.proof_verdict is ProofVerdict.UNKNOWN
-    assert result.detail == "malformed verifier output"
+    assert result.detail.startswith("malformed verifier output:")
+    assert "truncated" in result.detail
 
 
 def test_an_unregistered_grammar_is_refused_before_observation() -> None:

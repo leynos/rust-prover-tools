@@ -133,7 +133,14 @@ class RunningHarnessHandle(typ.Protocol):
 
 
 class HarnessLauncher(typ.Protocol):
-    """Starts one harness invocation and returns a handle to it."""
+    """Starts one harness invocation and returns a handle to it.
+
+    The supervisor calls `start` from its coroutine, awaits the handle's
+    `wait`, reads `done` and `group_id` while it runs, and calls `stop` with
+    the first stop reason. An implementation must launch the child in its own
+    process group, forward one bounded `OutputLine` per decoded line, and
+    settle the group when the handle's task is cancelled.
+    """
 
     def start(
         self,
@@ -141,7 +148,23 @@ class HarnessLauncher(typ.Protocol):
         build: cabc.Callable[[HarnessSpec], LaunchCommand],
         on_line: cabc.Callable[[object], None],
     ) -> RunningHarnessHandle:
-        """Start one invocation and return its running handle."""
+        """Start one invocation and return its running handle.
+
+        Parameters
+        ----------
+        spec : HarnessSpec
+            Identity the invocation belongs to.
+        build : cabc.Callable[[HarnessSpec], LaunchCommand]
+            Composes the argv, cwd, and environment for `spec`.
+        on_line : cabc.Callable[[object], None]
+            Receives one bounded `OutputLine` per decoded line, in order.
+
+        Returns
+        -------
+        RunningHarnessHandle
+            The active child. `stop` delivers the first stop request; `wait`
+            returns the termination evidence after the group has settled.
+        """
         ...
 
 

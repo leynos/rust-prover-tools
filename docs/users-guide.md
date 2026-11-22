@@ -397,9 +397,10 @@ _Table 1: Supervised harness defaults._
 
 Live human records are flushed per line to standard output, or to
 `--human PATH`. Versioned JSONL evidence is written to `--jsonl PATH`, and the
-final JSON report is written atomically to `--report PATH`. Each harness result
-carries a diagnostic reference to the byte offset where its JSONL evidence
-begins.
+final JSON report is written atomically to `--report PATH`. When JSONL evidence
+is enabled, each harness result carries a diagnostic reference to the byte
+offset where its records begin; with the default disabled JSONL sink, the
+reference is absent.
 
 Every harness result has one status: `passed`, `failed`, `no-match`,
 `multiple-match`, `timed-out`, `memory-exhausted`, `interrupted`,

@@ -149,10 +149,11 @@ Plain-language terms used in this plan:
   whole-text port. Severity: high. Likelihood: medium. Mitigation: implement
   whole-text parsing as feed-line plus finish, and add a line-fed equivalence
   property test over every corpus log and generated chatter.
-- Risk: Cuprum may reject a single output line longer than 64 KiB, because a
-  newline-free verbose line is treated as an EOF. Severity: high. Likelihood:
-  low. Mitigation: document the limit, bound the diagnostic line size, and
-  ensure the classifier never needs the full line; report truncation explicitly.
+- Risk: a newline-free verbose line can accumulate in Cuprum before the
+  bounded hook receives it. Severity: high. Likelihood: low. Mitigation:
+  document the residual upstream limit, bound every line and sink the
+  supervisor receives, and ensure the classifier never needs the full line. The
+  incomplete-line buffer is not claimed to be bounded.
 - Risk: CodeRabbit's shared review allowance may be exhausted.
   Severity: low. Likelihood: medium. Mitigation: run the deterministic gates
   before each review request; wait with `vsleep` as instructed on rate limits.

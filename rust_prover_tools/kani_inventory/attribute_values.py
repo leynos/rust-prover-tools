@@ -32,7 +32,12 @@ DEPTH_DELTAS = {
     "]": (0, 0, -1),
 }
 
-PROOF_ATTRIBUTES = frozenset({"kani::proof", "kani::proof_for_contract"})
+PROOF_ATTRIBUTES = frozenset({
+    "kani::proof",
+    "kani::proof_for_contract",
+    "::kani::proof",
+    "::kani::proof_for_contract",
+})
 _RAW_STRING = re.compile(r'r(?P<hashes>#*)"(?P<body>.*?)"(?P=hashes)', re.DOTALL)
 _HEX_DIGITS = 2
 _MIN_CFG_ATTR_PARTS = 2

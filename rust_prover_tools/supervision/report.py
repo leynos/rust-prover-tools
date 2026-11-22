@@ -98,7 +98,7 @@ def _row(result: HarnessResult) -> tuple[str, ...]:
         _mib(result.peak_group_rss),
         _mib(result.min_host_available),
         _exit_text(result.exit_code, result.signal_number),
-        result.detail,
+        result.detail.replace("\n", " ").replace("\r", " "),
     )
 
 

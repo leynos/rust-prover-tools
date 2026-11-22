@@ -50,6 +50,9 @@ def parse_other_pairs(text: str | None) -> tuple[tuple[int, str], ...]:
             msg = f"malformed other-result pair {part!r}"
             raise ValueError(msg)
         kind = match[2]
+        if kind not in OTHER_STATUS:
+            msg = f"unknown other-result kind {kind!r}"
+            raise ValueError(msg)
         if kind in kinds:
             msg = f"repeated other-result kind {kind!r}"
             raise ValueError(msg)
