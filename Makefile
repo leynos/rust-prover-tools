@@ -96,6 +96,12 @@ workflow-check: build actionlint ## Lint workflows and check their contracts
 
 # Opt-in: dispatches a real, non-publishing snapshot run. It builds on a hosted
 # runner and creates an attestation, so it is never part of `all`.
+#
+# The producer refuses a tag whose 12-hex prefix is not the upstream commit's,
+# but only once a hosted run has started. The tag grammar validated by the
+# recipe makes the fifth dash-separated field exactly that prefix, so the
+# recipe compares it locally and the operator sees the mistake without a red
+# resolve job.
 KANI_SNAPSHOT_UPSTREAM_COMMIT ?=
 KANI_SNAPSHOT_PUBLICATION_ID ?=
 # Exported, never interpolated: each value is data for the recipe's shell,
@@ -121,10 +127,6 @@ kani-snapshot-smoke: ## Dispatch a non-publishing snapshot run (opt-in)
 	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must match kani-snapshot-YYYY-MM-<12 hex>-rN\n' >&2; \
 	  exit 1; \
 	}
-# The producer refuses a tag whose 12-hex prefix is not the upstream commit's,
-# but only once a hosted run has started. The validated grammar above makes the
-# fifth dash-separated field exactly that prefix, so the recipe compares it
-# here and the operator sees the mistake without a red resolve job.
 	@test "$$(printf '%s\n' "$$KANI_SNAPSHOT_PUBLICATION_ID" | cut -d- -f5)" = \
 	      "$$(printf '%s\n' "$$KANI_SNAPSHOT_UPSTREAM_COMMIT" | cut -c1-12)" || { \
 	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must carry the upstream commit prefix (12 hex)\n' >&2; \

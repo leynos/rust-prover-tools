@@ -28,6 +28,9 @@ _MAKEFILE = _REPO_ROOT / "Makefile"
 #: The identifier the guide gives its smoke-dispatch example.
 _SMOKE_EXAMPLE = "kani-snapshot-smoke"
 
+#: The identifier the guide gives its consumer verification example.
+_VERIFY_EXAMPLE = "kani-snapshot-verify"
+
 #: The identifier the migration guide gives its snapshot consumer example.
 _SNAPSHOT_EXAMPLE = "migration-snapshot-consumer"
 
@@ -203,6 +206,31 @@ def test_the_smoke_example_names_the_target_and_its_inputs() -> None:
     )
     assert "KANI_SNAPSHOT_PUBLICATION_ID=" in example.body, (
         "the example omits the publication identity the target requires"
+    )
+
+
+def test_the_verify_example_names_the_target_and_its_inputs() -> None:
+    """The documented consumer verification runs the shipped target.
+
+    The example cannot execute in an ordinary gate: it installs a pinned
+    toolchain and runs real proofs. The test therefore holds the part a
+    reader depends on, that the guide and the Makefile agree on the target
+    and every input it refuses to run without.
+    """
+    example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
+
+    assert example.language == "sh", "the verification example must be shell"
+    assert "make kani-snapshot-verify" in example.body, (
+        "the example does not invoke the verification target"
+    )
+    for variable in (
+        "KANI_SNAPSHOT_ASSET_DIR=",
+        "KANI_SNAPSHOT_WHEEL=",
+        "KANI_SNAPSHOT_RUSTC_1_93=",
+    ):
+        assert variable in example.body, f"the example omits {variable}"
+    assert _target_recipe("kani-snapshot-verify"), (
+        "the Makefile has no verification target"
     )
 
 

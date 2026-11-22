@@ -1163,6 +1163,96 @@ Conventions that keep the recipe trustworthy:
   `kani-driver` links the host C library, so a prototype built on another
   distribution measures that distribution's floor, not the published one.
 
+## Kani snapshot proof evidence
+
+EP-M5 validates a produced release by reading what the tools actually print.
+Two pure modules in `rust_prover_tools/kani_snapshot/producer` own the policy,
+and the worker runs them from an opt-in integration test.
+
+`proof_report.py` parses one Kani transcript. It requires a
+`Checking harness <name>...` line, exactly one `VERIFICATION:- SUCCESSFUL` or
+`VERIFICATION:- FAILED` for that name, and exactly one manual summary. The
+summary's verified, failed and total counts must equal the verdicts, and the
+`Verification failed for - <name>` lines must name exactly the failed
+harnesses. It refuses, with distinct errors:
+
+- a transcript that found no proof harnesses;
+- a compiler diagnostic (`error[E...]`, `error: could not compile`);
+- a CBMC failure (`CBMC failed`, `CBMC timed out`, an out-of-memory message);
+- a missing or duplicated verdict;
+- a missing, duplicated or contradictory summary;
+- a transcript larger than `MAX_TRANSCRIPT_BYTES`.
+
+Lines may carry a `Thread N:` prefix from a parallel run; the verdict and
+summary bodies themselves are not prefixed. The parser distinguishes a genuine
+assertion failure from every other non-zero exit, which is why the smoke
+requires the false harness to fail *verification*.
+
+`setup_trace.py` parses `strace -f -e trace=execve` output. It permits version
+probes, extraction tools and the prebuilt toolchain install, and refuses any
+`cargo` invocation, a `rustc` invocation with a source file or code-generation
+flag, and C/C++ compilers, linkers and build drivers, including one reached
+through a shell. It requires the packaged `cargo-kani setup` record, so a trace
+from an unrelated command cannot discharge the claim. The trace and record
+ceilings are `MAX_TRACE_BYTES` and `MAX_EXEC_RECORDS`.
+
+The proof fixtures live under `tests/fixtures/kani_snapshot/proofs/`. They are
+ordinary Cargo crates with no `kani` dependency; `cargo kani` supplies the
+proof crate to their attributes. Nothing compiles them during `make test`.
+
+| Crate                | Harness                            | Expected result    | What it proves                                |
+| -------------------- | ---------------------------------- | ------------------ | --------------------------------------------- |
+| `bounded_collection` | `bounded_push_and_drop_are_exact`  | verifies           | bounded collection growth and contents        |
+| `bounded_collection` | `raii_release_runs_once`           | verifies           | ownership-driven cleanup runs exactly once    |
+| `false_assertion`    | `deliberately_false_assertion`     | fails verification | a real assertion failure, not a build failure |
+| `compiler_floor`     | `bounded_adjacent_pairs_are_exact` | verifies           | the 1.94 `array_windows` floor                |
+
+*Caption: the named harness inventory for the consumer smoke.*
+
+The captured transcripts under `tests/fixtures/kani_snapshot/transcripts/`
+cover the positive set, the false assertion, a zero-harness run, a compile
+error, a solver failure, a truncated transcript, a missing summary, a duplicate
+verdict, a contradictory summary, a parallel run and the allowed and forbidden
+setup traces. Recapture the positive and false transcripts from a real snapshot
+run when the pinned Kani changes; do not hand-edit a transcript to make a test
+pass.
+
+`tests/integration/test_kani_snapshot_smoke.py` is the opt-in end-to-end
+module. It is skipped unless `KANI_SNAPSHOT_SMOKE` is set, and
+`make kani-snapshot-verify` supplies:
+
+| Variable                           | Meaning                                                |
+| ---------------------------------- | ------------------------------------------------------ |
+| `KANI_SNAPSHOT_SMOKE_ASSET_DIR`    | Release directory downloaded from a non-publishing run |
+| `KANI_SNAPSHOT_SMOKE_PROVER_TOOLS` | Console script installed from the built wheel          |
+| `KANI_SNAPSHOT_SMOKE_RUSTC_1_93`   | A Rust 1.93 `rustc` for the below-floor control        |
+| `KANI_SNAPSHOT_SMOKE`              | Set by the target; the module's skip gate              |
+
+*Caption: environment the consumer smoke requires.*
+
+The smoke installs through the public commands in a throwaway consumer
+repository, proves the named harnesses, repeats the install from the warm cache
+and shows a corrupted payload and a changed identity refused. It also validates
+the cold install's `strace` trace when `strace` is available and records the
+gap when it is not. Ordinary `make test` collects the module but skips every
+test in it.
+
+Two integration defects found by the first real consumer install are worth
+keeping in mind:
+
+- Rustup's automatic self-update expects its binary under `CARGO_HOME`. Snapshot
+  setup uses a generation-private `CARGO_HOME`, so setup now runs
+  `rustup set auto-self-update disable` first. Do not remove that step; a local
+  consumer install fails after the toolchain is already installed without it.
+- The manifest must describe the toolchain a *consumer* installs. Upstream
+  setup runs `rustup toolchain install <identifier>` with rustup's default
+  profile, so the builder measures a second, consumer-profile sysroot under a
+  private rustup home. Measuring the builder's minimal-plus-`rustc-dev`
+  toolchain records compiler-development libraries and a component record no
+  consumer has, and the consumer's two-way coverage check refuses the install.
+  `tests/test_kani_workflow_build_contract.py` pins the default profile and the
+  consumer sysroot hand-off.
+
 ## Kani snapshot producer entrypoint
 
 `python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint` is the
