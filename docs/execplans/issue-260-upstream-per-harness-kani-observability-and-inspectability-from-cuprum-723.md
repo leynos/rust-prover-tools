@@ -289,7 +289,7 @@ Plain-language terms used in this plan:
   validation; the preserved verdict after a stop; the silent-failure
   classification; mountinfo cgroup resolution with `oom`/`max`; and the
   prescribed `run_kani_harnesses` entry point. The deterministic suite passes
-  with 2,478 tests and 6 skips, and the opt-in live Kani 0.67.0 fixture passes
+  with 2,479 tests and 6 skips, and the opt-in live Kani 0.67.0 fixture passes
   at head `e255561` in 627.95 s. The two remaining items are explicit
   decisions, not claims: D24 records the Cuprum newline-free line gap as
   upstream, and D25 records the tolerance overage and its authorization.
@@ -576,7 +576,7 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at head `6f772f3` passes with 2,478 tests and 6 skips, and the opt-in live Kani
+at head `6f772f3` passes with 2,479 tests and 6 skips, and the opt-in live Kani
 0.67.0 fixture passes at the same head: 2 passed in 678.97 s under the shared
 compile-admission pool. The parser property suite now checks generated build
 noise and feed groupings against an independent reading of the capture rather
