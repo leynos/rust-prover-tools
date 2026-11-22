@@ -868,11 +868,26 @@ def test_install_z3_reports_the_cache_miss_reason(
         (install_dir / ".z3-version").write_bytes(b"\xff\xfe")
     cache_dir = tmp_path / "cache"
     archive = write_z3_zip(cache_dir / Z3_ASSET.name)
-    stub_download(
-        monkeypatch,
-        archive,
-        expected_destination=cache_dir / Z3_ASSET.name,
-    )
+    expected_miss = {
+        "event": "z3.install.cache_miss",
+        "version": Z3_VERSION,
+        "reason": reason,
+    }
+
+    def assert_miss_precedes_download(asset: PinnedAsset, destination: Path) -> Path:
+        """Confirm the cache-miss event was recorded before the download."""
+        del asset, destination
+        misses = [
+            event
+            for event in events_from(caplog)
+            if event.get("event") == "z3.install.cache_miss"
+        ]
+        assert misses == [expected_miss], (
+            "the cache-miss event must be recorded before downloading"
+        )
+        return archive
+
+    monkeypatch.setattr(z3_module, "download_pinned", assert_miss_precedes_download)
 
     install_z3(
         Z3InstallOptions(
@@ -887,13 +902,9 @@ def test_install_z3_reports_the_cache_miss_reason(
         for event in events_from(caplog)
         if event.get("event") == "z3.install.cache_miss"
     ]
-    assert misses == [
-        {
-            "event": "z3.install.cache_miss",
-            "version": Z3_VERSION,
-            "reason": reason,
-        },
-    ], "a refused reuse should report exactly one bounded reason"
+    assert misses == [expected_miss], (
+        "a refused reuse should report exactly one bounded reason"
+    )
 
 
 def test_install_z3_reports_a_download_failure_event(

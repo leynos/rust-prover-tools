@@ -149,12 +149,13 @@ def test_install_refuses_a_binary_whose_bytes_differ(
     binary = install_dir / "z3"
     binary.write_bytes(payload)
     binary.chmod(0o755)
-    # Derive a digest that always differs from the installed bytes, so every
-    # example exercises the mismatch branch.
-    wrong_digest = hashlib.sha256(payload)
-    wrong_digest.update(b"not the installed bytes")
+    # Flip one hexadecimal character so the digest is guaranteed to differ
+    # rather than merely being very unlikely to collide.
+    correct_digest = hashlib.sha256(payload).hexdigest()
+    wrong_digest = ("1" if correct_digest[0] == "0" else "0") + correct_digest[1:]
+    assert wrong_digest != correct_digest
     (install_dir / z3_module.MARKER_NAME).write_text(
-        _marker_text(wrong_digest.hexdigest()),
+        _marker_text(wrong_digest),
         encoding="utf-8",
     )
     cache_dir = tmp_path / "cache"
