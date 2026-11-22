@@ -434,7 +434,6 @@ See [Kani supervised harness execution](kani-supervised-execution.md) for the
 inventory, JSONL, and report schemas, the adapter contract, and the discovery
 rules.
 
-
 ### Verus commands
 
 `prover-tools verus install` reads `tools/verus/VERSION` and

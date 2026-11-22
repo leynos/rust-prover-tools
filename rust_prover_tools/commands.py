@@ -43,6 +43,7 @@ from cuprum.context import EnvMode, UnsetType
 from rust_prover_tools.errors import (
     CommandFailedError,
     CommandTimedOutError,
+    CommandTimeoutError,
     ProverToolError,
 )
 
@@ -140,16 +141,6 @@ class TailCapture:
         if not lines:
             return ""
         return "\n".join(text for _, text in lines) + "\n"
-
-
-class CommandTimeoutError(ProverToolError):
-    """Raised when a command exceeds its wall-clock budget.
-
-    A timed-out command's whole process group has already been terminated
-    before this is raised. Callers that may retry a timeout, such as the
-    release publication loop, catch this type rather than the broader base
-    class so a genuine command failure is never mistaken for one.
-    """
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -367,4 +358,3 @@ def run_checked(spec: CommandSpec) -> CommandResult:
             result.stderr,
         )
     return result
-# weave: run 'weave explain rust_prover_tools/commands.py' for per-hunk detail, 'weave check' to verify your resolution

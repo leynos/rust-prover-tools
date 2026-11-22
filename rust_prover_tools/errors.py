@@ -20,6 +20,7 @@ from __future__ import annotations
 __all__ = (
     "CommandFailedError",
     "CommandTimedOutError",
+    "CommandTimeoutError",
     "ProverToolError",
     "TransientDownloadError",
 )
@@ -37,7 +38,17 @@ class TransientDownloadError(ProverToolError):
     """
 
 
-class CommandTimedOutError(ProverToolError):
+class CommandTimeoutError(ProverToolError):
+    """Raised when a command exceeds its wall-clock budget.
+
+    A timed-out command's whole process group has already been terminated
+    before this is raised. Callers that may retry a timeout catch this type
+    rather than the broader base class so a genuine command failure is never
+    mistaken for one.
+    """
+
+
+class CommandTimedOutError(CommandTimeoutError):
     """Raised when an external command exceeds its wall-clock budget.
 
     Attributes

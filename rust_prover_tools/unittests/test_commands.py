@@ -25,15 +25,14 @@ from rust_prover_tools.commands import (
 )
 from rust_prover_tools.errors import (
     CommandFailedError,
-    ProverToolError,
     CommandTimedOutError,
+    ProverToolError,
 )
 
 if typ.TYPE_CHECKING:
     from cmd_mox import CmdMox
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
-
 
 
 """Tests for Cuprum-backed command helpers."""
@@ -261,8 +260,6 @@ def test_run_command_reports_a_scope_supplied_timeout() -> None:
         run_command(CommandSpec(argv))
     assert raised.value.timeout_seconds == pytest.approx(0.2)
     assert raised.value.argv == argv
-
-
 
 
 def _run_with_budget(
