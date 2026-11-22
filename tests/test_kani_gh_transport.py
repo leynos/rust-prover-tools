@@ -120,6 +120,37 @@ def test_gh_translates_a_command_timeout_into_a_transient_failure(
         gh(("gh", "api", "repos/owner/repo/releases"))
 
 
+def test_a_timeout_reports_the_kind_without_an_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A timed-out command never produced an exit status to report.
+
+    The event carries `kind="timeout"` and no `exit_code`, which is what the
+    developer's guide documents; a consumer requiring both fields would
+    otherwise fail to process it.
+    """
+
+    def _timed_out(_spec: object) -> CommandResult:
+        """Fail exactly as a command that outlived its budget would."""
+        raise CommandTimeoutError(_TIMEOUT_MESSAGE)
+
+    monkeypatch.setattr(gh_transport, "run_command", _timed_out)
+
+    with (
+        caplog.at_level(logging.DEBUG, logger=gh_transport.__name__),
+        pytest.raises(ReleaseTransientError),
+    ):
+        gh(("gh", "api", "repos/owner/repo/releases"))
+
+    events = [
+        record.event_data for record in caplog.records if hasattr(record, "event_data")
+    ]
+    assert events == [{"event": "kani.snapshot.gh.failed", "kind": "timeout"}], (
+        "a timeout reported an exit code it never received"
+    )
+
+
 def test_gh_gives_a_read_the_read_budget_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

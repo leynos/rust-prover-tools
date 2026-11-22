@@ -162,10 +162,13 @@ package does not reconfigure a host application's logging. The events a
 publication job emits are `kani.snapshot.publish.start`, `.decision` (`step`,
 `action`), `.deferred` (`step`), `.transient` (`action`), and `.complete` or
 `.failed` (`span_id`, `outcome`, `elapsed_seconds`, and `reason` on failure);
-the `gh` transport adds `kani.snapshot.gh.failed` (`kind`, `exit_code`) and
-`kani.snapshot.gh.absent`. A failure that carried a decided outcome reports it,
-so a budget that ran out reads `outcome=not_converged` rather than only the
-exception's class.
+the `gh` transport adds `kani.snapshot.gh.failed` (`kind`, and `exit_code` for
+a command that exited) and `kani.snapshot.gh.absent` (`exit_code`). A timed-out
+command never produced an exit status, so its `kani.snapshot.gh.failed` event
+carries `kind=timeout` and no `exit_code`: a consumer must treat that field as
+present only for a failure that had one. A failure that carried a decided
+outcome reports it, so a budget that ran out reads `outcome=not_converged`
+rather than only the exception's class.
 
 A process or storage boundary that should be timed uses
 `operation_span(logger, event, **fields)` from the same module. It emits

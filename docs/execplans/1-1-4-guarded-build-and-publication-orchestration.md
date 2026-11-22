@@ -469,6 +469,17 @@ Terms used here:
   failure, and names `write_document`, `normalize_inventory_path` and
   `launcher_extract_command`. The PR description's entrypoint path was also
   wrong (`producer.entrypoint`); it now reads `orchestrator.entrypoint`.
+- 22 November 2026: remediated the seventh review round on `51d5e51`, which
+  accepted the logging delivery and found three edges. `_configure_logging`
+  returned before setting the level, so a host that raised the package logger
+  between calls would silence every event; the level is now set on every call
+  while the handler guard still prevents duplicates. The stderr handler called
+  `handleError` on a stream that had gone away, which writes its diagnostic to
+  the same stream and would let a closed stream's `ValueError` abort the
+  operation, so the failure is now dropped. The guide claimed
+  `kani.snapshot.gh.failed` always carries an `exit_code`; a timeout never
+  produced one, and that is now stated. Three tests hold the first two, and one
+  holds the timeout event's exact fields.
 
 ## Surprises & discoveries
 

@@ -160,3 +160,60 @@ def test_configuring_logging_twice_adds_one_handler() -> None:
 
     assert second == first == 1, "the entrypoint installed a duplicate event handler"
     assert logger.level == logging.DEBUG, "the event level was not enabled"
+
+
+def test_a_level_reset_by_an_embedding_caller_is_restored() -> None:
+    """Events must reach the run log even after a host raises the level.
+
+    An embedding caller can reset the package logger between calls. Returning
+    early because the handler is already installed would leave the level at
+    WARNING, and Python filters debug records before any handler sees them.
+    """
+    logger = logging.getLogger("rust_prover_tools")
+    entrypoint._configure_logging()
+    logger.setLevel(logging.WARNING)
+
+    entrypoint._configure_logging()
+
+    assert logger.level == logging.DEBUG, "the event level was not restored"
+    assert (
+        sum(
+            isinstance(handler, entrypoint._StderrEvents) for handler in logger.handlers
+        )
+        == 1
+    ), "restoring the level duplicated the handler"
+
+
+class _Closed:
+    """A text stream that has been closed."""
+
+    def write(self, _text: str) -> int:
+        """Fail exactly as a closed text stream would."""
+        msg = "I/O operation on closed file"
+        raise ValueError(msg)
+
+
+def test_a_closed_stream_does_not_abort_the_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A closed standard error must not turn an event into a crash.
+
+    `handleError` writes its diagnostic to the same stream, and Python 3.14
+    suppresses only `OSError` from that write, so a `ValueError` from a closed
+    stream would escape and abort the producer operation. Reaching
+    `handleError` at all is the defect, so this test makes that call fail.
+    """
+    handler = entrypoint._StderrEvents()
+    handler.setFormatter(entrypoint._EventFormatter("%(name)s %(message)s"))
+
+    def _explode(_record: logging.LogRecord) -> None:
+        """Fail if the handler writes its diagnostic to the broken stream."""
+        msg = "handleError wrote to the closed stream"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(entrypoint.sys, "stderr", _Closed())
+    monkeypatch.setattr(handler, "handleError", _explode)
+
+    handler.emit(
+        logging.LogRecord("rust_prover_tools", logging.DEBUG, "", 0, "event", (), None)
+    )

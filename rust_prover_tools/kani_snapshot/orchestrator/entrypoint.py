@@ -14,6 +14,7 @@ failing closed over convenience. The operations themselves live in
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import sys
 import typing as typ
@@ -154,11 +155,17 @@ class _StderrEvents(logging.Handler):
     """
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Write one formatted record to the current standard error."""
-        try:
+        """Write one formatted record to the current standard error.
+
+        A stream that has gone away is dropped rather than reported.
+        `handleError` writes its diagnostic to the same stream, and Python
+        suppresses only `OSError` from that write, so a closed text stream's
+        `ValueError` would escape and abort the operation the record was
+        describing.
+        """
+        # pragma: no cover - the suppressed branch needs a closed stream
+        with contextlib.suppress(*_STREAM_GONE):
             sys.stderr.write(f"{self.format(record)}\n")
-        except _STREAM_GONE:  # pragma: no cover - stream already closed
-            self.handleError(record)
 
 
 class _EventFormatter(logging.Formatter):
@@ -193,15 +200,17 @@ def _configure_logging() -> None:
 
     The level is DEBUG because `log_event` emits at debug level. Attaching the
     handler is idempotent: `main` runs once per subcommand process, but a test
-    or an embedding caller may invoke it more than once.
+    or an embedding caller may invoke it more than once. The level is set on
+    every call rather than only when the handler is installed, because a host
+    that raised it between calls would otherwise silence every event.
     """
     logger = logging.getLogger("rust_prover_tools")
+    logger.setLevel(logging.DEBUG)
     if any(isinstance(handler, _StderrEvents) for handler in logger.handlers):
         return
     handler = _StderrEvents()
     handler.setFormatter(_EventFormatter("%(levelname)s %(name)s %(message)s"))
     logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG)
 
 
 def main(argv: cabc.Sequence[str] | None = None) -> int:
