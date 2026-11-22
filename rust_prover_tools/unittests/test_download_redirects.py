@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import logging
 import typing as typ
 
@@ -244,30 +245,40 @@ def test_download_reports_a_missing_redirect_location(
     } in events, "a bad redirect should report its status and bounded reason"
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _StatusCase:
+    """One non-success status and how the transport must classify it."""
+
+    status: int
+    status_class: str
+    is_transient: bool
+
+
 @pytest.mark.parametrize(
-    ("status", "status_class", "is_transient"),
-    [(503, "5xx", True), (404, "4xx", False)],
+    "case",
+    [
+        _StatusCase(503, "5xx", is_transient=True),
+        _StatusCase(404, "4xx", is_transient=False),
+    ],
+    ids=["server-error", "client-error"],
 )
 def test_download_reports_an_http_status_class(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    status: int,
-    status_class: str,
-    *,
-    is_transient: bool,
+    case: _StatusCase,
 ) -> None:
     """A non-success response reports its status and whether it is transient."""
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools")
     connection = FakeConnection()
-    response = FakeResponse(status=status)
+    response = FakeResponse(status=case.status)
     monkeypatch.setattr(
         download_transport,
         "_open",
         lambda url, limits, deadline: (response, connection),
     )
 
-    with pytest.raises(ProverToolError, match=f"HTTP status {status}") as raised:
+    with pytest.raises(ProverToolError, match=f"HTTP status {case.status}") as raised:
         download_transport._download(
             download_request(
                 "https://example.test/asset.bin",
@@ -278,14 +289,14 @@ def test_download_reports_an_http_status_class(
             DownloadLimits(),
         )
 
-    assert isinstance(raised.value, TransientDownloadError) is is_transient, (
+    assert isinstance(raised.value, TransientDownloadError) is case.is_transient, (
         "only a retryable status may be classified as transient"
     )
     assert {
         "event": "download.failed",
         "reason": "http_status",
-        "status": status,
-        "status_class": status_class,
+        "status": case.status,
+        "status_class": case.status_class,
     } in events_from(caplog), "a failed response should report a bounded status class"
 
 

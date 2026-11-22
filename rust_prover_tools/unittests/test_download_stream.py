@@ -10,6 +10,7 @@ retryable stream fault, and a finished response is never re-armed, because
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import http.client
 import http.server
 import logging
@@ -115,71 +116,71 @@ def test_deadline_response_skips_the_timeout_without_a_socket() -> None:
     assert response.read(4) == b"body", "the wrapper must forward the body"
 
 
-def test_stream_reports_a_read_timeout_at_the_deadline(
+@dc.dataclass(frozen=True, slots=True)
+class _TimeoutCase:
+    """One read timeout and where it falls relative to the deadline."""
+
+    elapsed: float
+    deadline: float
+    error_match: str
+    event: dict[str, object]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        _TimeoutCase(
+            2.0,
+            1.0,
+            "transfer deadline",
+            {"event": "download.failed", "reason": "deadline", "written": 0},
+        ),
+        _TimeoutCase(
+            0.1,
+            10.0,
+            "failed to download",
+            {"event": "download.failed", "reason": "stream_error"},
+        ),
+    ],
+    ids=["at-the-deadline", "before-the-deadline"],
+)
+def test_stream_classifies_a_read_timeout_by_the_deadline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    case: _TimeoutCase,
 ) -> None:
-    """A read timeout at the deadline is reported as a deadline failure."""
+    """A read timeout is the deadline at or past it, and a stream error before.
+
+    The watchdog shuts the socket down at the deadline, so the timeout it
+    produces must not be retried as a flaky connection. Before the deadline the
+    same exception is the server's failure and stays transient.
+    """
     caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
     clock = FakeClock()
     monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
 
     class TimingOutResponse(FakeResponse):
-        """A response whose read runs past the deadline and then times out."""
+        """A response whose read spends `elapsed` and then times out."""
 
         def read(self, amt: int | None = None) -> bytes:
-            """Advance past the deadline and time out."""
+            """Spend the scripted time and time out."""
             del amt
-            clock.advance(2.0)
+            clock.advance(case.elapsed)
             msg = "timed out"
             raise TimeoutError(msg)
 
-    with pytest.raises(ProverToolError, match="transfer deadline"):
+    with pytest.raises(ProverToolError, match=case.error_match):
         download_stream._stream(
             TimingOutResponse(),
             tmp_path / "asset.bin",
-            stream_limits(10, 1.0),
+            stream_limits(10, case.deadline),
         )
 
-    assert events_from(caplog)[-1] == {
-        "event": "download.failed",
-        "reason": "deadline",
-        "written": 0,
-    }, "a read timeout at the deadline must report the deadline"
-
-
-def test_stream_reports_an_early_read_timeout_as_a_stream_error(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A read timeout before the deadline remains a transport failure."""
-    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
-    clock = FakeClock()
-    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
-
-    class TimingOutResponse(FakeResponse):
-        """A response whose read times out before the deadline is reached."""
-
-        def read(self, amt: int | None = None) -> bytes:
-            """Time out without reaching the deadline."""
-            del amt
-            clock.advance(0.1)
-            msg = "timed out"
-            raise TimeoutError(msg)
-
-    with pytest.raises(ProverToolError, match="failed to download"):
-        download_stream._stream(
-            TimingOutResponse(),
-            tmp_path / "asset.bin",
-            stream_limits(10, 10.0),
-        )
-
-    assert events_from(caplog)[-1] == {
-        "event": "download.failed",
-        "reason": "stream_error",
-    }, "an early read timeout must not be reported as the deadline"
+    assert events_from(caplog)[-1] == case.event, (
+        "the failure must be classified by where the read ended relative to "
+        "the deadline"
+    )
 
 
 def test_stream_reports_a_blocked_read_at_the_deadline(
