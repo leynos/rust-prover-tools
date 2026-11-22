@@ -121,6 +121,15 @@ kani-snapshot-smoke: ## Dispatch a non-publishing snapshot run (opt-in)
 	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must match kani-snapshot-YYYY-MM-<12 hex>-rN\n' >&2; \
 	  exit 1; \
 	}
+# The producer refuses a tag whose 12-hex prefix is not the upstream commit's,
+# but only once a hosted run has started. The validated grammar above makes the
+# fifth dash-separated field exactly that prefix, so the recipe compares it
+# here and the operator sees the mistake without a red resolve job.
+	@test "$$(printf '%s\n' "$$KANI_SNAPSHOT_PUBLICATION_ID" | cut -d- -f5)" = \
+	      "$$(printf '%s\n' "$$KANI_SNAPSHOT_UPSTREAM_COMMIT" | cut -c1-12)" || { \
+	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must carry the upstream commit prefix (12 hex)\n' >&2; \
+	  exit 1; \
+	}
 	gh workflow run kani-monthly.yml --ref main \
 	  -f upstream_commit="$$KANI_SNAPSHOT_UPSTREAM_COMMIT" \
 	  -f publication_id="$$KANI_SNAPSHOT_PUBLICATION_ID" \

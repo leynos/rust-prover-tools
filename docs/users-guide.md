@@ -540,7 +540,10 @@ make kani-snapshot-smoke \
 ```
 
 The target is opt-in and never part of `all`, because it builds on a hosted
-runner and creates an attestation.
+runner and creates an attestation. The tag's 12-hex field is the first 12
+characters of the upstream commit, not a free label. The target refuses a tag
+that carries another prefix before it reaches `gh`, because the producer can
+only refuse it after a hosted run has started.
 
 Ordinary Python releases are unaffected by the snapshot schedule. Pushing a
 `v*.*.*` tag creates a draft release, uploads the wheel, verifies that the
