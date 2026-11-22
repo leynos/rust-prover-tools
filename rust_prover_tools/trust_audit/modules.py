@@ -28,6 +28,8 @@ from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
 from rust_prover_tools.trust_audit.structure import attribute_spans
 from rust_prover_tools.trust_audit.syntax import Kind, Token
+from rust_prover_tools.trust_audit.use_paths import statement_end
+from rust_prover_tools.trust_audit.use_tree import begins_import, member_aliases
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -133,12 +135,54 @@ def _invocation_contexts(
     traversal follows those calls; a recursive definition is refused, because
     the chain would never end and the module tree could not be reported.
     """
-    walker = _ContextWalker(tokens, rules, inline)
+    aliases = _macro_aliases(tokens, rules.heads)
+    walker = _ContextWalker(tokens, rules, inline, aliases)
     for name in rules.heads:
-        for site in rules.invocations.get(name, ()):
+        for site in _invocation_sites(rules, aliases, name):
             if site not in rules.definitions:
                 walker.enter(name, inline.enclosing(site))
     return walker.frozen()
+
+
+def _macro_aliases(
+    tokens: tuple[Token, ...],
+    heads: cabc.Container[str],
+) -> dict[str, str]:
+    """Return every local name the file binds to a macro it defines.
+
+    Rust expands ``use crate::make as build; build!();`` as the definition of
+    ``make``, so the invocation site is the same site under another spelling.
+    ``build`` is therefore stored against ``make`` rather than dropped.
+    """
+    aliases: dict[str, str] = {}
+    for index, token in enumerate(tokens):
+        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
+            continue
+        end = statement_end(tokens, index + 1)
+        aliases.update(
+            (alias, item)
+            for item, alias in member_aliases(tokens, index + 1, end)
+            if item in heads
+        )
+    return aliases
+
+
+def _invocation_sites(
+    rules: MacroRules,
+    aliases: cabc.Mapping[str, str],
+    name: str,
+) -> tuple[int, ...]:
+    """Return every site that invokes ``name``, directly or through an alias.
+
+    One statement may rename a macro to its own name, and several aliases may
+    name the same macro, so the sites are de-duplicated while keeping the
+    source order the traversal records them in.
+    """
+    sites = dict.fromkeys(rules.invocations.get(name, ()))
+    for alias, target in aliases.items():
+        if target == name:
+            sites.update(dict.fromkeys(rules.invocations.get(alias, ())))
+    return tuple(sites)
 
 
 @dc.dataclass(slots=True)
@@ -148,6 +192,7 @@ class _ContextWalker:
     tokens: tuple[Token, ...]
     rules: MacroRules
     inline: InlineModules
+    aliases: cabc.Mapping[str, str]
     contexts: dict[int, list[tuple[InlineModule, ...]]] = dc.field(
         default_factory=dict,
     )
@@ -180,7 +225,7 @@ class _ContextWalker:
         local = self.inline.enclosing(token_index)[len(definition_chain) :]
         chain = (*outer, *local)
         self.contexts.setdefault(token_index, []).append(chain)
-        invoked = _invoked_macro(self.tokens, self.rules, token_index)
+        invoked = _invoked_macro(self.tokens, self.rules, self.aliases, token_index)
         if invoked is not None:
             self.enter(invoked, chain)
 
@@ -192,9 +237,14 @@ class _ContextWalker:
 def _invoked_macro(
     tokens: tuple[Token, ...],
     rules: MacroRules,
+    aliases: cabc.Mapping[str, str],
     index: int,
 ) -> str | None:
-    """Return the macro a token inside an expansion invokes, if it invokes one."""
+    """Return the macro a token inside an expansion invokes, if it invokes one.
+
+    An invocation through a ``use`` alias is the definition's macro, so the
+    local spelling is resolved before the name is looked up.
+    """
     if index not in rules.expansions or index + 2 >= len(tokens):
         return None
     token = tokens[index]
@@ -202,7 +252,8 @@ def _invoked_macro(
         return None
     if tokens[index + 2].text not in _DELIMITER_PAIRS:
         return None
-    return token.text if token.text in rules.heads else None
+    name = token.text if token.text in rules.heads else aliases.get(token.text)
+    return name if name in rules.heads else None
 
 
 def _expanded_references(

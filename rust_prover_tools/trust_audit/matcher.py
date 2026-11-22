@@ -41,10 +41,16 @@ from rust_prover_tools.trust_audit.modules import (
     inline_module_names,
     module_references,
 )
-from rust_prover_tools.trust_audit.structure import matching
+from rust_prover_tools.trust_audit.repetitions import (
+    MACRO_DELIMITERS,
+    repetition_refusal,
+)
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
-from rust_prover_tools.trust_audit.use_bindings import member_bindings
-from rust_prover_tools.trust_audit.use_tree import file_roots
+from rust_prover_tools.trust_audit.use_paths import statement_end
+from rust_prover_tools.trust_audit.use_tree import (
+    begins_import,
+    member_aliases,
+)
 from rust_prover_tools.trust_audit.vocabulary import (
     OPAQUE_MACROS,
     PROCEDURAL_OPAQUE_MACROS,
@@ -54,14 +60,9 @@ from rust_prover_tools.trust_audit.vocabulary import (
 
 __all__ = ("scan",)
 
-# The delimiters a macro invocation may open.
-_MACRO_DELIMITERS = frozenset({"(", "[", "{"})
 # The qualifier, its ``::``, and the metavariable marker before a final path
 # segment: the three tokens that say where a hidden path is rooted.
 _TRUST_PATH_SEGMENTS = 3
-# The qualifier, ``::``, the repetition marker, its ``(`` and the inner
-# ``$``: the five tokens before a repetition-wrapped metavariable.
-_REPETITION_SEGMENTS = 5
 
 
 def scan(
@@ -213,7 +214,7 @@ def _metavariable_refusal(
     token = tokens[index]
     following = tokens[index + 1].text if index + 1 < len(tokens) else ""
     second = tokens[index + 2].text if index + 2 < len(tokens) else ""
-    if following == "!" and second in _MACRO_DELIMITERS:
+    if following == "!" and second in MACRO_DELIMITERS:
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} invokes a macro through the metavariable "
@@ -238,38 +239,7 @@ def _metavariable_refusal(
             f"'${token.text}' as its final path segment, so the audit cannot "
             "tell which item is called"
         )
-    if _is_repetition_wrapped_trust_path(tokens, index, qualifiers):
-        return (
-            f"the macro_rules! expansion at line {token.line}, column "
-            f"{token.column} reaches a trust item through a repetition-wrapped "
-            f"metavariable '${token.text}', so the audit cannot tell which item "
-            "is called"
-        )
-    return None
-
-
-def _is_repetition_wrapped_trust_path(
-    tokens: tuple[Token, ...],
-    index: int,
-    qualifiers: frozenset[str],
-) -> bool:
-    """Report whether a repetition group ends a trust-qualified path.
-
-    ``kani::$($f)*(..)`` puts the group between ``::`` and the metavariable,
-    so the direct-segment check cannot see it.  The group must still name a
-    trust item through its metavariable.
-    """
-    if index < _REPETITION_SEGMENTS or tokens[index - 1].text != "$":
-        return False
-    if tokens[index - 2].text != "(" or tokens[index - 3].text != "$":
-        return False
-    if tokens[index - 4].text != "::" or tokens[index - 5].text not in qualifiers:
-        return False
-    closing = matching(tokens, index - 2, "(", ")")
-    following = closing + 1
-    if following < len(tokens) and tokens[following].text == ",":
-        following += 1
-    return following < len(tokens) and tokens[following].text in {"*", "+", "?"}
+    return repetition_refusal(tokens, index, qualifiers)
 
 
 def _is_trust_qualified(
@@ -290,11 +260,30 @@ def _opaque_names(
     tokens: tuple[Token, ...],
     base: frozenset[str],
 ) -> frozenset[str]:
-    """Return the opaque macro names, plus every local name bound to one."""
+    """Return the opaque macro names, plus every local name bound to one.
+
+    A re-export can pass a name through more than one module —
+    ``mod m { pub use std::include as load; } use m::load as hidden;`` — so the
+    search reads every ``as`` rename in the file and repeats until a pass adds
+    nothing.  Following only the roots of the statements would record
+    ``include → load`` and ``load → hidden`` but never ``include → hidden``,
+    and ``hidden!`` would be read as an ordinary macro.
+    """
     names = set(base)
-    names.update(
-        alias
-        for item, alias in member_bindings(tokens, file_roots(tokens))
-        if item in base
-    )
-    return frozenset(names)
+    renames = _all_member_renames(tokens)
+    while True:
+        discovered = {alias for item, alias in renames if item in names}
+        if discovered <= names:
+            return frozenset(names)
+        names |= discovered
+
+
+def _all_member_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:
+    """Return every ``(item, alias)`` a ``use`` statement in the file renames."""
+    renames: set[tuple[str, str]] = set()
+    for index, token in enumerate(tokens):
+        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
+            continue
+        end = statement_end(tokens, index + 1)
+        renames.update(member_aliases(tokens, index + 1, end))
+    return frozenset(renames)

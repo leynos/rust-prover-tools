@@ -35,7 +35,6 @@ from rust_prover_tools.kani_log.observation import (
     Observed,
     denies_claim,
     is_indeterminate,
-    lacks_panic_evidence,
 )
 from rust_prover_tools.kani_log.run_mode import FOCUSED, FULL_PROFILE, run_mode
 from rust_prover_tools.kani_log.syntax import (
@@ -285,11 +284,17 @@ def _final_outcome(
     """
     if not manifest.claims:
         return KaniOutcome.SKIPPED
-    if any(lacks_panic_evidence(seen, manifest) for seen in reported):
-        # A claim declared to panic must be verified by Kani's own note.  A
-        # successful block without it is a report the pinned release cannot
-        # produce, and accepting it would pass a harness whose panic never
-        # happened.
+    # A claim declared to panic must be verified by Kani's own note.  A
+    # successful block without it is a report the pinned release cannot
+    # produce, and accepting it would pass a harness whose panic never
+    # happened.  The names are collected once: building the manifest's claims
+    # per observation would make the final check quadratic.
+    panic_claims = frozenset(
+        claim.name for claim in manifest.claims if claim.should_panic
+    )
+    if any(
+        seen.name in panic_claims and not seen.panics_as_expected for seen in reported
+    ):
         return KaniOutcome.UNDETERMINED
     return (
         KaniOutcome.VERIFIED

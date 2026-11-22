@@ -703,15 +703,16 @@ description of the failed check it repeats, because the results section has
 already said how many lines it occupies. A blank line inside a description is
 content too, so it closes the entry only when the next line that is not blank
 is a report construct. Closing at the blank line would cut a description at an
-embedded quote and leave its continuation to be refused as an unrecognized line.
-`RESULTS:` is the one marker a description can also print, so it closes the
-entry only when a `Check N:` entry follows, which is what a real results
-section starts with. An echoed `cbmc` command is split at Kani's own boundaries
-rather than as shell text: the driver wraps an argument in double quotes
-exactly when it holds a space, and an apostrophe is an ordinary character, so
-shell splitting would let one apostrophe hide a flag. The expected-panic note
-and the description rule are both read from the pinned release's source rather
-than inferred from a sample.
+embedded quote and leave its continuation to be refused as an unrecognized
+line. A report marker can also be description text, so `RESULTS:` closes the
+entry only when a `Check N:` entry follows, `SUMMARY:` only when its `** …`
+counts or verdict follow, and `Manual Harness Summary:` only when a
+failed-harness line or the `Complete` counts follow. An echoed `cbmc` command
+is split at Kani's own boundaries rather than as shell text: the driver wraps
+an argument in double quotes exactly when it holds a space, and an apostrophe
+is an ordinary character, so shell splitting would let one apostrophe hide a
+flag. The expected-panic note and the description rule are both read from the
+pinned release's source rather than inferred from a sample.
 
 A second banner means the capture holds two invocations. The parser refuses it
 rather than returning the first run's facts, because those facts say nothing
@@ -721,7 +722,10 @@ A claim declared `should_panic` is verified only when Kani printed the
 expected-panic note; a successful block without it is undetermined. The note is
 also refused when no check failed, because the driver prints it only after
 excusing a failed property and a block with nothing to excuse is a report the
-release cannot produce.
+release cannot produce. Kani's unwinding-failure note is reconciled the same
+way: a completed block that carries it must list a failed check of an unwinding
+kind, because the note states that such a failure exists. A timed-out block
+keeps its own path, which refuses every completed-result field beside it.
 
 The trust audit replaces combobulate's ADR-0009 with prover-defined
 vocabularies: one frozen record per prover, selected by context, with no
@@ -779,15 +783,20 @@ invocation's module directory, not from the definition's, so the walk
 attributes the declaration to every invocation it can see and appends the
 expansion's own inline modules to that chain. A macro invoked from another
 macro's expansion is followed through the outer invocation, and a recursive
-definition is refused because its chain would never end. A macro name defined
-more than once is refused: Rust lets a later definition shadow an earlier one,
-and the scan cannot tell which one an invocation expands. An invocation in
-another file is outside the per-file scan, which the user guide states. A
-declaration whose name a metavariable supplies is refused, because only the
-invocation's arguments decide that name and the scan never evaluates them; an
-expansion that invokes a macro through a metavariable, or reaches a trust item
-through one such as `$p::assume` or `kani::$f`, is refused for the same reason.
-A target reached through a symbolic link is reported as the physical file, so a
+definition is refused because its chain would never end. An invocation through a
+`use` alias (`use crate::make as build; build!();`) expands the definition's
+macro, so the alias is resolved before the expansion's declarations are
+attributed. A macro name defined more than once is refused: Rust lets a later
+definition shadow an earlier one, and the scan cannot tell which one an
+invocation expands. An invocation in another file is outside the per-file scan,
+which the user guide states. A declaration whose name a metavariable supplies
+is refused, because only the invocation's arguments decide that name and the
+scan never evaluates them; an expansion that invokes a macro through a
+metavariable, or reaches a trust item through one such as `$p::assume` or
+`kani::$f`, is refused for the same reason. A repetition-wrapped metavariable
+is inspected through every enclosing repetition, so `$($p)+::assume` and
+`kani::$($($f),+);+` are refused rather than read as ordinary repetitions. A
+target reached through a symbolic link is reported as the physical file, so a
 cyclic `#[path]` terminates, while the children of that module resolve from the
 pathname the compiler loaded rather than the link's target. A file reached with
 two owners, or two declaring directories, that name different directories is
@@ -822,11 +831,18 @@ import, so `use kani::{assume, any_where}; use self::assume as a;` reaches
 name, so `use kani::assume as a;` does not seed `assume`. A qualified path is
 resolved through a crate alias first:
 `use kani as k; use self::k::assume as a;` binds `assume`, and repeated
-`super::` segments are skipped before the alias. A crate alias re-exported by a
-module the file declares is followed (`use m::k as kk;`), while a name imported
-from the crate root with `use crate::k;` is treated as a possible alias because
-the declaration is outside the file. A use qualified by a module the same file
-declares is reported too, because the import that binds it is visible there; a
+`super::` segments are skipped before the alias. A module alias may itself be
+renamed again (`use m as n; use n as q;`), and discovery repeats to a fixed
+point so a call through the later name still reaches the module. A crate alias
+re-exported by a module the file declares is followed (`use m::k as kk;`),
+while a name imported from the crate root with `use crate::k;` is treated as a
+possible alias because the declaration is outside the file. A use qualified by
+a module the same file declares is reported too, because the import that binds
+it is visible there; a wildcard re-export of a trust root
+(`mod m { pub use kani::*; }`) similarly makes `m::assume(..)` report, since
+the glob's bindings cannot be enumerated. A local wildcard import
+(`use crate::*;`) is refused instead: one of the names it binds may be a crate
+alias, and the per-file scan cannot see the crate root that exports it. A
 module declared elsewhere is not shown, so its names are left alone. A
 turbofish call such as `a::<u32, _>(..)` calls the renamed item rather than
 taking a path through it. A local alias for the `verus!` macro is the same

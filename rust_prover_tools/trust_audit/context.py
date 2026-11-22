@@ -21,10 +21,17 @@ from rust_prover_tools.trust_audit.literals import (
     qualified_pattern,
 )
 from rust_prover_tools.trust_audit.model import TrustItem
+from rust_prover_tools.trust_audit.positions import (
+    imports_root_glob,
+    is_bare_use,
+    is_member_position,
+    is_member_use,
+    member_names,
+)
 from rust_prover_tools.trust_audit.regions import verus_regions
 from rust_prover_tools.trust_audit.syntax import Kind, Token
-from rust_prover_tools.trust_audit.use_bindings import alias_bindings, member_bindings
-from rust_prover_tools.trust_audit.use_tree import LOCAL_QUALIFIERS, imported_roots
+from rust_prover_tools.trust_audit.use_bindings import alias_bindings
+from rust_prover_tools.trust_audit.use_tree import imported_roots
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -100,11 +107,16 @@ class Context:
         # after ``use kani::{assume as a};`` a bare ``a(..)`` is Kani's call.
         # The crate may itself have been renamed first — ``use kani as k;``
         # then ``use k::{assume as a};`` — so the aliases count as roots.
-        self.member_names = _member_names(
+        self.member_names = member_names(
             tokens,
             self.roots | all_root_names,
             self.words,
         )
+        # ``use kani::*;`` binds every exported name, including one a declared
+        # module re-exports as ``m::assume``.  The scan cannot enumerate what
+        # the glob binds, so a qualified vocabulary word is reported wherever
+        # it appears; the same fail-closed direction rule 3 takes.
+        self.root_glob = imports_root_glob(tokens, self.roots | all_root_names)
         self.verus_regions = verus_regions(tokens)
         self.qualified = qualified_pattern(self.roots)
         self.items: list[TrustItem] = []
@@ -136,6 +148,9 @@ class Context:
         if self._is_rooted_path(index):
             self._report(token.text, token)
             return
+        if self.root_glob and self._is_glob_qualified(index, token):
+            self._report(token.text, token)
+            return
         if token.text in self.region_words and self._is_verus_context(index):
             self._report(token.text, token)
         self._report_if_imported(index, token)
@@ -143,9 +158,9 @@ class Context:
     def _names_member(self, index: int, token: Token) -> bool:
         """Report whether this token reaches an item a local import bound."""
         items = self.member_names.get(token.text)
-        if items is None or not _is_member_use(self.tokens, index):
+        if items is None or not is_member_use(self.tokens, index):
             return False
-        return _is_member_position(self.tokens, index, self.module_names)
+        return is_member_position(self.tokens, index, self.module_names)
 
     def _report_if_imported(self, index: int, token: Token) -> None:
         """Apply rule 3: a bare word in a file that imports from a trust root.
@@ -170,7 +185,7 @@ class Context:
             for item in sorted(self.member_names[token.text]):
                 self._report(item, token)
             return
-        if _is_bare_use(self.tokens, index) and token.text in self.words:
+        if is_bare_use(self.tokens, index) and token.text in self.words:
             self._report(token.text, token)
 
     def _is_rooted_path(self, index: int) -> bool:
@@ -194,6 +209,22 @@ class Context:
             if any(qualifier in self.root_names[root] for root in vocabulary.roots):
                 return True
         return False
+
+    def _is_glob_qualified(self, index: int, token: Token) -> bool:
+        """Report whether a declared module's wildcard export reaches the word.
+
+        ``mod m { pub use kani::*; }`` makes ``m::assume`` a trust use even
+        though no named binding exists, and the glob cannot be enumerated.
+        Only a module this file declares is read: another qualifier names a
+        module whose exports the scan never sees, and is left to rule 1 or the
+        named-member rules.
+        """
+        return (
+            token.text in self.words
+            and index >= _QUALIFIED_SEGMENTS
+            and self.tokens[index - 1].text == "::"
+            and self.tokens[index - _QUALIFIED_SEGMENTS].text in self.module_names
+        )
 
     def _is_verus_context(self, index: int) -> bool:
         """Report whether this index sits in a Verus body or attribute."""
@@ -283,111 +314,3 @@ def _literal_item(
         token.line + preceding,
         offset - newlines[preceding - 1],
     )
-
-
-def _is_bare_use(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether rule 3 makes this token a bare use.
-
-    A word after ``::`` belongs to a path and a word after ``.`` to a field or
-    method; neither is the unqualified use rule 3 is about. Rule 1 has already
-    claimed the ``kani::`` case, so only the remaining positions matter.
-    """
-    if not index:
-        return True
-    # A name after ``as`` is the local alias being defined, not a use of the
-    # item: ``use kani::assume as any_where;`` must not report the borrowed
-    # spelling as Kani's ``any_where``.
-    return tokens[index - 1].text not in {"::", ".", "as"}
-
-
-def _member_names(
-    tokens: tuple[Token, ...],
-    roots: frozenset[str],
-    words: frozenset[str],
-) -> dict[str, frozenset[str]]:
-    """Group every vocabulary member by the local name that denotes it.
-
-    Two scopes may bind one local name to different items — ``use kani::assume
-    as m;`` in one module and ``use kani::any_where as m;`` in another — and
-    the scan is file-scoped, so it cannot tell which scope a later ``m(..)``
-    sits in.  Keeping every item the name may denote, and reporting all of
-    them, leaves the item for the reader to justify rather than dropping one.
-
-    Only the selected vocabularies' words are grouped, so narrowing the
-    selection narrows what a renamed import can report.
-    """
-    names: dict[str, set[str]] = {}
-    for member, alias in member_bindings(tokens, roots):
-        if member in words:
-            names.setdefault(alias, set()).add(member)
-    return {alias: frozenset(items) for alias, items in names.items()}
-
-
-def _is_local_qualified(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether this token is named through a local module qualifier.
-
-    The qualifiers are ``self::``, ``crate::`` and ``super::``.  A named import
-    binds its item in the module it appears in, so
-    ``self::a(..)`` after ``use kani::assume as a;`` is the same call as the
-    bare ``a(..)``.  ``crate::a`` names the same binding when the import sits
-    at the crate root, and ``super::a`` names it from a child module; the scan
-    is file-scoped, so it cannot rule either out and reports both.  Another
-    module's name stays unreported, because the binding there is not shown.
-    """
-    return (
-        index >= _QUALIFIED_SEGMENTS
-        and tokens[index - 1].text == "::"
-        and tokens[index - _QUALIFIED_SEGMENTS].text in LOCAL_QUALIFIERS
-    )
-
-
-def _is_member_position(
-    tokens: tuple[Token, ...],
-    index: int,
-    module_names: frozenset[str],
-) -> bool:
-    """Report whether a renamed member is used as the imported item here.
-
-    Three positions count: the bare call, a ``self::``, ``crate::`` or
-    ``super::`` qualifier that reaches the binding in this module, and a module
-    this file declares, whose export the audit can read.
-    """
-    if _is_bare_use(tokens, index) or _is_local_qualified(tokens, index):
-        return True
-    return _is_declared_module_qualified(tokens, index, module_names)
-
-
-def _is_declared_module_qualified(
-    tokens: tuple[Token, ...],
-    index: int,
-    module_names: frozenset[str],
-) -> bool:
-    """Report whether a module this file declares qualifies the name.
-
-    ``mod m { pub use kani::assume as a; } m::a(..)`` reaches the binding the
-    module exports, and the import is in this file, so the audit can read it.
-    The scan is file-scoped rather than scope-exact: an ``a`` imported in a
-    different module would also be reported here, which is the fail-closed
-    direction this audit takes everywhere else.
-    """
-    return (
-        index >= _QUALIFIED_SEGMENTS
-        and tokens[index - 1].text == "::"
-        and tokens[index - _QUALIFIED_SEGMENTS].text in module_names
-    )
-
-
-def _is_member_use(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether a renamed import is used as the item it renames.
-
-    Only a call counts.  The name at its own definition follows ``as``, and a
-    name in front of ``::`` qualifies a path rather than calling the item, so
-    neither is a request for trust under another spelling.  A turbofish call
-    such as ``a::<u32, _>(..)`` is the exception: Rust writes ``::`` before
-    explicit generic arguments, so the ``::`` is part of the call.
-    """
-    if index and tokens[index - 1].text == "as":
-        return False
-    if index + 1 >= len(tokens) or tokens[index + 1].text != "::":
-        return True
-    return index + 2 < len(tokens) and tokens[index + 2].text == "<"

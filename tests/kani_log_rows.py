@@ -32,6 +32,12 @@ def facts_of_row(row: dict[str, typ.Any]) -> tuple[HarnessFact, ...]:
     facts = []
     for entry in row["harnesses"]:
         covers = entry.get("covers") or ()
+        if len(covers) > 1:
+            msg = (
+                f"the decision-table row for {entry['name']!r} declares "
+                f"{len(covers)} covers, but the adapter represents one"
+            )
+            raise ValueError(msg)
         facts.append(
             HarnessFact(
                 entry["name"],

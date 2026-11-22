@@ -130,7 +130,7 @@ def _count_disagreements(
         )
     if expected.errors is not None and summary.errors != expected.errors:
         yield (
-            f"the log reported {summary.errors} failing functions, "
+            f"the log reported {_failing_functions(summary.errors)}, "
             f"not the expected {expected.errors}"
         )
 
@@ -170,6 +170,12 @@ def _failure_disagreements(
         yield f"no diagnostic fell inside the declared region {region.describe()}"
 
 
+def _failing_functions(count: int) -> str:
+    """Name a failing-function count with the number's own plural."""
+    noun = "function" if count == 1 else "functions"
+    return f"{count} failing {noun}"
+
+
 def _status_disagreements(
     log: VerusLog,
     expected: LogExpectations,
@@ -195,7 +201,7 @@ def _status_disagreements(
     exited_failing = expected.exit_status != CLEAN_STATUS
     if reported_failure and not exited_failing:
         yield (
-            f"the summary reported {log.summary.errors} failing functions, "
+            f"the summary reported {_failing_functions(log.summary.errors)}, "
             f"but the invocation exited {expected.exit_status}"
         )
     if not reported_failure and exited_failing:

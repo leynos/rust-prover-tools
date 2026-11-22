@@ -49,6 +49,7 @@ def require_complete(builder: _BlockBuilder) -> None:
         # makes the marker contradictory, which ``_require_timeout`` refuses.
         _require_timeout(builder)
         return
+    _require_unwinding_note(builder)
     if not builder.has_results:
         # Kani prints ``RESULTS:`` even when there are no checks, so a block
         # that lacks it lost part of its report rather than reporting none.
@@ -98,6 +99,28 @@ def _require_panic_note(builder: _BlockBuilder) -> None:
         msg = (
             f"the block for {builder.name!r} reports {builder.verdict} with the "
             "expected-panic note, which Kani prints only for a successful verdict"
+        )
+        raise KaniLogError(msg)
+
+
+def _require_unwinding_note(builder: _BlockBuilder) -> None:
+    """Reconcile the unwinding-failure note against the checks beneath it.
+
+    Kani prints the note only when a check failed because the harness reached
+    the unwinding bound, and that check is listed under an unwinding kind.  A
+    block carrying the note without such a failure is a report the pinned
+    release cannot produce, and accepting it would certify a run whose stated
+    failure the analysis never saw.  A timed-out block keeps its own path: it
+    is reconciled by `_require_timeout`, which refuses every completed field.
+    """
+    if not builder.unwinding_reported:
+        return
+    if not any(
+        item.is_unwinding and item.status == "FAILURE" for item in builder.checks
+    ):
+        msg = (
+            f"the block for {builder.name!r} reports unwinding failures "
+            "but no failed unwinding check"
         )
         raise KaniLogError(msg)
 

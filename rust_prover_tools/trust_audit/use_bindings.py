@@ -26,6 +26,7 @@ from rust_prover_tools.trust_audit.crate_bindings import (
 from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import (
+    is_grouped,
     statement_end,
     top_level_members,
     use_root,
@@ -320,10 +321,21 @@ def _grouped_requalified_bindings(
     opener: int,
     scope: _Scope,
 ) -> dict[str, set[str]]:
-    """Bind each member of ``self::{…}`` as if the qualifiers prefixed it."""
+    """Bind each member of ``self::{…}`` as if the qualifiers prefixed it.
+
+    A member may itself be a group — ``use self::{{unrelated, a as b}};`` is
+    the same import one brace deeper — so the walk recurses rather than reading
+    the inner brace as the first segment of a path.
+    """
     closing = matching(tokens, opener, "{", "}")
     discovered: dict[str, set[str]] = {}
     for member_start, member_end in top_level_members(tokens, opener, closing + 1):
+        if is_grouped(tokens, member_start, member_end):
+            _merge(
+                discovered,
+                _grouped_requalified_bindings(tokens, member_start, scope),
+            )
+            continue
         root = use_root(tokens, member_start, member_end)
         if root is None:
             continue

@@ -6,7 +6,6 @@ import typing as typ
 from pathlib import Path
 
 from rust_prover_tools.verus_log import (
-    SUPPORTED_VERUS_VERSIONS,
     LogExpectations,
     LogVerdict,
     VerusFailure,
@@ -17,12 +16,17 @@ from rust_prover_tools.verus_log import (
     parse_verus_log,
 )
 
+#: The release whose fixed-detail log these tests read.  The capture is named
+#: rather than taken from a tuple position, so adding a newer release cannot
+#: change the facts these assertions state.
+CHECK_RELEASE: typ.Final[str] = "0.2026.11.02.8bf68ee"
+
 FIXTURES: typ.Final[Path] = (
     Path(__file__).resolve().parents[2]
     / "tests"
     / "fixtures"
     / "verus_logs"
-    / SUPPORTED_VERUS_VERSIONS[0]
+    / CHECK_RELEASE
 )
 
 
@@ -231,7 +235,7 @@ def test_a_failing_summary_beside_a_clean_status_is_refused() -> None:
 
     assert not result.meets
     assert result.disagreements == (
-        "the summary reported 1 failing functions, but the invocation exited 0",
+        "the summary reported 1 failing function, but the invocation exited 0",
     )
 
 

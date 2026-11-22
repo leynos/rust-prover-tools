@@ -157,7 +157,7 @@ def test_a_negative_control_must_see_exactly_one_failure() -> None:
             VerusFailure("assertion failed", "proofs/mutant.rs", 20, 5),
         ),
     )
-    expectation = FailureExpectation("proofs/mutant.rs")
+    expectation = FailureExpectation("proofs/mutant.rs", 5, 12)
 
     analysis = analyse_verus_log(log, expectation=expectation)
 

@@ -24,6 +24,7 @@ from rust_prover_tools.kani_log.syntax import (
     COMPLETE,
     COVER,
     FAILED_CHECK,
+    FAILED_FOR,
     FAILED_LOCATION,
     FIELD,
     HARNESS_START,
@@ -187,9 +188,6 @@ _ENTRY_HEADS = (
     HARNESS_START,
 )
 
-#: Whole-line report markers that can follow a check entry.
-_ENTRY_LINES = frozenset({"RESULTS:", "SUMMARY:", "Manual Harness Summary:"})
-
 
 def _ends_entry(reader: Reader) -> bool:
     """Report whether the quote just read ends the check's description.
@@ -233,9 +231,9 @@ def _blank_closes_entry(reader: Reader) -> bool:
         return _starts_results(reader, offset + 1)
     if following == "SUMMARY:":
         return _starts_summary(reader, offset + 1)
-    return following in _ENTRY_LINES or any(
-        pattern.match(following) is not None for pattern in _ENTRY_HEADS
-    )
+    if following == "Manual Harness Summary:":
+        return _starts_manual_summary(reader, offset + 1)
+    return any(pattern.match(following) is not None for pattern in _ENTRY_HEADS)
 
 
 def _starts_results(reader: Reader, offset: int) -> bool:
@@ -257,6 +255,22 @@ def _starts_summary(reader: Reader, offset: int) -> bool:
     if following is None:
         return True
     return following.startswith(" **") or VERIFICATION.match(following) is not None
+
+
+def _starts_manual_summary(reader: Reader, offset: int) -> bool:
+    """Report whether a real manual summary follows its heading.
+
+    Kani prints a ``Verification failed for`` line when a harness failed and
+    always ends the section with its ``Complete - …`` counts, so a heading that
+    neither follows is description content that happens to spell the words.
+    """
+    while (following := reader.peek_at(offset)) is not None and not following.strip():
+        offset += 1
+    if following is None:
+        return True
+    return (
+        FAILED_FOR.match(following) is not None or COMPLETE.match(following) is not None
+    )
 
 
 def _unquote(value: str) -> str:

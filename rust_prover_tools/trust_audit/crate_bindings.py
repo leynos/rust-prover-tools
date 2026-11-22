@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.inline_modules import inline_module_names
 from rust_prover_tools.trust_audit.modules import module_references
 from rust_prover_tools.trust_audit.structure import matching
@@ -174,6 +175,16 @@ def _crate_member_names(
     """
     if any(tokens[index].text == "::" for index in range(start, stop)):
         return set()
+    if start < stop and tokens[start].text == "*":
+        # A wildcard imports names the per-file scan never sees.  One of them
+        # may be a trust alias exported by the crate root, so dropping the
+        # wildcard would let a later ``k::assume`` pass unreported.
+        token = tokens[start]
+        msg = (
+            f"the wildcard import at line {token.line}, column {token.column} "
+            "imports names the audit cannot determine"
+        )
+        raise TrustAuditError(msg)
     if start >= stop or tokens[start].kind is not Kind.IDENT:
         return set()
     member = tokens[start]

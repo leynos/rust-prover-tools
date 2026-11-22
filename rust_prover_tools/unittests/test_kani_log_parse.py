@@ -204,6 +204,21 @@ def test_the_unwinding_warning_is_recorded_on_the_block_it_names() -> None:
     ] == ["unwind"]
 
 
+def test_an_unwinding_note_without_a_failed_unwinding_check_is_refused() -> None:
+    """Refuse a note whose stated failure the block never lists.
+
+    The note says the output shows unwinding failures, so a block that lists
+    none contradicts itself even when its verdict is successful.
+    """
+    text = log_text("verified").replace(
+        "Verification Time:",
+        "[Kani] info: Verification output shows one or more unwinding failures.\n"
+        "Verification Time:",
+    )
+
+    assert "reports unwinding failures but no failed unwinding check" in refused(text)
+
+
 def test_a_wrong_version_names_the_observed_and_supported_versions() -> None:
     """A log from another release is refused with both versions in the message."""
     text = log_text("verified").replace("0.67.0", "0.66.0", 1)
@@ -900,6 +915,22 @@ def test_a_description_holding_a_summary_marker_is_read_in_full() -> None:
     )
     block = parse_text(text).blocks[0]
     assert block.covers[0].description == 'first"\n\nSUMMARY:\nand second'
+
+
+def test_a_description_holding_a_manual_summary_marker_is_read_in_full() -> None:
+    """Keep ``Manual Harness Summary:`` as content unless a summary follows.
+
+    A real manual summary begins with a failed-harness line or the ``Complete``
+    counts, so the heading followed by ordinary text stays inside the frame.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: "first"\n\nManual Harness Summary:\nand second"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == (
+        'first"\n\nManual Harness Summary:\nand second'
+    )
 
 
 def test_a_non_cover_check_cannot_carry_a_cover_status() -> None:

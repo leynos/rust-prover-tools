@@ -199,7 +199,26 @@ def declared_module_aliases(
     tokens: tuple[Token, ...],
     module_names: frozenset[str],
 ) -> frozenset[str]:
-    """Return the local names that rename a module this file declares."""
+    """Return the local names that rename a module this file declares.
+
+    A module alias can itself be renamed — ``use m as n; use n as q;`` — so
+    discovery repeats with the names found so far until a pass adds nothing.
+    Reading the statements once would leave ``q`` unknown, and a call through
+    it would not be attributed to the module's export.
+    """
+    names = set(module_names)
+    while True:
+        discovered = _declared_module_alias_round(tokens, names)
+        if discovered <= names:
+            return frozenset(names - module_names)
+        names |= discovered
+
+
+def _declared_module_alias_round(
+    tokens: tuple[Token, ...],
+    module_names: cabc.Container[str],
+) -> set[str]:
+    """Return every name one pass binds to a module already in ``module_names``."""
     aliases: set[str] = set()
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or not begins_import(tokens, index):
@@ -208,4 +227,4 @@ def declared_module_aliases(
         for root, start, stop in rooted_spans(tokens, index + 1, end):
             if root in module_names:
                 aliases.update(use_aliases(tokens, start, stop))
-    return frozenset(aliases)
+    return aliases
