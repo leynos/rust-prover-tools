@@ -1,9 +1,10 @@
 """Property tests for the digest-bound Z3 installation marker.
 
 The unit tests enumerate the rejection classes. These properties state the
-invariant over arbitrary marker text and installed bytes: only a canonical
-marker for the pinned version and a lowercase SHA-256 digest is usable, and a
-reuse decision matches the bytes on disk.
+invariant over arbitrary marker text and installed bytes: only a marker JSON
+object carrying the pinned version and a lowercase SHA-256 digest is usable,
+and a reuse decision matches the bytes on disk. Writing is canonical; parsing
+accepts any JSON with that shape.
 """
 
 from __future__ import annotations
