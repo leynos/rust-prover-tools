@@ -501,6 +501,28 @@ files, and both abort the run before any mutant is scored:
 predicate directly, so a lost guard fails an ordinary pull request rather than
 waiting for the next scheduled mutation run.
 
+## Kani corpus and lint exceptions
+
+The Kani parser corpus lives at `tests/fixtures/kani_logs/`. The repository's
+global `*.log` ignore would otherwise drop it, so `.gitignore` carries an
+explicit `!tests/fixtures/kani_logs/*.log` exception. A new capture must be
+added under that path, or the exception extended, before its test can rely on
+it. A capture that exists only in a working tree passes locally and fails a
+clean CI checkout.
+
+`pyproject.toml` relaxes two per-file lint rules for this capability, and both
+are narrower than they look:
+
+- `rust_prover_tools/kani_harness_cli.py` keeps
+  `too-many-arguments` and `too-many-positional-arguments` disabled because
+  Cyclopts evaluates its command annotations; the option groups themselves live
+  in `rust_prover_tools/kani_harness_cli_options.py`, which is not exempt.
+- `rust_prover_tools/unittests/*_support.py` and `tests/*_support.py` keep the
+  test-only relaxations for assertions, subprocess use, argument counts, local
+  counts, magic values and `no-self-use`. A new shared test helper belongs in
+  one of those directories with the `_support.py` suffix; a production module
+  named `*_support.py` gains none of these relaxations.
+
 ## Docstring coverage
 
 `make lint-python` depends on `build` and on `make interrogate`, which needs

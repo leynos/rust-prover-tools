@@ -221,3 +221,28 @@ def test_a_block_after_the_final_summary_is_refused() -> None:
 
     with pytest.raises(KaniLogError, match="after the final manual summary"):
         parse(text)
+
+
+@pytest.mark.parametrize("name", sorted(LOGS))
+@settings(max_examples=15, deadline=None)
+@given(st.lists(st.integers(min_value=1, max_value=4), max_size=40))
+def test_chunked_feeding_matches_the_whole_text_parse(
+    name: str, chunk_sizes: list[int]
+) -> None:
+    """Feed boundaries cannot change the facts or the refusal."""
+    lines = lines_of(name)
+    reader = KaniLogReader()
+    position = 0
+    for size in chunk_sizes:
+        for line in lines[position : position + size]:
+            reader.feed_line("stdout", line)
+        position += size
+    for line in lines[position:]:
+        reader.feed_line("stdout", line)
+    fed = _finish(reader)
+    if isinstance(fed, str):
+        with pytest.raises(KaniLogError) as whole:
+            parse(log_text(name))
+        assert fed == str(whole.value), "chunked refusal text diverged"
+        return
+    assert fed == parse(log_text(name)), "chunked facts diverged"

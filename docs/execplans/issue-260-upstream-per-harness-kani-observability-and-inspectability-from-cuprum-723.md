@@ -513,7 +513,23 @@ All six milestones are implemented. The acceptance evidence is:
 - documentation explains configuration, outcome semantics, measurement
   limits, signal behaviour, and adoption.
 
-The retrospective will be completed after CodeRabbit review and PR delivery.
+`EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
+adapter reference, and the users', developers', and CLI design guides, README,
+migration guide, and roadmap carry the supervised route. The final gate at the
+rebased head passes with 2,422 tests and 6 skips, and the opt-in live 0.67.0
+fixture passes on the final head.
+
+The retrospective is complete. The capability shipped as one branch rather than
+the six separately mergeable milestones the plan allowed, because the parser,
+inventory, supervision, and route layers share typed models that would have
+needed compatibility shims between milestone commits. Nine local CodeRabbit
+passes found real defects that the deterministic suite then pinned, chiefly in
+the Rust lexical grammar, the snapshot environment freeze, retained-state
+bounds, and diagnostic-failure handling. The lessons are recorded in the
+Decision log and Surprises sections: a serial `--jobs=1` and a target selector
+are required for exact per-harness evidence, a banner naming an unregistered
+release is attempt evidence rather than a run failure, and report publication
+must be independent of live sinks.
 
 ## Context and orientation
 

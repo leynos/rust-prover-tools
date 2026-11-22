@@ -131,3 +131,32 @@ documents the pin, manifest and attestation requirements.
 No action is needed for existing `kani exec` callers. Repositories that relied
 on the old `cargo install` route only for `kani install` should either accept
 the pinned prebuilt release or add `--compile` to keep building from source.
+
+## Supervised harness execution (opt-in)
+
+0.2.0 adds a supervised route that runs one exact Kani invocation per harness
+and records per-harness identity, progress, resource and termination evidence.
+Like the snapshot commands it is additive: no existing `kani exec` or
+`kani snapshot` invocation changes behaviour, and no existing caller needs an
+edit.
+
+<!-- tested-example: migration-supervised-harnesses -->
+```bash
+prover-tools kani harnesses list --repo-root . --package example-package
+prover-tools kani harnesses run --repo-root . --package example-package \
+  --installation "$HOME/.kani/kani-0.67.0" --cwd .
+```
+
+`kani harnesses list` prints the resolved, package-qualified inventory as
+strict version-1 JSON. `kani harnesses run` executes one exact invocation per
+selected harness in an owned process group, with live human and JSONL evidence,
+resource sampling, a per-harness timeout, an optional host-memory watchdog, and
+a versioned report. The route accepts a qualified 0.67.0 release or a reviewed
+snapshot; the [users' guide](users-guide.md#supervised-kani-harness-execution)
+documents the options, defaults, outcome vocabulary and exit statuses, and
+[Kani supervised harness execution](kani-supervised-execution.md) gives the
+schemas and measurement limits.
+
+No existing command changes: `kani install`, `kani check-version`, `kani exec`,
+`kani snapshot`, `kani run`, and the Verus and Z3 commands keep their defaults
+and their environment bindings.

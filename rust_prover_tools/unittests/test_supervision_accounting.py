@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import collections
+
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.supervision import compare_identities, identity_key
 
@@ -93,3 +97,45 @@ def test_a_repeated_expectation_matched_exactly_has_no_drift() -> None:
     drift = compare_identities(("a::x", "a::x"), ("a::x", "a::x"))
 
     assert drift.is_empty
+
+
+_IDENTITIES = st.sampled_from(("a::x", "a::y", "b::x", "b::z"))
+
+
+@settings(max_examples=60, deadline=None)
+@given(st.lists(_IDENTITIES, max_size=8), st.lists(_IDENTITIES, max_size=8))
+def test_drift_reconstructs_the_multiset_difference(
+    expected: list[str], executed: list[str]
+) -> None:
+    """The reported drift is exactly the two multiset differences."""
+    drift = compare_identities(expected, executed)
+
+    wanted = collections.Counter(expected)
+    seen = collections.Counter(executed)
+    assert collections.Counter(drift.missing) == wanted - seen
+    assert collections.Counter(drift.unexpected) == seen - wanted
+
+
+@settings(max_examples=60, deadline=None)
+@given(st.lists(_IDENTITIES, max_size=8))
+def test_an_equal_multiset_has_no_drift_whatever_the_order(
+    identities: list[str],
+) -> None:
+    """Shuffling either side cannot create or hide an identity."""
+    drift = compare_identities(identities, list(reversed(identities)))
+
+    assert drift.is_empty
+
+
+@settings(max_examples=60, deadline=None)
+@given(st.lists(_IDENTITIES, max_size=8), st.lists(_IDENTITIES, max_size=8))
+def test_drift_is_order_independent_and_sorted(
+    expected: list[str], executed: list[str]
+) -> None:
+    """Two reports of the same multisets are byte-identical."""
+    forward = compare_identities(expected, executed)
+    backward = compare_identities(list(reversed(expected)), list(reversed(executed)))
+
+    assert forward == backward
+    for values in (forward.missing, forward.duplicate, forward.unexpected):
+        assert list(values) == sorted(values)
