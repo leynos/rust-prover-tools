@@ -131,6 +131,20 @@ def test_a_macro_rules_definition_inside_a_matcher_is_not_a_definition() -> None
     assert items(source) == []
 
 
+def test_a_metavariable_invocation_in_a_nested_matcher_is_accepted() -> None:
+    """A matcher nested in an expansion describes input; it invokes nothing."""
+    source = "\n".join(
+        (
+            "macro_rules! outer {",
+            "    ($m:ident) => { macro_rules! inner { ($m!()) => {}; } };",
+            "}",
+            "outer!(noop);",
+        ),
+    )
+
+    assert items(source) == []
+
+
 def test_a_metavariable_import_rename_is_refused() -> None:
     """Refuse ``use std::$name as load;``, whose bound name the arguments decide."""
     source = "\n".join(

@@ -46,7 +46,11 @@ from rust_prover_tools.trust_audit.repetitions import (
     repetition_refusal,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
-from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
+from rust_prover_tools.trust_audit.use_paths import (
+    opens_use_group,
+    statement_end,
+    use_roots,
+)
 from rust_prover_tools.trust_audit.use_tree import (
     begins_import,
     member_aliases,
@@ -60,11 +64,9 @@ from rust_prover_tools.trust_audit.vocabulary import (
 
 __all__ = ("scan",)
 
-# The qualifier, its ``::``, and the metavariable marker before a final path
-# segment: the three tokens that say where a hidden path is rooted.
+# The qualifier, its ``::``, and the metavariable marker before a path segment.
 _TRUST_PATH_SEGMENTS = 3
-# The metavariable marker, ``as`` and the item before it: the three tokens of
-# a renamed import's destination.
+# The metavariable marker, ``as`` and the item before it.
 _IMPORT_ALIAS_SEGMENTS = 3
 
 
@@ -197,7 +199,7 @@ def _refuse_metavariable_invocations(
     defining crate rather than an argument, so it is not refused.
     """
     for index in rules.expansions:
-        if index < 1 or tokens[index - 1].text != "$":
+        if not _is_expansion_metavariable(tokens, rules, index):
             continue
         token = tokens[index]
         if token.kind is not Kind.IDENT or token.text == "crate":
@@ -205,6 +207,22 @@ def _refuse_metavariable_invocations(
         refusal = _metavariable_refusal(tokens, index, words, qualifiers)
         if refusal is not None:
             raise TrustAuditError(refusal)
+
+
+def _is_expansion_metavariable(
+    tokens: tuple[Token, ...],
+    rules: MacroRules,
+    index: int,
+) -> bool:
+    """Report whether ``index`` is a metavariable in executable expansion code.
+
+    A matcher nested in an expansion is input the invocation fills in; it
+    describes an invocation rather than making one, so its metavariables are
+    skipped even though the matcher tokens also lie inside the outer expansion.
+    """
+    if index in rules.patterns or index < 1:
+        return False
+    return tokens[index - 1].text == "$"
 
 
 def _metavariable_refusal(
@@ -314,20 +332,13 @@ def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether ``index`` sits inside a ``use`` statement's path."""
     for cursor in range(index - 1, -1, -1):
         text = tokens[cursor].text
-        if text == "{" and _opens_use_group(tokens, cursor):
+        if text == "{" and opens_use_group(tokens, cursor):
             continue
         if text in {";", "(", ")", "[", "]", "{", "}"}:
             return False
         if text == "use" and begins_import(tokens, cursor):
             return True
     return False
-
-
-def _opens_use_group(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether the ``{`` at ``index`` opens a ``use`` tree."""
-    if index < 1:
-        return False
-    return tokens[index - 1].text in {"::", "use"}
 
 
 def _is_trust_qualified(

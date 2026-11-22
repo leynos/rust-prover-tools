@@ -47,6 +47,23 @@ def test_a_row_that_declares_a_cover_needs_its_status() -> None:
         kani_log_rows.facts_of_row(row)
 
 
+def test_a_row_cover_with_the_no_cover_sentinel_is_refused() -> None:
+    """Reject a declared cover whose status says no cover exists."""
+    row = {
+        "harnesses": [
+            {
+                "name": "h::x",
+                "status": "SUCCESS",
+                "covers": ["witness"],
+                "cover_status": "NONE",
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="without a cover_status"):
+        kani_log_rows.facts_of_row(row)
+
+
 def test_every_table_row_explains_itself() -> None:
     """Require each row to carry the reason it exists."""
     for row in corpus.table()["rows"]:
@@ -91,15 +108,22 @@ def test_degrading_never_improves_the_outcome() -> None:
     assert improved == [], "degrading a harness must never turn the run verified"
 
 
-def test_verified_exactly_when_every_claim_stands() -> None:
-    """Require verified if and only if every claim stands."""
+def _decision_stands(combination: tuple[facts.HarnessFact, ...]) -> bool:
+    """Report whether the decision verifies every claim and its witness."""
+    decision = facts.decision_for(combination)
+    return decision.outcome == KaniOutcome.VERIFIED and all(
+        status == "satisfied" for status in decision.witness_statuses
+    )
+
+
+def test_a_claim_stands_exactly_when_it_is_verified_and_witnessed() -> None:
+    """Require a claim to stand iff the run verifies it and satisfies its cover."""
     disagreeing = [
         props.names_of(combination)
         for combination in props.declared_combinations()
-        if (facts.decision_for(combination).outcome == KaniOutcome.VERIFIED)
-        != props.claims_stand(combination)
+        if _decision_stands(combination) != props.claims_stand(combination)
     ]
-    assert disagreeing == [], "verified must hold exactly when every claim stands"
+    assert disagreeing == [], "a claim must stand exactly when it is witnessed"
 
 
 def test_an_unsatisfied_witness_is_always_reported() -> None:

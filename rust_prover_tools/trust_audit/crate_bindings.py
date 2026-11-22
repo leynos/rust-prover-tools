@@ -266,7 +266,7 @@ def _alias_round(
                 tokens,
                 index + 1,
                 end,
-                _AliasScope(names, modules),
+                _AliasScope(modules),
             ),
         )
     return discovered
@@ -286,9 +286,8 @@ def _declared_modules(tokens: tuple[Token, ...]) -> frozenset[str]:
 
 @dc.dataclass(frozen=True, slots=True)
 class _AliasScope:
-    """The crate aliases and declared modules one pass reads against."""
+    """The declared modules one pass reads a path through."""
 
-    names: cabc.Container[str]
     modules: cabc.Container[str]
 
 
@@ -298,23 +297,21 @@ def _module_path_aliases(
     end: int,
     scope: _AliasScope,
 ) -> set[str]:
-    """Return aliases bound through a module this file declares.
+    """Return names bound through a module this file declares.
 
     ``mod m { pub use kani as k; } use m::k as kk;`` binds ``kk`` to the same
     crate.  The module's export is visible in this file, so the rename is
-    followed; a module declared elsewhere cannot be resolved and is not read.
-    Only a member that already names a crate alias counts, which keeps
-    ``use kani::{assume as a};`` from binding a crate alias.
+    followed; a module declared elsewhere cannot be resolved.  An import that
+    names a member of a declared module (``use exports::k;`` where ``exports``
+    is declared but not read here) binds a name that module may re-export as a
+    crate alias, so the local name is treated as a possible alias — the same
+    fail-closed policy as a deeper crate-root import.  A wildcard at any depth
+    is refused because its bindings cannot be determined.
     """
     discovered: set[str] = set()
     for root, span_start, span_stop in rooted_spans(tokens, start, end):
-        if root not in scope.modules:
-            continue
-        discovered.update(
-            alias
-            for member, alias in member_aliases(tokens, span_start, span_stop)
-            if member in scope.names
-        )
+        if root in scope.modules:
+            discovered.update(_crate_member_names(tokens, span_start, span_stop))
     return discovered
 
 

@@ -44,6 +44,10 @@ class _BlockBuilder:
     properties: list[PropertyResult] = dc.field(default_factory=list)
     check_ids: set[str] = dc.field(default_factory=set)
     failures: list[FailedCheck] = dc.field(default_factory=list)
+    # Built on the first explanation and reused for the rest: the results
+    # section is complete by then, and rebuilding it per explanation would
+    # rescan every property once per failure.
+    failed_descriptions: tuple[str, ...] | None = None
     failed_count: int | None = None
     total_count: int | None = None
     other_counts: dict[str, int] = dc.field(default_factory=dict)

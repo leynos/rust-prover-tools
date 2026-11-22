@@ -26,6 +26,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "is_grouped",
+    "opens_use_group",
     "statement_end",
     "top_level_members",
     "use_aliases",
@@ -243,3 +244,10 @@ def top_level_members(
             if member_start is not None:
                 yield member_start, index
             member_start = index + 1
+
+
+def opens_use_group(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether the ``{`` at ``index`` opens a ``use`` tree."""
+    if index < 1:
+        return False
+    return tokens[index - 1].text in {"::", "use"}

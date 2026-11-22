@@ -64,9 +64,10 @@ def claims_of(
 def stands(fact: facts.HarnessFact) -> bool:
     """Report whether one claim fact leaves the claim proved.
 
-    An unreachable or undetermined witness denies it even when the assertion
-    passed: a harness that assumed its own precondition away, or one whose
-    solver never decided its cover, reports success having shown nothing.
+    A witness other than a satisfied one denies it even when the assertion
+    passed: a harness that assumed its own precondition away, one whose solver
+    never decided its cover, or one whose witness is unsatisfiable, reports
+    success having shown nothing.
     """
     excused = fact.status in STANDING or (
         fact.status == facts.FAILURE and fact.should_panic and fact.note
@@ -74,7 +75,7 @@ def stands(fact: facts.HarnessFact) -> bool:
     return (
         excused
         and fact.extra != facts.FAILURE
-        and fact.cover not in {facts.UNREACHABLE, facts.UNDETERMINED}
+        and fact.cover in {facts.NOTHING, facts.SATISFIED}
     )
 
 

@@ -875,21 +875,23 @@ the file shows. A module declared elsewhere is not shown, so its names are left
 alone, except that a name imported from the crate root or a parent —
 `use crate::k;`, `use crate::{k as kk};`, `use crate::prelude::k as kk;` or
 `use super::k;` — is treated as a possible crate alias because the declaration
-it names is outside the file. A module the file declares may itself be renamed
-(`use m as n;`), the rename may chain (`use n as q;`), and its alias qualifies
-a renamed member just as its name does. A module the file declares may
-re-export a trust root's whole surface (`mod m { pub use kani::*; }`); the glob
-cannot be enumerated, so a vocabulary word qualified by that module
-(`m::assume(..)`) is reported. A wildcard import from the crate root, the
-current module or a parent (`use crate::*;`, `use crate::prelude::*;` or
-`use crate::{prelude::{k, *}};`) is refused instead: its bindings are not
-shown, and one of them may be a crate alias. Every member of a nested
-crate-root group is read, including a renamed one
-(`use crate::prelude::{k as kk, j};`). A member re-exported by a module the
+it names is outside the file; a member imported from a module the file declares
+(`use exports::k;`) is treated the same way, since that module may re-export a
+trust crate. A module the file declares may itself be renamed (`use m as n;`),
+the rename may chain (`use n as q;`), and its alias qualifies a renamed member
+just as its name does. A module the file declares may re-export a trust root's
+whole surface (`mod m { pub use kani::*; }`); the glob cannot be enumerated, so
+a vocabulary word qualified by that module (`m::assume(..)`) is reported. A
+wildcard import from the crate root, the current module or a parent
+(`use crate::*;`, `use crate::prelude::*;` or `use crate::{prelude::{k, *}};`)
+is refused instead: its bindings are not shown, and one of them may be a crate
+alias. Every member of a nested crate-root group is read, including a renamed
+one (`use crate::prelude::{k as kk, j};`). A member re-exported by a module the
 file declares is followed (`use m::a as b;` after the module binds `a`), as is
-a crate alias (`use m::k as kk;`). A `use<…>` precise-capture bound is not an
-import. A turbofish call such as `a::<u32, _>(..)` is a call on the renamed
-item, not a path through it.
+a crate alias (`use m::k as kk;`). A member a trust-root glob supplies is bound
+too, so `use kani::*; use self::assume as a;` reports `a(false)` as `assume`. A
+`use<…>` precise-capture bound is not an import. A turbofish call such as
+`a::<u32, _>(..)` is a call on the renamed item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a

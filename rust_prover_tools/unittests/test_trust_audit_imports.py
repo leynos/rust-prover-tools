@@ -47,6 +47,13 @@ def test_a_crate_alias_requalified_through_self_is_followed() -> None:
     assert [item for item, _ in items(source)] == ["assume"]
 
 
+def test_a_glob_imported_item_renamed_through_self_is_bound() -> None:
+    """Bind ``use self::assume as a;`` when a trust-root glob supplies the item."""
+    source = "use kani::*;\nuse self::assume as a;\nfn f() { a(false); }"
+
+    assert items(source) == [("assume", 3)]
+
+
 def test_a_grouped_plain_import_seeds_every_member() -> None:
     """Seed each unrenamed leaf of a grouped import, not only the last.
 
@@ -266,6 +273,17 @@ def test_a_member_rename_through_a_declared_module_is_followed() -> None:
         ("assume", 2),
         ("assume", 3),
     ], "the module's import, the second rename and its call must all report"
+
+
+def test_a_member_of_a_declared_module_is_a_possible_alias() -> None:
+    """Treat ``use exports::k;`` as binding a possible crate alias.
+
+    ``exports`` is declared but not read here, so it may re-export Kani under
+    ``k``; the call through ``k`` must not pass silently.
+    """
+    source = "mod exports;\nuse exports::k;\nfn f() { k::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
 
 
 def test_a_declared_module_alias_qualifies_a_renamed_member() -> None:

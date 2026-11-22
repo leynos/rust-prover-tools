@@ -54,7 +54,7 @@ def facts_of_row(row: dict[str, typ.Any]) -> tuple[HarnessFact, ...]:
                 f"{len(covers)} covers, but the adapter represents one"
             )
             raise ValueError(msg)
-        if covers and "cover_status" not in entry:
+        if covers and entry.get("cover_status", NOTHING) == NOTHING:
             # A declared cover with no status would be mapped to NOTHING,
             # which the manifest builder treats as no cover at all, so the
             # witness would silently disappear from the analysis.

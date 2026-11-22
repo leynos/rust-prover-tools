@@ -868,10 +868,15 @@ per-file scan cannot see the module that exports it. Every member of a nested
 crate-root group is read, including its renames
 (`use crate::prelude::{k as kk, j};`). A member re-exported by a module the
 file declares is followed (`use m::a as b;` after the module binds `a`). A
-module declared elsewhere is not shown, so its names are left alone. A
-turbofish call such as `a::<u32, _>(..)` calls the renamed item rather than
-taking a path through it. A local alias for the `verus!` macro is the same
-macro, so its body opens a Verus region.
+member imported from a module the file declares but does not read
+(`use exports::k;`) is treated as a possible crate alias, for the same reason
+as a deeper crate-root import, and a wildcard there is refused. A trust-root
+glob supplies members under their own names, so
+`use kani::*; use self::assume as a;` binds `a` to `assume`. A module declared
+elsewhere is not shown, so its names are left alone. A turbofish call such as
+`a::<u32, _>(..)` calls the renamed item rather than taking a path through it.
+A local alias for the `verus!` macro is the same macro, so its body opens a
+Verus region.
 
 ### Verus outcome vocabulary
 

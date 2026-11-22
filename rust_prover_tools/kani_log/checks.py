@@ -359,9 +359,11 @@ def explained_message(
     itself, so a first line or continuation that disagrees is refused rather
     than attributed to the check.
     """
-    described = [
-        item.description for item in builder.properties if item.status == "FAILURE"
-    ]
+    if builder.failed_descriptions is None:
+        builder.failed_descriptions = tuple(
+            item.description for item in builder.properties if item.status == "FAILURE"
+        )
+    described = builder.failed_descriptions
     index = len(builder.failures)
     if index >= len(described):
         # More explanations than failures is a contradiction the block's count
