@@ -42,6 +42,14 @@ type AdmissionResolver = cabc.Callable[[cabc.Mapping[str, str]], tuple[str, ...]
 #: Setup must not let an inherited `TAR_OPTIONS` change extraction.
 _INHERITED_EXTRACTION_VARIABLES: typ.Final[tuple[str, ...]] = ("TAR_OPTIONS",)
 
+#: Rustup's config command, run before the launcher starts.
+_DISABLE_SELF_UPDATE: typ.Final[tuple[str, ...]] = (
+    "rustup",
+    "set",
+    "auto-self-update",
+    "disable",
+)
+
 
 def run_local_bundle_setup(
     runtime: SnapshotRuntime,
@@ -73,6 +81,18 @@ def run_local_bundle_setup(
         # The environment is an overlay, so removal must be spelled as a
         # Cuprum `UNSET` marker rather than by deleting a copied key.
         env[name] = UNSET
+    # Rustup's automatic self-update expects its own binary under `CARGO_HOME`.
+    # This generation's cargo home is private and holds no rustup, so the
+    # update attempt fails after the toolchain has been installed. Disabling it
+    # with the same private homes is version-agnostic and keeps setup
+    # deterministic; an inherited setting could otherwise re-enable it.
+    run_checked(
+        CommandSpec(
+            _DISABLE_SELF_UPDATE,
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
+    )
     run_checked(
         CommandSpec(
             (
