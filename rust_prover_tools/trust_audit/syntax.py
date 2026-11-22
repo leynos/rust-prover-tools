@@ -92,7 +92,10 @@ def tokenize(text: str) -> tuple[Token, ...]:
         terminates. The scan fails closed rather than resuming mid-literal,
         because a resumed scan reads the literal's contents as code.
     """
-    cursor = Cursor(text)
+    # Rust strips one leading BOM before it looks for a shebang, and the BOM is
+    # not otherwise part of the source text, so removing it keeps reported
+    # columns aligned with the characters an author sees.
+    cursor = Cursor(text.removeprefix("﻿"))
     _skip_shebang(cursor)
     tokens: list[Token] = []
     while not cursor.at_end:
@@ -104,6 +107,16 @@ def tokenize(text: str) -> tuple[Token, ...]:
                 Token(Kind.LITERAL, literal, cursor.line_before, cursor.column_before),
             )
             _skip_literal_suffix(cursor)
+            continue
+        numeric = _numeric_literal_length(cursor.text, cursor.index)
+        if numeric:
+            # A numeric literal is opaque to the audit, but its suffix may hold
+            # a vocabulary word: Rust lexes ``1assume`` as one literal, so
+            # emitting ``1`` and ``assume`` would invent a trust use.  It is
+            # recorded as a punctuator rather than a literal because a
+            # proc-macro scan decodes literal text as code.
+            line, column = cursor.line, cursor.column
+            tokens.append(Token(Kind.PUNCT, cursor.take(numeric), line, column))
             continue
         length = _identifier_length(cursor.text, cursor.index)
         if length:
@@ -285,6 +298,23 @@ def _skip_character_literal_or_lifetime(cursor: Cursor) -> bool:
         raise TrustAuditError(msg)
     cursor.take(length)
     return True
+
+
+def _numeric_literal_length(text: str, start: int) -> int:
+    """Return the length of the numeric literal at ``start``, or zero.
+
+    The audit reads no numeric value, but an arbitrary suffix belongs to the
+    literal: Rust lexes ``1assume`` as one token, so splitting it would expose
+    ``assume`` as a trust word the compiler never sees.  Consuming the leading
+    digits and alphanumeric suffix as one opaque token is enough for that
+    purpose; the remaining punctuation is lexed normally.
+    """
+    if start >= len(text) or not "0" <= text[start] <= "9":
+        return 0
+    end = start + 1
+    while end < len(text) and (text[end].isalnum() or text[end] == "_"):
+        end += 1
+    return end - start
 
 
 def _identifier_length(text: str, start: int) -> int:

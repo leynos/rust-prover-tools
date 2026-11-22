@@ -175,7 +175,27 @@ def _span_bindings(
     for member, alias in member_aliases(tokens, start, stop):
         if member in scope.bindings:
             discovered.setdefault(alias, set()).update(scope.bindings[member])
+    # A trust crate can also appear after a module segment the scan cannot
+    # resolve: ``use bridge::k::assume as a;`` names the member through the
+    # alias ``k``.  The leaf is bound whenever a segment before it is a trust
+    # root, not only when the path begins with one.
+    for index in range(start + 1, stop - 1):
+        if _names_root(tokens, index, scope.roots):
+            _merge(discovered, _member_bindings(tokens, index, stop))
+            break
     return discovered
+
+
+def _names_root(
+    tokens: tuple[Token, ...],
+    index: int,
+    roots: cabc.Container[str],
+) -> bool:
+    """Report whether the segment at ``index`` names a trust root and continues."""
+    token = tokens[index]
+    if token.kind is not Kind.IDENT or token.text not in roots:
+        return False
+    return tokens[index + 1].text == "::"
 
 
 def _member_bindings(

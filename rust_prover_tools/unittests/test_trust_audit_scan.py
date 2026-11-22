@@ -24,6 +24,15 @@ def test_a_kani_only_word_is_not_reported_from_a_generic_root() -> None:
     assert items("other::assume(x);") == []
 
 
+def test_a_call_through_an_external_module_alias_is_reported() -> None:
+    """Report a word behind a module alias whose re-export the file cannot see.
+
+    ``exports`` may re-export Kani under ``k`` in another file, so the
+    per-file scan cannot rule the call out.
+    """
+    assert items("fn f() { exports::k::assume(true); }") == [("assume", 1)]
+
+
 def test_a_named_kani_import_makes_a_bare_word_trust() -> None:
     """Apply the imported-root rule to a bare use after a named import."""
     source = "use kani::assume;\nfn f() { assume(true); }"
@@ -278,6 +287,23 @@ def test_a_leading_inner_attribute_is_not_a_shebang() -> None:
     words = [token.text for token in tokenize(source) if token.kind == "ident"]
     assert "allow" in words, "the inner attribute must survive tokenization"
     assert "dead_code" in words
+    assert items(source) == [("assume", 2)]
+
+
+def test_a_numeric_literal_suffix_is_not_an_identifier() -> None:
+    """Keep a numeric literal's suffix inside the literal, as Rust lexes it."""
+    words = [
+        token.text for token in tokenize("ignore!(1assume);") if token.kind == "ident"
+    ]
+
+    assert "assume" not in words, "a numeric suffix must not become an identifier"
+    assert items("ignore!(1assume);") == []
+
+
+def test_a_leading_bom_does_not_hide_a_shebang() -> None:
+    """Strip a leading BOM before deciding whether the first line is a shebang."""
+    source = '﻿#!/usr/bin/env "run\nkani::assume(x);'
+
     assert items(source) == [("assume", 2)]
 
 

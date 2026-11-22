@@ -63,6 +63,9 @@ __all__ = ("scan",)
 # The qualifier, its ``::``, and the metavariable marker before a final path
 # segment: the three tokens that say where a hidden path is rooted.
 _TRUST_PATH_SEGMENTS = 3
+# The metavariable marker, ``as`` and the item before it: the three tokens of
+# a renamed import's destination.
+_IMPORT_ALIAS_SEGMENTS = 3
 
 
 def scan(
@@ -229,6 +232,12 @@ def _metavariable_refusal(
             f"{token.column} renames an import through the metavariable "
             f"'${token.text}', so the audit cannot tell which name it binds"
         )
+    if _is_import_destination(tokens, index):
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} binds an import's local name to the metavariable "
+            f"'${token.text}', so the audit cannot tell which name it binds"
+        )
     if _is_trust_qualified(tokens, index, qualifiers):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
@@ -260,11 +269,12 @@ def _path_refusal(
             f"{token.column} reaches a trust item through the metavariable "
             f"'${token.text}', so the audit cannot tell which crate it names"
         )
-    if second == "*":
+    if second in {"*", "{"}:
         return (
             f"the macro_rules! expansion at line {token.line}, column "
-            f"{token.column} reaches a glob import through the metavariable "
-            f"'${token.text}', so the audit cannot tell which names it binds"
+            f"{token.column} reaches a glob or grouped import through the "
+            f"metavariable '${token.text}', so the audit cannot tell which "
+            "names it binds"
         )
     return None
 
@@ -279,6 +289,29 @@ def _is_import_rename(tokens: tuple[Token, ...], index: int) -> bool:
     """
     if index + 1 >= len(tokens) or tokens[index + 1].text != "as":
         return False
+    return _inside_import(tokens, index)
+
+
+def _is_import_destination(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether a metavariable is the local name a ``use`` alias binds.
+
+    ``use std::include as $name;`` chooses at expansion time what the local
+    name is, and a later call under that name is a trust use the scan cannot
+    see.  A cast such as ``$value as u64`` has no metavariable after ``as``,
+    and a cast to a metavariable type is outside any import statement, so both
+    remain accepted.
+    """
+    if index < _IMPORT_ALIAS_SEGMENTS or tokens[index - 1].text != "$":
+        return False
+    if tokens[index - 2].text != "as":
+        return False
+    if tokens[index - _IMPORT_ALIAS_SEGMENTS].kind is not Kind.IDENT:
+        return False
+    return _inside_import(tokens, index)
+
+
+def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether ``index`` sits inside a ``use`` statement's path."""
     for cursor in range(index - 1, -1, -1):
         text = tokens[cursor].text
         if text == "{" and _opens_use_group(tokens, cursor):

@@ -42,6 +42,8 @@ __all__ = ("Context",)
 
 # The ``::`` and the qualifier in front of a path's last segment.
 _QUALIFIED_SEGMENTS = 2
+# The alias and both ``::`` separators of a two-segment qualified path.
+_DEEP_QUALIFIED_SEGMENTS = 3
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -151,6 +153,9 @@ class Context:
         if self.root_glob and self._is_glob_qualified(index, token):
             self._report(token.text, token)
             return
+        if self._is_deep_qualified(index, token):
+            self._report(token.text, token)
+            return
         if token.text in self.region_words and self._is_verus_context(index):
             self._report(token.text, token)
         self._report_if_imported(index, token)
@@ -224,6 +229,23 @@ class Context:
             and index >= _QUALIFIED_SEGMENTS
             and self.tokens[index - 1].text == "::"
             and self.tokens[index - _QUALIFIED_SEGMENTS].text in self.module_names
+        )
+
+    def _is_deep_qualified(self, index: int, token: Token) -> bool:
+        """Report whether a vocabulary word ends a multi-segment path.
+
+        ``exports::k::assume(..)`` may reach Kani through a crate alias that
+        another file's module re-exports; the per-file scan cannot see that
+        binding, so the word is reported rather than passed.  A single
+        ``other::assume`` stays unreported, which keeps rule 1's ordinary
+        qualified path from becoming every qualified word in the file.
+        """
+        return (
+            token.text in self.words
+            and index >= _DEEP_QUALIFIED_SEGMENTS
+            and self.tokens[index - 1].text == "::"
+            and self.tokens[index - _DEEP_QUALIFIED_SEGMENTS].text == "::"
+            and self.tokens[index - 2].kind is Kind.IDENT
         )
 
     def _is_verus_context(self, index: int) -> bool:

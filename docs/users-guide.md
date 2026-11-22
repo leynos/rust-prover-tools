@@ -764,8 +764,9 @@ Useful options are:
   that never failed has not shown that the fault would be caught. Paths are
   compared without touching the filesystem: `.` components match, and on
   Windows either separator matches, but on POSIX a backslash is part of the
-  filename. A `..` step never matches, because through a symbolic link it can
-  name a different file.
+  filename. A `..` step is kept as written, so only the same spelling matches;
+  through a symbolic link it can name a different file from the path a `..`
+  would collapse to.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for
@@ -822,8 +823,10 @@ tell which one an invocation expands. A declaration whose name comes from a
 metavariable is refused, because only the invocation's arguments decide that
 name, and an expansion that invokes a macro through a metavariable is refused
 for the same reason, as is one that reaches a trust item through a metavariable
-path such as `$p::assume` or `kani::$f`, or binds an import's item
-(`use std::$name as load;`). A repetition-wrapped form such as `$($p)+::assume`
+path such as `$p::assume` or `kani::$f`, binds an import's item or local name
+(`use std::$name as load;` or `use std::include as $name;`), glob-imports
+through one (`use $p::*;`), or opens an import group through one
+(`use $p::{assume as a};`). A repetition-wrapped form such as `$($p)+::assume`
 or `kani::$($f)*` is refused too, with every enclosing repetition walked before
 the decision. A target reached through a symbolic link is reported as the
 physical file it reaches, so a cyclic `#[path]` is scanned once; a `#[path]`
@@ -855,38 +858,46 @@ A word counts as trust only in a context that gives it meaning:
   `verus_verify` or `verus_spec` attribute, or inside a `cfg_attr` that carries
   one of those;
 - any unqualified vocabulary word in a file that imports from `kani`, `vstd` or
-  `verus_builtin`.
+  `verus_builtin`;
+- a vocabulary word ending a path with two or more qualifier segments, such as
+  `exports::k::assume(..)`, because a module the file imports may re-export a
+  trust crate under an alias the file never binds.
 
-The third rule is deliberately wide. A named import such as `use kani::assume;`
-makes a later bare `assume(..)` ambiguous, so it is reported with every other
-unqualified vocabulary word in that file. An audit that reports a word wrongly
-leaves something for the reviewer to dismiss; one that stays silent hides a
-request for proof by assumption. A renamed import is reported under the item it
-names when the use is bare, is reached through `self::`, `crate::` or
-`super::`, or is qualified by a module the same file declares —
-`mod m { pub use kani::assume as a; } m::a(..)` reaches the binding the file
-shows. A module declared elsewhere is not shown, so its names are left alone,
-except that a name imported from the crate root or a parent — `use crate::k;`,
-`use crate::{k as kk};`, `use crate::prelude::k as kk;` or `use super::k;` — is
-treated as a possible crate alias because the declaration it names is outside
-the file. A module the file declares may itself be renamed (`use m as n;`), the
-rename may chain (`use n as q;`), and its alias qualifies a renamed member just
-as its name does. A module the file declares may re-export a trust root's whole
-surface (`mod m { pub use kani::*; }`); the glob cannot be enumerated, so a
-vocabulary word qualified by that module (`m::assume(..)`) is reported. A
-wildcard import from the crate root, the current module or a parent
-(`use crate::*;` or `use crate::prelude::*;`) is refused instead: its bindings
-are not shown, and one of them may be a crate alias. A member re-exported by a
-module the file declares is followed (`use m::a as b;` after the module binds
-`a`), as is a crate alias (`use m::k as kk;`). A `use<…>` precise-capture bound
-is not an import. A turbofish call such as `a::<u32, _>(..)` is a call on the
-renamed item, not a path through it.
+The unqualified-word rule is deliberately wide. A named import such as
+`use kani::assume;` makes a later bare `assume(..)` ambiguous, so it is
+reported with every other unqualified vocabulary word in that file. An audit
+that reports a word wrongly leaves something for the reviewer to dismiss; one
+that stays silent hides a request for proof by assumption. A renamed import is
+reported under the item it names when the use is bare, is reached through
+`self::`, `crate::` or `super::`, or is qualified by a module the same file
+declares — `mod m { pub use kani::assume as a; } m::a(..)` reaches the binding
+the file shows. A module declared elsewhere is not shown, so its names are left
+alone, except that a name imported from the crate root or a parent —
+`use crate::k;`, `use crate::{k as kk};`, `use crate::prelude::k as kk;` or
+`use super::k;` — is treated as a possible crate alias because the declaration
+it names is outside the file. A module the file declares may itself be renamed
+(`use m as n;`), the rename may chain (`use n as q;`), and its alias qualifies
+a renamed member just as its name does. A module the file declares may
+re-export a trust root's whole surface (`mod m { pub use kani::*; }`); the glob
+cannot be enumerated, so a vocabulary word qualified by that module
+(`m::assume(..)`) is reported. A wildcard import from the crate root, the
+current module or a parent (`use crate::*;`, `use crate::prelude::*;` or
+`use crate::{prelude::{k, *}};`) is refused instead: its bindings are not
+shown, and one of them may be a crate alias. Every member of a nested
+crate-root group is read, including a renamed one
+(`use crate::prelude::{k as kk, j};`). A member re-exported by a module the
+file declares is followed (`use m::a as b;` after the module binds `a`), as is
+a crate alias (`use m::k as kk;`). A `use<…>` precise-capture bound is not an
+import. A turbofish call such as `a::<u32, _>(..)` is a call on the renamed
+item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a
-leading shebang is discarded; a literal's suffix belongs to the literal, so
-`"text"include` is not an `include` call; and a `\u{…}` escape must begin with
-a hexadecimal digit, so `\u{_63}` is refused rather than read as `c`.
+leading shebang is discarded after a leading BOM; a literal's suffix belongs to
+the literal, so `"text"include` is not an `include` call and a numeric
+literal's suffix is equally opaque, so `1assume` is not an `assume` call; and a
+`\u{…}` escape must begin with a hexadecimal digit, so `\u{_63}` is refused
+rather than read as `c`.
 
 Source the audit cannot read is refused rather than skipped: comments and
 literals that never terminate, and the macros `include!`, `paste!` and

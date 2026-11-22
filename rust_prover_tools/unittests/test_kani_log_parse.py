@@ -946,6 +946,11 @@ _DESCRIPTION_BOUNDARIES = (
         'first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast',
         id="field-shaped-continuation",
     ),
+    pytest.param(
+        '- Description: "first"\n\n\t - Location: src/harnesses.rs:1:1 in f\nlast"',
+        'first"\n\n\t - Location: src/harnesses.rs:1:1 in f\nlast',
+        id="field-shaped-continuation-after-blank",
+    ),
 )
 
 

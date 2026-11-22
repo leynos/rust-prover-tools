@@ -157,6 +157,17 @@ def _crate_root_names(
 
 def _grouped_crate_names(tokens: tuple[Token, ...], opener: int) -> set[str]:
     """Return the local names a ``crate::{…}`` group binds."""
+    return _nested_crate_names(tokens, opener)
+
+
+def _nested_crate_names(tokens: tuple[Token, ...], opener: int) -> set[str]:
+    """Return every local name the brace group at ``opener`` binds.
+
+    A member may itself be a group or a deeper path ending in one, so each
+    member is read by the same rules as the outermost list: a rename keeps its
+    alias, a wildcard at any depth is refused, and a plain member keeps its own
+    name.
+    """
     closer = matching(tokens, opener, "{", "}")
     names: set[str] = set()
     for member_start, member_end in top_level_members(tokens, opener, closer + 1):
@@ -177,7 +188,18 @@ def _crate_member_names(
     a possible alias, the same fail-closed direction as a single-segment
     import.  A path that binds nothing, such as a bare ``crate``, contributes
     no name.
+
+    A path that ends in a brace group — ``prelude::{k, j}`` — binds one name
+    per member, each of which may be renamed or be a wildcard.  Reading the
+    whole span as one path would keep only its last identifier and lose the
+    others, so the group is expanded first.
     """
+    opener = next(
+        (index for index in range(start, stop) if tokens[index].text == "{"),
+        None,
+    )
+    if opener is not None:
+        return _nested_crate_names(tokens, opener)
     if start < stop and tokens[stop - 1].text == "*":
         # A wildcard imports names the per-file scan never sees, at any depth:
         # ``use crate::prelude::*`` exports whatever that module re-exports,

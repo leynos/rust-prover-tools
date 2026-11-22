@@ -802,27 +802,28 @@ invocation in another file is outside the per-file scan, which the user guide
 states. A declaration whose name a metavariable supplies is refused, because
 only the invocation's arguments decide that name and the scan never evaluates
 them; an expansion that invokes a macro through a metavariable, reaches a trust
-item through one such as `$p::assume` or `kani::$f`, binds an import's item
-(`use std::$name as load;`, including the grouped `use std::{$name as load};`),
-or glob-imports through one (`use $p::*;`), is refused for the same reason: the
-arguments decide which name or names the expansion binds. A repetition-wrapped
-metavariable is inspected through every enclosing repetition, so
-`$($p)+::assume` and `kani::$($($f),+);+` are refused rather than read as
-ordinary repetitions. A target reached through a symbolic link is reported as
-the physical file, so a cyclic `#[path]` terminates, while the children of that
-module resolve from the pathname the compiler loaded rather than the link's
-target. A file reached with two owners, or two declaring directories, that name
-different directories is refused, because a file-scope `#[path]` would resolve
-its children beneath one or the other. When a plain crate and a proc-macro
-crate both reach one file, the stronger literal-reading policy wins and the
-file and its children are rescanned. A `#[path]` that a `cfg_attr` can select
-is refused: the configuration decides which file compiles, so no single answer
-would be true. A `#[path]` whose value is not a literal is refused for the same
-reason: the expansion's arguments decide the file, and reading it as no
-override would scan the default file in place of the one the crate compiles. A
-nested `cfg_attr` is read through its own payload, so a predicate that merely
-spells `path = …` is not mistaken for an applied path attribute; an unrelated
-attribute's arguments are skipped, so
+item through one such as `$p::assume` or `kani::$f`, binds an import's item or
+local name (`use std::$name as load;`, the grouped `use std::{$name as load};`,
+or `use std::include as $name;`), glob-imports through one (`use $p::*;`), or
+opens a group through one (`use $p::{assume as a};`), is refused for the same
+reason: the arguments decide which name or names the expansion binds. A
+repetition-wrapped metavariable is inspected through every enclosing
+repetition, so `$($p)+::assume` and `kani::$($($f),+);+` are refused rather
+than read as ordinary repetitions. A target reached through a symbolic link is
+reported as the physical file, so a cyclic `#[path]` terminates, while the
+children of that module resolve from the pathname the compiler loaded rather
+than the link's target. A file reached with two owners, or two declaring
+directories, that name different directories is refused, because a file-scope
+`#[path]` would resolve its children beneath one or the other. When a plain
+crate and a proc-macro crate both reach one file, the stronger literal-reading
+policy wins and the file and its children are rescanned. A `#[path]` that a
+`cfg_attr` can select is refused: the configuration decides which file
+compiles, so no single answer would be true. A `#[path]` whose value is not a
+literal is refused for the same reason: the expansion's arguments decide the
+file, and reading it as no override would scan the default file in place of the
+one the crate compiles. A nested `cfg_attr` is read through its own payload, so
+a predicate that merely spells `path = …` is not mistaken for an applied path
+attribute; an unrelated attribute's arguments are skipped, so
 `doc = stringify!(verifier::external_body)` is documentation rather than an
 applied Verus attribute.
 
@@ -832,7 +833,10 @@ the ticket names. Under-reporting is a soundness failure in an audit, so
 `assume_termination` are included with the words the ticket lists;
 over-reporting only asks a reviewer to read one more line. `assume_termination`
 is currently unneeded according to the reference, but the note does not remove
-it from the inventory.
+it from the inventory. The same direction covers a path with two or more
+qualifier segments: `exports::k::assume(..)` may reach Kani through an alias a
+module re-exports in another file, and the per-file scan cannot see that
+binding, so the word is reported rather than passed.
 
 A renamed member is reported under the item it names, at the position it is
 used. A bare call is the ordinary case; `self::`, `crate::` and `super::` name
@@ -857,14 +861,17 @@ holding the item is equally outside the file. A use qualified by a module the
 same file declares is reported too, because the import that binds it is visible
 there; a wildcard re-export of a trust root (`mod m { pub use kani::*; }`)
 similarly makes `m::assume(..)` report, since the glob's bindings cannot be
-enumerated. A local wildcard import (`use crate::*;` or a deeper
-`use crate::prelude::*;`) is refused instead: one of the names it binds may be
-a crate alias, and the per-file scan cannot see the module that exports it. A
-member re-exported by a module the file declares is followed (`use m::a as b;`
-after the module binds `a`). A module declared elsewhere is not shown, so its
-names are left alone. A turbofish call such as `a::<u32, _>(..)` calls the
-renamed item rather than taking a path through it. A local alias for the
-`verus!` macro is the same macro, so its body opens a Verus region.
+enumerated. A local wildcard import (`use crate::*;`, a deeper
+`use crate::prelude::*;`, or a nested `use crate::{prelude::{k, *}};`) is
+refused instead: one of the names it binds may be a crate alias, and the
+per-file scan cannot see the module that exports it. Every member of a nested
+crate-root group is read, including its renames
+(`use crate::prelude::{k as kk, j};`). A member re-exported by a module the
+file declares is followed (`use m::a as b;` after the module binds `a`). A
+module declared elsewhere is not shown, so its names are left alone. A
+turbofish call such as `a::<u32, _>(..)` calls the renamed item rather than
+taking a path through it. A local alias for the `verus!` macro is the same
+macro, so its body opens a Verus region.
 
 ### Verus outcome vocabulary
 
@@ -923,12 +930,16 @@ exists because Verus reports a postcondition failure at the contract line above
 the body, not at the line a seeded mutation touched.
 
 Path comparison ignores spellings that cannot change the file: a `.` component,
-an empty component, a trailing separator and a separator written the other way
-round. A `..` component is kept. It is resolved against the directory before
-it, and through a symbolic link `linked/../mutant.rs` names a different file
-from `mutant.rs`; collapsing it would let one diagnostic satisfy an expectation
-for a file the run never read. Nothing is resolved against the filesystem,
-because the log and the expectation may describe a machine that is gone.
+an empty component, and a trailing separator. The host that captured the log
+decides the separator rule: on Windows either separator names the same file,
+while on POSIX a backslash is an ordinary filename character, so `a\b.rs` is a
+different file from `a/b.rs`. A `..` component is kept exactly as written. It
+is resolved against the directory before it, and through a symbolic link
+`linked/../mutant.rs` names a different file from `mutant.rs`; collapsing it
+would let one diagnostic satisfy an expectation for a file the run never read,
+and two spellings that both keep it compare equal. Nothing is resolved against
+the filesystem, because the log and the expectation may describe a machine that
+is gone.
 
 ### Verus release qualification
 

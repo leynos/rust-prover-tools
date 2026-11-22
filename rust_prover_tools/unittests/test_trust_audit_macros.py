@@ -170,7 +170,35 @@ def test_a_metavariable_glob_root_is_refused() -> None:
         ),
     )
 
-    with pytest.raises(TrustAuditError, match="glob import"):
+    with pytest.raises(TrustAuditError, match="glob or grouped"):
+        items(source)
+
+
+def test_a_metavariable_grouped_import_root_is_refused() -> None:
+    """Refuse ``use $p::{assume as a};``, whose crate the arguments decide."""
+    source = "\n".join(
+        (
+            "macro_rules! bind { ($p:ident) => { use $p::{assume as a}; }; }",
+            "bind!(kani);",
+            "fn f() { a(true); }",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="glob or grouped"):
+        items(source)
+
+
+def test_a_metavariable_import_destination_is_refused() -> None:
+    """Refuse ``use std::include as $n;``, whose local name is an argument."""
+    source = "\n".join(
+        (
+            "macro_rules! bind { ($n:ident) => { use std::include as $n; }; }",
+            "bind!(load);",
+            'load!("hidden.rs");',
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="local name"):
         items(source)
 
 

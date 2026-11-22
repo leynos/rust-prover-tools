@@ -72,6 +72,19 @@ def test_a_grouped_plain_import_seeds_every_member() -> None:
     ], "both unrenamed imports must survive their later aliases"
 
 
+def test_a_leaf_after_a_crate_alias_is_bound() -> None:
+    """Bind the leaf of a path whose crate alias is not the first segment."""
+    source = "\n".join(
+        (
+            "use kani as k;",
+            "use bridge::k::assume as a;",
+            "fn f() { a(false); }",
+        ),
+    )
+
+    assert items(source) == [("assume", 2), ("assume", 3)]
+
+
 def test_a_crate_alias_qualified_through_self_is_followed() -> None:
     """Resolve the crate alias in ``self::k::assume`` before the member.
 
@@ -162,6 +175,35 @@ def test_a_deeper_crate_root_import_is_a_possible_alias() -> None:
     source = "use crate::prelude::k as kk;\nfn f() { kk::assume(true); }"
 
     assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_grouped_deeper_crate_import_binds_every_member() -> None:
+    """Expand ``prelude::{k, j}`` rather than keeping only its last name."""
+    source = "use crate::prelude::{k, j};\nfn f() { k::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_grouped_deeper_crate_import_keeps_renames_and_plain_members() -> None:
+    """Read a renamed member and a plain member of the same nested group."""
+    source = "use crate::prelude::{k as kk, j};\nfn f() { kk::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_nested_grouped_crate_import_binds_every_member() -> None:
+    """Expand a group nested one brace deeper under the crate root."""
+    source = "use crate::{prelude::{k, j}};\nfn f() { k::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
+def test_a_nested_wildcard_under_the_crate_root_is_refused() -> None:
+    """Refuse a wildcard member of a nested group under the crate root."""
+    source = "use crate::{prelude::{k, *}};\nfn f() { k::assume(true); }"
+
+    with pytest.raises(TrustAuditError, match="wildcard import"):
+        items(source)
 
 
 def test_a_grouped_crate_root_import_binds_its_aliases() -> None:

@@ -267,7 +267,25 @@ def _blank_closes_entry(reader: Reader) -> bool:
         return _starts_summary(reader, offset + 1)
     if following == "Manual Harness Summary:":
         return _starts_manual_summary(reader, offset + 1)
+    if FIELD.match(following) is not None:
+        return _field_run_closes_entry(reader, offset)
     return any(pattern.match(following) is not None for pattern in _ENTRY_HEADS)
+
+
+def _field_run_closes_entry(reader: Reader, offset: int) -> bool:
+    """Report whether a field run after a blank line is a real boundary.
+
+    A description may print a blank line and then a field-shaped line as
+    content, exactly as it may print one without the blank line.  The run is
+    read the same way here: it is a boundary only when what follows it is
+    another field, a report construct or the end of the log.
+    """
+    while (following := reader.peek_at(offset)) is not None:
+        if not following.strip() or FIELD.match(following) is not None:
+            offset += 1
+            continue
+        return _is_report_line(following)
+    return True
 
 
 def _starts_results(reader: Reader, offset: int) -> bool:

@@ -296,8 +296,17 @@ def test_parse_expectation_refuses_an_unusable_region(text: str) -> None:
         (VerusFailure("failed", "./proofs/mutant.rs", 8, 13), True),
         (VerusFailure("failed", "proofs/./mutant.rs", 8, 13), True),
         # On POSIX a backslash is an ordinary filename character, not a
-        # separator, so this names a different file from the expectation.
-        (VerusFailure("failed", "proofs\\mutant.rs", 8, 13), False),
+        # separator, so this names a different file from the expectation.  On
+        # Windows the two spellings are the same file, which the dedicated
+        # Windows test covers.
+        pytest.param(
+            VerusFailure("failed", "proofs\\mutant.rs", 8, 13),
+            False,
+            marks=pytest.mark.skipif(
+                expectation_module._WINDOWS,
+                reason="a Windows backslash is a separator",
+            ),
+        ),
         # A ``..`` step is kept: through a symbolic link it can name another
         # file, so only the exact path may satisfy the expectation.
         (VerusFailure("failed", "proofs/../proofs/mutant.rs", 8, 13), False),
