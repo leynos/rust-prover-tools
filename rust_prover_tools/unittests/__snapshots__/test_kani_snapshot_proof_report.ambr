@@ -1,0 +1,15 @@
+# serializer version: 1
+# name: test_the_rendered_failure_is_stable
+  '''
+  verified: -
+  failed: deliberately_false_assertion
+  counts: 0 verified, 1 failed, 1 total
+  '''
+# ---
+# name: test_the_rendered_report_is_stable
+  '''
+  verified: bounded_push_and_drop_are_exact, raii_release_runs_once
+  failed: -
+  counts: 2 verified, 0 failed, 2 total
+  '''
+# ---

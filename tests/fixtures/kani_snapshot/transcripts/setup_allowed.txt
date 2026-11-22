@@ -1,0 +1,7 @@
+1821  execve("/usr/bin/gh", ["gh", "attestation", "verify", "/tmp/assets/manifest.json", "--repo", "leynos/rust-prover-tools"], 0x7ffd2c1a4b30) = 0
+1822  execve("/home/runner/.cache/kani/bin/cargo-kani", ["cargo-kani", "setup", "--use-local-bundle", "/tmp/staging/bundle.tar.gz"], 0x7ffd2c1a4b30) = 0
+1823  execve("/home/runner/.rustup/toolchains/nightly/bin/rustup", ["rustup", "toolchain", "install", "nightly-2026-08-21-x86_64-unknown-linux-gnu", "--profile", "minimal"], 0x7ffd2c1a4b30) = 0
+1824  execve("/usr/bin/tar", ["tar", "-xzf", "/tmp/staging/toolchain.tar.gz", "-C", "/home/runner/.rustup"], 0x7ffd2c1a4b30) = 0
+1825  execve("/home/runner/.rustup/toolchains/nightly/bin/rustc", ["rustc", "-vV"], 0x7ffd2c1a4b30) = 0
+1826  execve("/home/runner/gen/bin/kani-compiler", ["kani-compiler", "--version"], 0x7ffd2c1a4b30) = 0
+1827  execve("/usr/bin/uname", ["uname", "-m"], 0x7ffd2c1a4b30) = 0

@@ -1,0 +1,17 @@
+Kani Rust Verifier 0.68.0 (standalone)
+Thread 0: Checking harness bounded_push_and_drop_are_exact...
+Thread 0: SUMMARY:
+ ** 0 of 12 failed (3 unreachable)
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.41000000s
+
+Thread 1: Checking harness raii_release_runs_once...
+Thread 1: SUMMARY:
+ ** 0 of 9 failed
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.38000000s
+
+Manual Harness Summary:
+Complete - 2 successfully verified harnesses, 0 failures, 2 total.
