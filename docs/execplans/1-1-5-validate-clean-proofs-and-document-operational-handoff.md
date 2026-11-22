@@ -5,11 +5,12 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS
-
-Draft pull request: pending.
+Status: BLOCKED (D4 component-record digest is unsatisfiable; deviation
+proposed in the decision log and awaiting explicit approval)
 
 Branch: `1-1-5-validate-clean-proofs-and-document-operational-handoff`
+
+Draft pull request: pending.
 
 Roadmap item: `1.1.5` in `docs/roadmap.md`. Parent milestone EP-M5 in
 `docs/execplans/kani-monthly-snapshot-distribution.md`.
@@ -141,23 +142,46 @@ only entries in scope.
       the design, the users' and developers' guides, the workflow, the producer
       purity contract, the opt-in test idiom and the documentation gates.
 - [x] (2026-11-22) Renamed the branch and set the Lody session title.
-- [x] (2026-11-22) Dispatched the non-publishing hosted smoke build
-      (`publish=false`) on `main` at upstream
-      `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, publication identity
-      `kani-snapshot-2026-11-686f7753991b-r1`, run `45067008011`. Nothing is
-      published.
-- [ ] `EP-M5-A` Add the pure proof-transcript and setup-trace validators, their
-      fixtures and offline tests.
-- [ ] `EP-M5-B` Add the opt-in consumer smoke integration test and the
-      `kani-snapshot-verify` Makefile target.
-- [ ] `EP-M5-C` Write the operations runbook and synchronize the guides and
-      design.
-- [ ] `EP-M5-D` Download the hosted release, run the consumer smoke, record
-      the evidence, and close EP-M5 and roadmap 1.1.5 only if it passes.
+- [x] (2026-11-22) Dispatched a non-publishing hosted build (`publish=false`)
+      on `main` at upstream `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, run
+      `45067008011`, identity `kani-snapshot-2026-11-686f7753991b-r1`. The
+      resolve job refused it because the tag's 12-hex field was not the
+      upstream prefix; the Makefile now checks that binding locally.
+- [x] (2026-11-22) Re-dispatched as run `45067145476`, identity
+      `kani-snapshot-2026-11-0d2328a93f0e-r1`. Build, assembly, attestation and
+      validation succeeded; the publish job was skipped. Nothing is published.
+- [x] (2026-11-22) `EP-M5-A` Pure validators, four named proof fixtures, the
+      transcript and trace controls, and unit, property and Syrupy tests.
+- [x] (2026-11-22) `EP-M5-B` Opt-in consumer smoke and the
+      `kani-snapshot-verify` target.
+- [x] (2026-11-22) `EP-M5-C` Operations runbook and synchronized guides and
+      designs.
+- [x] (2026-11-22) `EP-M5-D` (partial) Downloaded run `45067145476`'s release
+      and installed it through the public consumer path. Two real defects
+      appeared and are repaired with tests: rustup's automatic self-update
+      failed against the generation-private `CARGO_HOME`, and the manifest
+      recorded the builder's minimal-plus-`rustc-dev` toolchain instead of the
+      default profile a consumer installs.
+- [ ] `EP-M5-D` (remaining) A third defect blocks the milestone: the recorded
+      `rustup_components_sha256` is a byte digest of a rustup file whose write
+      order is nondeterministic, so it cannot match between any two
+      installations. Deviation D6 is proposed and awaits approval.
+- [ ] Re-run the consumer smoke against a corrected hosted release from trusted
+      `main` and close EP-M5 and roadmap 1.1.5 only if it passes.
 - [ ] Run every gate and create the draft PR.
 
 ## Surprises & discoveries
 
+- Observation: rustup's `lib/rustlib/components` file has a nondeterministic
+  byte order. Three default-profile installs of `nightly-2026-08-21` produced
+  three different digests (`528aa02a…`, `b3c04168…`, and, from the consumer
+  generation, `4059df09…`) while their sorted component sets were identical
+  (`b6d60943…`). Evidence: `rustup toolchain install nightly-2026-08-21` under
+  two fresh private `RUSTUP_HOME` directories, plus the first consumer
+  generation. Impact: the manifest's `rustup_components_sha256` cannot be
+  satisfied by any consumer, so a hosted release can never install. This is a
+  trust-policy defect, not an environment quirk, and needs an approved
+  deviation (D6).
 - Observation: the parent plan's planned Makefile target
   `make kani-snapshot-smoke` with `SNAPSHOT_PIN`, `SNAPSHOT_ASSET_DIR` and
   `SNAPSHOT_FIXTURE_ROOT` was written before EP-M4 shipped that name for the
@@ -206,6 +230,32 @@ only entries in scope.
   Rationale: EP-M5 requires trusted-main hosted evidence. The builder path is
   unchanged by this milestone, so the dispatched run is representative.
   Date/Author: 2026-11-22, agent.
+- D6. **Proposed deviation, awaiting approval. Status `BLOCKED`.** The design's
+  D4 and manifest schema v1 bind a toolchain to `rustup_components_sha256`, a
+  SHA-256 of the exact bytes of `<toolchain>/lib/rustlib/components`. Rustup
+  writes that file in component-completion order, which is not deterministic:
+  three default-profile installs of the same channel produced three different
+  digests with the same component set. The consumer therefore cannot ever
+  accept a hosted manifest, and EP-M5's hosted evidence is unreachable while
+  the raw-byte contract stands. Affected identifiers: D4 (toolchain
+  provenance), V4/V5 (identity and integrity evidence), the version 1 manifest
+  schema, and `toolchain_binding._RUSTUP_COMPONENTS`. Options:
+  - D6a (recommended) Keep the field name and schema, but define and compare a
+    digest of the **sorted component names** rather than the file's raw bytes.
+    It still detects an added, removed or renamed component, and it is the only
+    deterministic invariant this file supports. It requires a documented
+    semantic change to D4 and to the field's meaning, plus permutation and
+    property tests.
+  - D6b Remove `rustup_components_sha256` from the schema and the verification.
+    Simple, but loses the component-set evidence entirely and is a larger
+    schema change.
+  - D6c Keep the raw-byte contract and stop EP-M5. Honest but makes the
+    distribution permanently uninstallable.
+  Effects on remaining work: whichever option is approved, the corrected
+  builder must be merged and re-dispatched from trusted `main` before the
+  consumer smoke can pass and roadmap 1.1.5 can close. The two defects already
+  repaired (self-update and the measured profile) stay regardless. Date/Author:
+  2026-11-22, agent.
 
 ## Outcomes & retrospective
 

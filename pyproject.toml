@@ -99,6 +99,9 @@ extend-ignore = [
 "**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 # Shared test doubles: test code that pytest does not collect by name.
 "rust_prover_tools/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments"]
+# The smoke's shared runner deliberately starts the public console script, and
+# its manifest check is a test-support invariant rather than a CLI decision.
+"tests/kani_snapshot_smoke_support.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments"]
 "tests/steps/*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
 
 [tool.ruff.lint.flake8-import-conventions]

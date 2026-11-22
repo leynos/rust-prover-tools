@@ -19,9 +19,11 @@ from tests.kani_snapshot_bundles import TOOLCHAIN, VERSION
 from tests.kani_snapshot_fixtures import make_pin
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     from pathlib import Path
 
     import pytest
+    from cuprum.context import UnsetType
 
 
 def _runtime(tmp_path: Path) -> SnapshotRuntime:
@@ -31,6 +33,14 @@ def _runtime(tmp_path: Path) -> SnapshotRuntime:
         toolchain=TOOLCHAIN,
         backend_version=VERSION,
     )
+
+
+def _homes(
+    spec: commands.CommandSpec,
+) -> cabc.Mapping[str, str | UnsetType]:
+    """Return one command's environment mapping, refusing an absent one."""
+    assert spec.env is not None, "the setup command must state its environment"
+    return spec.env
 
 
 def _record_commands(
@@ -68,9 +78,10 @@ def test_setup_disables_rustup_self_update_before_the_launcher(
             str(bundle),
         ),
     ]
-    assert seen[0].env["RUSTUP_HOME"] == str(runtime.layout.rustup_home)
-    assert seen[0].env["CARGO_HOME"] == str(runtime.layout.cargo_home)
-    assert seen[1].env["RUSTUP_HOME"] == str(runtime.layout.rustup_home)
+    homes = _homes(seen[0])
+    assert homes["RUSTUP_HOME"] == str(runtime.layout.rustup_home)
+    assert homes["CARGO_HOME"] == str(runtime.layout.cargo_home)
+    assert _homes(seen[1])["RUSTUP_HOME"] == str(runtime.layout.rustup_home)
 
 
 def test_setup_removes_an_inherited_tar_options(
@@ -82,4 +93,4 @@ def test_setup_removes_an_inherited_tar_options(
 
     install_defaults.run_local_bundle_setup(_runtime(tmp_path), tmp_path / "b.tar.gz")
 
-    assert "TAR_OPTIONS" in seen[-1].env
+    assert "TAR_OPTIONS" in _homes(seen[-1])
