@@ -5,8 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS (implementation complete; draft PR #266 open, review in
-progress)
+Status: IN PROGRESS (implementation complete; draft PR #266 open; nine local
+review passes addressed, residual skips documented)
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -279,6 +279,17 @@ Plain-language terms used in this plan:
   pool, with a 900-second per-harness budget. The fixture verifies a passing
   library proof, a passing `#[path]` proof, and a failing proof through the
   real Kani 0.67.0 driver.
+- [x] (2026-11-22 00:39Z) Ninth CodeRabbit pass: 24 findings. Fixed escaped
+  single quotes, broad Unicode harness headers, LF-only archive splitting,
+  formatter-only quote removal, bounded issue text, empty-source refusal,
+  cross-namespace selection ambiguity, non-finite JSON values, signal status
+  when evidence publication fails, and the registry example. Residual skips:
+  the absent documentation loader, XID-table differences beyond Python's
+  identifier rules, shared-record byte sub-budgets, cgroup mount resolution,
+  observed-identity accounting, requested-stop evidence, the injected snapshot
+  probe environment, blocking diagnostic writes on the event loop, and
+  test-style-only refactors. The full deterministic gate passes with 1,929
+  tests and 6 skips; the live fixture also passes.
 
 ## Surprises & discoveries
 
