@@ -291,6 +291,38 @@ def test_the_build_lets_the_producer_enumerate_the_shared_libraries(
     )
 
 
+def test_the_manifest_describes_the_toolchain_a_consumer_installs(
+    workflow: dict[str, object],
+) -> None:
+    """The recorded profile must be the launcher's, not the builder's.
+
+    Upstream setup runs `rustup toolchain install <identifier>` with rustup's
+    default profile. The consumer therefore has no `rustc-dev` libraries and a
+    different component record from the builder's minimal-plus-`rustc-dev`
+    toolchain. Measuring the builder's toolchain records files a consumer can
+    never have, and the consumer's two-way coverage check refuses them.
+    """
+    scripts = named_scripts(job(workflow, "build"))
+    install = scripts["Install the consumer toolchain profile"]
+    evidence = scripts["Measure the build evidence"]
+
+    assert "rustup toolchain install" in install, (
+        "the build must install the toolchain the launcher installs"
+    )
+    assert "--profile" not in install, (
+        "the consumer profile must be rustup's default, not the builder's"
+    )
+    assert "--component" not in install, (
+        "the consumer profile must be rustup's default, not the builder's"
+    )
+    assert '--sysroot "$CONSUMER_SYSROOT"' in evidence, (
+        "the evidence must measure the consumer-profile sysroot"
+    )
+    assert "rustup run" not in evidence, (
+        "the evidence must not measure the builder's toolchain"
+    )
+
+
 def test_the_assembly_input_is_read_from_the_build_artefact(
     workflow: dict[str, object],
 ) -> None:
