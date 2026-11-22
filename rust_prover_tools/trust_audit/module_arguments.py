@@ -18,7 +18,7 @@ from rust_prover_tools.trust_audit.inline_modules import (
     DECLARATION_TOKENS,
     names_module,
 )
-from rust_prover_tools.trust_audit.structure import matching
+from rust_prover_tools.trust_audit.structure import attribute_spans, matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 if typ.TYPE_CHECKING:
@@ -26,7 +26,7 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.trust_audit.macro_rules import MacroRules
 
-__all__ = ("refuse_forwarded_modules",)
+__all__ = ("refuse_forwarded_modules", "refuse_imported_macros")
 
 # The delimiter pairs a macro invocation's body may open.
 _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
@@ -154,4 +154,37 @@ def _declares_module(
             tokens[expansion + 1 : expansion + DECLARATION_TOKENS],
         )
         for expansion in scope.rules.expansions_by_name.get(name, ())
+    )
+
+
+def refuse_imported_macros(
+    tokens: tuple[Token, ...],
+    rules: MacroRules,
+) -> None:
+    """Refuse a file whose imported macros could hide module declarations.
+
+    ``#[macro_use] mod macros;`` imports every macro that module exports, and
+    an invocation of one can emit ``mod hidden;`` in a file the per-file scan
+    never reads.  When such an import is present and the file invokes a macro
+    it does not define, the audit cannot tell which modules the crate compiles,
+    so it refuses rather than report a clean scan of the wrong tree.
+    """
+    if not _imports_macro_use(tokens):
+        return
+    for name in rules.invocations:
+        if name == "macro_rules" or name in rules.heads:
+            continue
+        msg = (
+            f"the file imports macros with #[macro_use] and invokes {name!r}, "
+            "which it does not define; the invocation may declare a module "
+            "the audit cannot locate"
+        )
+        raise TrustAuditError(msg)
+
+
+def _imports_macro_use(tokens: tuple[Token, ...]) -> bool:
+    """Report whether an attribute in the file carries ``macro_use``."""
+    return any(
+        any(tokens[index].text == "macro_use" for index in range(opener, closer + 1))
+        for opener, closer in attribute_spans(tokens)
     )

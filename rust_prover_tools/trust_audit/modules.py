@@ -26,7 +26,10 @@ from rust_prover_tools.trust_audit.inline_modules import (
 )
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
-from rust_prover_tools.trust_audit.module_arguments import refuse_forwarded_modules
+from rust_prover_tools.trust_audit.module_arguments import (
+    refuse_forwarded_modules,
+    refuse_imported_macros,
+)
 from rust_prover_tools.trust_audit.structure import (
     attribute_spans,
     stringify_arguments,
@@ -88,6 +91,7 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     references = []
     spans = dict(attribute_spans(tokens))
     rules = macro_rules(tokens)
+    refuse_imported_macros(tokens, rules)
     stringified = stringify_arguments(tokens, defined=rules.heads)
     _refuse_metavariable_modules(tokens, rules.expansions, stringified)
     aliases = _macro_aliases(tokens, rules.heads)

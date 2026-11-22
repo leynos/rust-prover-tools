@@ -36,6 +36,9 @@ claim or control role, a cover, an expected failure or `should_panic`.
 - Kani: `0.67.0`
 - Rust toolchain: `nightly-2025-11-21-x86_64-unknown-linux-gnu`
 - Route: direct `kani-driver` invocation, not `cargo kani`
+- Qualification: this corpus qualifies the direct-driver output. The
+  `cargo kani` wrapper's banner and build chatter are accepted by the grammar,
+  but that route is not independently captured here.
 - Working directory: `tools/verifier-fixtures/kani-corpus` in the origin
   repository
 - Source crate: `kani-corpus` at origin commit

@@ -24,6 +24,7 @@ from cyclopts import Parameter
 
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.trust_audit import AuditedFile, TrustAuditError, audit_tree
+from rust_prover_tools.trust_audit.module_paths import RUST_SUFFIX
 from rust_prover_tools.trust_audit.vocabulary import (
     Vocabulary,
     select_vocabularies,
@@ -174,7 +175,7 @@ def audit_trust(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
         return AUDIT_FAILED
     root = (repo_root or Path.cwd()).resolve()
     try:
-        drivers = tuple(_relative_to(root, path) for path in paths)
+        drivers = _expand_drivers(root, paths)
         files = audit_tree(
             root,
             drivers,
@@ -190,6 +191,67 @@ def audit_trust(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
         lines = _text_lines(files, vocabularies)
     print_lines(lines)
     return 0
+
+
+#: The module roots a crate directory contributes.
+_CRATE_ROOTS: typ.Final[tuple[str, ...]] = ("lib.rs", "main.rs", "mod.rs")
+#: Directories whose Rust files are crate roots in their own right.
+_COMPILED_DIRECTORIES: typ.Final[tuple[str, ...]] = ("tests", "benches", "examples")
+
+
+def _expand_drivers(root: Path, paths: cabc.Iterable[Path]) -> tuple[str, ...]:
+    """Expand files and crate directories into repository-relative drivers.
+
+    A file is its own driver.  A directory contributes the entry points of
+    every crate beneath it: the module roots at the crate directory and under
+    ``src/``, and every Rust file under ``tests/``, ``benches/`` and
+    ``examples/``.  No entry point is a refusal, because an audit that read
+    nothing must not look like a clean one.
+    """
+    drivers: dict[str, None] = {}
+    for path in paths:
+        for driver in _drivers_for(root, path):
+            drivers[driver] = None
+    return tuple(drivers)
+
+
+def _drivers_for(root: Path, path: Path) -> tuple[str, ...]:
+    """Return the drivers one argument names, refusing a missing path."""
+    candidate = path if path.is_absolute() else root / path
+    if not candidate.is_dir():
+        # A file, a missing path, or one outside the root keeps the ordinary
+        # single-driver path, so its existing diagnostics are unchanged.
+        return (_relative_to(root, path),)
+    resolved = candidate.resolve()
+    drivers = {
+        entry.resolve().relative_to(root).as_posix()
+        for crate_root in _crate_roots(resolved)
+        for entry in _entry_points(crate_root)
+    }
+    if not drivers:
+        msg = f"{path} contains no Rust entry point to audit"
+        raise TrustAuditError(msg)
+    return tuple(sorted(drivers))
+
+
+def _crate_roots(directory: Path) -> tuple[Path, ...]:
+    """Return every crate directory under ``directory``, including itself."""
+    manifests = {
+        manifest.parent.resolve() for manifest in directory.rglob("Cargo.toml")
+    }
+    return tuple(sorted(manifests | {directory}))
+
+
+def _entry_points(crate_root: Path) -> cabc.Iterator[Path]:
+    """Yield the files that start a crate's module tree."""
+    for name in _CRATE_ROOTS:
+        for candidate in (crate_root / name, crate_root / "src" / name):
+            if candidate.is_file():
+                yield candidate
+    for directory in _COMPILED_DIRECTORIES:
+        nested = crate_root / directory
+        if nested.is_dir():
+            yield from sorted(nested.rglob(f"*{RUST_SUFFIX}"))
 
 
 def _relative_to(root: Path, path: Path) -> str:

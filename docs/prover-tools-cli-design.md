@@ -749,12 +749,15 @@ vocabulary can be passed in the same shape without changing the matcher.
 root that bounds them, and reports `path:line:column: word` for every trusted
 item it found:
 
-- `PATHS` are crate roots, usually each crate's `lib.rs` or `main.rs`. A
-  relative path is read as repository-relative so the answer does not depend on
-  the working directory; an absolute path must already sit beneath the root. An
-  outside spelling that reaches an in-root file only through a symbolic link is
-  refused, because its children would resolve from the outside directory while
-  the compiler uses the spelling's.
+- `PATHS` are files or crate directories. A file is a crate root, usually a
+  `lib.rs` or `main.rs`; a directory expands to the entry points of every crate
+  beneath it, including the compiled `tests/`, `benches/` and `examples/`
+  files. A directory with no entry point is refused. A relative path is read as
+  repository-relative so the answer does not depend on the working directory;
+  an absolute path must already sit beneath the root. An outside spelling that
+  reaches an in-root file only through a symbolic link is refused, because its
+  children would resolve from the outside directory while the compiler uses the
+  spelling's.
 - `--repo-root` (alias `--root`) anchors every reported location and bounds the
   walk. Defaults to the working directory.
 - `--prover PROVER` applies one prover's vocabulary, named `kani` or `verus`.

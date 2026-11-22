@@ -70,6 +70,19 @@ def test_a_module_inside_stringify_is_not_a_declaration() -> None:
     assert references(source) == [("real", None, ())]
 
 
+def test_a_macro_use_import_with_an_unknown_invocation_is_refused() -> None:
+    """Refuse a file whose imported macro may declare a module elsewhere."""
+    source = "#[macro_use]\nmod macros;\nfn f() { emit!(); }"
+
+    with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
+        references(source)
+
+
+def test_a_macro_use_import_without_an_unknown_invocation_is_read() -> None:
+    """A ``macro_use`` import on its own is an ordinary module reference."""
+    assert references("#[macro_use]\nmod macros;") == [("macros", None, ())]
+
+
 def test_a_macro_pattern_is_not_a_module_declaration() -> None:
     """Ignore ``mod sample;`` written as the input a macro matches.
 

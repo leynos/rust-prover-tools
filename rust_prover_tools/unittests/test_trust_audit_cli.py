@@ -347,3 +347,66 @@ def test_a_non_printable_path_stays_on_one_report_line(
     assert status == 0, captured.err
     locations = [line for line in captured.out.splitlines() if ": assume" in line]
     assert locations == ["src/first\\nsecond.rs:1:7: assume"], captured.out
+
+
+def test_a_crate_directory_expands_to_its_entry_points(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A crate directory contributes ``src/lib.rs`` as a driver."""
+    repo = tmp_path / "repo"
+    write(
+        repo,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n',
+            "src/lib.rs": "kani::assume(true);",
+        },
+    )
+
+    status = audit_trust([repo], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 0, captured.err
+    assert "src/lib.rs:1:7: assume\n" in captured.out
+    assert "audited 1 file," in captured.out
+
+
+def test_a_workspace_directory_expands_every_crate(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A workspace directory contributes each member crate's entry points."""
+    repo = tmp_path / "repo"
+    write(
+        repo,
+        {
+            "Cargo.toml": '[workspace]\nmembers = ["a", "b"]\n',
+            "a/Cargo.toml": '[package]\nname = "a"\nversion = "0.1.0"\n',
+            "a/src/lib.rs": "kani::assume(true);",
+            "b/Cargo.toml": '[package]\nname = "b"\nversion = "0.1.0"\n',
+            "b/src/lib.rs": "verus_builtin::admit();",
+        },
+    )
+
+    status = audit_trust([repo], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 0, captured.err
+    assert "a/src/lib.rs:1:7: assume\n" in captured.out
+    assert "b/src/lib.rs:1:16: admit\n" in captured.out
+    assert "audited 2 files," in captured.out
+
+
+def test_a_directory_without_rust_entry_points_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Refuse a directory that contributes no driver, rather than audit nothing."""
+    repo = tmp_path / "repo"
+    (repo / "empty").mkdir(parents=True)
+
+    status = audit_trust([repo / "empty"], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "contains no Rust entry point to audit" in captured.err
