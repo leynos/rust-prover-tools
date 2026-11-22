@@ -57,9 +57,24 @@ def parse_kani_log(text: str) -> KaniLog:
     banner``.
 
     """
-    reader = Reader(text.splitlines())
+    reader = Reader(_physical_lines(text))
     version = _require_supported_banner(reader)
     return _reconcile(version, _scan(reader))
+
+
+def _physical_lines(text: str) -> list[str]:
+    """Split a transcript only at physical line endings.
+
+    ``str.splitlines`` also breaks on U+2028, U+0085 and the other Unicode line
+    separators.  Kani prints such a character inside a quoted description as
+    content, and splitting there would rejoin it as a newline the author never
+    wrote, so a declared cover could stop matching its report.  A trailing
+    newline yields no final empty line, as the reader expects.
+    """
+    lines = text.split("\n")
+    if lines and not lines[-1]:
+        lines.pop()
+    return [line.removesuffix("\r") for line in lines]
 
 
 def _require_supported_banner(reader: Reader) -> str:

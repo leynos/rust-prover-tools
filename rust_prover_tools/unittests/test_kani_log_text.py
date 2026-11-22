@@ -338,3 +338,15 @@ def test_a_non_cover_check_cannot_carry_a_cover_status() -> None:
         "Check 3: harnesses::verified.assertion.1\n\t - Status: SATISFIED",
     )
     assert "is not a cover but carries the cover status" in refused(text)
+
+
+def test_a_unicode_line_separator_stays_in_the_description() -> None:
+    """Do not treat U+2028 as a physical line ending inside a description."""
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: "first\u2028second"',
+    )
+
+    block = parse_text(text).blocks[0]
+
+    assert block.covers[0].description == "first\u2028second"

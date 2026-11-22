@@ -50,6 +50,11 @@ def is_import_destination(tokens: tuple[Token, ...], index: int) -> bool:
     return _inside_import(tokens, index)
 
 
+def _opens_repetition(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether the ``(`` at ``index`` opens a ``$( … )`` group."""
+    return index >= 1 and tokens[index].text == "(" and tokens[index - 1].text == "$"
+
+
 def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether ``index`` sits inside a ``use`` statement's path."""
     cursor = index - 1
@@ -65,6 +70,11 @@ def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
             continue
         if text == "{" and opens_use_group(tokens, cursor):
             cursor -= 1
+            continue
+        if _opens_repetition(tokens, cursor):
+            # A use repetition wraps its members in ``$( … )``; the group is
+            # part of the enclosing import, not a closing delimiter.
+            cursor -= 2
             continue
         if text in {";", "(", ")", "[", "]", "{"}:
             return False

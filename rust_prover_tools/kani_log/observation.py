@@ -167,11 +167,7 @@ class Observed:
 
 def lacks_panic_evidence(seen: Observed, manifest: Manifest) -> bool:
     """Report whether a claim declared to panic lacks Kani's panic note."""
-    entry = next(
-        (claim for claim in manifest.claims if claim.name == seen.name),
-        None,
-    )
-    return entry is not None and entry.should_panic and not seen.panics_as_expected
+    return manifest.declares_panic(seen.name) and not seen.panics_as_expected
 
 
 def is_indeterminate(seen: Observed, manifest: Manifest) -> bool:
@@ -208,7 +204,4 @@ def panics_as_expected(seen: Observed, manifest: Manifest) -> bool:
     driver calls successful.  It therefore says nothing about a failure of any
     other kind, which is why the caller still reads the failed checks.
     """
-    if not seen.panics_as_expected:
-        return False
-    entry = next(item for item in manifest.claims if item.name == seen.name)
-    return entry.should_panic
+    return seen.panics_as_expected and manifest.declares_panic(seen.name)

@@ -180,6 +180,14 @@ def _macro_aliases(
     aliases: dict[str, str] = {}
     while True:
         fresh = _fresh_macro_aliases(renames, heads, aliases)
+        for alias, target in fresh.items():
+            if alias in heads and alias != target:
+                msg = (
+                    f"the local macro name {alias!r} is both a definition and "
+                    f"an alias for {target!r}, so the audit cannot tell which "
+                    "one a textual invocation expands"
+                )
+                raise TrustAuditError(msg)
         if not fresh:
             return aliases
         aliases.update(fresh)

@@ -69,11 +69,10 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
                     f"{resolved_root}, so its crate kind is unknown"
                 )
                 raise TrustAuditError(msg)
-            return _declares_procedural_macro(resolved) or _manifest_covers(
-                resolved_root,
-                resolved,
-                leaf,
-            )
+            _refuse_inherited_trust_rename(resolved_root, resolved)
+            if _declares_procedural_macro(resolved):
+                return True
+            return _manifest_naming_leaf(resolved_root, leaf)
         if directory == resolved_root or resolved_root not in directory.parents:
             return _manifest_naming_leaf(resolved_root, leaf)
         directory = directory.parent
@@ -90,6 +89,9 @@ def _manifest_naming_leaf(root: pathlib.Path, leaf: pathlib.Path) -> bool:
     for manifest in sorted(root.rglob(CARGO_MANIFEST)):
         resolved = manifest.resolve()
         if root not in resolved.parents:
+            continue
+        _refuse_inherited_trust_rename(root, resolved)
+        if not _declares_procedural_macro(resolved):
             continue
         if _manifest_covers(root, resolved, leaf):
             return True
@@ -111,13 +113,18 @@ def _manifest_covers(
     return target == leaf
 
 
-def _library_path(manifest: pathlib.Path) -> str | None:
-    """Return a manifest's ``[lib] path`` value, if it declares one."""
+def _read_manifest(manifest: pathlib.Path) -> dict[str, object]:
+    """Return one manifest's parsed document, refusing an unreadable file."""
     try:
-        document = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        return tomllib.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         msg = f"{manifest} cannot be read, so the crate kind is unknown: {error}"
         raise TrustAuditError(msg) from error
+
+
+def _library_path(manifest: pathlib.Path) -> str | None:
+    """Return a manifest's ``[lib] path`` value, if it declares one."""
+    document = _read_manifest(manifest)
     _refuse_renamed_trust_package(manifest, document)
     library = document.get("lib")
     if not isinstance(library, dict):
@@ -144,11 +151,7 @@ def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
     ``proc-macro`` value or a non-string crate type is refused rather than
     guessed at.
     """
-    try:
-        document = tomllib.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        msg = f"{manifest} cannot be read, so the crate kind is unknown: {error}"
-        raise TrustAuditError(msg) from error
+    document = _read_manifest(manifest)
     _refuse_renamed_trust_package(manifest, document)
     library = document.get("lib")
     if not isinstance(library, dict):
@@ -178,15 +181,7 @@ def _refuse_renamed_trust_package(
     call through the new name would pass unreported, so the audit refuses the
     manifest rather than a file it cannot read.
     """
-    sections: list[object] = [
-        document.get("dependencies"),
-        document.get("dev-dependencies"),
-        document.get("build-dependencies"),
-    ]
-    workspace = document.get("workspace")
-    if isinstance(workspace, dict):
-        sections.append(workspace.get("dependencies"))
-    for table in sections:
+    for table in _dependency_tables(document):
         if not isinstance(table, dict):
             continue
         for name, spec in table.items():
@@ -199,6 +194,55 @@ def _refuse_renamed_trust_package(
                     f"{name!r}, so the audit cannot tell which calls reach it"
                 )
                 raise TrustAuditError(msg)
+
+
+def _dependency_tables(document: dict[str, object]) -> list[object]:
+    """Return every table a manifest may declare a dependency in."""
+    tables: list[object] = [
+        document.get("dependencies"),
+        document.get("dev-dependencies"),
+        document.get("build-dependencies"),
+    ]
+    workspace = document.get("workspace")
+    if isinstance(workspace, dict):
+        tables.append(workspace.get("dependencies"))
+    target = document.get("target")
+    if isinstance(target, dict):
+        for platform in target.values():
+            if not isinstance(platform, dict):
+                continue
+            tables.extend(
+                (
+                    platform.get("dependencies"),
+                    platform.get("dev-dependencies"),
+                    platform.get("build-dependencies"),
+                ),
+            )
+    return tables
+
+
+def _refuse_inherited_trust_rename(
+    root: pathlib.Path,
+    manifest: pathlib.Path,
+) -> None:
+    """Refuse a workspace that renames a trust crate for its members.
+
+    A member inherits ``[workspace.dependencies]`` from a manifest above it,
+    and its own file may say only ``proof.workspace = true``.  The rename is
+    visible only in the workspace root, so that table is checked too.
+    """
+    directory = manifest.parent
+    while directory == root or root in directory.parents:
+        candidate = directory / CARGO_MANIFEST
+        if candidate.is_file():
+            document = _read_manifest(candidate.resolve())
+            workspace = document.get("workspace")
+            if isinstance(workspace, dict):
+                _refuse_renamed_trust_package(candidate, document)
+                return
+        if directory == root:
+            return
+        directory = directory.parent
 
 
 def _declares_crate_type(manifest: pathlib.Path, crate_types: object) -> bool:

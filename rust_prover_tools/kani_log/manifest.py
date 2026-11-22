@@ -116,12 +116,29 @@ class Manifest:
     """Declared roles, covers and expected control failures for one run."""
 
     harnesses: tuple[Harness, ...]
+    #: Claim names that declare an expected panic, built once so a per-block
+    #: check does not rescan the manifest for every observation.
+    _panic_names: frozenset[str] = dc.field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=frozenset(),
+    )
 
     def __post_init__(self) -> None:
         """Refuse an ambiguous manifest."""
         names = self.names()
         if len(set(names)) != len(names):
             _fail("declares a harness twice")
+        object.__setattr__(
+            self,
+            "_panic_names",
+            frozenset(
+                item.name
+                for item in self.harnesses
+                if item.role == CLAIM and item.should_panic
+            ),
+        )
 
     @property
     def claims(self) -> tuple[Harness, ...]:
@@ -132,6 +149,10 @@ class Manifest:
     def controls(self) -> tuple[Harness, ...]:
         """The negative controls, which must fail for the declared reason."""
         return tuple(item for item in self.harnesses if item.role == CONTROL)
+
+    def declares_panic(self, name: str) -> bool:
+        """Report whether a claim of this name declares an expected panic."""
+        return name in self._panic_names
 
     def names(self) -> tuple[str, ...]:
         """Return every declared harness name in manifest order."""

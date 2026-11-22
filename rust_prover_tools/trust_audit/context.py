@@ -119,7 +119,9 @@ class Context:
         # the glob binds, so a vocabulary word qualified by such a module is
         # reported; the same fail-closed direction rule 3 takes.
         self.root_glob = imports_root_glob(tokens, self.roots | all_root_names)
-        self.verus_regions = verus_regions(tokens)
+        self.verus_regions = _merged_regions(verus_regions(tokens))
+        self._region_starts = [start for start, _ in self.verus_regions]
+        self._region_ends = [end for _, end in self.verus_regions]
         self.qualified = qualified_pattern(self.roots)
         self.items: list[TrustItem] = []
         self._reported: set[TrustItem] = set()
@@ -254,7 +256,8 @@ class Context:
 
     def _is_verus_context(self, index: int) -> bool:
         """Report whether this index sits in a Verus body or attribute."""
-        return any(start <= index <= end for start, end in self.verus_regions)
+        position = bisect.bisect_right(self._region_starts, index) - 1
+        return position >= 0 and index <= self._region_ends[position]
 
     def _report(self, item: str, token: Token) -> None:
         """Record one item, skipping a position an earlier rule claimed.
@@ -308,6 +311,23 @@ class Context:
         newlines = _newline_positions(token.text)
         for start, item in sorted(found):
             self._record(_literal_item(item, token, positions[start], newlines))
+
+
+def _merged_regions(
+    regions: cabc.Iterable[tuple[int, int]],
+) -> tuple[tuple[int, int], ...]:
+    """Return the regions as sorted, non-overlapping spans.
+
+    Merging once per file lets a membership test binary-search the starts
+    instead of comparing against every earlier region for every token.
+    """
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(regions):
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return tuple(merged)
 
 
 def _newline_positions(text: str) -> list[int]:

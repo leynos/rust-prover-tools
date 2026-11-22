@@ -214,6 +214,46 @@ def test_a_metavariable_invocation_in_a_nested_matcher_is_accepted() -> None:
     assert items(source) == []
 
 
+def test_a_qualified_stringify_keeps_the_opaque_refusal() -> None:
+    """A qualified ``stringify`` may name a user macro, so no exemption applies."""
+    source = 'fn f() { other::stringify!(include!("hidden.rs")); }'
+
+    with pytest.raises(TrustAuditError, match="include!"):
+        scan(source)
+
+
+def test_an_imported_stringify_keeps_the_opaque_refusal() -> None:
+    """An imported ``stringify`` may name a user macro, so no exemption applies."""
+    source = 'use other::stringify;\nfn f() { stringify!(include!("hidden.rs")); }'
+
+    with pytest.raises(TrustAuditError, match="include!"):
+        scan(source)
+
+
+@pytest.mark.parametrize("path", ["vstd::prelude", "kani::nested"])
+def test_a_multisegment_repetition_trust_path_is_refused(path: str) -> None:
+    """Walk back to the first segment before deciding a repetition is trusted."""
+    source = f"macro_rules! call {{ ($($f:ident)+) => {{ {path}::$($f)+(true) }}; }}"
+
+    with pytest.raises(TrustAuditError, match="repetition-wrapped"):
+        items(source)
+
+
+def test_a_multisegment_nontrust_repetition_is_accepted() -> None:
+    """Leave a repetition rooted at a non-trust crate alone."""
+    source = "macro_rules! call { ($($f:ident)+) => { other::nested::$($f)+(true) }; }"
+
+    assert items(source) == []
+
+
+def test_a_multitoken_repetition_separator_is_refused() -> None:
+    """Skip a multi-token separator such as ``>>`` before the repetition operator."""
+    source = "macro_rules! call { ($($p:ident)>>+) => { $($p)>>+::assume(true) }; }"
+
+    with pytest.raises(TrustAuditError, match="repetition-wrapped"):
+        items(source)
+
+
 def test_a_metavariable_import_rename_is_refused() -> None:
     """Refuse ``use std::$name as load;``, whose bound name the arguments decide."""
     source = "\n".join(
@@ -226,6 +266,21 @@ def test_a_metavariable_import_rename_is_refused() -> None:
     )
 
     with pytest.raises(TrustAuditError, match="renames an import"):
+        items(source)
+
+
+def test_a_metavariable_import_alias_inside_a_repetition_is_refused() -> None:
+    """Refuse ``use std::{$(include as $name),*};``, a repeated rename."""
+    source = "\n".join(
+        (
+            "macro_rules! bind {",
+            "    ($name:ident) => { use std::{$(include as $name),*}; };",
+            "}",
+            "bind!(load);",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="local name"):
         items(source)
 
 

@@ -13,11 +13,17 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.trust_audit.structure import matching
+from rust_prover_tools.trust_audit.syntax import Kind
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.trust_audit.syntax import Token
 
 __all__ = ("MACRO_DELIMITERS", "repetition_refusal")
+
+# A path segment and its ``::``, as in ``vstd::prelude``.
+_PATH_SEGMENT = 2
+# A repetition separator may itself be several tokens, as ``>>`` is.
+_MAX_SEPARATOR_TOKENS = 3
 
 # The delimiters a macro invocation may open.
 MACRO_DELIMITERS = frozenset({"(", "[", "{"})
@@ -86,7 +92,14 @@ def _follows_trust_qualifier(
     """Report whether ``before`` is the ``::`` following a trust qualifier."""
     if before < 1 or tokens[before].text != "::":
         return False
-    return tokens[before - 1].text in qualifiers
+    index = before - 1
+    while (
+        index >= _PATH_SEGMENT
+        and tokens[index - 1].text == "::"
+        and tokens[index - 2].kind is Kind.IDENT
+    ):
+        index -= _PATH_SEGMENT
+    return tokens[index].text in qualifiers
 
 
 def _repetition_extents(
@@ -130,8 +143,8 @@ def _after_repetition(tokens: tuple[Token, ...], close: int) -> int | None:
     accepted as that separator.
     """
     following = close + 1
-    if following < len(tokens) and tokens[following].text in {"*", "+", "?"}:
-        return following + 1
-    if following + 1 < len(tokens) and tokens[following + 1].text in {"*", "+", "?"}:
-        return following + 2
+    for offset in range(0, _MAX_SEPARATOR_TOKENS + 1):
+        operator = following + offset
+        if operator < len(tokens) and tokens[operator].text in {"*", "+", "?"}:
+            return operator + 1
     return None

@@ -199,6 +199,21 @@ def test_a_stringified_metavariable_module_is_not_refused() -> None:
     assert references(source) == []
 
 
+def test_a_macro_name_that_is_also_an_alias_is_refused() -> None:
+    """Refuse a name that is both a definition and another macro's alias."""
+    source = "\n".join(
+        (
+            "macro_rules! make { () => { mod child; }; }",
+            "macro_rules! other { () => {}; }",
+            "use crate::make as other;",
+            "other!();",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="both a definition and an alias"):
+        references(source)
+
+
 def test_a_forwarded_module_inside_an_expansion_is_refused() -> None:
     """Refuse a forwarded declaration written inside another macro's expansion."""
     source = "\n".join(

@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import typing as typ
 from pathlib import Path
+
+import pytest
 
 from rust_prover_tools.trust_audit_cli import audit_trust
 from rust_prover_tools.unittests import conftest
 from rust_prover_tools.unittests.trust_audit_tree_support import symlink, write
-
-if typ.TYPE_CHECKING:
-    import pytest
 
 
 def test_a_text_report_names_each_item_and_counts_the_files(
@@ -326,6 +326,7 @@ def test_an_absolute_driver_through_a_symlink_names_the_compiled_file(
     assert "src/lib.rs:1:7: assume\n" in captured.out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows forbids LF in filenames")
 def test_a_non_printable_path_stays_on_one_report_line(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

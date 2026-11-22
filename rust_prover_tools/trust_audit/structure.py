@@ -316,6 +316,35 @@ def path_value(
 _MACRO_DELIMITERS = {"(": ")", "[": "]", "{": "}"}
 
 
+def _is_builtin_stringify(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether the ``stringify`` at ``index`` names the builtin macro.
+
+    A qualified path other than ``std::stringify`` or ``core::stringify`` can
+    name a user macro that emits its argument, so it earns no exemption.
+    """
+    if index < 1 or tokens[index - 1].text != "::":
+        return True
+    qualifier = index - 2
+    if qualifier < 0:
+        return False
+    return tokens[qualifier].text in {"std", "core"}
+
+
+def _imports_stringify(tokens: tuple[Token, ...]) -> bool:
+    """Report whether a ``use`` statement binds the name ``stringify``."""
+    for index, token in enumerate(tokens):
+        if token.kind is not Kind.IDENT or token.raw:
+            continue
+        if token.text != "use":
+            continue
+        for cursor in range(index + 1, len(tokens)):
+            if tokens[cursor].text == ";":
+                break
+            if tokens[cursor].text == "stringify":
+                return True
+    return False
+
+
 def stringify_arguments(
     tokens: tuple[Token, ...],
     *,
@@ -329,11 +358,13 @@ def stringify_arguments(
     defines its own ``stringify`` macro compiles the argument, so there is no
     exemption for it.
     """
-    if "stringify" in defined:
+    if "stringify" in defined or _imports_stringify(tokens):
         return frozenset()
     skipped: set[int] = set()
     for index, token in enumerate(tokens[:-2]):
         if token.kind is not Kind.IDENT or token.text != "stringify":
+            continue
+        if not _is_builtin_stringify(tokens, index):
             continue
         if tokens[index + 1].text != "!":
             continue

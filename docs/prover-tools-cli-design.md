@@ -808,33 +808,35 @@ declaration passed into an argument-forwarding macro is refused, because the
 expansion may place it inside an inline module and the scan does not substitute
 the arguments. A macro name defined more than once is refused: Rust lets a
 later definition shadow an earlier one, and the scan cannot tell which one an
-invocation expands. An invocation in another file is outside the per-file scan,
-which the user guide states. A declaration whose name a metavariable supplies
-is refused, because only the invocation's arguments decide that name and the
-scan never evaluates them; an expansion that invokes a macro through a
-metavariable, reaches a trust item through one such as `$p::assume` or
-`kani::$f`, binds an import's item or local name (`use std::$name as load;`,
-the grouped `use std::{$name as load};`, or `use std::include as $name;`),
-glob-imports through one (`use $p::*;`), or opens a group through one
-(`use $p::{assume as a};`), is refused for the same reason: the arguments
-decide which name or names the expansion binds. A repetition-wrapped
-metavariable is inspected through every enclosing repetition, so
-`$($p)+::assume` and `kani::$($($f),+);+` are refused rather than read as
-ordinary repetitions. A target reached through a symbolic link is reported as
-the physical file, so a cyclic `#[path]` terminates, while the children of that
-module resolve from the pathname the compiler loaded rather than the link's
-target. A file reached with two owners, or two declaring directories, that name
-different directories is refused, because a file-scope `#[path]` would resolve
-its children beneath one or the other. When a plain crate and a proc-macro
-crate both reach one file, the stronger literal-reading policy wins and the
-file and its children are rescanned. A `#[path]` that a `cfg_attr` can select
-is refused: the configuration decides which file compiles, so no single answer
-would be true. A `#[path]` whose value is not a literal is refused for the same
-reason: the expansion's arguments decide the file, and reading it as no
-override would scan the default file in place of the one the crate compiles. A
-nested `cfg_attr` is read through its own payload, so a predicate that merely
-spells `path = …` is not mistaken for an applied path attribute; an unrelated
-attribute's arguments are skipped, so
+invocation expands. A name that is both a definition and a `use` alias is
+refused for the same reason, because Rust resolves a bare invocation by textual
+scope first and the per-file scan does not model that scope's end. An
+invocation in another file is outside the per-file scan, which the user guide
+states. A declaration whose name a metavariable supplies is refused, because
+only the invocation's arguments decide that name and the scan never evaluates
+them; an expansion that invokes a macro through a metavariable, reaches a trust
+item through one such as `$p::assume` or `kani::$f`, binds an import's item or
+local name (`use std::$name as load;`, the grouped `use std::{$name as load};`,
+or `use std::include as $name;`), glob-imports through one (`use $p::*;`), or
+opens a group through one (`use $p::{assume as a};`), is refused for the same
+reason: the arguments decide which name or names the expansion binds. A
+repetition-wrapped metavariable is inspected through every enclosing
+repetition, so `$($p)+::assume` and `kani::$($($f),+);+` are refused rather
+than read as ordinary repetitions. A target reached through a symbolic link is
+reported as the physical file, so a cyclic `#[path]` terminates, while the
+children of that module resolve from the pathname the compiler loaded rather
+than the link's target. A file reached with two owners, or two declaring
+directories, that name different directories is refused, because a file-scope
+`#[path]` would resolve its children beneath one or the other. When a plain
+crate and a proc-macro crate both reach one file, the stronger literal-reading
+policy wins and the file and its children are rescanned. A `#[path]` that a
+`cfg_attr` can select is refused: the configuration decides which file
+compiles, so no single answer would be true. A `#[path]` whose value is not a
+literal is refused for the same reason: the expansion's arguments decide the
+file, and reading it as no override would scan the default file in place of the
+one the crate compiles. A nested `cfg_attr` is read through its own payload, so
+a predicate that merely spells `path = …` is not mistaken for an applied path
+attribute; an unrelated attribute's arguments are skipped, so
 `doc = stringify!(verifier::external_body)` is documentation rather than an
 applied Verus attribute.
 

@@ -830,19 +830,23 @@ followed through the outer invocation's directory, and an invocation through a
 an alias may itself be renamed before it is invoked. A module declaration
 passed as an argument is refused when the expansion splices its arguments,
 because the macro may place it inside an inline module and the scan does not
-evaluate the substitution. A `mod` written inside `stringify!` is text, not a
-declaration, and names no file. A macro no invocation in the file names
-compiles nothing there, so its declaration demands no file. An invocation in
-another file is outside the audit's per-file scan, and the audit does not claim
-to follow it. A macro name defined more than once is refused: Rust permits a
-later definition to shadow an earlier one, and the scan cannot tell which one
-an invocation expands. A declaration whose name comes from a metavariable is
-refused, because only the invocation's arguments decide that name, and an
-expansion that invokes a macro through a metavariable is refused for the same
-reason, as is one that reaches a trust item through a metavariable path such as
-`$p::assume` or `kani::$f`, binds an import's item or local name
-(`use std::$name as load;` or `use std::include as $name;`), glob-imports
-through one (`use $p::*;`), or opens an import group through one
+evaluate the substitution. A `mod` written inside the standard `stringify!` is
+text, not a declaration, and names no file; a locally defined, imported or
+non-`std`/`core`-qualified macro of that name is not exempt, because it may
+compile its argument. A macro no invocation in the file names compiles nothing
+there, so its declaration demands no file. An invocation in another file is
+outside the audit's per-file scan, and the audit does not claim to follow it. A
+macro name defined more than once is refused: Rust permits a later definition
+to shadow an earlier one, and the scan cannot tell which one an invocation
+expands. The same refusal covers a name that is both a definition and a `use`
+alias, because Rust resolves a bare invocation by textual scope first and the
+per-file scan does not model where that scope ends. A declaration whose name
+comes from a metavariable is refused, because only the invocation's arguments
+decide that name, and an expansion that invokes a macro through a metavariable
+is refused for the same reason, as is one that reaches a trust item through a
+metavariable path such as `$p::assume` or `kani::$f`, binds an import's item or
+local name (`use std::$name as load;` or `use std::include as $name;`),
+glob-imports through one (`use $p::*;`), or opens an import group through one
 (`use $p::{assume as a};`). A repetition-wrapped form such as `$($p)+::assume`
 or `kani::$($f)*` is refused too, with every enclosing repetition walked before
 the decision. A target reached through a symbolic link is reported as the
@@ -863,10 +867,15 @@ refused. The proc-macro flag is read from the nearest `Cargo.toml` with
 `tomllib`: `[lib] proc-macro = true`, its deprecated `proc_macro` spelling, and
 `crate-type = ["proc-macro"]` all make the crate a proc-macro crate. A driver a
 manifest names through `[lib] path` takes that manifest's crate kind even when
-it sits outside the manifest's directory. A manifest that resolves outside the
+it sits outside the manifest's directory; when no manifest above the driver
+declares the proc-macro kind, every manifest in the repository is asked whether
+its `[lib] path` owns the file. A manifest that resolves outside the
 repository, cannot be parsed, or renames `kani`, `vstd` or `verus_builtin` as a
 dependency (`proof = { package = "kani", … }`) is refused rather than guessed
-at: the rename binds the crate without any import the scan can see.
+at: the rename binds the crate without any import the scan can see. That
+refusal covers the plain, development, build and platform-specific dependency
+tables, and a workspace table a member inherits through
+`proof.workspace = true`.
 
 A word counts as trust only in a context that gives it meaning:
 
