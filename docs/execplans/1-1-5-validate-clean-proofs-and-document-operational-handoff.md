@@ -10,7 +10,7 @@ proposed in the decision log and awaiting explicit approval)
 
 Branch: `1-1-5-validate-clean-proofs-and-document-operational-handoff`
 
-Draft pull request: pending.
+Draft pull request: <https://github.com/leynos/rust-prover-tools/pull/267>.
 
 Roadmap item: `1.1.5` in `docs/roadmap.md`. Parent milestone EP-M5 in
 `docs/execplans/kani-monthly-snapshot-distribution.md`.
