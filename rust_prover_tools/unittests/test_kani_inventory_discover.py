@@ -428,3 +428,33 @@ def test_a_lib_harness_needs_no_test_attribution() -> None:
     metadata = _metadata_with_test_targets("integration", "second")
 
     verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))
+
+
+def test_the_fixture_inventory_is_exactly_what_the_suite_expects() -> None:
+    """Pin every package-qualified identity and its target mapping.
+
+    The proof assessment noted that per-target assertions did not establish the
+    complete inventory. This records the whole set, including the binary
+    helper proof and the integration-test proof, so a discovery change that
+    silently drops or reattributes one is visible.
+    """
+    inventory = _inventory("alpha", "beta")
+
+    observed = {
+        (harness.identity, harness.target, harness.target_kind)
+        for harness in inventory.harnesses
+    }
+
+    assert observed == {
+        ("alpha::harnesses::bounded", "alpha", "lib"),
+        ("alpha::harnesses::conditional_extra", "alpha", "lib"),
+        ("alpha::harnesses::failing", "alpha", "lib"),
+        ("alpha::harnesses::nested::proof", "alpha", "lib"),
+        ("alpha::harnesses::verified", "alpha", "lib"),
+        ("alpha::inline::inside", "alpha", "lib"),
+        ("alpha::path_proofs::via_path", "alpha", "lib"),
+        ("alpha::shared::proof", "alpha", "lib"),
+        ("beta::helper::in_helper", "beta", "bin"),
+        ("beta::in_main", "beta", "bin"),
+        ("beta::integration_proof", "integration", "test"),
+    }
