@@ -115,11 +115,12 @@ _ITEM_QUALIFIERS = frozenset({"crate", "self", "super"})
 def _crate_root_imports(tokens: tuple[Token, ...]) -> frozenset[str]:
     """Return the local names a qualified item import binds in this file.
 
-    A single-segment import from the crate root, the current module or a
-    parent may name an alias the scan cannot see; its grouped form
-    (``use crate::{k as kk, j};``) binds the same names.  ``super`` may repeat.
-    A deeper path names a member and is left to the member rules.  The local
-    spelling is what a qualified use would carry.
+    An import from the crate root, the current module or a parent may name an
+    alias the scan cannot see; its grouped form (``use crate::{k as kk, j};``)
+    binds the same names.  ``super`` may repeat.  A deeper path names a member
+    of a module outside the file, and its local name may still be that module's
+    re-export, so the local spelling is treated as a possible alias too.  What
+    a qualified use would carry is what the scan records.
     """
     names: set[str] = set()
     for index, token in enumerate(tokens):
@@ -168,13 +169,15 @@ def _crate_member_names(
     start: int,
     stop: int,
 ) -> set[str]:
-    """Return the local name one crate-root member binds, if it is an alias.
+    """Return the local name one crate-root path binds, if it can be an alias.
 
-    A deeper path names a member rather than a crate-root item, so it is left
-    out; the group's members are single segments by construction.
+    A deeper path such as ``crate::prelude::k as kk`` names a member of a
+    module under the crate root.  The per-file scan cannot see that module's
+    exports, so the local name may still be a crate re-export; it is treated as
+    a possible alias, the same fail-closed direction as a single-segment
+    import.  A path that binds nothing, such as a bare ``crate``, contributes
+    no name.
     """
-    if any(tokens[index].text == "::" for index in range(start, stop)):
-        return set()
     if start < stop and tokens[start].text == "*":
         # A wildcard imports names the per-file scan never sees.  One of them
         # may be a trust alias exported by the crate root, so dropping the
@@ -185,33 +188,29 @@ def _crate_member_names(
             "imports names the audit cannot determine"
         )
         raise TrustAuditError(msg)
-    if start >= stop or tokens[start].kind is not Kind.IDENT:
-        return set()
-    member = tokens[start]
-    return {_local_name(tokens, member, start + 1, stop)}
+    alias = _trailing_alias(tokens, start, stop)
+    if alias is not None:
+        return {alias}
+    for index in range(stop - 1, start - 1, -1):
+        token = tokens[index]
+        if token.kind is not Kind.IDENT:
+            continue
+        return set() if token.text in LOCAL_QUALIFIERS else {token.text}
+    return set()
 
 
-def _local_name(
+def _trailing_alias(
     tokens: tuple[Token, ...],
-    member: Token,
-    following: int,
-    end: int,
-) -> str:
-    """Return the name an import binds: the alias after ``as``, or the member."""
-    alias = _renamed_to(tokens, following, end)
-    return member.text if alias is None else alias
-
-
-def _renamed_to(
-    tokens: tuple[Token, ...],
-    following: int,
-    end: int,
+    start: int,
+    stop: int,
 ) -> str | None:
-    """Return the identifier after a trailing ``as``, if the import has one."""
-    if following + 1 >= end or tokens[following].text != "as":
-        return None
-    alias = tokens[following + 1]
-    return alias.text if alias.kind is Kind.IDENT else None
+    """Return the local name an import's ``as`` binds, if it has one."""
+    for index in range(stop - 2, start - 1, -1):
+        if tokens[index].text != "as":
+            continue
+        alias = tokens[index + 1]
+        return alias.text if alias.kind is Kind.IDENT else None
+    return None
 
 
 def _alias_round(

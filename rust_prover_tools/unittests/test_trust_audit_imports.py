@@ -152,6 +152,18 @@ def test_a_crate_root_import_is_treated_as_a_possible_alias() -> None:
     assert [item for item, _ in items(source)] == ["assume"]
 
 
+def test_a_deeper_crate_root_import_is_a_possible_alias() -> None:
+    """Treat a deeper crate-root import's local name as a possible alias.
+
+    The module holding ``k`` is outside the file, so the scan cannot rule out
+    that ``kk`` re-exports a trust crate; leaving it unreported would hide
+    ``kk::assume``.
+    """
+    source = "use crate::prelude::k as kk;\nfn f() { kk::assume(true); }"
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
 def test_a_grouped_crate_root_import_binds_its_aliases() -> None:
     """Read ``use crate::{k as kk};`` like the ungrouped form."""
     source = "use crate::{k as kk};\nfn f() { kk::assume(true); }"
@@ -268,6 +280,23 @@ def test_a_grouped_self_import_reaches_a_member_binding() -> None:
         ("assume", 2),
         ("assume", 3),
     ], "the plain import, the grouped import and its call must all report"
+
+
+def test_a_grouped_module_path_reaches_a_member_binding() -> None:
+    """Bind the leaf of a grouped module path to the item the file imported."""
+    source = "\n".join(
+        (
+            "mod inner { pub use kani::assume as a; }",
+            "use crate::{inner::a as b};",
+            "fn f() { b(true); }",
+        ),
+    )
+
+    assert items(source) == [
+        ("assume", 1),
+        ("assume", 2),
+        ("assume", 3),
+    ], "the module's import, the grouped rename and its call must all report"
 
 
 def test_a_nested_self_group_reaches_a_member_binding() -> None:

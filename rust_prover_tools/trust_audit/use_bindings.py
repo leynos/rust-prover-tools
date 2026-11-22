@@ -351,4 +351,11 @@ def _grouped_requalified_bindings(
                     scope.bindings[root],
                 ),
             )
+        # A group preserves the path prefix, so ``inner::a as b`` reaches the
+        # leaf ``a`` the file already bound even when ``inner`` is a module
+        # this scan cannot resolve.  Reading only the first segment would drop
+        # the binding the group exists to make.
+        for member, alias in member_aliases(tokens, member_start, member_end):
+            if member in scope.bindings:
+                discovered.setdefault(alias, set()).update(scope.bindings[member])
     return discovered

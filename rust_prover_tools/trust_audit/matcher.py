@@ -232,6 +232,12 @@ def _metavariable_refusal(
             f"{token.column} reaches a trust item through the metavariable "
             f"'${token.text}', so the audit cannot tell which crate it names"
         )
+    if _is_import_rename(tokens, index):
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} renames an import through the metavariable "
+            f"'${token.text}', so the audit cannot tell which name it binds"
+        )
     if _is_trust_qualified(tokens, index, qualifiers):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
@@ -240,6 +246,25 @@ def _metavariable_refusal(
             "tell which item is called"
         )
     return repetition_refusal(tokens, index, qualifiers)
+
+
+def _is_import_rename(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether a metavariable is the item a ``use`` rename binds.
+
+    ``use std::$name as load;`` chooses at expansion time which opaque macro
+    ``load!`` calls, so the scan must refuse rather than accept the file.  A
+    cast such as ``$value as u64`` is an expression, not an import: the search
+    stops at the statement or delimiter that surrounds it.
+    """
+    if index + 1 >= len(tokens) or tokens[index + 1].text != "as":
+        return False
+    for cursor in range(index - 1, -1, -1):
+        text = tokens[cursor].text
+        if text in {";", "(", ")", "[", "]", "{", "}"}:
+            return False
+        if text == "use" and begins_import(tokens, cursor):
+            return True
+    return False
 
 
 def _is_trust_qualified(

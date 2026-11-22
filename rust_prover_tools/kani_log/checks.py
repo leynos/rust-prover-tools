@@ -210,7 +210,41 @@ def _ends_entry(reader: Reader) -> bool:
     following = reader.peek()
     if not following.strip():
         return _blank_closes_entry(reader)
-    return FIELD.match(following) is not None
+    return FIELD.match(following) is not None and _field_closes_entry(reader)
+
+
+def _field_closes_entry(reader: Reader) -> bool:
+    """Report whether the field-shaped line at the cursor is a real boundary.
+
+    A description is arbitrary text, so one of its continuation lines may
+    itself look like ``Location:``.  A real field run is followed by another
+    field, a report construct, a fresh check entry or the end of the log; a
+    description continuation is followed by ordinary text.  Scanning past the
+    run is what keeps ``first"`` + a field-shaped line + ``last"`` inside one
+    description.
+    """
+    offset = 0
+    while (following := reader.peek_at(offset)) is not None:
+        if not following.strip() or FIELD.match(following) is not None:
+            offset += 1
+            continue
+        return _is_report_line(following)
+    return True
+
+
+def _is_report_line(line: str) -> bool:
+    """Report whether ``line`` can follow a check entry's field list.
+
+    A malformed ``Check`` header counts too.  It is not a report construct the
+    block can read, but it is also not description continuation: keeping the
+    description open would swallow the line and hide the structural fault the
+    outer parser reports.
+    """
+    if line in {"RESULTS:", "SUMMARY:", "Manual Harness Summary:"}:
+        return True
+    if line.startswith("Check "):
+        return True
+    return any(pattern.match(line) is not None for pattern in _ENTRY_HEADS)
 
 
 def _blank_closes_entry(reader: Reader) -> bool:

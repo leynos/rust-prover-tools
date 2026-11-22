@@ -155,7 +155,6 @@ Capture standard output and standard error separately, then concatenate them in
 that order:
 
 <!-- tested-example: kani-log-capture -->
-
 ```bash
 if prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" --cwd "$PWD" \
   --extra-arg=--verbose >kani.out 2>kani.err; then
@@ -185,7 +184,6 @@ Schema version `1` is the only accepted version. Each harness entry has:
   expect; defaults to `false`.
 
 <!-- tested-example: kani-log-manifest -->
-
 ```json
 {
   "schema_version": 1,
@@ -220,7 +218,6 @@ kind, because its property name alone also names the control's own property.
 #### Reading a log
 
 <!-- tested-example: kani-log-analysis -->
-
 ```bash
 prover-tools kani analyse-log --log kani.log --manifest harnesses.json
 ```
@@ -688,7 +685,6 @@ Two runs that differ only in their Z3 build can disagree, so
 `prover-tools verus run` can pin the solver for every invocation:
 
 <!-- tested-example: verus-solver-selection -->
-
 ```bash
 prover-tools verus run --z3 pinned --proof-file verus/edge_harvest_proofs.rs
 ```
@@ -711,7 +707,6 @@ directory. A captured run is analysed from the facts Verus printed, so a log
 that never reached a verification result is never mistaken for a passing proof.
 
 <!-- tested-example: verus-log-analysis -->
-
 ```bash
 prover-tools verus run --proof-file proofs/example.rs 2>&1 | tee verus.log
 prover-tools verus analyse-log --log verus.log \
@@ -789,7 +784,6 @@ to accept something without proof, so a reviewer can read each one against a
 justification. It reads source files, so it needs neither verifier installed.
 
 <!-- tested-example: trust-audit -->
-
 ```bash
 prover-tools audit trust --repo-root . verus/lib.rs kani/src/lib.rs
 ```
@@ -803,35 +797,38 @@ The audit follows `mod` declarations from the files it is given rather than
 listing directories, so dead files nobody compiles are not reported and every
 file the crate compiles is. A declaration may use `#[path]`, inline modules, or
 nested module directories; each target is resolved as Rust resolves it. A
-declaration that resolves to no file, to a file outside the repository root, or
-to whichever file a `cfg_attr` selects, is refused: a configuration decides the
-last of those, so no single answer describes what the crate compiles. A `mod`
-written as a `macro_rules!` pattern names no file, because it is a template for
-source the macro is given rather than source the crate compiles; a declaration
-an expansion emits is followed from the invocation's module directory, which is
-where rustc resolves it. A macro invoked from another macro's expansion is
-followed through the outer invocation's directory, and an invocation through a
-`use` alias (`use crate::make as build; build!();`) is the definition's macro.
-A macro no invocation in the file names compiles nothing there, so its
-declaration demands no file. An invocation in another file is outside the
-audit's per-file scan, and the audit does not claim to follow it. A macro name
-defined more than once is refused: Rust permits a later definition to shadow an
-earlier one, and the scan cannot tell which one an invocation expands. A
-declaration whose name comes from a metavariable is refused, because only the
-invocation's arguments decide that name, and an expansion that invokes a macro
-through a metavariable is refused for the same reason, as is one that reaches a
-trust item through a metavariable path such as `$p::assume` or `kani::$f`. A
-repetition-wrapped form such as `$($p)+::assume` or `kani::$($f)*` is refused
-too, with every enclosing repetition walked before the decision. A target
-reached through a symbolic link is reported as the physical file it reaches, so
-a cyclic `#[path]` is scanned once; a `#[path]` inside that module still
-resolves from the pathname the compiler loaded. Two arrivals at one physical
-file are accepted only when they agree on both the owner directory and the
-declaring directory, because a file-scope `#[path]` resolves against the
-latter. When a plain crate and a proc-macro crate both reach one file through
-`#[path]`, the file and its children are rescanned with the stronger
-literal-reading policy. A `macro_rules!` definition spelled inside a matcher is
-input, not a second definition.
+declaration that resolves to no file, to more than one candidate (`x.rs` beside
+`x/mod.rs`), to a file outside the repository root, or to whichever file a
+`cfg_attr` selects, is refused: a configuration decides the last of those, so
+no single answer describes what the crate compiles, and Rust rejects the
+ambiguous pair rather than choosing one. A `mod` written as a `macro_rules!`
+pattern names no file, because it is a template for source the macro is given
+rather than source the crate compiles; a declaration an expansion emits is
+followed from the invocation's module directory, which is where rustc resolves
+it. A macro invoked from another macro's expansion is followed through the
+outer invocation's directory, and an invocation through a `use` alias
+(`use crate::make as build; build!();`) is the definition's macro; an alias may
+itself be renamed before it is invoked. A macro no invocation in the file names
+compiles nothing there, so its declaration demands no file. An invocation in
+another file is outside the audit's per-file scan, and the audit does not claim
+to follow it. A macro name defined more than once is refused: Rust permits a
+later definition to shadow an earlier one, and the scan cannot tell which one
+an invocation expands. A declaration whose name comes from a metavariable is
+refused, because only the invocation's arguments decide that name, and an
+expansion that invokes a macro through a metavariable is refused for the same
+reason, as is one that reaches a trust item through a metavariable path such as
+`$p::assume` or `kani::$f`, or binds an import's item
+(`use std::$name as load;`). A repetition-wrapped form such as `$($p)+::assume`
+or `kani::$($f)*` is refused too, with every enclosing repetition walked before
+the decision. A target reached through a symbolic link is reported as the
+physical file it reaches, so a cyclic `#[path]` is scanned once; a `#[path]`
+inside that module still resolves from the pathname the compiler loaded. Two
+arrivals at one physical file are accepted only when they agree on both the
+owner directory and the declaring directory, because a file-scope `#[path]`
+resolves against the latter. When a plain crate and a proc-macro crate both
+reach one file through `#[path]`, the file and its children are rescanned with
+the stronger literal-reading policy. A `macro_rules!` definition spelled inside
+a matcher is input, not a second definition.
 
 A `#[path]` is resolved from the directory rustc uses at that position. At file
 scope that is the declaring file's own directory; the first inline `#[path]`
@@ -865,19 +862,19 @@ names when the use is bare, is reached through `self::`, `crate::` or
 `mod m { pub use kani::assume as a; } m::a(..)` reaches the binding the file
 shows. A module declared elsewhere is not shown, so its names are left alone,
 except that a name imported from the crate root or a parent — `use crate::k;`,
-`use crate::{k as kk};` or `use super::k;` — is treated as a possible crate
-alias because the declaration it names is outside the file. A module the file
-declares may itself be renamed (`use m as n;`), the rename may chain
-(`use n as q;`), and its alias qualifies a renamed member just as its name
-does. A module the file declares may re-export a trust root's whole surface
-(`mod m { pub use kani::*; }`); the glob cannot be enumerated, so a vocabulary
-word qualified by that module (`m::assume(..)`) is reported. A wildcard import
-from the crate root, the current module or a parent (`use crate::*;`) is
-refused instead: its bindings are not shown, and one of them may be a crate
-alias. A `use<…>` precise-capture bound is not an import. A crate alias
-re-exported by a module the file declares is followed (`use m::k as kk;`). A
-turbofish call such as `a::<u32, _>(..)` is a call on the renamed item, not a
-path through it.
+`use crate::{k as kk};`, `use crate::prelude::k as kk;` or `use super::k;` — is
+treated as a possible crate alias because the declaration it names is outside
+the file. A module the file declares may itself be renamed (`use m as n;`), the
+rename may chain (`use n as q;`), and its alias qualifies a renamed member just
+as its name does. A module the file declares may re-export a trust root's whole
+surface (`mod m { pub use kani::*; }`); the glob cannot be enumerated, so a
+vocabulary word qualified by that module (`m::assume(..)`) is reported. A
+wildcard import from the crate root, the current module or a parent
+(`use crate::*;`) is refused instead: its bindings are not shown, and one of
+them may be a crate alias. A `use<…>` precise-capture bound is not an import. A
+crate alias re-exported by a module the file declares is followed
+(`use m::k as kk;`). A turbofish call such as `a::<u32, _>(..)` is a call on
+the renamed item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a

@@ -933,6 +933,23 @@ def test_a_description_holding_a_manual_summary_marker_is_read_in_full() -> None
     )
 
 
+def test_a_field_shaped_line_inside_a_description_is_kept() -> None:
+    """Keep a field-shaped continuation inside the quoted description.
+
+    The description is arbitrary text, so a continuation may spell a
+    ``Location:`` line.  A real field run is followed by another field or a
+    report construct; this one is followed by the rest of the description.
+    """
+    text = log_text("verified").replace(
+        '- Description: "the boundary below saturation is reachable"',
+        '- Description: "first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast"',
+    )
+    block = parse_text(text).blocks[0]
+    assert block.covers[0].description == (
+        'first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast'
+    )
+
+
 def test_a_non_cover_check_cannot_carry_a_cover_status() -> None:
     """Refuse a status Kani applies only to cover properties."""
     text = log_text("verified").replace(

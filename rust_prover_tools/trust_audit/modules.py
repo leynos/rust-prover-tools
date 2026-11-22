@@ -28,7 +28,7 @@ from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
 from rust_prover_tools.trust_audit.structure import attribute_spans
 from rust_prover_tools.trust_audit.syntax import Kind, Token
-from rust_prover_tools.trust_audit.use_paths import statement_end
+from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import begins_import, member_aliases
 
 if typ.TYPE_CHECKING:
@@ -152,19 +152,42 @@ def _macro_aliases(
 
     Rust expands ``use crate::make as build; build!();`` as the definition of
     ``make``, so the invocation site is the same site under another spelling.
-    ``build`` is therefore stored against ``make`` rather than dropped.
+    An alias can itself be renamed — ``use build as rebuild;`` — so discovery
+    repeats until a pass adds no name, and each alias records the defined macro
+    rather than the intermediate spelling.
     """
+    renames = _all_macro_renames(tokens)
     aliases: dict[str, str] = {}
+    while True:
+        fresh = {
+            alias: (item if item in heads else aliases[item])
+            for item, alias in renames
+            if (item in heads or item in aliases) and alias not in aliases
+        }
+        if not fresh:
+            return aliases
+        aliases.update(fresh)
+
+
+def _all_macro_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:
+    """Return every ``(item, alias)`` a ``use`` statement in the file renames.
+
+    A macro is renamed either as a member (``use crate::make as build;``) or as
+    the statement's root (``use build as rebuild;``), so both readings are
+    collected.
+    """
+    renames: set[tuple[str, str]] = set()
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue
         end = statement_end(tokens, index + 1)
-        aliases.update(
-            (alias, item)
-            for item, alias in member_aliases(tokens, index + 1, end)
-            if item in heads
+        renames.update(
+            (root, alias)
+            for root, alias in use_roots(tokens, index + 1, end)
+            if alias is not None
         )
-    return aliases
+        renames.update(member_aliases(tokens, index + 1, end))
+    return frozenset(renames)
 
 
 def _invocation_sites(

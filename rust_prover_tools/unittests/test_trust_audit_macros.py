@@ -131,6 +131,33 @@ def test_a_macro_rules_definition_inside_a_matcher_is_not_a_definition() -> None
     assert items(source) == []
 
 
+def test_a_metavariable_import_rename_is_refused() -> None:
+    """Refuse ``use std::$name as load;``, whose bound name the arguments decide."""
+    source = "\n".join(
+        (
+            "macro_rules! wrapper {",
+            '    ($name:ident) => { use std::$name as load; load!("hidden.rs"); };',
+            "}",
+            "wrapper!(include);",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="renames an import"):
+        items(source)
+
+
+def test_a_metavariable_cast_is_not_an_import_rename() -> None:
+    """Leave ``$value as u64`` alone: it is an expression, not an import."""
+    source = "\n".join(
+        (
+            "macro_rules! widen { ($value:expr) => { $value as u64 }; }",
+            "fn f() { widen(1); }",
+        ),
+    )
+
+    assert items(source) == []
+
+
 def test_a_metavariable_final_path_segment_is_refused() -> None:
     """Refuse ``kani::$f(..)``, whose called item only the arguments decide."""
     source = "macro_rules! call { ($f:ident) => { kani::$f(true) }; }"
@@ -219,6 +246,24 @@ def test_an_ordinary_repetition_is_accepted() -> None:
             "fn f() { list!(a, b); }",
         ),
     )
+
+    assert items(source) == []
+
+
+def test_a_nested_repetition_with_a_call_is_refused() -> None:
+    """Climb past a repetition whose next token is a call, not the group close."""
+    source = (
+        "macro_rules! call { "
+        "($($($f:ident),+ (true))+) => { kani::$($($f),+ (true))+ }; }"
+    )
+
+    with pytest.raises(TrustAuditError, match="repetition-wrapped"):
+        items(source)
+
+
+def test_a_nested_repetition_without_a_trust_path_is_accepted() -> None:
+    """Leave a nested repetition that emits no trust path alone."""
+    source = "macro_rules! list { ($($($x:ident),+);+) => { $($($x),+);+ }; }"
 
     assert items(source) == []
 

@@ -92,6 +92,20 @@ def test_a_literal_module_declaration_in_an_expansion_is_reported() -> None:
     assert references(source) == [("proofs", None, ())]
 
 
+def test_a_chained_macro_alias_compiles_its_module() -> None:
+    """Resolve a rename of a rename before attributing the expansion."""
+    source = "\n".join(
+        (
+            "macro_rules! make { () => { mod hidden; }; }",
+            "use crate::make as first;",
+            "use first as second;",
+            "second!();",
+        ),
+    )
+
+    assert references(source) == [("hidden", None, ())]
+
+
 def test_a_macro_invoked_through_an_alias_compiles_its_module() -> None:
     """Resolve the ``use`` alias before attributing an expansion's declaration.
 

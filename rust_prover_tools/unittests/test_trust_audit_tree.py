@@ -280,6 +280,21 @@ def test_an_inline_path_attribute_replaces_its_directory(tmp_path: Path) -> None
     }
 
 
+def test_an_ambiguous_module_is_refused(tmp_path: Path) -> None:
+    """Refuse a module both candidate files could name, as rustc does."""
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "mod child;",
+            "src/child.rs": "fn f() {}",
+            "src/child/mod.rs": "fn g() {}",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="ambiguous"):
+        audit_tree(tmp_path, ["src/lib.rs"])
+
+
 def test_a_missing_module_is_refused(tmp_path: Path) -> None:
     """Refuse source whose declared module resolves to no file."""
     write(tmp_path, {"src/lib.rs": "mod absent;"})

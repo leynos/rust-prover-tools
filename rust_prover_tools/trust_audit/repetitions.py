@@ -78,13 +78,6 @@ def _follows_trust_qualifier(
     return tokens[before - 1].text in qualifiers
 
 
-def _opens_repetition(tokens: tuple[Token, ...], opener: int) -> bool:
-    """Report whether ``opener`` is a ``(`` introduced by a repetition ``$``."""
-    if opener < 1:
-        return False
-    return tokens[opener - 1].text == "$"
-
-
 def _repetition_extent(
     tokens: tuple[Token, ...],
     index: int,
@@ -92,26 +85,22 @@ def _repetition_extent(
     """Return the tokens before and after a metavariable's outermost repetition.
 
     The walk starts at the innermost ``$( … )`` holding the metavariable and
-    continues outwards while the group and its operator are themselves the body
-    of another repetition.  ``before`` is the token in front of the outermost
-    ``$(``; ``after`` is the token after its repetition operator.  A ``None``
-    result means the metavariable is not inside a repetition the scan can
-    delimit.
+    climbs to every enclosing ``$(` group, whether or not the inner repetition
+    is directly followed by its operator's group close.  ``before`` is the
+    token in front of the outermost ``$(``; ``after`` is the token after that
+    group's repetition operator.  A ``None`` result means the metavariable is
+    not inside a repetition the scan can delimit.
     """
     opener = _enclosing_repetition(tokens, index)
     if opener is None:
         return None
-    while True:
-        close = matching(tokens, opener, "(", ")")
-        after = _after_repetition(tokens, close)
-        if after is None:
-            return None
-        if after < len(tokens) and tokens[after].text == ")":
-            outer = _enclosing_group_opener(tokens, after)
-            if outer is not None and _opens_repetition(tokens, outer):
-                opener = outer
-                continue
-        return opener - 2, after
+    while (outer := _enclosing_repetition(tokens, opener)) is not None:
+        opener = outer
+    close = matching(tokens, opener, "(", ")")
+    after = _after_repetition(tokens, close)
+    if after is None:
+        return None
+    return opener - 2, after
 
 
 def _enclosing_repetition(tokens: tuple[Token, ...], index: int) -> int | None:
@@ -136,17 +125,4 @@ def _after_repetition(tokens: tuple[Token, ...], close: int) -> int | None:
         return following + 1
     if following + 1 < len(tokens) and tokens[following + 1].text in {"*", "+", "?"}:
         return following + 2
-    return None
-
-
-def _enclosing_group_opener(tokens: tuple[Token, ...], close: int) -> int | None:
-    """Return the ``(`` matching the ``)`` at ``close``."""
-    depth = 0
-    for index in range(close, -1, -1):
-        if tokens[index].text == ")":
-            depth += 1
-        elif tokens[index].text == "(":
-            depth -= 1
-            if depth == 0:
-                return index
     return None

@@ -136,7 +136,8 @@ def module_target(
     Raises
     ------
     TrustAuditError
-        If the target resolves outside the root or to no file.
+        If the target resolves outside the root, to no file, or to more than
+        one file.
     """
     candidates = _module_candidates(module, reference)
     # Containment is checked before existence so an escaping `#[path]` is
@@ -150,17 +151,25 @@ def module_target(
             f"repository: {list(candidates)}"
         )
         raise TrustAuditError(msg)
-    found = next(
-        (candidate for candidate in candidates if (root / candidate).is_file()),
-        None,
-    )
-    if found is None:
+    existing = [candidate for candidate in candidates if (root / candidate).is_file()]
+    if not existing:
         msg = (
             f"{module.relative}:{reference.line}:{reference.column} declares "
             f"module {reference.name!r}, which resolves to none of "
             f"{list(candidates)}"
         )
         raise TrustAuditError(msg)
+    if len(existing) > 1:
+        # rustc rejects a declaration that could name both ``x.rs`` and
+        # ``x/mod.rs`` rather than giving either precedence, so the audit must
+        # not scan one of them and call the module resolved.
+        msg = (
+            f"{module.relative}:{reference.line}:{reference.column} declares "
+            f"module {reference.name!r}, which is ambiguous between "
+            f"{existing}"
+        )
+        raise TrustAuditError(msg)
+    found = existing[0]
     return Module(
         relative=physical_relative(root, found),
         owner=_target_owner(module, reference, found),

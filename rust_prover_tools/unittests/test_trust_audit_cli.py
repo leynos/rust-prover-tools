@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rust_prover_tools.trust_audit_cli import audit_trust
 from rust_prover_tools.unittests import conftest
+from rust_prover_tools.unittests.trust_audit_tree_support import symlink
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -306,7 +307,7 @@ def test_an_absolute_driver_through_a_symlink_names_the_compiled_file(
     """Accept an absolute driver and report the file it physically reaches."""
     repo = tmp_path / "repo"
     write(repo, {"src/lib.rs": "kani::assume(true);"})
-    (repo / "alias.rs").symlink_to(repo / "src/lib.rs")
+    symlink(repo / "alias.rs", repo / "src/lib.rs")
 
     status = audit_trust([repo / "alias.rs"], repo_root=repo)
     captured = capsys.readouterr()

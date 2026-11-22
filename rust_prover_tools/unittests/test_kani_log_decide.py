@@ -17,6 +17,8 @@ depend on is tested by concern in the sibling ``ownership``, ``controls``,
 
 from __future__ import annotations
 
+import pytest
+
 from rust_prover_tools.kani_log import CLAIM, KaniOutcome
 from tests import kani_log_corpus as corpus
 from tests import kani_log_fixtures as facts
@@ -31,6 +33,18 @@ def test_every_table_row_decides_as_it_declares() -> None:
         assert decision.outcome == row["outcome"], (
             f"{row['id']} must decide {row['outcome']}: {row['why']}"
         )
+
+
+def test_a_row_that_declares_a_cover_needs_its_status() -> None:
+    """Reject a declared cover the adapter would otherwise drop silently."""
+    row = {
+        "harnesses": [
+            {"name": "h::x", "status": "SUCCESS", "covers": ["witness"]},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="without a cover_status"):
+        kani_log_rows.facts_of_row(row)
 
 
 def test_every_table_row_explains_itself() -> None:
