@@ -207,6 +207,22 @@ def test_a_nested_repetition_wrapped_trust_path_is_refused() -> None:
         items(source)
 
 
+def test_an_ordinary_repetition_is_accepted() -> None:
+    """Leave a repetition that emits no path or invocation alone.
+
+    Only a repetition wrapped around a metavariable that then reaches a trust
+    path or an invocation is refused; a plain list expansion is ordinary code.
+    """
+    source = "\n".join(
+        (
+            "macro_rules! list { ($($x:ident),*) => { $($x),* }; }",
+            "fn f() { list!(a, b); }",
+        ),
+    )
+
+    assert items(source) == []
+
+
 def test_an_opaque_macro_alias_is_followed_through_a_module() -> None:
     """Keep the opaque item's identity across a local module re-export."""
     source = "\n".join(

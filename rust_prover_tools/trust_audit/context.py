@@ -114,8 +114,8 @@ class Context:
         )
         # ``use kani::*;`` binds every exported name, including one a declared
         # module re-exports as ``m::assume``.  The scan cannot enumerate what
-        # the glob binds, so a qualified vocabulary word is reported wherever
-        # it appears; the same fail-closed direction rule 3 takes.
+        # the glob binds, so a vocabulary word qualified by such a module is
+        # reported; the same fail-closed direction rule 3 takes.
         self.root_glob = imports_root_glob(tokens, self.roots | all_root_names)
         self.verus_regions = verus_regions(tokens)
         self.qualified = qualified_pattern(self.roots)
