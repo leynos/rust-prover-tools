@@ -159,14 +159,42 @@ def _macro_aliases(
     renames = _all_macro_renames(tokens)
     aliases: dict[str, str] = {}
     while True:
-        fresh = {
-            alias: (item if item in heads else aliases[item])
-            for item, alias in renames
-            if (item in heads or item in aliases) and alias not in aliases
-        }
+        fresh = _fresh_macro_aliases(renames, heads, aliases)
         if not fresh:
             return aliases
         aliases.update(fresh)
+
+
+def _fresh_macro_aliases(
+    renames: cabc.Iterable[tuple[str, str]],
+    heads: cabc.Container[str],
+    aliases: cabc.Mapping[str, str],
+) -> dict[str, str]:
+    """Return this pass's newly resolved aliases, refusing a conflict.
+
+    Two modules may bind one local name to different macros, and the per-file
+    scan cannot tell which definition an invocation sees, so that ambiguity is
+    refused rather than resolved arbitrarily.
+    """
+    fresh: dict[str, str] = {}
+    for item, alias in sorted(renames):
+        if item in heads:
+            target = item
+        elif item in aliases:
+            target = aliases[item]
+        else:
+            continue
+        known = aliases.get(alias, fresh.get(alias))
+        if known is not None and known != target:
+            msg = (
+                f"the local macro name {alias!r} is bound to both {known!r} "
+                f"and {target!r}, so the audit cannot tell which definition "
+                "an invocation expands"
+            )
+            raise TrustAuditError(msg)
+        if alias not in aliases:
+            fresh[alias] = target
+    return fresh
 
 
 def _all_macro_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:

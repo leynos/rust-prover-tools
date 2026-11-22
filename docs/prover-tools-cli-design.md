@@ -719,7 +719,11 @@ release's source rather than inferred from a sample.
 
 A second banner means the capture holds two invocations. The parser refuses it
 rather than returning the first run's facts, because those facts say nothing
-about whatever the second run reported.
+about whatever the second run reported. The manual summary normally counts
+every block, but `--fail-fast` stops at the first failure and passes only that
+result to the driver's final-summary routine; a summary with no successes whose
+total is exactly the failed set is therefore accepted, and every other
+disagreement is still refused.
 
 A claim declared `should_panic` is verified only when Kani printed the
 expected-panic note; a successful block without it is undetermined. The note is
@@ -798,20 +802,24 @@ invocation in another file is outside the per-file scan, which the user guide
 states. A declaration whose name a metavariable supplies is refused, because
 only the invocation's arguments decide that name and the scan never evaluates
 them; an expansion that invokes a macro through a metavariable, reaches a trust
-item through one such as `$p::assume` or `kani::$f`, or binds an import's item
-(`use std::$name as load;`), is refused for the same reason: the arguments
-decide which name the alias carries. A repetition-wrapped metavariable is
-inspected through every enclosing repetition, so `$($p)+::assume` and
-`kani::$($($f),+);+` are refused rather than read as ordinary repetitions. A
-target reached through a symbolic link is reported as the physical file, so a
-cyclic `#[path]` terminates, while the children of that module resolve from the
-pathname the compiler loaded rather than the link's target. A file reached with
-two owners, or two declaring directories, that name different directories is
-refused, because a file-scope `#[path]` would resolve its children beneath one
-or the other. When a plain crate and a proc-macro crate both reach one file,
-the stronger literal-reading policy wins and the file and its children are
-rescanned. A `#[path]` that a `cfg_attr` can select is refused: the
-configuration decides which file compiles, so no single answer would be true. A
+item through one such as `$p::assume` or `kani::$f`, binds an import's item
+(`use std::$name as load;`, including the grouped `use std::{$name as load};`),
+or glob-imports through one (`use $p::*;`), is refused for the same reason: the
+arguments decide which name or names the expansion binds. A repetition-wrapped
+metavariable is inspected through every enclosing repetition, so
+`$($p)+::assume` and `kani::$($($f),+);+` are refused rather than read as
+ordinary repetitions. A target reached through a symbolic link is reported as
+the physical file, so a cyclic `#[path]` terminates, while the children of that
+module resolve from the pathname the compiler loaded rather than the link's
+target. A file reached with two owners, or two declaring directories, that name
+different directories is refused, because a file-scope `#[path]` would resolve
+its children beneath one or the other. When a plain crate and a proc-macro
+crate both reach one file, the stronger literal-reading policy wins and the
+file and its children are rescanned. A `#[path]` that a `cfg_attr` can select
+is refused: the configuration decides which file compiles, so no single answer
+would be true. A `#[path]` whose value is not a literal is refused for the same
+reason: the expansion's arguments decide the file, and reading it as no
+override would scan the default file in place of the one the crate compiles. A
 nested `cfg_attr` is read through its own payload, so a predicate that merely
 spells `path = …` is not mistaken for an applied path attribute; an unrelated
 attribute's arguments are skipped, so
@@ -849,10 +857,12 @@ holding the item is equally outside the file. A use qualified by a module the
 same file declares is reported too, because the import that binds it is visible
 there; a wildcard re-export of a trust root (`mod m { pub use kani::*; }`)
 similarly makes `m::assume(..)` report, since the glob's bindings cannot be
-enumerated. A local wildcard import (`use crate::*;`) is refused instead: one
-of the names it binds may be a crate alias, and the per-file scan cannot see
-the crate root that exports it. A module declared elsewhere is not shown, so
-its names are left alone. A turbofish call such as `a::<u32, _>(..)` calls the
+enumerated. A local wildcard import (`use crate::*;` or a deeper
+`use crate::prelude::*;`) is refused instead: one of the names it binds may be
+a crate alias, and the per-file scan cannot see the module that exports it. A
+member re-exported by a module the file declares is followed (`use m::a as b;`
+after the module binds `a`). A module declared elsewhere is not shown, so its
+names are left alone. A turbofish call such as `a::<u32, _>(..)` calls the
 renamed item rather than taking a path through it. A local alias for the
 `verus!` macro is the same macro, so its body opens a Verus region.
 

@@ -249,7 +249,11 @@ def opening_bracket(tokens: tuple[Token, ...], close_index: int) -> int | None:
 
 
 def path_value(
-    tokens: tuple[Token, ...], open_index: int, close_index: int
+    tokens: tuple[Token, ...],
+    open_index: int,
+    close_index: int,
+    *,
+    refuse_unresolved: bool = False,
 ) -> str | None:
     r"""Return the value of a ``#[path = "…"]`` span, if it is one.
 
@@ -265,12 +269,23 @@ def path_value(
         Token index of the attribute's ``[``.
     close_index : int
         Token index of that attribute's ``]``.
+    refuse_unresolved : bool
+        Raise when the span is a path attribute whose value is not a literal.
+        A caller that resolves module files sets this, because a metavariable
+        or other expression would otherwise read as "no path" and send the walk
+        to the default file instead of the one the expansion compiles.
 
     Returns
     -------
     str | None
         The decoded value, or ``None`` when the span is not a
         ``#[path = "…"]`` attribute.
+
+    Raises
+    ------
+    TrustAuditError
+        If the span is a path attribute with an unresolvable value and
+        ``refuse_unresolved`` is set.
 
     """
     value_index = open_index + 1 + len(_PATH_HEAD)
@@ -281,5 +296,11 @@ def path_value(
         return None
     literal = tokens[value_index]
     if literal.kind is not Kind.LITERAL:
-        return None
+        if not refuse_unresolved:
+            return None
+        msg = (
+            f"the #[path] attribute at line {literal.line}, column "
+            f"{literal.column} has a value the audit cannot resolve"
+        )
+        raise TrustAuditError(msg)
     return decoded_literal_body(literal.text)[1]

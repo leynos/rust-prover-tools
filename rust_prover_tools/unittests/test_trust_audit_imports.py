@@ -209,6 +209,23 @@ def test_a_local_qualifier_import_is_not_a_plain_member() -> None:
     assert items(source) == [("assume", 1), ("assume", 2), ("assume", 3)]
 
 
+def test_a_member_rename_through_a_declared_module_is_followed() -> None:
+    """Follow ``use m::a as b;`` to the member binding ``m`` re-exports."""
+    source = "\n".join(
+        (
+            "mod m { pub use kani::assume as a; }",
+            "use m::a as b;",
+            "fn f() { b(false); }",
+        ),
+    )
+
+    assert items(source) == [
+        ("assume", 1),
+        ("assume", 2),
+        ("assume", 3),
+    ], "the module's import, the second rename and its call must all report"
+
+
 def test_a_declared_module_alias_qualifies_a_renamed_member() -> None:
     """Follow ``use m as n;`` for a module the file declares."""
     source = "mod m { pub use kani::assume as a; }\nuse m as n;\nfn f() { n::a(true); }"
@@ -245,6 +262,18 @@ def test_a_trust_glob_reexported_by_a_declared_module_is_reported() -> None:
 def test_a_local_wildcard_import_is_refused() -> None:
     """Refuse a wildcard whose bindings the per-file scan cannot enumerate."""
     source = "use crate::*;\nfn f() { k::assume(true); }"
+
+    with pytest.raises(TrustAuditError, match="wildcard import"):
+        items(source)
+
+
+def test_a_deeper_local_wildcard_import_is_refused() -> None:
+    """Refuse a wildcard at any depth of a crate-root import.
+
+    ``use crate::prelude::*`` binds whatever that module re-exports, which may
+    include a crate alias the file never names.
+    """
+    source = "use crate::prelude::*;\nfn f() { k::assume(true); }"
 
     with pytest.raises(TrustAuditError, match="wildcard import"):
         items(source)

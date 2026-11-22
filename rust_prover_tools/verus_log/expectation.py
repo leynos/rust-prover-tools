@@ -13,6 +13,7 @@ edit touched.
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import pathlib
 import re
 import typing as typ
@@ -30,13 +31,21 @@ _EXPECTATION = re.compile(
 )
 
 
+#: Whether the host that captured a log spells paths with Windows separators.
+#: A POSIX filename may contain a literal backslash, so converting it on every
+#: host would make two different files compare equal.
+_WINDOWS = os.name == "nt"
+
+
 def _normalize(path: str) -> str:
     """Return a comparable form of a path Verus printed or a caller typed.
 
     The comparison ignores spellings that cannot change which file a path
-    names: a ``.`` component, an empty component, a trailing separator, and a
-    separator written the other way round.  :class:`pathlib.PureWindowsPath`
-    reads all of those alike, so its POSIX rendering is the comparable form.
+    names: a ``.`` component, an empty component, a trailing separator, and —
+    on the host that captured the log — a separator written the other way
+    round.  The host decides the flavour: a POSIX name may contain a literal
+    backslash, which names a different file from a slash-separated one, while a
+    Windows path accepts either separator.
 
     A ``..`` component is kept.  It is resolved against the component before
     it, and when that component is a symbolic link, ``linked/../mutant.rs``
@@ -45,7 +54,8 @@ def _normalize(path: str) -> str:
     is resolved against the filesystem either: the log and the expectation may
     describe a machine that is no longer present.
     """
-    return pathlib.PureWindowsPath(path).as_posix()
+    flavour = pathlib.PureWindowsPath if _WINDOWS else pathlib.PurePosixPath
+    return flavour(path).as_posix()
 
 
 @dc.dataclass(frozen=True, slots=True)

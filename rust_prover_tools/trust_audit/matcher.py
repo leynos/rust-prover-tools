@@ -46,7 +46,7 @@ from rust_prover_tools.trust_audit.repetitions import (
     repetition_refusal,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
-from rust_prover_tools.trust_audit.use_paths import statement_end
+from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import (
     begins_import,
     member_aliases,
@@ -220,18 +220,9 @@ def _metavariable_refusal(
             f"{token.column} invokes a macro through the metavariable "
             f"'${token.text}', so the audit cannot tell which macro runs"
         )
-    if following == "::" and second == "$":
-        return (
-            f"the macro_rules! expansion at line {token.line}, column "
-            f"{token.column} reaches a path whose segments are both "
-            "metavariables, so the audit cannot tell which crate or item it names"
-        )
-    if following == "::" and second in words:
-        return (
-            f"the macro_rules! expansion at line {token.line}, column "
-            f"{token.column} reaches a trust item through the metavariable "
-            f"'${token.text}', so the audit cannot tell which crate it names"
-        )
+    path_refusal = _path_refusal(token, following, second, words)
+    if path_refusal is not None:
+        return path_refusal
     if _is_import_rename(tokens, index):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
@@ -248,6 +239,36 @@ def _metavariable_refusal(
     return repetition_refusal(tokens, index, qualifiers)
 
 
+def _path_refusal(
+    token: Token,
+    following: str,
+    second: str,
+    words: frozenset[str],
+) -> str | None:
+    """Return the diagnostic for a hidden ``::`` path, or ``None``."""
+    if following != "::":
+        return None
+    if second == "$":
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a path whose segments are both "
+            "metavariables, so the audit cannot tell which crate or item it names"
+        )
+    if second in words:
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a trust item through the metavariable "
+            f"'${token.text}', so the audit cannot tell which crate it names"
+        )
+    if second == "*":
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} reaches a glob import through the metavariable "
+            f"'${token.text}', so the audit cannot tell which names it binds"
+        )
+    return None
+
+
 def _is_import_rename(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether a metavariable is the item a ``use`` rename binds.
 
@@ -260,11 +281,20 @@ def _is_import_rename(tokens: tuple[Token, ...], index: int) -> bool:
         return False
     for cursor in range(index - 1, -1, -1):
         text = tokens[cursor].text
+        if text == "{" and _opens_use_group(tokens, cursor):
+            continue
         if text in {";", "(", ")", "[", "]", "{", "}"}:
             return False
         if text == "use" and begins_import(tokens, cursor):
             return True
     return False
+
+
+def _opens_use_group(tokens: tuple[Token, ...], index: int) -> bool:
+    """Report whether the ``{`` at ``index`` opens a ``use`` tree."""
+    if index < 1:
+        return False
+    return tokens[index - 1].text in {"::", "use"}
 
 
 def _is_trust_qualified(
@@ -295,7 +325,7 @@ def _opaque_names(
     and ``hidden!`` would be read as an ordinary macro.
     """
     names = set(base)
-    renames = _all_member_renames(tokens)
+    renames = _all_renames(tokens)
     while True:
         discovered = {alias for item, alias in renames if item in names}
         if discovered <= names:
@@ -303,12 +333,23 @@ def _opaque_names(
         names |= discovered
 
 
-def _all_member_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:
-    """Return every ``(item, alias)`` a ``use`` statement in the file renames."""
+def _all_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:
+    """Return every ``(item, alias)`` a ``use`` statement in the file renames.
+
+    A rename of a macro's item (``use std::include as load;``) and a rename of
+    the name it bound (``use load as hidden;``) are both followed: the second
+    spelling is the same opaque macro, and stopping at the first would let
+    ``hidden!`` expand code the scan never reads.
+    """
     renames: set[tuple[str, str]] = set()
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue
         end = statement_end(tokens, index + 1)
         renames.update(member_aliases(tokens, index + 1, end))
+        renames.update(
+            (root, alias)
+            for root, alias in use_roots(tokens, index + 1, end)
+            if alias is not None
+        )
     return frozenset(renames)

@@ -25,6 +25,22 @@ from tests.kani_log_fixtures import (
 __all__ = ("decide_row", "facts_of_row")
 
 TABLE_STATUSES = {"UNSUPPORTED_FAILURE": UNSUPPORTED_CHECK}
+#: Every status a rendered check line can carry.  ``extra_status`` describes an
+#: observed check, so a fact-class name is not one of these.
+_CHECK_STATUSES = frozenset({"SUCCESS", "FAILURE", "UNDETERMINED", "UNREACHABLE"})
+
+
+def _check_status(value: str) -> str:
+    """Translate a row's ``extra_status`` into the status a check line carries.
+
+    The value names a check's result, not a fact class.  Accepting a class name
+    such as ``UNSUPPORTED_FAILURE`` would put it on the built check line, where
+    no status like it exists and no rule matches it.
+    """
+    if value in _CHECK_STATUSES or value == NOTHING:
+        return value
+    msg = f"the decision-table extra_status {value!r} is not a check status"
+    raise ValueError(msg)
 
 
 def facts_of_row(row: dict[str, typ.Any]) -> tuple[HarnessFact, ...]:
@@ -60,10 +76,7 @@ def facts_of_row(row: dict[str, typ.Any]) -> tuple[HarnessFact, ...]:
                 bool(entry.get("panics_as_expected")),
                 cover_description=covers[0] if covers else None,
                 expected_failure=entry.get("expected_failure"),
-                extra=TABLE_STATUSES.get(
-                    entry.get("extra_status", NOTHING),
-                    entry.get("extra_status", NOTHING),
-                ),
+                extra=_check_status(entry.get("extra_status", NOTHING)),
             ),
         )
     return tuple(facts)

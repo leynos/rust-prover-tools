@@ -178,11 +178,12 @@ def _crate_member_names(
     import.  A path that binds nothing, such as a bare ``crate``, contributes
     no name.
     """
-    if start < stop and tokens[start].text == "*":
-        # A wildcard imports names the per-file scan never sees.  One of them
-        # may be a trust alias exported by the crate root, so dropping the
-        # wildcard would let a later ``k::assume`` pass unreported.
-        token = tokens[start]
+    if start < stop and tokens[stop - 1].text == "*":
+        # A wildcard imports names the per-file scan never sees, at any depth:
+        # ``use crate::prelude::*`` exports whatever that module re-exports,
+        # including a trust alias.  Dropping it would let a later
+        # ``k::assume`` pass unreported.
+        token = tokens[stop - 1]
         msg = (
             f"the wildcard import at line {token.line}, column {token.column} "
             "imports names the audit cannot determine"

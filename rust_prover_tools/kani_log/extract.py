@@ -175,11 +175,9 @@ def _require_summary_counts(
     """Refuse a manual summary that disagrees with the blocks."""
     succeeded = tuple(block.name for block in blocks if block.succeeded)
     failed = tuple(block.name for block in blocks if block.verdict == "FAILED")
-    if (len(succeeded), len(failed), len(blocks)) != (
-        manual.verified,
-        manual.failures,
-        manual.total,
-    ):
+    counts = (manual.verified, manual.failures, manual.total)
+    observed = (len(succeeded), len(failed), len(blocks))
+    if counts != observed and not _fail_fast_counts(counts, failed):
         msg = (
             f"the manual summary claims {manual.verified} verified and "
             f"{manual.failures} failed of {manual.total}, but the blocks "
@@ -193,6 +191,28 @@ def _require_summary_counts(
             f"blocks report {list(failed)}"
         )
         raise KaniLogError(msg)
+
+
+def _fail_fast_counts(
+    counts: tuple[int, int, int],
+    failed: tuple[str, ...],
+) -> bool:
+    """Report whether a summary counted only the failing harnesses.
+
+    ``--fail-fast`` stops the run at the first failing harness and passes only
+    that result to Kani's final-summary routine, so successes printed before
+    it appear as blocks but not in the counts.  The valid shape is therefore a
+    summary with no successes whose total is exactly the failed set; any other
+    disagreement is still refused.  The reader cannot see the driver flag in
+    the transcript, so this shape is the only evidence of the mode.
+    """
+    verified, failures, total = counts
+    return (
+        verified == 0
+        and bool(failed)
+        and failures == len(failed)
+        and total == len(failed)
+    )
 
 
 def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:

@@ -37,9 +37,20 @@ def repetition_refusal(
     because they may nest.
     """
     token = tokens[index]
-    extent = _repetition_extent(tokens, index)
-    if extent is None:
-        return None
+    for extent in _repetition_extents(tokens, index):
+        refusal = _boundary_refusal(tokens, token, extent, qualifiers)
+        if refusal is not None:
+            return refusal
+    return None
+
+
+def _boundary_refusal(
+    tokens: tuple[Token, ...],
+    token: Token,
+    extent: tuple[int, int],
+    qualifiers: frozenset[str],
+) -> str | None:
+    """Return the diagnostic for one repetition boundary, or ``None``."""
     before, after = extent
     following = tokens[after].text if after < len(tokens) else ""
     second = tokens[after + 1].text if after + 1 < len(tokens) else ""
@@ -78,29 +89,27 @@ def _follows_trust_qualifier(
     return tokens[before - 1].text in qualifiers
 
 
-def _repetition_extent(
+def _repetition_extents(
     tokens: tuple[Token, ...],
     index: int,
-) -> tuple[int, int] | None:
-    """Return the tokens before and after a metavariable's outermost repetition.
+) -> tuple[tuple[int, int], ...]:
+    """Return every enclosing repetition's boundary, innermost first.
 
-    The walk starts at the innermost ``$( … )`` holding the metavariable and
-    climbs to every enclosing ``$(` group, whether or not the inner repetition
-    is directly followed by its operator's group close.  ``before`` is the
-    token in front of the outermost ``$(``; ``after`` is the token after that
-    group's repetition operator.  A ``None`` result means the metavariable is
-    not inside a repetition the scan can delimit.
+    Each pair is ``(before, after)``: the token in front of that group's ``$(``
+    and the token after its repetition operator.  Every level is reported
+    because an inner repetition can wrap a macro invocation while an outer one
+    wraps the same expression, and only the inner boundary names the macro that
+    runs.  A metavariable outside any repetition yields no pairs.
     """
+    extents = []
     opener = _enclosing_repetition(tokens, index)
-    if opener is None:
-        return None
-    while (outer := _enclosing_repetition(tokens, opener)) is not None:
-        opener = outer
-    close = matching(tokens, opener, "(", ")")
-    after = _after_repetition(tokens, close)
-    if after is None:
-        return None
-    return opener - 2, after
+    while opener is not None:
+        close = matching(tokens, opener, "(", ")")
+        after = _after_repetition(tokens, close)
+        if after is not None:
+            extents.append((opener - 2, after))
+        opener = _enclosing_repetition(tokens, opener)
+    return tuple(extents)
 
 
 def _enclosing_repetition(tokens: tuple[Token, ...], index: int) -> int | None:

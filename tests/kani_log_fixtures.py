@@ -295,7 +295,9 @@ def block_of(fact: HarnessFact) -> HarnessBlock | None:
         if is_timeout
         else sum(1 for item in checks if not item.is_cover),
         other_counts=_status_counts(checks),
-        covered_satisfied=sum(1 for item in covers if item.status == SATISFIED) or None,
+        covered_satisfied=(
+            sum(1 for item in covers if item.status == SATISFIED) if covers else None
+        ),
         covered_total=len(covers) or None,
         covered_unreachable=sum(1 for item in covers if item.status == UNREACHABLE)
         or None,

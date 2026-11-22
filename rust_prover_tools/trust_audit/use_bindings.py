@@ -168,6 +168,13 @@ def _span_bindings(
         )
     if root in LOCAL_QUALIFIERS:
         _merge(discovered, _requalified_bindings(tokens, start, stop, scope))
+    # A module this file declares may re-export a member binding, and the
+    # group preserves the path prefix: ``use m::a as b;`` reaches the leaf
+    # ``a`` the file already bound even though ``m`` is not a trust root.  The
+    # same reading applies to every rooted path, so the leaf is checked here.
+    for member, alias in member_aliases(tokens, start, stop):
+        if member in scope.bindings:
+            discovered.setdefault(alias, set()).update(scope.bindings[member])
     return discovered
 
 

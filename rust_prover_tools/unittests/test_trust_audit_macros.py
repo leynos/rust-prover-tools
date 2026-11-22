@@ -146,6 +146,34 @@ def test_a_metavariable_import_rename_is_refused() -> None:
         items(source)
 
 
+def test_a_metavariable_import_rename_inside_a_group_is_refused() -> None:
+    """Refuse ``use std::{$name as load};``, a grouped form of the same rename."""
+    source = "\n".join(
+        (
+            "macro_rules! wrapper {",
+            '    ($name:ident) => { use std::{$name as load}; load!("hidden.rs"); };',
+            "}",
+            "wrapper!(include);",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="renames an import"):
+        items(source)
+
+
+def test_a_metavariable_glob_root_is_refused() -> None:
+    """Refuse ``use $p::*;``, whose bound names only the arguments decide."""
+    source = "\n".join(
+        (
+            "macro_rules! glob { ($p:ident) => { use $p::*; assume(true); }; }",
+            "glob!(kani);",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="glob import"):
+        items(source)
+
+
 def test_a_metavariable_cast_is_not_an_import_rename() -> None:
     """Leave ``$value as u64`` alone: it is an expression, not an import."""
     source = "\n".join(
@@ -261,11 +289,39 @@ def test_a_nested_repetition_with_a_call_is_refused() -> None:
         items(source)
 
 
+def test_an_inner_repetition_invocation_is_refused() -> None:
+    """Refuse an inner repetition that invokes a macro chosen by its argument.
+
+    The outer repetition ends before a brace, so only the inner boundary names
+    the ``!`` and the macro it invokes.
+    """
+    source = (
+        'macro_rules! load { ($($($m:ident)+);*) => { $( $($m)+!("hidden.rs"); )* }; }'
+    )
+
+    with pytest.raises(TrustAuditError, match="repetition-wrapped"):
+        items(source)
+
+
 def test_a_nested_repetition_without_a_trust_path_is_accepted() -> None:
     """Leave a nested repetition that emits no trust path alone."""
     source = "macro_rules! list { ($($($x:ident),+);+) => { $($($x),+);+ }; }"
 
     assert items(source) == []
+
+
+def test_an_opaque_macro_alias_of_an_alias_is_refused() -> None:
+    """Follow a bare rename of the opaque macro name to its second spelling."""
+    source = "\n".join(
+        (
+            "use std::include as load;",
+            "use load as hidden;",
+            'hidden!("hidden.rs");',
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="hidden"):
+        items(source)
 
 
 def test_an_opaque_macro_alias_is_followed_through_a_module() -> None:

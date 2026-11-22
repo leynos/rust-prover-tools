@@ -292,6 +292,56 @@ def test_a_missing_manual_summary_is_refused() -> None:
     assert "has no manual harness summary" in refused("\n".join(lines[:manual]))
 
 
+def _captured_block(name: str) -> str:
+    """Return one corpus harness block, through its verification time."""
+    text = log_text("verified")
+    start = text.index(f"Checking harness {name}...")
+    end = text.index("Verification Time:", start)
+    return text[start : text.index("\n", end) + 1]
+
+
+def _fail_fast_after_a_success(summary: str | None = None) -> str:
+    """Return the fail-fast capture with one successful block before it."""
+    text = log_text("fail_fast")
+    if summary is not None:
+        text = text.replace(
+            "Complete - 0 successfully verified harnesses, 1 failures, 1 total.",
+            summary,
+        )
+    block = _captured_block("harnesses::verified")
+    return text.replace("Checking harness", block + "Checking harness", 1)
+
+
+def test_a_fail_fast_summary_counts_only_the_failing_harness() -> None:
+    """Accept the shape ``--fail-fast`` produces after an earlier success.
+
+    The driver stops at the first failure and passes only that result to its
+    final-summary routine, so a successful block printed before it is absent
+    from the counts.  The completed blocks still have to reconcile.
+    """
+    parsed = parse_text(_fail_fast_after_a_success())
+
+    assert [block.name for block in parsed.blocks] == [
+        "harnesses::verified",
+        "harnesses::seeded_wrapping_mutant",
+    ]
+    assert parsed.manual is not None
+    assert (parsed.manual.verified, parsed.manual.failures, parsed.manual.total) == (
+        0,
+        1,
+        1,
+    )
+
+
+def test_a_fail_fast_summary_that_loses_a_failure_is_refused() -> None:
+    """Refuse a summary whose counts match no shape the driver prints."""
+    text = _fail_fast_after_a_success(
+        "Complete - 0 successfully verified harnesses, 1 failures, 2 total.",
+    )
+
+    assert "the manual summary claims" in refused(text)
+
+
 def test_mismatched_manual_counts_are_refused() -> None:
     """A manual summary must agree with the blocks it summarises."""
     text = log_text("verified").replace(
@@ -874,19 +924,49 @@ def test_a_description_with_an_embedded_quote_then_a_blank_line_is_read_in_full(
     assert block.covers[0].description == '"ready"\n\nand continued'
 
 
-def test_a_description_holding_a_results_marker_is_read_in_full() -> None:
-    """Keep a report-shaped word inside a description when it is content.
+#: Report-shaped text a description may print, with the value it must keep.
+_DESCRIPTION_BOUNDARIES = (
+    pytest.param(
+        '- Description: "first"\n\nRESULTS:\nand second"',
+        'first"\n\nRESULTS:\nand second',
+        id="results-marker",
+    ),
+    pytest.param(
+        '- Description: "first"\n\nSUMMARY:\nand second"',
+        'first"\n\nSUMMARY:\nand second',
+        id="summary-marker",
+    ),
+    pytest.param(
+        '- Description: "first"\n\nManual Harness Summary:\nand second"',
+        'first"\n\nManual Harness Summary:\nand second',
+        id="manual-summary-marker",
+    ),
+    pytest.param(
+        '- Description: "first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast"',
+        'first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast',
+        id="field-shaped-continuation",
+    ),
+)
 
-    Kani escapes nothing, so a description may print ``RESULTS:`` on its own
-    line.  A real results section is followed by a ``Check N:`` entry; this one
-    is followed by more description, so the frame stays open.
+
+@pytest.mark.parametrize(("replacement", "expected"), _DESCRIPTION_BOUNDARIES)
+def test_a_report_shaped_line_inside_a_description_is_read_in_full(
+    replacement: str,
+    expected: str,
+) -> None:
+    """Keep report-shaped text inside a description when it is content.
+
+    Kani escapes nothing, so a description may print a report marker or a
+    field-shaped line on its own line.  Each is a boundary only when the
+    structure that really follows a marker or field is present; here more
+    description follows, so the frame stays open.
     """
     text = log_text("verified").replace(
         '- Description: "the boundary below saturation is reachable"',
-        '- Description: "first"\n\nRESULTS:\nand second"',
+        replacement,
     )
     block = parse_text(text).blocks[0]
-    assert block.covers[0].description == 'first"\n\nRESULTS:\nand second'
+    assert block.covers[0].description == expected
 
 
 def test_an_expected_panic_note_without_a_failed_check_is_refused() -> None:
@@ -901,53 +981,6 @@ def test_an_expected_panic_note_without_a_failed_check_is_refused() -> None:
     )
 
     assert "expected-panic note but no check failed" in refused(text)
-
-
-def test_a_description_holding_a_summary_marker_is_read_in_full() -> None:
-    """Keep ``SUMMARY:`` as description content unless a summary follows.
-
-    A real summary begins with its `` ** …`` counts or the verdict, so a marker
-    followed by ordinary text stays inside the description.
-    """
-    text = log_text("verified").replace(
-        '- Description: "the boundary below saturation is reachable"',
-        '- Description: "first"\n\nSUMMARY:\nand second"',
-    )
-    block = parse_text(text).blocks[0]
-    assert block.covers[0].description == 'first"\n\nSUMMARY:\nand second'
-
-
-def test_a_description_holding_a_manual_summary_marker_is_read_in_full() -> None:
-    """Keep ``Manual Harness Summary:`` as content unless a summary follows.
-
-    A real manual summary begins with a failed-harness line or the ``Complete``
-    counts, so the heading followed by ordinary text stays inside the frame.
-    """
-    text = log_text("verified").replace(
-        '- Description: "the boundary below saturation is reachable"',
-        '- Description: "first"\n\nManual Harness Summary:\nand second"',
-    )
-    block = parse_text(text).blocks[0]
-    assert block.covers[0].description == (
-        'first"\n\nManual Harness Summary:\nand second'
-    )
-
-
-def test_a_field_shaped_line_inside_a_description_is_kept() -> None:
-    """Keep a field-shaped continuation inside the quoted description.
-
-    The description is arbitrary text, so a continuation may spell a
-    ``Location:`` line.  A real field run is followed by another field or a
-    report construct; this one is followed by the rest of the description.
-    """
-    text = log_text("verified").replace(
-        '- Description: "the boundary below saturation is reachable"',
-        '- Description: "first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast"',
-    )
-    block = parse_text(text).blocks[0]
-    assert block.covers[0].description == (
-        'first"\n\t - Location: src/harnesses.rs:1:1 in f\nlast'
-    )
 
 
 def test_a_non_cover_check_cannot_carry_a_cover_status() -> None:

@@ -92,6 +92,24 @@ def test_a_literal_module_declaration_in_an_expansion_is_reported() -> None:
     assert references(source) == [("proofs", None, ())]
 
 
+def test_a_macro_alias_bound_to_two_definitions_is_refused() -> None:
+    """Refuse one local name that two modules bind to different macros."""
+    source = "\n".join(
+        (
+            "macro_rules! left { () => { mod one; }; }",
+            "macro_rules! right { () => { mod two; }; }",
+            "mod x { pub use crate::left as load; }",
+            "mod y { pub use crate::right as load; }",
+            "use x::load;",
+            "use y::load;",
+            "fn f() { load!(); }",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="bound to both"):
+        references(source)
+
+
 def test_a_chained_macro_alias_compiles_its_module() -> None:
     """Resolve a rename of a rename before attributing the expansion."""
     source = "\n".join(
@@ -167,6 +185,14 @@ def test_an_undecodable_path_escape_is_refused(spelling: str, pattern: str) -> N
     """
     source = f'#[path = "{spelling}.rs"]\nmod x;'
     with pytest.raises(TrustAuditError, match=pattern):
+        references(source)
+
+
+def test_a_metavariable_path_attribute_is_refused() -> None:
+    """Refuse a ``#[path]`` whose value only the expansion's arguments decide."""
+    source = "macro_rules! load { ($p:literal) => { #[path = $p] mod child; }; }"
+
+    with pytest.raises(TrustAuditError, match="cannot resolve"):
         references(source)
 
 

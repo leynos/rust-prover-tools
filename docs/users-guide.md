@@ -271,7 +271,10 @@ still bounded: none of these outcomes proves a property over every execution.
 otherwise structurally invalid output, two invocations concatenated so a second
 banner appears, a release other than 0.67.0, `kani list` inventory output, or a
 log that reports a harness the manifest does not declare. It completes the
-analysis with exit status `2`; it is not an input error.
+analysis with exit status `2`; it is not an input error. A log captured with
+`--fail-fast` is valid when the manual summary counts only the failing
+harnesses: the driver stops at the first failure and passes only that result to
+its final-summary routine, so an earlier success is a block the counts omit.
 
 Each declared cover is reported as `satisfied` or `unsatisfied`. A cover that
 Kani reported unreachable, or did not report at all, is `unsatisfied`. Each
@@ -709,8 +712,7 @@ that never reached a verification result is never mistaken for a passing proof.
 <!-- tested-example: verus-log-analysis -->
 ```bash
 prover-tools verus run --proof-file proofs/example.rs 2>&1 | tee verus.log
-prover-tools verus analyse-log --log verus.log \
-  --verus-release 0.2026.11.02.8bf68ee
+prover-tools verus analyse-log --log verus.log
 ```
 
 Verus writes its `verification results::` summary to standard output and its
@@ -760,9 +762,10 @@ Useful options are:
   inside that region. A second failure, located or not, or a second count in
   the summary, means the run broke more than the seeded fault, and a control
   that never failed has not shown that the fault would be caught. Paths are
-  compared without touching the filesystem: `./` and separator spellings match,
-  but a `..` step does not, because through a symbolic link it can name a
-  different file.
+  compared without touching the filesystem: `.` components match, and on
+  Windows either separator matches, but on POSIX a backslash is part of the
+  filename. A `..` step never matches, because through a symbolic link it can
+  name a different file.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for
@@ -801,23 +804,25 @@ declaration that resolves to no file, to more than one candidate (`x.rs` beside
 `x/mod.rs`), to a file outside the repository root, or to whichever file a
 `cfg_attr` selects, is refused: a configuration decides the last of those, so
 no single answer describes what the crate compiles, and Rust rejects the
-ambiguous pair rather than choosing one. A `mod` written as a `macro_rules!`
-pattern names no file, because it is a template for source the macro is given
-rather than source the crate compiles; a declaration an expansion emits is
-followed from the invocation's module directory, which is where rustc resolves
-it. A macro invoked from another macro's expansion is followed through the
-outer invocation's directory, and an invocation through a `use` alias
-(`use crate::make as build; build!();`) is the definition's macro; an alias may
-itself be renamed before it is invoked. A macro no invocation in the file names
-compiles nothing there, so its declaration demands no file. An invocation in
-another file is outside the audit's per-file scan, and the audit does not claim
-to follow it. A macro name defined more than once is refused: Rust permits a
-later definition to shadow an earlier one, and the scan cannot tell which one
-an invocation expands. A declaration whose name comes from a metavariable is
-refused, because only the invocation's arguments decide that name, and an
-expansion that invokes a macro through a metavariable is refused for the same
-reason, as is one that reaches a trust item through a metavariable path such as
-`$p::assume` or `kani::$f`, or binds an import's item
+ambiguous pair rather than choosing one. A `#[path]` whose value is not a
+literal — a metavariable, for example — is refused as well, because only the
+expansion's arguments decide which file it names. A `mod` written as a
+`macro_rules!` pattern names no file, because it is a template for source the
+macro is given rather than source the crate compiles; a declaration an
+expansion emits is followed from the invocation's module directory, which is
+where rustc resolves it. A macro invoked from another macro's expansion is
+followed through the outer invocation's directory, and an invocation through a
+`use` alias (`use crate::make as build; build!();`) is the definition's macro;
+an alias may itself be renamed before it is invoked. A macro no invocation in
+the file names compiles nothing there, so its declaration demands no file. An
+invocation in another file is outside the audit's per-file scan, and the audit
+does not claim to follow it. A macro name defined more than once is refused:
+Rust permits a later definition to shadow an earlier one, and the scan cannot
+tell which one an invocation expands. A declaration whose name comes from a
+metavariable is refused, because only the invocation's arguments decide that
+name, and an expansion that invokes a macro through a metavariable is refused
+for the same reason, as is one that reaches a trust item through a metavariable
+path such as `$p::assume` or `kani::$f`, or binds an import's item
 (`use std::$name as load;`). A repetition-wrapped form such as `$($p)+::assume`
 or `kani::$($f)*` is refused too, with every enclosing repetition walked before
 the decision. A target reached through a symbolic link is reported as the
@@ -870,11 +875,12 @@ as its name does. A module the file declares may re-export a trust root's whole
 surface (`mod m { pub use kani::*; }`); the glob cannot be enumerated, so a
 vocabulary word qualified by that module (`m::assume(..)`) is reported. A
 wildcard import from the crate root, the current module or a parent
-(`use crate::*;`) is refused instead: its bindings are not shown, and one of
-them may be a crate alias. A `use<…>` precise-capture bound is not an import. A
-crate alias re-exported by a module the file declares is followed
-(`use m::k as kk;`). A turbofish call such as `a::<u32, _>(..)` is a call on
-the renamed item, not a path through it.
+(`use crate::*;` or `use crate::prelude::*;`) is refused instead: its bindings
+are not shown, and one of them may be a crate alias. A member re-exported by a
+module the file declares is followed (`use m::a as b;` after the module binds
+`a`), as is a crate alias (`use m::k as kk;`). A `use<…>` precise-capture bound
+is not an import. A turbofish call such as `a::<u32, _>(..)` is a call on the
+renamed item, not a path through it.
 
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a

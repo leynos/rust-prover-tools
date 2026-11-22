@@ -175,7 +175,7 @@ def path_attribute(
         opener = opening_bracket(tokens, index)
         if opener is None or opener not in spans:
             break
-        found = path_value(tokens, opener, index)
+        found = path_value(tokens, opener, index, refuse_unresolved=True)
         if found is not None:
             value = found
         if conditional_path(tokens, opener, index):
