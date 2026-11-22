@@ -61,7 +61,7 @@ PYLINT = $(UV_GATE) tool --managed-python --python $(PYLINT_PYTHON) --from 'pyli
 
 .PHONY: prepare help all clean build build-release lint lint-python interrogate fmt check-fmt \
         markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS) test-workflow-contracts \
-        workflow-check actionlint kani-snapshot-smoke
+        workflow-check actionlint kani-snapshot-smoke kani-snapshot-verify
 
 prepare: ## Install the locked development environment, offline first
 	$(UV_GATE) prepare --group dev
@@ -134,6 +134,53 @@ kani-snapshot-smoke: ## Dispatch a non-publishing snapshot run (opt-in)
 	  -f upstream_commit="$$KANI_SNAPSHOT_UPSTREAM_COMMIT" \
 	  -f publication_id="$$KANI_SNAPSHOT_PUBLICATION_ID" \
 	  -f publish=false
+
+# Opt-in: verifies a produced release through the public consumer commands in a
+# fresh virtual environment. It installs the pinned toolchain, runs setup and
+# executes real proofs, so it is never part of `all`. The release directory is
+# what `gh run download` fetched from a non-publishing run; nothing here
+# publishes.
+KANI_SNAPSHOT_ASSET_DIR ?=
+KANI_SNAPSHOT_WHEEL ?=
+KANI_SNAPSHOT_RUSTC_1_93 ?=
+# Exported, never interpolated: each value is data for the recipe's shell.
+export KANI_SNAPSHOT_ASSET_DIR KANI_SNAPSHOT_WHEEL KANI_SNAPSHOT_RUSTC_1_93
+
+# The smoke environment and the temporary consumer environment both live below
+# the caller's chosen directory, so a failed run leaves nothing in the tree.
+KANI_SNAPSHOT_SMOKE_VENV ?= $(CURDIR)/.kani-smoke-venv
+
+kani-snapshot-verify: ## Verify a produced snapshot through the consumer path
+	$(call ensure_uv)
+	@test -n "$$KANI_SNAPSHOT_ASSET_DIR" || { \
+	  printf 'Error: set KANI_SNAPSHOT_ASSET_DIR to the downloaded release directory\n' >&2; \
+	  exit 1; \
+	}
+	@test -d "$$KANI_SNAPSHOT_ASSET_DIR" || { \
+	  printf 'Error: KANI_SNAPSHOT_ASSET_DIR is not a directory: %s\n' "$$KANI_SNAPSHOT_ASSET_DIR" >&2; \
+	  exit 1; \
+	}
+	@if [ -z "$$KANI_SNAPSHOT_WHEEL" ]; then \
+	  printf 'Error: set KANI_SNAPSHOT_WHEEL to a built wheel\n' >&2; \
+	  exit 1; \
+	fi
+	@test -f "$$KANI_SNAPSHOT_WHEEL" || { \
+	  printf 'Error: KANI_SNAPSHOT_WHEEL is not a file: %s\n' "$$KANI_SNAPSHOT_WHEEL" >&2; \
+	  exit 1; \
+	}
+	@if [ -n "$$KANI_SNAPSHOT_RUSTC_1_93" ] && [ ! -x "$$KANI_SNAPSHOT_RUSTC_1_93" ]; then \
+	  printf 'Error: KANI_SNAPSHOT_RUSTC_1_93 is not executable: %s\n' "$$KANI_SNAPSHOT_RUSTC_1_93" >&2; \
+	  exit 1; \
+	fi
+	rm -rf "$(KANI_SNAPSHOT_SMOKE_VENV)"
+	$(UV_GATE) run -- uv venv "$(KANI_SNAPSHOT_SMOKE_VENV)" --python 3.14
+	$(UV_GATE) run -- uv pip install --python \
+	  "$(KANI_SNAPSHOT_SMOKE_VENV)/bin/python" "$$KANI_SNAPSHOT_WHEEL"
+	KANI_SNAPSHOT_SMOKE=1 \
+	  KANI_SNAPSHOT_SMOKE_ASSET_DIR="$$KANI_SNAPSHOT_ASSET_DIR" \
+	  KANI_SNAPSHOT_SMOKE_PROVER_TOOLS="$(KANI_SNAPSHOT_SMOKE_VENV)/bin/prover-tools" \
+	  KANI_SNAPSHOT_SMOKE_RUSTC_1_93="$$KANI_SNAPSHOT_RUSTC_1_93" \
+	  $(UV_GATE) run -- pytest -q tests/integration/test_kani_snapshot_smoke.py
 
 all: build check-fmt lint typecheck test spelling test-workflow-contracts actionlint
 

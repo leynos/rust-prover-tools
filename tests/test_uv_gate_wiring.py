@@ -53,6 +53,12 @@ ALLOWED_UV_LINES: tuple[str, ...] = (
     "ifeq ($(shell test -f '$(UV)' -a -x '$(UV)' && printf y),)",
     "ifneq ($(UV),uv)",
     "ifneq ($(notdir $(UV)),uv)",
+    # The snapshot verify target's two inner calls are themselves run through
+    # the helper: `uv venv` creates the consumer environment and `uv pip
+    # install` puts the built wheel in it, so each mention is the gated
+    # command rather than a bypass of it.
+    '$(UV_GATE) run -- uv venv "$(KANI_SNAPSHOT_SMOKE_VENV)" --python 3.14',
+    '$(UV_GATE) run -- uv pip install --python "$(KANI_SNAPSHOT_SMOKE_VENV)/bin/python" "$$KANI_SNAPSHOT_WHEEL"',  # ruff: ignore[line-too-long]
 )
 MAKE = shutil.which("make")
 MARKER = "UV-GATE-MARKER"
