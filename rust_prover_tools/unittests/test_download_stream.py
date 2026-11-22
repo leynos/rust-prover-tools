@@ -475,3 +475,58 @@ def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
             destination,
             stream_limits(100, NO_DEADLINE),
         )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _EofCase:
+    """One short body that ends at the deadline, with its declared length."""
+
+    headers: dict[str, str]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        _EofCase({"Content-Length": "10"}),
+        _EofCase({}),
+    ],
+    ids=["declared-length", "no-length"],
+)
+def test_stream_reports_a_late_eof_as_the_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    case: _EofCase,
+) -> None:
+    """A body that ends at the deadline is the deadline, not a short body.
+
+    The watchdog releases a blocked read by shutting the socket down, which
+    reads as EOF. The deadline is therefore checked again before an empty
+    chunk is accepted, so a stalled body cannot pass as complete or be
+    retried as a truncated transfer.
+    """
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    clock = FakeClock()
+    monkeypatch.setattr(download_stream, "monotonic", clock.monotonic)
+
+    class LateEofResponse(FakeResponse):
+        """A response whose body ends only after the deadline."""
+
+        def read(self, amt: int | None = None) -> bytes:
+            """Spend past the deadline and report the end of the body."""
+            del amt
+            clock.advance(2.0)
+            return b""
+
+    with pytest.raises(ProverToolError, match="transfer deadline"):
+        download_stream._stream(
+            LateEofResponse(headers=case.headers),
+            tmp_path / "asset.bin",
+            stream_limits(100, 1.0),
+        )
+
+    assert events_from(caplog)[-1] == {
+        "event": "download.failed",
+        "reason": "deadline",
+        "written": 0,
+    }, "a body that ends at the deadline must report the deadline"

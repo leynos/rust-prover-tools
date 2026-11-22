@@ -15,6 +15,8 @@ import threading
 import typing as typ
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools import download_deadline, download_stream, download_transport
 from rust_prover_tools.downloads import DownloadLimits
@@ -33,6 +35,19 @@ from rust_prover_tools.unittests.download_support import (
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
+
+# Hypothesis cannot reset `monkeypatch` between examples because it is a
+# teardown fixture. Each example installs the same replacement, so reuse is
+# safe.
+REUSABLE_FIXTURES = [HealthCheck.function_scoped_fixture]
+
+#: A finite, positive duration in seconds: a connect limit or a time left.
+DURATION = st.floats(
+    min_value=1e-3,
+    max_value=1_200.0,
+    allow_nan=False,
+    allow_infinity=False,
+)
 
 
 def test_open_rejects_an_expired_deadline() -> None:
@@ -388,3 +403,108 @@ def test_watchdog_shutdown_preserves_a_tls_socket_wrapper() -> None:
     finally:
         tls.close()
         server.close()
+
+
+def test_open_refuses_a_response_that_arrives_after_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A complete header block that arrives at the deadline is still the deadline.
+
+    The watchdog can shut the socket down while the headers are parsed and
+    leave a complete header block behind, so the hop must not hand that
+    response over to be judged by its status instead of its timing.
+    """
+    clock = FakeClock()
+    monkeypatch.setattr(download_deadline, "monotonic", clock.monotonic)
+    hop = FakeHopConnection(sock=FakeSocket())
+
+    def finish_late() -> None:
+        """Spend the whole deadline and return the response normally."""
+        clock.advance(2.0)
+
+    hop.on_response = finish_late
+    monkeypatch.setattr(
+        download_transport.http.client,
+        "HTTPSConnection",
+        HopFactory(hop),
+    )
+
+    with pytest.raises(ProverToolError, match="exceeded the transfer deadline"):
+        download_transport._open(
+            "https://example.test/asset.bin",
+            DownloadLimits(),
+            1.0,
+        )
+
+    assert hop.responses == 1, "the response must be acquired before the check"
+    assert hop.closed, "the refused hop must close its connection"
+
+
+@given(connect_timeout=DURATION, remaining=DURATION)
+@settings(max_examples=100, deadline=None, suppress_health_check=REUSABLE_FIXTURES)
+def test_hop_timeout_never_exceeds_the_time_left(
+    monkeypatch: pytest.MonkeyPatch,
+    connect_timeout: float,
+    remaining: float,
+) -> None:
+    """The hop budget is the smaller of the limit and the time left, and positive.
+
+    A hop with a whole limit to spare keeps the limit; a hop with less left
+    gets only that. The budget is never zero, because a zero socket timeout
+    makes the socket non-blocking rather than failing it.
+    """
+    monkeypatch.setattr(download_deadline, "monotonic", lambda: 0.0)
+
+    budget = download_deadline._hop_timeout(
+        "https://example.test/asset.bin",
+        connect_timeout,
+        remaining,
+    )
+
+    assert budget == pytest.approx(min(connect_timeout, remaining)), (
+        "the hop must be bounded by the smaller of its limit and the time left"
+    )
+    assert budget > 0.0, "a hop budget must never be zero or negative"
+
+
+@given(connect_timeout=DURATION, elapsed=DURATION)
+@settings(max_examples=100, deadline=None, suppress_health_check=REUSABLE_FIXTURES)
+def test_hop_timeout_refuses_every_spent_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    connect_timeout: float,
+    elapsed: float,
+) -> None:
+    """A hop with no time left is refused rather than given a zero budget."""
+    monkeypatch.setattr(download_deadline, "monotonic", lambda: elapsed)
+
+    with pytest.raises(ProverToolError, match="exceeded the transfer deadline"):
+        download_deadline._hop_timeout(
+            "https://example.test/asset.bin",
+            connect_timeout,
+            0.0,
+        )
+
+
+@given(connect_timeout=DURATION, remaining=DURATION)
+@settings(max_examples=100, deadline=None, suppress_health_check=REUSABLE_FIXTURES)
+def test_arm_socket_uses_the_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    connect_timeout: float,
+    remaining: float,
+) -> None:
+    """Re-arming before the send uses the same budget the hop was sized with."""
+    monkeypatch.setattr(download_deadline, "monotonic", lambda: 0.0)
+    sock = FakeSocket()
+    hop = FakeHopConnection(sock=sock)
+
+    armed = download_deadline._arm_socket(
+        typ.cast("download_transport.http.client.HTTPSConnection", hop),
+        "https://example.test/asset.bin",
+        connect_timeout,
+        remaining,
+    )
+
+    assert armed is sock, "the hop must arm the capture it will watch"
+    assert sock.timeouts == [pytest.approx(min(connect_timeout, remaining))], (
+        "the send must run under the time the connect phase left"
+    )
