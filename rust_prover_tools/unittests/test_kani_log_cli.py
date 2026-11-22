@@ -46,13 +46,17 @@ def test_a_verified_log_passes_and_prints_its_cover(
     """Report the outcome, run mode and cover in text."""
     status = run("verified", harness=["harnesses::verified"])
     captured = capsys.readouterr()
-    assert status == 0
-    assert "outcome: verified\n" in captured.out
-    assert "run mode: full-profile\n" in captured.out
+    assert status == 0, "Report the outcome, run mode and cover in text."
+    assert "outcome: verified\n" in captured.out, (
+        "Report the outcome, run mode and cover in text."
+    )
+    assert "run mode: full-profile\n" in captured.out, (
+        "Report the outcome, run mode and cover in text."
+    )
     assert (
         "cover harnesses::verified: the boundary below saturation is "
         "reachable: satisfied\n"
-    ) in captured.out
+    ) in captured.out, "Report the outcome, run mode and cover in text."
 
 
 def test_a_counterexample_completes_without_passing(
@@ -60,8 +64,10 @@ def test_a_counterexample_completes_without_passing(
 ) -> None:
     """Use status 2 for a completed analysis that did not pass."""
     status = run("counterexample", harness=["harnesses::counterexample"])
-    assert status == 2
-    assert "outcome: counterexample\n" in capsys.readouterr().out
+    assert status == 2, "Use status 2 for a completed analysis that did not pass."
+    assert "outcome: counterexample\n" in capsys.readouterr().out, (
+        "Use status 2 for a completed analysis that did not pass."
+    )
 
 
 def test_a_truncated_log_is_a_tool_error(
@@ -69,8 +75,12 @@ def test_a_truncated_log_is_a_tool_error(
 ) -> None:
     """A structurally invalid log completes as a tool error, not an input error."""
     status = run("truncated")
-    assert status == 2
-    assert "outcome: tool-error\n" in capsys.readouterr().out
+    assert status == 2, (
+        "A structurally invalid log completes as a tool error, not an input error."
+    )
+    assert "outcome: tool-error\n" in capsys.readouterr().out, (
+        "A structurally invalid log completes as a tool error, not an input error."
+    )
 
 
 def test_requiring_a_full_profile_fails_a_focused_run(
@@ -105,15 +115,19 @@ def test_requiring_a_full_profile_fails_a_focused_run(
         output_format="text",
     )
     captured = capsys.readouterr()
-    assert without_requirement == 0
-    assert with_requirement == 2
+    assert without_requirement == 0, (
+        "The profile requirement turns a passing focused run into status 2."
+    )
+    assert with_requirement == 2, (
+        "The profile requirement turns a passing focused run into status 2."
+    )
     assert captured.out == (
         "outcome: verified\n"
         "reason: decided from the parsed log\n"
         "run mode: focused\n"
         "cover harnesses::verified: the boundary below saturation is "
         "reachable: satisfied\n"
-    )
+    ), "The profile requirement turns a passing focused run into status 2."
 
 
 def test_an_invalid_manifest_is_an_input_error(
@@ -125,8 +139,10 @@ def test_an_invalid_manifest_is_an_input_error(
     manifest.write_text("{not json", encoding="utf-8")
     status = run("verified", manifest=manifest)
     captured = capsys.readouterr()
-    assert status == 1
-    assert "Kani harness manifest" in captured.err
+    assert status == 1, "Reject a manifest that is not JSON with status 1."
+    assert "Kani harness manifest" in captured.err, (
+        "Reject a manifest that is not JSON with status 1."
+    )
 
 
 def test_a_deeply_nested_manifest_is_an_input_error(
@@ -143,10 +159,10 @@ def test_a_deeply_nested_manifest_is_an_input_error(
     manifest.write_text("[" * 100_000 + "]" * 100_000, encoding="utf-8")
     status = run("verified", manifest=manifest)
     captured = capsys.readouterr()
-    assert status == 1
+    assert status == 1, "Reject a deeply nested manifest with status 1."
     assert "nested too deeply" in captured.err or "must be a JSON object" in (
         captured.err
-    )
+    ), "Reject a deeply nested manifest with status 1."
 
 
 def test_an_unreadable_log_is_an_input_error(
@@ -161,8 +177,10 @@ def test_an_unreadable_log_is_an_input_error(
         output_format="text",
     )
     captured = capsys.readouterr()
-    assert status == 1
-    assert "cannot read log" in captured.err
+    assert status == 1, "Reject a missing log with status 1 and a diagnostic."
+    assert "cannot read log" in captured.err, (
+        "Reject a missing log with status 1 and a diagnostic."
+    )
 
 
 def test_json_output_is_a_stable_object(
@@ -178,7 +196,9 @@ def test_json_output_is_a_stable_object(
         output_format="json",
     )
     payload = json.loads(capsys.readouterr().out)
-    assert status == 0
+    assert status == 0, (
+        "Emit the documented object with one record per cover and control."
+    )
     assert list(payload) == [
         "schema_version",
         "outcome",
@@ -187,21 +207,29 @@ def test_json_output_is_a_stable_object(
         "passed",
         "covers",
         "controls",
-    ]
-    assert payload["schema_version"] == 1
-    assert payload["outcome"] == "verified"
-    assert payload["run_mode"] == "full-profile"
-    assert payload["passed"] is True
+    ], "Emit the documented object with one record per cover and control."
+    assert payload["schema_version"] == 1, (
+        "Emit the documented object with one record per cover and control."
+    )
+    assert payload["outcome"] == "verified", (
+        "Emit the documented object with one record per cover and control."
+    )
+    assert payload["run_mode"] == "full-profile", (
+        "Emit the documented object with one record per cover and control."
+    )
+    assert payload["passed"] is True, (
+        "Emit the documented object with one record per cover and control."
+    )
     assert payload["covers"] == [
         {
             "harness": "harnesses::verified",
             "cover": "the boundary below saturation is reachable",
             "status": "satisfied",
         },
-    ]
+    ], "Emit the documented object with one record per cover and control."
     assert payload["controls"] == [
         {
             "harness": "harnesses::seeded_wrapping_mutant",
             "status": "rejected-as-intended",
         },
-    ]
+    ], "Emit the documented object with one record per cover and control."

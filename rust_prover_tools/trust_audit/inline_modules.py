@@ -61,7 +61,9 @@ def names_module(token: Token, head: tuple[Token, ...]) -> bool:
     ``head`` holds the module's name and the ``;`` or ``{`` after it. A short
     slice means the file ends inside a declaration, which names no file.
     """
-    if token.kind is not Kind.IDENT or token.text != "mod":
+    if token.kind is not Kind.IDENT or token.raw:
+        return False
+    if token.text != "mod":
         return False
     return len(head) == DECLARATION_TOKENS - 1 and head[0].kind is Kind.IDENT
 

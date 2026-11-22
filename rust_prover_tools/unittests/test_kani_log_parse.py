@@ -365,6 +365,17 @@ def test_a_harness_block_after_the_manual_summary_is_refused() -> None:
     assert "follows the manual harness summary" in refused(text)
 
 
+def test_a_report_line_outside_a_block_is_refused() -> None:
+    """Refuse report markers that no harness block owns."""
+    text = log_text("verified").replace(
+        "Manual Harness Summary:",
+        "RESULTS:\nVERIFICATION:- FAILED\nManual Harness Summary:",
+        1,
+    )
+
+    assert "outside a harness block" in refused(text)
+
+
 def test_a_second_kani_banner_is_refused() -> None:
     """Refuse a capture that holds more than one Kani invocation.
 

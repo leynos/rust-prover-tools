@@ -10,6 +10,7 @@ rather than guessed.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
@@ -31,10 +32,20 @@ __all__ = ("refuse_forwarded_modules",)
 _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _ForwardScope:
+    """The definitions, aliases and excluded spans one refusal reads."""
+
+    rules: MacroRules
+    aliases: cabc.Mapping[str, str]
+    stringified: frozenset[int]
+
+
 def refuse_forwarded_modules(
     tokens: tuple[Token, ...],
     rules: MacroRules,
     aliases: cabc.Mapping[str, str],
+    stringified: frozenset[int],
 ) -> None:
     """Refuse a module declaration passed into an argument-forwarding macro.
 
@@ -44,6 +55,7 @@ def refuse_forwarded_modules(
         If a module declaration lies in the arguments of a local macro whose
         expansion splices a metavariable.
     """
+    scope = _ForwardScope(rules, aliases, stringified)
     for spelling, sites in rules.invocations.items():
         name = spelling if spelling in rules.heads else aliases.get(spelling)
         if name is None or not _forwards_arguments(tokens, rules, name):
@@ -52,6 +64,7 @@ def refuse_forwarded_modules(
             if site not in rules.patterns and _argument_declares_module(
                 tokens,
                 site,
+                scope,
             ):
                 token = tokens[site]
                 msg = (
@@ -77,8 +90,17 @@ def _forwards_arguments(
     )
 
 
-def _argument_declares_module(tokens: tuple[Token, ...], site: int) -> bool:
-    """Report whether an invocation's argument group holds a module declaration."""
+def _argument_declares_module(
+    tokens: tuple[Token, ...],
+    site: int,
+    scope: _ForwardScope,
+) -> bool:
+    """Report whether an invocation's argument group declares a module.
+
+    A literal ``mod`` counts, and so does a local macro invocation whose
+    expansion declares one: the forwarding macro may wrap that expansion in
+    its own inline module just as it wraps a literal declaration.
+    """
     opening = site + 2
     if opening >= len(tokens) or tokens[opening].text not in _DELIMITER_PAIRS:
         return False
@@ -89,6 +111,47 @@ def _argument_declares_module(tokens: tuple[Token, ...], site: int) -> bool:
         _DELIMITER_PAIRS[tokens[opening].text],
     )
     return any(
-        names_module(tokens[index], tokens[index + 1 : index + DECLARATION_TOKENS])
-        for index in range(opening + 1, closing)
+        _declares_module(tokens, index, scope) for index in range(opening + 1, closing)
+    )
+
+
+def _invoked_definition(
+    tokens: tuple[Token, ...],
+    index: int,
+    scope: _ForwardScope,
+) -> str | None:
+    """Return the local macro an argument token invokes, if it invokes one."""
+    if index + 2 >= len(tokens):
+        return None
+    token = tokens[index]
+    if token.kind is not Kind.IDENT or tokens[index + 1].text != "!":
+        return None
+    if tokens[index + 2].text not in _DELIMITER_PAIRS:
+        return None
+    if token.text in scope.rules.heads:
+        return token.text
+    return scope.aliases.get(token.text)
+
+
+def _declares_module(
+    tokens: tuple[Token, ...],
+    index: int,
+    scope: _ForwardScope,
+) -> bool:
+    """Report whether one argument token declares or invokes a declaration."""
+    if index in scope.stringified:
+        return False
+    if names_module(tokens[index], tokens[index + 1 : index + DECLARATION_TOKENS]):
+        return True
+    name = _invoked_definition(tokens, index, scope)
+    if name is None:
+        return False
+    return any(
+        expansion not in scope.rules.patterns
+        and expansion not in scope.stringified
+        and names_module(
+            tokens[expansion],
+            tokens[expansion + 1 : expansion + DECLARATION_TOKENS],
+        )
+        for expansion in scope.rules.expansions_by_name.get(name, ())
     )

@@ -307,6 +307,13 @@ def test_a_unicode_numeric_suffix_is_not_an_identifier() -> None:
     assert items("ignore!(1a·assume);") == []
 
 
+def test_a_raw_keyword_is_not_read_as_the_keyword() -> None:
+    """``r#use`` is an identifier, not an import, so it begins no import root."""
+    source = "struct kani; fn r#use() -> kani { kani }"
+
+    assert items(source) == []
+
+
 def test_a_numeric_literal_suffix_is_not_an_identifier() -> None:
     """Keep a numeric literal's suffix inside the literal, as Rust lexes it."""
     words = [

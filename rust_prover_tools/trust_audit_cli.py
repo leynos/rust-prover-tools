@@ -66,9 +66,23 @@ def _text_lines(
     file_noun = "file" if audited == 1 else "files"
     return (
         f"provers: {', '.join(_provers(vocabularies))}",
-        *(f"{path}:{item.line}:{item.column}: {item.item}" for path, item in entries),
+        *(
+            f"{_printable(path)}:{item.line}:{item.column}: {item.item}"
+            for path, item in entries
+        ),
         f"audited {audited} {file_noun}, {count} trusted {noun}",
     )
+
+
+def _printable(path: str) -> str:
+    """Escape characters that would break one line of the text report.
+
+    A Linux filename may contain a newline or an escape character, and the
+    report must keep one item per line.  The JSON form already escapes them.
+    """
+    if path.isprintable():
+        return path
+    return path.encode("unicode_escape").decode("ascii")
 
 
 def _json_payload(

@@ -85,7 +85,9 @@ def test_the_real_decision_gets_nothing_wrong() -> None:
         for name in corpus.log_names()
         if props.summarise(corpus.corpus_decision_for(name)) != corpus.recorded(name)
     ]
-    assert wrong == []
+    assert wrong == [], (
+        "Establish the reference the broken analyses are measured against."
+    )
 
 
 def test_always_verified_is_wrong() -> None:
@@ -96,7 +98,7 @@ def test_always_verified_is_wrong() -> None:
         if props.summarise(_apply(broken_always_verified, name))
         != corpus.recorded(name)
     ]
-    assert wrong
+    assert wrong, "Reject an analysis that ignores the log and reports success."
 
 
 def test_the_success_line_alone_is_wrong() -> None:
@@ -107,7 +109,9 @@ def test_the_success_line_alone_is_wrong() -> None:
         if props.summarise(_apply(broken_success_line_only, name))
         != corpus.recorded(name)
     ]
-    assert "vacuous_assumption" in wrong
+    assert "vacuous_assumption" in wrong, (
+        "Reject an analysis that trusts the printed verdict and ignores covers."
+    )
 
 
 def test_ignoring_the_manifest_is_wrong() -> None:
@@ -118,4 +122,6 @@ def test_ignoring_the_manifest_is_wrong() -> None:
         if props.summarise(_apply(broken_manifest_ignored, name))
         != corpus.recorded(name)
     ]
-    assert "seeded_wrapping_mutant" in wrong
+    assert "seeded_wrapping_mutant" in wrong, (
+        "Reject an analysis that never reads roles, witnesses or expected failures."
+    )

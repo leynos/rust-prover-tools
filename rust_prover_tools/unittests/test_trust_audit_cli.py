@@ -324,3 +324,25 @@ def test_an_absolute_driver_through_a_symlink_names_the_compiled_file(
 
     assert status == 0
     assert "src/lib.rs:1:7: assume\n" in captured.out
+
+
+def test_a_non_printable_path_stays_on_one_report_line(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Escape a filename that would otherwise split one item across two lines."""
+    text = "kani::assume(true);"
+    write(tmp_path, {"src/first\nsecond.rs": text})
+    (tmp_path / "src" / "first\nsecond.rs").rename(
+        tmp_path / "src" / "first\nsecond.rs"
+    )
+
+    status = audit_trust(
+        [tmp_path / "src" / "first\nsecond.rs"],
+        repo_root=tmp_path,
+    )
+    captured = capsys.readouterr()
+
+    assert status == 0, captured.err
+    locations = [line for line in captured.out.splitlines() if ": assume" in line]
+    assert locations == ["src/first\\nsecond.rs:1:7: assume"], captured.out

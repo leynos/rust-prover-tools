@@ -61,7 +61,7 @@ def begins_import(tokens: tuple[Token, ...], index: int) -> bool:
     import: treating it as one would make ``kani`` an import root and switch
     the bare-word rule on for a file that never imported anything.
     """
-    if tokens[index].text != "use":
+    if tokens[index].text != "use" or tokens[index].raw:
         return False
     return index + 1 >= len(tokens) or tokens[index + 1].text != "<"
 

@@ -275,6 +275,11 @@ _DESCRIPTION_BOUNDARIES = (
         'first"\n\nCheck this boundary\nand second',
         id="ordinary-check-prose",
     ),
+    pytest.param(
+        '- Description: "first"\n\t - Status: SUCCESS\n\nCheck 2: not-a-header\nlast"',
+        'first"\n\t - Status: SUCCESS\n\nCheck 2: not-a-header\nlast',
+        id="repeated-field-after-embedded-quote",
+    ),
 )
 
 

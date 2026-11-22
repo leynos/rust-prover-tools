@@ -766,7 +766,11 @@ item it found:
   that expands literals turns them into code the lexer never sees. Either flag
   overrides the manifest, so a caller can correct a crate kind the audit cannot
   read without editing the manifest. A manifest that exists but cannot be
-  parsed is refused rather than guessed at.
+  parsed is refused rather than guessed at, as is one that renames `kani`,
+  `vstd` or `verus_builtin` as a Cargo dependency: that rename binds the crate
+  with no import the per-file scan can follow. A driver a manifest names through
+  `[lib] path` takes that manifest's crate kind even when the file sits
+  outside the manifest's directory.
 - `--format text|json` chooses the readable report or the schema-versioned
   object. Both forms name the selected provers, because the selection changes
   what the report can contain.

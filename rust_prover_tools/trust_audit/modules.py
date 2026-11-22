@@ -88,11 +88,11 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     references = []
     spans = dict(attribute_spans(tokens))
     rules = macro_rules(tokens)
-    _refuse_metavariable_modules(tokens, rules.expansions)
+    stringified = stringify_arguments(tokens, defined=rules.heads)
+    _refuse_metavariable_modules(tokens, rules.expansions, stringified)
     aliases = _macro_aliases(tokens, rules.heads)
-    refuse_forwarded_modules(tokens, rules, aliases)
+    refuse_forwarded_modules(tokens, rules, aliases, stringified)
     inline = InlineModules(tokens, rules.patterns)
-    stringified = stringify_arguments(tokens)
     contexts = _invocation_contexts(
         tokens,
         rules,
@@ -351,6 +351,7 @@ def _expanded_references(
 def _refuse_metavariable_modules(
     tokens: tuple[Token, ...],
     expansions: cabc.Iterable[int],
+    stringified: frozenset[int],
 ) -> None:
     """Fail closed on a ``mod $name;`` a macro expansion emits.
 
@@ -365,6 +366,8 @@ def _refuse_metavariable_modules(
     declaration.
     """
     for index in sorted(expansions):
+        if index in stringified:
+            continue
         token = tokens[index]
         next_index = index + 1
         if token.kind is not Kind.IDENT or token.text != "mod":

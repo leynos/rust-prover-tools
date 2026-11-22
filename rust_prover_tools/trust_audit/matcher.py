@@ -32,6 +32,7 @@ never sees.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.trust_audit.context import Context
@@ -176,8 +177,16 @@ def _refuse_opaque_macros(
     # ``stringify!`` turns its argument into text, so an opaque macro inside
     # one does not run.  A proc-macro crate can parse that text, so there the
     # refusal stays.
-    stringified = frozenset() if procedural_macro else stringify_arguments(tokens)
-    _refuse_metavariable_invocations(tokens, rules, words, qualifiers)
+    stringified = (
+        frozenset()
+        if procedural_macro
+        else stringify_arguments(tokens, defined=rules.heads)
+    )
+    _refuse_metavariable_invocations(
+        tokens,
+        rules,
+        _Vocabulary(words, qualifiers, stringified),
+    )
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
         if index in rules.patterns or index in stringified:
@@ -193,11 +202,19 @@ def _refuse_opaque_macros(
         raise TrustAuditError(msg)
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _Vocabulary:
+    """The vocabulary and exclusions one refusal pass reads."""
+
+    words: frozenset[str]
+    qualifiers: frozenset[str]
+    stringified: frozenset[int]
+
+
 def _refuse_metavariable_invocations(
     tokens: tuple[Token, ...],
     rules: MacroRules,
-    words: frozenset[str],
-    qualifiers: frozenset[str],
+    scope: _Vocabulary,
 ) -> None:
     """Fail closed on an expansion whose metavariable hides a trust use.
 
@@ -209,12 +226,21 @@ def _refuse_metavariable_invocations(
     defining crate rather than an argument, so it is not refused.
     """
     for index in rules.expansions:
-        if not _is_expansion_metavariable(tokens, rules, index):
+        if index in scope.stringified or not _is_expansion_metavariable(
+            tokens,
+            rules,
+            index,
+        ):
             continue
         token = tokens[index]
         if token.kind is not Kind.IDENT or token.text == "crate":
             continue
-        refusal = _metavariable_refusal(tokens, index, words, qualifiers)
+        refusal = _metavariable_refusal(
+            tokens,
+            index,
+            scope.words,
+            scope.qualifiers,
+        )
         if refusal is not None:
             raise TrustAuditError(refusal)
 

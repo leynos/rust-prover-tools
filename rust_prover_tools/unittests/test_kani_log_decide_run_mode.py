@@ -27,7 +27,9 @@ from tests import kani_log_fixtures as facts
 
 def test_a_single_harness_run_is_full_profile_for_its_own_manifest() -> None:
     """Require a run narrowed to one harness to cover that manifest completely."""
-    assert corpus.corpus_decision_for("selected_harness").run_mode == FULL_PROFILE
+    assert corpus.corpus_decision_for("selected_harness").run_mode == FULL_PROFILE, (
+        "Require a run narrowed to one harness to cover that manifest completely."
+    )
 
 
 def test_the_corpus_contains_a_full_profile_run() -> None:
@@ -36,14 +38,18 @@ def test_the_corpus_contains_a_full_profile_run() -> None:
     focused = {
         name for name, decision in decisions.items() if decision.run_mode == FOCUSED
     }
-    assert focused == {"fail_fast", "list", "truncated"}
+    assert focused == {"fail_fast", "list", "truncated"}, (
+        "Require only the runs that omit a declared harness to stay focused."
+    )
     verified = {
         name
         for name, decision in decisions.items()
         if decision.run_mode == FULL_PROFILE
         and decision.outcome == KaniOutcome.VERIFIED
     }
-    assert {"default_unwind", "verified"} <= verified
+    assert {"default_unwind", "verified"} <= verified, (
+        "Require only the runs that omit a declared harness to stay focused."
+    )
 
 
 def test_full_profile_requires_every_manifest_harness() -> None:
@@ -66,7 +72,9 @@ def test_full_profile_requires_every_manifest_harness() -> None:
             ),
         )
     )
-    assert facts.decision_for(combination).run_mode == FULL_PROFILE
+    assert facts.decision_for(combination).run_mode == FULL_PROFILE, (
+        "Require the whole manifest, with unwinding enabled, to be full-profile."
+    )
 
 
 def test_full_profile_requires_enabled_unwinding_checks() -> None:
@@ -75,17 +83,23 @@ def test_full_profile_requires_enabled_unwinding_checks() -> None:
         facts.HarnessFact("h::a", CLAIM, facts.SUCCESS, unwinding_checks=False),
         facts.HarnessFact("h::k", CONTROL, facts.AS_INTENDED, unwinding_checks=False),
     )
-    assert facts.decision_for(combination).run_mode == FOCUSED
+    assert facts.decision_for(combination).run_mode == FOCUSED, (
+        "Require a run that disabled unwinding checks to stay focused."
+    )
 
 
 def test_a_narrowed_manifest_is_what_makes_a_run_full_profile() -> None:
     """Require the same log to be full-profile for its run and focused for the crate."""
-    assert corpus.corpus_decision_for("insufficient_unwind").run_mode == FULL_PROFILE
+    assert corpus.corpus_decision_for("insufficient_unwind").run_mode == FULL_PROFILE, (
+        "Require the same log to be full-profile for its run and focused for the crate."
+    )
     whole = analyse_kani_log(
         corpus.parse_log("insufficient_unwind"),
         corpus.corpus_manifest(),
     )
-    assert whole.run_mode == FOCUSED
+    assert whole.run_mode == FOCUSED, (
+        "Require the same log to be full-profile for its run and focused for the crate."
+    )
 
 
 def test_a_block_for_an_unselected_harness_is_skipped_not_refused() -> None:
@@ -103,8 +117,12 @@ def test_a_block_for_an_unselected_harness_is_skipped_not_refused() -> None:
         whole.select(("h::a",)),
         declared=whole.names(),
     )
-    assert decision.outcome is KaniOutcome.VERIFIED
-    assert decision.run_mode == FULL_PROFILE
+    assert decision.outcome is KaniOutcome.VERIFIED, (
+        "Skip a block the run did not select instead of calling it undeclared."
+    )
+    assert decision.run_mode == FULL_PROFILE, (
+        "Skip a block the run did not select instead of calling it undeclared."
+    )
 
 
 def test_a_block_the_declaration_does_not_name_is_still_refused() -> None:
@@ -112,5 +130,9 @@ def test_a_block_the_declaration_does_not_name_is_still_refused() -> None:
     log = shapes.log_of("h::a", "h::stray")
     manifest = Manifest((Harness("h::a", CLAIM),))
     decision = analyse_kani_log(log, manifest)
-    assert decision.outcome is KaniOutcome.TOOL_ERROR
-    assert "does not declare" in decision.reason
+    assert decision.outcome is KaniOutcome.TOOL_ERROR, (
+        "Refuse a block for a harness the manifest never declared at all."
+    )
+    assert "does not declare" in decision.reason, (
+        "Refuse a block for a harness the manifest never declared at all."
+    )

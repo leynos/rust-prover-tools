@@ -73,7 +73,9 @@ def test_every_table_row_explains_itself() -> None:
 def test_the_table_covers_every_outcome() -> None:
     """Require the table to reach every outcome the analysis can return."""
     covered = {row["outcome"] for row in corpus.table()["rows"]}
-    assert covered == {outcome.value for outcome in KaniOutcome}
+    assert covered == {outcome.value for outcome in KaniOutcome}, (
+        "Require the table to reach every outcome the analysis can return."
+    )
 
 
 def test_counterexamples_dominate() -> None:
@@ -143,7 +145,7 @@ def test_every_outcome_is_reachable() -> None:
         facts.decision_for(combination).outcome
         for combination in props.every_combination()
     }
-    assert reached == set(KaniOutcome)
+    assert reached == set(KaniOutcome), "Require the product to reach every outcome."
 
 
 def test_an_undeclared_harness_is_always_a_tool_error() -> None:

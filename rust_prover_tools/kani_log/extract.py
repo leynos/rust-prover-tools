@@ -22,6 +22,7 @@ from rust_prover_tools.kani_log.syntax import (
     SOLVER_FRAME,
     SUPPORTED_KANI_VERSIONS,
     UNSUPPORTED_PRELUDE,
+    VERIFICATION,
     KaniLogError,
 )
 
@@ -119,6 +120,7 @@ def _scan(reader: Reader) -> _ObservedLog:
             )
             raise KaniLogError(msg)
         else:
+            _refuse_orphan_report_line(reader, line)
             reader.take()
     return _ObservedLog(
         tuple(blocks),
@@ -126,6 +128,17 @@ def _scan(reader: Reader) -> _ObservedLog:
         is_list,
         tuple(unsupported),
     )
+
+
+def _refuse_orphan_report_line(reader: Reader, line: str) -> None:
+    """Refuse a report marker that no harness block owns.
+
+    Discarding one would accept a malformed capture and return an earlier
+    block's facts as though the report were complete.
+    """
+    if line in {"RESULTS:", "SUMMARY:"} or VERIFICATION.match(line) is not None:
+        msg = f"{reader.where()}: a report line outside a harness block"
+        raise KaniLogError(msg)
 
 
 def _refuse_harness_after_manual(

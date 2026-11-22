@@ -42,7 +42,9 @@ def test_a_failed_verdict_outweighs_a_missing_claim() -> None:
     )
     log = KaniLog("0.67.0", "regular", (block,), ManualSummary(0, 1, 1, (name,)), ())
     manifest = Manifest((Harness(name, CLAIM), Harness("h::b", CLAIM)))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE, (
+        "Prefer the disproof a failed block shows to the skip the log also shows."
+    )
 
 
 def test_a_failed_verdict_outranks_another_claims_timeout() -> None:
@@ -70,7 +72,9 @@ def test_a_failed_verdict_outranks_another_claims_timeout() -> None:
         (),
     )
     manifest = Manifest((Harness(name, CLAIM), Harness("h::b", CLAIM)))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE, (
+        "Prefer an unexplained failure to a timeout in a different claim."
+    )
 
 
 def test_a_timeout_without_an_unexplained_failure_is_exhaustion() -> None:
@@ -85,14 +89,20 @@ def test_a_timeout_without_an_unexplained_failure_is_exhaustion() -> None:
     )
     manifest = Manifest((Harness("h::a", CLAIM),))
     decision = analyse_kani_log(log, manifest)
-    assert decision.outcome is KaniOutcome.RESOURCE_EXHAUSTED
+    assert decision.outcome is KaniOutcome.RESOURCE_EXHAUSTED, (
+        "Keep a timeout's own classification when no verdict is unexplained."
+    )
 
 
 def test_a_structural_refusal_decides_tool_error() -> None:
     """Require the killed run to decide tool-error with its structural reason."""
     decision = corpus.corpus_decision_for("truncated")
-    assert decision.outcome == KaniOutcome.TOOL_ERROR
-    assert "truncated" in decision.reason
+    assert decision.outcome == KaniOutcome.TOOL_ERROR, (
+        "Require the killed run to decide tool-error with its structural reason."
+    )
+    assert "truncated" in decision.reason, (
+        "Require the killed run to decide tool-error with its structural reason."
+    )
 
 
 def test_every_committed_log_decides_as_recorded() -> None:
@@ -113,16 +123,26 @@ def test_the_corpus_reaches_the_required_classes() -> None:
         KaniOutcome.RESOURCE_EXHAUSTED,
         KaniOutcome.SKIPPED,
         KaniOutcome.TOOL_ERROR,
-    } <= outcomes
+    } <= outcomes, (
+        "Require the corpus to contain each outcome class registration depends on."
+    )
     assert {
         KaniOutcome.UNSUPPORTED,
         KaniOutcome.UNDETERMINED,
-    } & outcomes
-    assert any("unsatisfied" in decision.witness_statuses for decision in decisions)
+    } & outcomes, (
+        "Require the corpus to contain each outcome class registration depends on."
+    )
+    assert any("unsatisfied" in decision.witness_statuses for decision in decisions), (
+        "Require the corpus to contain each outcome class registration depends on."
+    )
 
 
 def test_a_successful_run_may_still_have_an_unsatisfied_witness() -> None:
     """Require the vacuous run's successful verdict not to decide verified."""
     decision = corpus.corpus_decision_for("vacuous_assumption")
-    assert decision.outcome == KaniOutcome.UNDETERMINED
-    assert decision.witness_statuses == ("unsatisfied",)
+    assert decision.outcome == KaniOutcome.UNDETERMINED, (
+        "Require the vacuous run's successful verdict not to decide verified."
+    )
+    assert decision.witness_statuses == ("unsatisfied",), (
+        "Require the vacuous run's successful verdict not to decide verified."
+    )

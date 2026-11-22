@@ -18,6 +18,36 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
 
+def test_a_windows_path_attribute_derives_a_windows_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    r"""Resolve ``#[path]`` components the way the reading host does.
+
+    On Windows ``r"parts\parent.rs"`` names ``src/parts/parent.rs``, so the
+    file's own ``mod child;`` searches ``src/parts/child.rs``.  A POSIX lookup
+    would keep the backslash and search ``src/child.rs`` instead.
+    """
+    from rust_prover_tools.trust_audit import module_paths
+
+    monkeypatch.setattr(module_paths, "_WINDOWS", True)
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": '#[path = r"parts\\parent.rs"]\nmod parent;',
+            "src/parts/parent.rs": "mod child;",
+            "src/parts/child.rs": "fn f() { kani::assume(true); }",
+            "src/child.rs": "fn clean() {}",
+        },
+    )
+
+    assert audited(tmp_path, "src/lib.rs") == {
+        "src/lib.rs": [],
+        "src/parts/child.rs": ["assume"],
+        "src/parts/parent.rs": [],
+    }
+
+
 def test_a_first_inline_path_is_relative_to_the_files_directory(
     tmp_path: Path,
 ) -> None:

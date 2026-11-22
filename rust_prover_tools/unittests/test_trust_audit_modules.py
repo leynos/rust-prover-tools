@@ -159,6 +159,46 @@ def test_a_module_forwarded_through_a_macro_argument_is_refused() -> None:
         references(source)
 
 
+def test_a_forwarded_invocation_that_declares_a_module_is_refused() -> None:
+    """Refuse an invocation forwarded into a wrapper that may re-scope it."""
+    source = "\n".join(
+        (
+            "macro_rules! emit { () => { mod child; }; }",
+            "macro_rules! wrap { ($($t:tt)*) => { mod nested { $($t)* } }; }",
+            "wrap! { emit!(); }",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="passes a module declaration"):
+        references(source)
+
+
+def test_a_stringified_module_is_not_forwarded() -> None:
+    """Leave ``stringify!`` text alone inside a forwarding macro's argument."""
+    source = "\n".join(
+        (
+            "macro_rules! identity { ($($t:tt)*) => { $($t)* }; }",
+            "identity! { const TEXT: &str = stringify!(mod ghost;); }",
+        ),
+    )
+
+    assert references(source) == []
+
+
+def test_a_stringified_metavariable_module_is_not_refused() -> None:
+    """Leave a metavariable module inside ``stringify!`` alone."""
+    source = "\n".join(
+        (
+            "macro_rules! label {",
+            "    ($name:ident) => { const TEXT: &str = stringify!(mod $name;); };",
+            "}",
+            "label!(ghost);",
+        ),
+    )
+
+    assert references(source) == []
+
+
 def test_a_forwarded_module_inside_an_expansion_is_refused() -> None:
     """Refuse a forwarded declaration written inside another macro's expansion."""
     source = "\n".join(

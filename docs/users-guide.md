@@ -773,9 +773,11 @@ Useful options are:
   that never failed has not shown that the fault would be caught. Paths are
   compared without touching the filesystem: `.` components match, and on
   Windows either separator matches, but on POSIX a backslash is part of the
-  filename. A `..` step is kept as written, so only the same spelling matches;
-  through a symbolic link it can name a different file from the path a `..`
-  would collapse to.
+  filename. The same host rule decides a `#[path]` value: on Windows a
+  backslash separates components, and on POSIX it is part of the name. A `..`
+  step is kept as written, so only the same spelling matches; through a
+  symbolic link it can name a different file from the path a `..` would
+  collapse to.
 - `--require-full`: fail unless the run verified the whole crate rather than a
   selection.
 - `--format text|json`: choose the readable report or a stable JSON object for
@@ -808,7 +810,9 @@ different from "never read".
 
 The audit follows `mod` declarations from the files it is given rather than
 listing directories, so dead files nobody compiles are not reported and every
-file the crate compiles is. A declaration may use `#[path]`, inline modules, or
+file the crate compiles through the declarations the scan can follow is read. A
+file that a macro invocation in another file declares is the documented
+exception, stated below. A declaration may use `#[path]`, inline modules, or
 nested module directories; each target is resolved as Rust resolves it. A
 declaration that resolves to no file, to more than one candidate (`x.rs` beside
 `x/mod.rs`), to a file outside the repository root, or to whichever file a
@@ -857,9 +861,12 @@ inside `src/a.rs` is applied before the deferred `a` component exists, so it
 names `src/parts`, not `src/a/parts`. A `#[path]` that leaves the repository is
 refused. The proc-macro flag is read from the nearest `Cargo.toml` with
 `tomllib`: `[lib] proc-macro = true`, its deprecated `proc_macro` spelling, and
-`crate-type = ["proc-macro"]` all make the crate a proc-macro crate. A manifest
-that resolves outside the repository, or cannot be parsed, is refused rather
-than guessed at.
+`crate-type = ["proc-macro"]` all make the crate a proc-macro crate. A driver a
+manifest names through `[lib] path` takes that manifest's crate kind even when
+it sits outside the manifest's directory. A manifest that resolves outside the
+repository, cannot be parsed, or renames `kani`, `vstd` or `verus_builtin` as a
+dependency (`proof = { package = "kani", … }`) is refused rather than guessed
+at: the rename binds the crate without any import the scan can see.
 
 A word counts as trust only in a context that gives it meaning:
 

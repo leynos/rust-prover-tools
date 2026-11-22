@@ -17,6 +17,7 @@ before its existence is asked about.
 from __future__ import annotations
 
 import dataclasses as dc
+import os
 import pathlib
 import typing as typ
 
@@ -26,6 +27,11 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
+
+#: Whether the host reading a ``#[path]`` value treats ``\\`` as a separator.
+#: rustc resolves the value with the host's path rules, and on POSIX a
+#: backslash is an ordinary filename character.
+_WINDOWS = os.name == "nt"
 
 #: The suffix a Rust source file carries.
 RUST_SUFFIX: typ.Final[str] = ".rs"
@@ -242,7 +248,7 @@ def _module_candidates(
     """
     if reference.path is not None:
         base = pathlib.PurePosixPath(_path_base(module, reference))
-        return ((base / reference.path).as_posix(),)
+        return ((base / _portable(reference.path)).as_posix(),)
     directory = pathlib.PurePosixPath(_search_directory(module, reference))
     return tuple(
         (
@@ -250,6 +256,17 @@ def _module_candidates(
         ).as_posix()
         for template in _MODULE_FILE_CANDIDATES
     )
+
+
+def _portable(value: str) -> str:
+    """Return a ``#[path]`` value in the separator form the host resolves.
+
+    rustc applies the host's path rules, so a Windows backslash separates
+    components there while a POSIX backslash is part of the filename.
+    Normalising once, before the owner and directory are derived, keeps a
+    child's search directory consistent with the file the lookup found.
+    """
+    return value.replace("\\", "/") if _WINDOWS else value
 
 
 def _path_base(module: Module, reference: ModuleReference) -> str:

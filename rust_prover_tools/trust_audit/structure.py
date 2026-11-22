@@ -11,9 +11,14 @@ caller can drift from the other.
 
 from __future__ import annotations
 
+import typing as typ
+
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.literals import decoded_literal_body
 from rust_prover_tools.trust_audit.syntax import Kind, Token
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 __all__ = (
     "attribute_spans",
@@ -311,13 +316,21 @@ def path_value(
 _MACRO_DELIMITERS = {"(": ")", "[": "]", "{": "}"}
 
 
-def stringify_arguments(tokens: tuple[Token, ...]) -> frozenset[int]:
+def stringify_arguments(
+    tokens: tuple[Token, ...],
+    *,
+    defined: cabc.Container[str] = frozenset(),
+) -> frozenset[int]:
     """Return the token indices inside every ``stringify!`` argument group.
 
     ``stringify!`` returns its argument's spelling and compiles none of it, so
     a declaration or invocation written there names nothing.  The argument is
-    skipped by its delimiters rather than by matching each line.
+    skipped by its delimiters rather than by matching each line.  A file that
+    defines its own ``stringify`` macro compiles the argument, so there is no
+    exemption for it.
     """
+    if "stringify" in defined:
+        return frozenset()
     skipped: set[int] = set()
     for index, token in enumerate(tokens[:-2]):
         if token.kind is not Kind.IDENT or token.text != "stringify":

@@ -104,6 +104,29 @@ def test_an_opaque_macro_inside_stringify_is_not_refused() -> None:
     assert scan(source).items == ()
 
 
+def test_a_metavariable_inside_stringify_is_not_refused() -> None:
+    """A macro definition inside ``stringify!`` is text, not an expansion."""
+    source = (
+        "const S: &str = stringify! { "
+        "macro_rules! m { ($p:ident) => { $p::assume(true); } } };"
+    )
+
+    assert scan(source).items == ()
+
+
+def test_a_locally_defined_stringify_keeps_the_opaque_refusal() -> None:
+    """A local ``stringify`` macro compiles its argument, so nothing is exempt."""
+    source = "\n".join(
+        (
+            "macro_rules! stringify { ($($t:tt)*) => { $($t)* }; }",
+            'stringify!(include!("hidden.rs"));',
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="include!"):
+        scan(source)
+
+
 def test_an_opaque_macro_inside_stringify_is_refused_for_a_proc_macro() -> None:
     """A proc-macro crate can parse the generated text, so keep the refusal."""
     source = 'const S: &str = stringify!(include!("absent.rs"));'

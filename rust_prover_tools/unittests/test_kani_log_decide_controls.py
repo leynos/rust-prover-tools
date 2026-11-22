@@ -32,7 +32,7 @@ def test_a_control_never_becomes_a_claim() -> None:
     assert (decision.outcome, decision.control_statuses) == (
         KaniOutcome.SKIPPED,
         ("rejected-as-intended",),
-    )
+    ), "Require a control's own failure to leave the claims' verdict alone."
     assert not decision.passed, "a control alone proves no claim"
 
 
@@ -63,7 +63,9 @@ def test_a_control_with_an_extra_failure_is_rejected_otherwise() -> None:
         PropertyResult("h::k.assertion.2", "FAILURE", "an unrelated check fails"),
     )
     manifest = Manifest((Harness("h::k", CONTROL, expected_failure="assertion.1"),))
-    assert analyse_kani_log(log, manifest).control_statuses == (REJECTED_OTHERWISE,)
+    assert analyse_kani_log(log, manifest).control_statuses == (REJECTED_OTHERWISE,), (
+        "Require every failed check to match the declared expectation."
+    )
 
 
 def test_a_control_that_fails_a_called_property_is_rejected_otherwise() -> None:
@@ -77,4 +79,6 @@ def test_a_control_that_fails_a_called_property_is_rejected_otherwise() -> None:
         ),
     )
     manifest = Manifest((Harness("h::k", CONTROL, expected_failure="assertion.1"),))
-    assert analyse_kani_log(log, manifest).control_statuses == (REJECTED_OTHERWISE,)
+    assert analyse_kani_log(log, manifest).control_statuses == (REJECTED_OTHERWISE,), (
+        "Count a failure owned by a called routine as an unexpected failure."
+    )

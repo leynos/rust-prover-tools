@@ -61,17 +61,29 @@ def test_a_valid_manifest_reads_its_claims_and_controls() -> None:
             ),
         ),
     )
-    assert manifest.names() == ("h::claim", "h::control")
-    assert [item.name for item in manifest.claims] == ["h::claim"]
-    assert [item.name for item in manifest.controls] == ["h::control"]
-    assert manifest.declared_covers() == ("the boundary is reachable",)
+    assert manifest.names() == ("h::claim", "h::control"), (
+        "Read roles, covers and expected failures from a valid document."
+    )
+    assert [item.name for item in manifest.claims] == ["h::claim"], (
+        "Read roles, covers and expected failures from a valid document."
+    )
+    assert [item.name for item in manifest.controls] == ["h::control"], (
+        "Read roles, covers and expected failures from a valid document."
+    )
+    assert manifest.declared_covers() == ("the boundary is reachable",), (
+        "Read roles, covers and expected failures from a valid document."
+    )
 
 
 def test_malformed_json_is_refused_with_its_location() -> None:
     """Refuse text that is not JSON, naming the line rather than guessing."""
     reason = refused('{\n"schema_version": }')
-    assert "Kani harness manifest" in reason
-    assert "not valid JSON" in reason
+    assert "Kani harness manifest" in reason, (
+        "Refuse text that is not JSON, naming the line rather than guessing."
+    )
+    assert "not valid JSON" in reason, (
+        "Refuse text that is not JSON, naming the line rather than guessing."
+    )
     assert "at line 2" in reason, "the diagnostic must name the decoder line"
 
 
@@ -81,7 +93,9 @@ def test_a_duplicated_json_key_is_refused() -> None:
         '{"schema_version": 1, "schema_version": 1, '
         '"harnesses": [{"name": "h::c", "role": "claim"}]}'
     )
-    assert "repeats the key 'schema_version'" in refused(text)
+    assert "repeats the key 'schema_version'" in refused(text), (
+        "Refuse a duplicated key rather than letting the last value win."
+    )
 
 
 @pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
@@ -92,17 +106,23 @@ def test_a_non_finite_constant_is_refused(constant: str) -> None:
         f'"schema_version": {constant}',
         1,
     )
-    assert f"non-finite constant {constant}" in refused(text)
+    assert f"non-finite constant {constant}" in refused(text), (
+        "Refuse JSON extensions that would produce an unreadable number."
+    )
 
 
 def test_a_non_object_document_is_refused() -> None:
     """Require the manifest to be a JSON object."""
-    assert "must be a JSON object" in refused("[]")
+    assert "must be a JSON object" in refused("[]"), (
+        "Require the manifest to be a JSON object."
+    )
 
 
 def test_an_unknown_top_level_key_is_refused() -> None:
     """Refuse a key the manifest does not define."""
-    assert "unknown keys" in refused(json.dumps(document(revision="0.1")))
+    assert "unknown keys" in refused(json.dumps(document(revision="0.1"))), (
+        "Refuse a key the manifest does not define."
+    )
 
 
 @pytest.mark.parametrize("version", [None, 0, 2, True, "1"])
@@ -110,27 +130,33 @@ def test_an_unsupported_schema_version_is_refused(version: object) -> None:
     """Require exactly the supported schema version, with a truthful type."""
     entry = document()
     entry["schema_version"] = version
-    assert "must declare schema_version" in refused(json.dumps(entry))
+    assert "must declare schema_version" in refused(json.dumps(entry)), (
+        "Require exactly the supported schema version, with a truthful type."
+    )
 
 
 def test_a_missing_harnesses_array_is_refused() -> None:
     """Require a harnesses array rather than treating absence as empty."""
     entry = document()
     del entry["harnesses"]
-    assert "has no harnesses array" in refused(json.dumps(entry))
+    assert "has no harnesses array" in refused(json.dumps(entry)), (
+        "Require a harnesses array rather than treating absence as empty."
+    )
 
 
 def test_an_empty_manifest_is_refused() -> None:
     """Refuse a manifest that declares nothing to analyse."""
     assert "declares no harnesses" in refused(
         json.dumps(document(harnesses=[])),
-    )
+    ), "Refuse a manifest that declares nothing to analyse."
 
 
 def test_an_unknown_harness_key_is_refused() -> None:
     """Refuse a key the harness entry does not define."""
     manifest = document(harnesses=[harness(expected="assertion.1")])
-    assert "unknown keys" in refused(json.dumps(manifest))
+    assert "unknown keys" in refused(json.dumps(manifest)), (
+        "Refuse a key the harness entry does not define."
+    )
 
 
 def test_a_duplicate_harness_name_is_refused() -> None:
@@ -138,13 +164,17 @@ def test_a_duplicate_harness_name_is_refused() -> None:
     manifest = document(
         harnesses=[harness(), harness(name="h::claim")],
     )
-    assert "declares a harness twice" in refused(json.dumps(manifest))
+    assert "declares a harness twice" in refused(json.dumps(manifest)), (
+        "Refuse a manifest that declares one harness twice."
+    )
 
 
 def test_an_unknown_role_is_refused() -> None:
     """Refuse a role outside claim and control."""
     manifest = document(harnesses=[harness(role="witness")])
-    assert "unknown role 'witness'" in refused(json.dumps(manifest))
+    assert "unknown role 'witness'" in refused(json.dumps(manifest)), (
+        "Refuse a role outside claim and control."
+    )
 
 
 def test_a_control_without_an_expected_failure_is_refused() -> None:
@@ -152,7 +182,7 @@ def test_a_control_without_an_expected_failure_is_refused() -> None:
     manifest = document(harnesses=[harness(role=CONTROL)])
     assert "names no property it is expected to fail" in refused(
         json.dumps(manifest),
-    )
+    ), "Require a control to name the property it is supposed to fail."
 
 
 def test_a_control_cannot_declare_should_panic() -> None:
@@ -166,7 +196,9 @@ def test_a_control_cannot_declare_should_panic() -> None:
             ),
         ],
     )
-    assert "should_panic" in refused(json.dumps(manifest))
+    assert "should_panic" in refused(json.dumps(manifest)), (
+        "Refuse the panic flag on a negative control."
+    )
 
 
 def test_a_should_panic_claim_cannot_declare_covers() -> None:
@@ -174,7 +206,9 @@ def test_a_should_panic_claim_cannot_declare_covers() -> None:
     manifest = document(
         harnesses=[harness(should_panic=True, covers=["unreachable"])],
     )
-    assert "covers would be unreachable" in refused(json.dumps(manifest))
+    assert "covers would be unreachable" in refused(json.dumps(manifest)), (
+        "Refuse covers a panic claim could never reach."
+    )
 
 
 @pytest.mark.parametrize(
@@ -194,7 +228,9 @@ def test_an_entry_with_the_wrong_type_is_refused(
 ) -> None:
     """Refuse booleans, strings and scalars where the schema requires another type."""
     manifest = document(harnesses=[entry])
-    assert message in refused(json.dumps(manifest))
+    assert message in refused(json.dumps(manifest)), (
+        "Refuse booleans, strings and scalars where the schema requires another type."
+    )
 
 
 def test_a_direct_harness_refuses_an_invalid_role() -> None:
@@ -217,7 +253,9 @@ def test_a_number_too_long_to_convert_is_a_manifest_error() -> None:
         '"schema_version": ' + "9" * 4301,
         1,
     )
-    assert "number this parser cannot read" in refused(text)
+    assert "number this parser cannot read" in refused(text), (
+        "Report an over-long JSON integer as a manifest error, not a ValueError."
+    )
 
 
 def test_a_deeply_nested_document_is_a_manifest_error() -> None:
@@ -230,7 +268,9 @@ def test_a_deeply_nested_document_is_a_manifest_error() -> None:
     """
     text = "[" * 100_000 + "]" * 100_000
     reason = refused(text)
-    assert "nested too deeply" in reason or "must be a JSON object" in reason
+    assert "nested too deeply" in reason or "must be a JSON object" in reason, (
+        "Report a deeply nested document as a manifest error, never a traceback."
+    )
 
 
 def test_a_direct_manifest_refuses_a_duplicate_name() -> None:
@@ -251,7 +291,9 @@ def test_select_keeps_the_manifest_order() -> None:
         ),
     )
     selected = manifest.select(("h::k", "h::a"))
-    assert selected.names() == ("h::k", "h::a")
+    assert selected.names() == ("h::k", "h::a"), (
+        "Narrow a manifest to the requested names, preserving request order."
+    )
 
 
 def test_select_refuses_an_undeclared_name() -> None:

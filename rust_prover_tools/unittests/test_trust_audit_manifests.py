@@ -131,6 +131,20 @@ def test_a_manifest_symlinked_outside_the_root_is_refused(tmp_path: Path) -> Non
         audit_tree(repo, ["src/lib.rs"])
 
 
+def test_a_lib_path_owns_a_driver_outside_its_directory(tmp_path: Path) -> None:
+    """Find a manifest whose ``[lib] path`` names a driver in a sibling tree."""
+    write(
+        tmp_path,
+        {
+            "macros/Cargo.toml": '[package]\nname = "macros"\nversion = "0.1.0"\n\n'
+            '[lib]\npath = "../shared/lib.rs"\nproc-macro = true\n',
+            "shared/lib.rs": _LITERAL_SOURCE,
+        },
+    )
+
+    assert audited(tmp_path, "shared/lib.rs") == {"shared/lib.rs": ["assume"]}
+
+
 def test_a_shared_module_takes_the_drivers_crate_kind(tmp_path: Path) -> None:
     """Scan a ``#[path]`` module as part of the crate that compiles it.
 
@@ -152,6 +166,21 @@ def test_a_shared_module_takes_the_drivers_crate_kind(tmp_path: Path) -> None:
         "macros/src/lib.rs": [],
         "shared/helper.rs": ["assume"],
     }
+
+
+def test_a_cargo_renamed_trust_crate_is_refused(tmp_path: Path) -> None:
+    """Refuse a dependency rename the per-file scan cannot follow."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            '[dependencies]\nproof = { package = "kani", version = "0.67.0" }\n',
+            "src/lib.rs": "fn f() {}",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="renames the Cargo package"):
+        audit_tree(tmp_path, ["src/lib.rs"])
 
 
 def test_an_unparseable_manifest_is_refused(tmp_path: Path) -> None:

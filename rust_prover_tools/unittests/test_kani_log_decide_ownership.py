@@ -46,8 +46,12 @@ def test_a_cover_is_matched_to_the_claim_that_declares_it() -> None:
         ),
     )
     decision = facts.decision_for(combination)
-    assert decision.witness_statuses == ("satisfied", "unsatisfied")
-    assert decision.outcome == KaniOutcome.SKIPPED
+    assert decision.witness_statuses == ("satisfied", "unsatisfied"), (
+        "Require two claims sharing witness wording to keep their own results."
+    )
+    assert decision.outcome == KaniOutcome.SKIPPED, (
+        "Require two claims sharing witness wording to keep their own results."
+    )
 
 
 def test_a_foreign_cover_does_not_satisfy_a_declared_witness() -> None:
@@ -68,7 +72,9 @@ def test_a_foreign_cover_does_not_satisfy_a_declared_witness() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
     decision = analyse_kani_log(log, manifest)
-    assert decision.witness_statuses == ("unsatisfied",)
+    assert decision.witness_statuses == ("unsatisfied",), (
+        "Refuse a called routine's cover as this claim's witness."
+    )
 
 
 def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
@@ -85,8 +91,12 @@ def test_an_ownerless_cover_is_matched_to_its_own_block() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
     decision = analyse_kani_log(log, manifest)
-    assert decision.witness_statuses == ("satisfied",)
-    assert decision.outcome is KaniOutcome.VERIFIED
+    assert decision.witness_statuses == ("satisfied",), (
+        "Count a cover CBMC left unattributed as its own block's witness."
+    )
+    assert decision.outcome is KaniOutcome.VERIFIED, (
+        "Count a cover CBMC left unattributed as its own block's witness."
+    )
 
 
 def test_an_unreachable_ownerless_cover_leaves_the_run_undetermined() -> None:
@@ -105,8 +115,12 @@ def test_an_unreachable_ownerless_cover_leaves_the_run_undetermined() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, covers=("reachable",)),))
     decision = analyse_kani_log(log, manifest)
-    assert decision.witness_statuses == ("satisfied",)
-    assert decision.outcome is KaniOutcome.UNDETERMINED
+    assert decision.witness_statuses == ("satisfied",), (
+        "Count an undecided cover from the block even without an owner."
+    )
+    assert decision.outcome is KaniOutcome.UNDETERMINED, (
+        "Count an undecided cover from the block even without an owner."
+    )
 
 
 def test_an_unresolved_foreign_check_leaves_the_run_undetermined() -> None:
@@ -126,7 +140,9 @@ def test_an_unresolved_foreign_check_leaves_the_run_undetermined() -> None:
     )
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.UNDETERMINED
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.UNDETERMINED, (
+        "Count a check the solver could not decide, whoever owns it."
+    )
 
 
 @pytest.mark.parametrize(
@@ -155,7 +171,9 @@ def test_an_unreachable_foreign_check_is_not_this_blocks_evidence(
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
 
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED, (
+        "Leave a called routine's unreachable check out of the evidence."
+    )
 
 
 def test_an_expected_panic_excuses_a_foreign_failure() -> None:
@@ -177,7 +195,9 @@ def test_an_expected_panic_excuses_a_foreign_failure() -> None:
     )
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.VERIFIED, (
+        "Exempt a called routine's failure from a claim declared to panic."
+    )
 
 
 @pytest.mark.parametrize(
@@ -203,7 +223,9 @@ def test_an_expected_panic_excuses_only_the_checks_it_notes(failing: str) -> Non
     )
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE, (
+        "Deny the claim for a failure the note cannot explain."
+    )
 
 
 def test_a_foreign_failure_without_an_expected_panic_is_a_counterexample() -> None:
@@ -218,7 +240,9 @@ def test_a_foreign_failure_without_an_expected_panic_is_a_counterexample() -> No
     )
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
-    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE
+    assert analyse_kani_log(log, manifest).outcome is KaniOutcome.COUNTEREXAMPLE, (
+        "Refuse to excuse a called failure no manifest entry asked for."
+    )
 
 
 def test_a_repeated_witness_description_must_all_be_satisfied() -> None:
@@ -237,7 +261,9 @@ def test_a_repeated_witness_description_must_all_be_satisfied() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, covers=("the witness",)),))
     decision = analyse_kani_log(log, manifest)
-    assert decision.witness_statuses == ("unsatisfied",)
+    assert decision.witness_statuses == ("unsatisfied",), (
+        "Require every cover sharing a description to be satisfied."
+    )
 
 
 def test_a_passing_unsupported_construct_check_is_not_unsupported() -> None:
@@ -255,7 +281,9 @@ def test_a_passing_unsupported_construct_check_is_not_unsupported() -> None:
     )
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
-    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED, (
+        "Require the check to have failed before it can deny a claim."
+    )
 
 
 def test_a_foreign_unsupported_construct_check_denies_the_claim() -> None:
@@ -280,7 +308,9 @@ def test_a_foreign_unsupported_construct_check_denies_the_claim() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
 
-    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNSUPPORTED
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNSUPPORTED, (
+        "A routine Kani could not model leaves the claim unsupported."
+    )
 
 
 @pytest.mark.parametrize(
@@ -307,7 +337,9 @@ def test_a_recursion_bound_counts_as_resource_exhaustion(identifier: str) -> Non
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM),))
 
-    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.RESOURCE_EXHAUSTED
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.RESOURCE_EXHAUSTED, (
+        "Classify both of Kani's bound checks as resource exhaustion."
+    )
 
 
 def test_a_manifest_with_only_controls_cannot_pass() -> None:
@@ -331,8 +363,10 @@ def test_a_manifest_with_only_controls_cannot_pass() -> None:
 
     decision = analyse_kani_log(log, manifest)
 
-    assert decision.outcome == KaniOutcome.SKIPPED
-    assert not decision.passed
+    assert decision.outcome == KaniOutcome.SKIPPED, (
+        "A run that declares no claim has verified no claim."
+    )
+    assert not decision.passed, "A run that declares no claim has verified no claim."
 
 
 def test_a_certified_panic_ignores_a_crate_wide_unsupported_warning() -> None:
@@ -358,7 +392,9 @@ def test_a_certified_panic_ignores_a_crate_wide_unsupported_warning() -> None:
     )
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
 
-    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.VERIFIED, (
+        "A warning for the whole crate does not deny a certified panic."
+    )
 
 
 def test_a_should_panic_claim_without_the_note_is_undetermined() -> None:
@@ -378,7 +414,9 @@ def test_a_should_panic_claim_without_the_note_is_undetermined() -> None:
     log = shapes.verified_log(block)
     manifest = Manifest((Harness(name, CLAIM, should_panic=True),))
 
-    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNDETERMINED
+    assert analyse_kani_log(log, manifest).outcome == KaniOutcome.UNDETERMINED, (
+        "Require Kani's note before accepting a claim declared to panic."
+    )
 
 
 def test_a_secondary_failure_is_not_verified() -> None:
@@ -390,7 +428,9 @@ def test_a_secondary_failure_is_not_verified() -> None:
         extra=facts.FAILURE,
     )
 
-    assert facts.decision_for((fact,)).outcome == KaniOutcome.COUNTEREXAMPLE
+    assert facts.decision_for((fact,)).outcome == KaniOutcome.COUNTEREXAMPLE, (
+        "A second failed check denies a block whose primary class succeeded."
+    )
 
 
 def test_every_failed_check_carries_its_own_explanation() -> None:
@@ -403,5 +443,9 @@ def test_every_failed_check_carries_its_own_explanation() -> None:
     )
     block = facts.block_of(fact)
 
-    assert block is not None
-    assert len(block.failures) == block.failed_count == 2
+    assert block is not None, (
+        "Build one failure explanation per failed check, as Kani prints them."
+    )
+    assert len(block.failures) == block.failed_count == 2, (
+        "Build one failure explanation per failed check, as Kani prints them."
+    )

@@ -51,6 +51,10 @@ class Token:
     text: str
     line: int
     column: int
+    #: Whether the author wrote the identifier in its raw form ``r#name``.  A
+    #: raw name is never the keyword it spells, so syntax dispatch must ignore
+    #: it even though vocabulary matching still reads its bare text.
+    raw: bool = False
 
 
 # Multi-character punctuators, longest first.
@@ -131,9 +135,10 @@ def tokenize(text: str) -> tuple[Token, ...]:
             # here rather than at every comparison. The column stays at the
             # prefix so a location names the token the author wrote.
             line, column = cursor.line, cursor.column
-            written = cursor.take(length).removeprefix("r#")
-            name = unicodedata.normalize("NFC", written)
-            tokens.append(Token(Kind.IDENT, name, line, column))
+            written = cursor.take(length)
+            raw = written.startswith("r#")
+            name = unicodedata.normalize("NFC", written.removeprefix("r#"))
+            tokens.append(Token(Kind.IDENT, name, line, column, raw=raw))
             continue
         if _skip_character_literal_or_lifetime(cursor):
             continue
