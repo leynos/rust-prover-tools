@@ -154,7 +154,11 @@ class Context:
             self._report(token.text, token)
             return
         if self._is_deep_qualified(index, token):
-            self._report(token.text, token)
+            if self._names_member(index, token):
+                for item in sorted(self.member_names[token.text]):
+                    self._report(item, token)
+            else:
+                self._report(token.text, token)
             return
         if token.text in self.region_words and self._is_verus_context(index):
             self._report(token.text, token)

@@ -8,20 +8,10 @@ from pathlib import Path
 
 from rust_prover_tools.trust_audit_cli import audit_trust
 from rust_prover_tools.unittests import conftest
-from rust_prover_tools.unittests.trust_audit_tree_support import symlink
+from rust_prover_tools.unittests.trust_audit_tree_support import symlink, write
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     import pytest
-
-
-def write(root: Path, files: cabc.Mapping[str, str]) -> None:
-    """Write each source beneath ``root``, creating its parent directory."""
-    for relative, text in files.items():
-        path = root / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
 
 
 def test_a_text_report_names_each_item_and_counts_the_files(
@@ -36,7 +26,7 @@ def test_a_text_report_names_each_item_and_counts_the_files(
 
     assert status == 0
     assert "src/lib.rs:2:11: assume\n" in captured.out
-    assert "audited 1 files, 1 trusted item\n" in captured.out
+    assert "audited 1 file, 1 trusted item\n" in captured.out
 
 
 def test_a_clean_audit_reports_no_items(
@@ -50,7 +40,7 @@ def test_a_clean_audit_reports_no_items(
     captured = capsys.readouterr()
 
     assert status == 0
-    assert "audited 1 files, 0 trusted items\n" in captured.out
+    assert "audited 1 file, 0 trusted items\n" in captured.out
 
 
 def test_a_json_report_carries_each_item_and_its_location(
@@ -268,14 +258,17 @@ def test_an_unknown_prover_is_refused(
 def test_the_root_alias_and_repeated_prover_parse(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The command line accepts ``--root`` and a repeated ``--prover``.
 
     The adapter's own parameters prove the behaviour; this test proves the
-    spellings the user guide documents actually reach them.
+    spellings the user guide documents actually reach them.  The procedural
+    toggle is cleared so an ambient value cannot change the parsed arguments.
     """
     from rust_prover_tools.cli import app
 
+    monkeypatch.delenv("INPUT_PROCEDURAL_MACRO", raising=False)
     write(tmp_path, {"src/lib.rs": _BOTH_PROVERS})
 
     status = app(
@@ -298,6 +291,23 @@ def test_the_root_alias_and_repeated_prover_parse(
     assert "provers: verus, kani\n" in captured.out
     assert ": admit\n" in captured.out
     assert ": assume\n" in captured.out
+
+
+def test_an_outside_driver_symlinked_into_the_root_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Refuse an outside spelling whose children would resolve elsewhere."""
+    repo = tmp_path / "repo"
+    write(repo, {"src/lib.rs": "kani::assume(true);"})
+    outside = tmp_path / "outside.rs"
+    symlink(outside, repo / "src/lib.rs")
+
+    status = audit_trust([outside], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "only through a symbolic link" in captured.err
 
 
 def test_an_absolute_driver_through_a_symlink_names_the_compiled_file(

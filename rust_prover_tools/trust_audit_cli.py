@@ -62,10 +62,12 @@ def _text_lines(
     entries = _entries(files)
     count = len(entries)
     noun = "item" if count == 1 else "items"
+    audited = len(files)
+    file_noun = "file" if audited == 1 else "files"
     return (
         f"provers: {', '.join(_provers(vocabularies))}",
         *(f"{path}:{item.line}:{item.column}: {item.item}" for path, item in entries),
-        f"audited {len(files)} files, {count} trusted {noun}",
+        f"audited {audited} {file_noun}, {count} trusted {noun}",
     )
 
 
@@ -200,20 +202,26 @@ def _relative_to(root: Path, path: Path) -> str:
     Raises
     ------
     TrustAuditError
-        If an absolute ``path`` resolves outside ``root``, where the audit
-        could not name it.
+        If an absolute ``path`` resolves outside ``root``, or reaches an
+        in-root file only through a symbolic link outside it.
     """
     if not path.is_absolute():
         return pathlib.PurePosixPath(path.as_posix()).as_posix()
     try:
-        resolved = path.resolve().relative_to(root)
+        path.resolve().relative_to(root)
     except ValueError as error:
         msg = f"{path} is outside the repository root {root}"
         raise TrustAuditError(msg) from error
     try:
-        # Keep the spelling the caller supplied when it already sits beneath
-        # the root; the resolved form is only the fallback for a path that
-        # reaches the root through a symbolic link.
+        # Keep the spelling the caller supplied; the module walk resolves its
+        # children from that spelling's directory, exactly as rustc does.
         return path.relative_to(root).as_posix()
-    except ValueError:
-        return resolved.as_posix()
+    except ValueError as error:
+        # The path names an in-root file only through a link outside the root.
+        # Substituting the resolved spelling would resolve children from the
+        # target's directory while the compiler uses the supplied one.
+        msg = (
+            f"{path} names a file inside {root} only through a symbolic link, "
+            "so its module directory cannot be derived from the spelling"
+        )
+        raise TrustAuditError(msg) from error

@@ -271,7 +271,19 @@ class Reader:
         bool
             Whether ``line`` was one of the markers this method knows.
 
+        Raises
+        ------
+        KaniLogError
+            If the line is a second Kani banner.  The solver transcript is
+            skipped by position, so a banner inside a block would otherwise
+            disappear without a trace.
         """
+        if BANNER.match(line) is not None:
+            msg = (
+                f"{self.where()}: a second Kani banner, so the log holds "
+                "two invocations"
+            )
+            raise KaniLogError(msg)
         if line == UNWINDING_FAILED:
             builder.unwinding_reported = True
         elif line.startswith(TIMED_OUT):

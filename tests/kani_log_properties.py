@@ -74,7 +74,7 @@ def stands(fact: facts.HarnessFact) -> bool:
     )
     return (
         excused
-        and fact.extra != facts.FAILURE
+        and fact.extra in {facts.NOTHING, facts.SUCCESS}
         and fact.cover in {facts.NOTHING, facts.SATISFIED}
     )
 

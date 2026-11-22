@@ -290,6 +290,13 @@ def test_a_leading_inner_attribute_is_not_a_shebang() -> None:
     assert items(source) == [("assume", 2)]
 
 
+def test_a_byte_character_literal_is_not_an_identifier() -> None:
+    """Lex ``b'x'`` as one byte literal rather than ``b`` and a character."""
+    words = [token.text for token in tokenize("let b = b'x';") if token.kind == "ident"]
+
+    assert words == ["let", "b"], "the byte literal's prefix must stay inside it"
+
+
 def test_a_numeric_literal_suffix_is_not_an_identifier() -> None:
     """Keep a numeric literal's suffix inside the literal, as Rust lexes it."""
     words = [

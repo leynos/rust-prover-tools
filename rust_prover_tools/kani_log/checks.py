@@ -228,8 +228,26 @@ def _field_closes_entry(reader: Reader) -> bool:
         if not following.strip() or FIELD.match(following) is not None:
             offset += 1
             continue
-        return _is_report_line(following)
+        return _marker_closes_entry(reader, offset)
     return True
+
+
+def _marker_closes_entry(reader: Reader, offset: int) -> bool:
+    """Report whether the line at ``offset`` is a real entry boundary.
+
+    A report marker is also description text, so each is accepted only when
+    the structure that follows a real one is present.
+    """
+    following = reader.peek_at(offset)
+    if following is None:
+        return True
+    if following == "RESULTS:":
+        return _starts_results(reader, offset + 1)
+    if following == "SUMMARY:":
+        return _starts_summary(reader, offset + 1)
+    if following == "Manual Harness Summary:":
+        return _starts_manual_summary(reader, offset + 1)
+    return _is_report_line(following)
 
 
 def _is_report_line(line: str) -> bool:
@@ -240,8 +258,6 @@ def _is_report_line(line: str) -> bool:
     description open would swallow the line and hide the structural fault the
     outer parser reports.
     """
-    if line in {"RESULTS:", "SUMMARY:", "Manual Harness Summary:"}:
-        return True
     if line.startswith("Check "):
         return True
     return any(pattern.match(line) is not None for pattern in _ENTRY_HEADS)
@@ -261,15 +277,9 @@ def _blank_closes_entry(reader: Reader) -> bool:
         offset += 1
     if following is None:
         return True
-    if following == "RESULTS:":
-        return _starts_results(reader, offset + 1)
-    if following == "SUMMARY:":
-        return _starts_summary(reader, offset + 1)
-    if following == "Manual Harness Summary:":
-        return _starts_manual_summary(reader, offset + 1)
     if FIELD.match(following) is not None:
         return _field_run_closes_entry(reader, offset)
-    return any(pattern.match(following) is not None for pattern in _ENTRY_HEADS)
+    return _marker_closes_entry(reader, offset)
 
 
 def _field_run_closes_entry(reader: Reader, offset: int) -> bool:
@@ -284,7 +294,7 @@ def _field_run_closes_entry(reader: Reader, offset: int) -> bool:
         if not following.strip() or FIELD.match(following) is not None:
             offset += 1
             continue
-        return _is_report_line(following)
+        return _marker_closes_entry(reader, offset)
     return True
 
 

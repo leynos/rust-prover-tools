@@ -166,23 +166,32 @@ def test_an_unparseable_manifest_is_refused(tmp_path: Path) -> None:
 
 
 def test_the_flag_overrides_the_manifest(tmp_path: Path) -> None:
-    """An explicit flag states the crate kind instead of reading the manifest."""
-    write(
-        tmp_path,
-        {
-            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n',
-            "src/lib.rs": _LITERAL_SOURCE,
-        },
+    """An explicit flag decides the crate kind without looking up the manifest.
+
+    The manifest is a symlink outside the repository, so reading it at all is
+    refused.  Requiring that refusal without the flag proves the flag skips
+    the lookup rather than merely skipping TOML parsing.
+    """
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside-Cargo.toml"
+    outside.write_text(
+        '[package]\nname = "p"\nversion = "0.1.0"\n\n[lib]\nproc-macro = true\n',
+        encoding="utf-8",
     )
+    write(repo, {"src/lib.rs": _LITERAL_SOURCE})
+    symlink(repo / "Cargo.toml", outside)
+
+    with pytest.raises(TrustAuditError, match="resolves outside"):
+        audit_tree(repo, ["src/lib.rs"])
 
     forced = {
         file.path: [item.item for item in file.items]
-        for file in audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=True)
+        for file in audit_tree(repo, ["src/lib.rs"], procedural_macro=True)
     }
     suppressed = {
         file.path: [item.item for item in file.items]
         for file in audit_tree(
-            tmp_path,
+            repo,
             ["src/lib.rs"],
             procedural_macro=False,
         )

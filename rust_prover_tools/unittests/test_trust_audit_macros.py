@@ -59,6 +59,18 @@ def test_a_procedural_macro_scan_refuses_include_str(
         scan(source, procedural_macro=True)
 
 
+def test_a_matcher_import_rename_is_not_an_opaque_alias() -> None:
+    """An import written in a matcher describes input; it binds nothing."""
+    source = "\n".join(
+        (
+            "macro_rules! m { (use std::include as load;) => {}; }",
+            'load!("hidden.rs");',
+        ),
+    )
+
+    assert items(source) == []
+
+
 def test_an_opaque_macro_in_a_matcher_pattern_is_not_refused() -> None:
     """Read a matcher pattern as input, not as an ``include!`` invocation."""
     assert items("macro_rules! m { (include!($x:literal)) => { () }; }") == []

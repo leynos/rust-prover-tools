@@ -32,9 +32,15 @@ never sees.
 
 from __future__ import annotations
 
+import typing as typ
+
 from rust_prover_tools.trust_audit.context import Context
 from rust_prover_tools.trust_audit.crate_bindings import alias_bindings
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.import_renames import (
+    is_import_destination,
+    is_import_rename,
+)
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import ScanResult
 from rust_prover_tools.trust_audit.modules import (
@@ -46,11 +52,7 @@ from rust_prover_tools.trust_audit.repetitions import (
     repetition_refusal,
 )
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
-from rust_prover_tools.trust_audit.use_paths import (
-    opens_use_group,
-    statement_end,
-    use_roots,
-)
+from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import (
     begins_import,
     member_aliases,
@@ -61,6 +63,9 @@ from rust_prover_tools.trust_audit.vocabulary import (
     PROVER_VOCABULARIES,
     Vocabulary,
 )
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 __all__ = ("scan",)
 
@@ -165,8 +170,8 @@ def _refuse_opaque_macros(
     base = OPAQUE_MACROS
     if procedural_macro:
         base |= PROCEDURAL_OPAQUE_MACROS
-    names = _opaque_names(tokens, base)
     rules = macro_rules(tokens)
+    names = _opaque_names(tokens, base, rules.patterns)
     _refuse_metavariable_invocations(tokens, rules, words, qualifiers)
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
@@ -244,13 +249,13 @@ def _metavariable_refusal(
     path_refusal = _path_refusal(token, following, second, words)
     if path_refusal is not None:
         return path_refusal
-    if _is_import_rename(tokens, index):
+    if is_import_rename(tokens, index):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} renames an import through the metavariable "
             f"'${token.text}', so the audit cannot tell which name it binds"
         )
-    if _is_import_destination(tokens, index):
+    if is_import_destination(tokens, index):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} binds an import's local name to the metavariable "
@@ -297,50 +302,6 @@ def _path_refusal(
     return None
 
 
-def _is_import_rename(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether a metavariable is the item a ``use`` rename binds.
-
-    ``use std::$name as load;`` chooses at expansion time which opaque macro
-    ``load!`` calls, so the scan must refuse rather than accept the file.  A
-    cast such as ``$value as u64`` is an expression, not an import: the search
-    stops at the statement or delimiter that surrounds it.
-    """
-    if index + 1 >= len(tokens) or tokens[index + 1].text != "as":
-        return False
-    return _inside_import(tokens, index)
-
-
-def _is_import_destination(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether a metavariable is the local name a ``use`` alias binds.
-
-    ``use std::include as $name;`` chooses at expansion time what the local
-    name is, and a later call under that name is a trust use the scan cannot
-    see.  A cast such as ``$value as u64`` has no metavariable after ``as``,
-    and a cast to a metavariable type is outside any import statement, so both
-    remain accepted.
-    """
-    if index < _IMPORT_ALIAS_SEGMENTS or tokens[index - 1].text != "$":
-        return False
-    if tokens[index - 2].text != "as":
-        return False
-    if tokens[index - _IMPORT_ALIAS_SEGMENTS].kind is not Kind.IDENT:
-        return False
-    return _inside_import(tokens, index)
-
-
-def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether ``index`` sits inside a ``use`` statement's path."""
-    for cursor in range(index - 1, -1, -1):
-        text = tokens[cursor].text
-        if text == "{" and opens_use_group(tokens, cursor):
-            continue
-        if text in {";", "(", ")", "[", "]", "{", "}"}:
-            return False
-        if text == "use" and begins_import(tokens, cursor):
-            return True
-    return False
-
-
 def _is_trust_qualified(
     tokens: tuple[Token, ...],
     index: int,
@@ -358,6 +319,7 @@ def _is_trust_qualified(
 def _opaque_names(
     tokens: tuple[Token, ...],
     base: frozenset[str],
+    patterns: cabc.Container[int],
 ) -> frozenset[str]:
     """Return the opaque macro names, plus every local name bound to one.
 
@@ -366,10 +328,11 @@ def _opaque_names(
     search reads every ``as`` rename in the file and repeats until a pass adds
     nothing.  Following only the roots of the statements would record
     ``include → load`` and ``load → hidden`` but never ``include → hidden``,
-    and ``hidden!`` would be read as an ordinary macro.
+    and ``hidden!`` would be read as an ordinary macro.  A ``use`` written in a
+    matcher is input, not an import, so those tokens are skipped.
     """
     names = set(base)
-    renames = _all_renames(tokens)
+    renames = _all_renames(tokens, patterns)
     while True:
         discovered = {alias for item, alias in renames if item in names}
         if discovered <= names:
@@ -377,16 +340,22 @@ def _opaque_names(
         names |= discovered
 
 
-def _all_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:
+def _all_renames(
+    tokens: tuple[Token, ...],
+    patterns: cabc.Container[int],
+) -> frozenset[tuple[str, str]]:
     """Return every ``(item, alias)`` a ``use`` statement in the file renames.
 
     A rename of a macro's item (``use std::include as load;``) and a rename of
     the name it bound (``use load as hidden;``) are both followed: the second
     spelling is the same opaque macro, and stopping at the first would let
-    ``hidden!`` expand code the scan never reads.
+    ``hidden!`` expand code the scan never reads.  Tokens inside a
+    ``macro_rules!`` matcher describe input and import nothing.
     """
     renames: set[tuple[str, str]] = set()
     for index, token in enumerate(tokens):
+        if index in patterns:
+            continue
         if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue
         end = statement_end(tokens, index + 1)

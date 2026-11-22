@@ -97,7 +97,9 @@ def test_a_macro_alias_bound_to_two_definitions_is_refused() -> None:
     source = "\n".join(
         (
             "macro_rules! left { () => { mod one; }; }",
+            "pub(crate) use left;",
             "macro_rules! right { () => { mod two; }; }",
+            "pub(crate) use right;",
             "mod x { pub use crate::left as load; }",
             "mod y { pub use crate::right as load; }",
             "use x::load;",
@@ -115,6 +117,7 @@ def test_a_chained_macro_alias_compiles_its_module() -> None:
     source = "\n".join(
         (
             "macro_rules! make { () => { mod hidden; }; }",
+            "pub(crate) use make;",
             "use crate::make as first;",
             "use first as second;",
             "second!();",
@@ -122,6 +125,19 @@ def test_a_chained_macro_alias_compiles_its_module() -> None:
     )
 
     assert references(source) == [("hidden", None, ())]
+
+
+def test_a_module_forwarded_through_a_macro_argument_is_refused() -> None:
+    """Refuse a module the macro may place inside an inline module."""
+    source = "\n".join(
+        (
+            "macro_rules! wrap { ($($t:tt)*) => { mod nested { $($t)* } }; }",
+            "wrap! { mod child; }",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="passes a module declaration"):
+        references(source)
 
 
 def test_a_macro_invoked_through_an_alias_compiles_its_module() -> None:
@@ -133,6 +149,7 @@ def test_a_macro_invoked_through_an_alias_compiles_its_module() -> None:
     source = "\n".join(
         (
             "macro_rules! make { () => { mod hidden; }; }",
+            "pub(crate) use make;",
             "use crate::make as build;",
             "build!();",
         ),

@@ -193,9 +193,17 @@ def test_a_grouped_deeper_crate_import_binds_every_member() -> None:
 
 def test_a_grouped_deeper_crate_import_keeps_renames_and_plain_members() -> None:
     """Read a renamed member and a plain member of the same nested group."""
-    source = "use crate::prelude::{k as kk, j};\nfn f() { kk::assume(true); }"
+    source = "\n".join(
+        (
+            "use crate::prelude::{k as kk, j};",
+            "fn f() { kk::assume(true); j::assume(true); }",
+        ),
+    )
 
-    assert [item for item, _ in items(source)] == ["assume"]
+    assert items(source) == [
+        ("assume", 2),
+        ("assume", 2),
+    ], "both the renamed member and the plain member must resolve"
 
 
 def test_a_nested_grouped_crate_import_binds_every_member() -> None:
@@ -273,6 +281,18 @@ def test_a_member_rename_through_a_declared_module_is_followed() -> None:
         ("assume", 2),
         ("assume", 3),
     ], "the module's import, the second rename and its call must all report"
+
+
+def test_a_deep_path_reports_the_member_binding_it_names() -> None:
+    """Normalize a deep path through the member binding the file declares."""
+    source = "\n".join(
+        (
+            "mod m { pub use kani::assume as any_where; }",
+            "fn f() { crate::m::any_where(false); }",
+        ),
+    )
+
+    assert items(source) == [("assume", 1), ("assume", 2)]
 
 
 def test_a_member_of_a_declared_module_is_a_possible_alias() -> None:

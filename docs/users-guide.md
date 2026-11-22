@@ -814,16 +814,19 @@ expansion emits is followed from the invocation's module directory, which is
 where rustc resolves it. A macro invoked from another macro's expansion is
 followed through the outer invocation's directory, and an invocation through a
 `use` alias (`use crate::make as build; build!();`) is the definition's macro;
-an alias may itself be renamed before it is invoked. A macro no invocation in
-the file names compiles nothing there, so its declaration demands no file. An
-invocation in another file is outside the audit's per-file scan, and the audit
-does not claim to follow it. A macro name defined more than once is refused:
-Rust permits a later definition to shadow an earlier one, and the scan cannot
-tell which one an invocation expands. A declaration whose name comes from a
-metavariable is refused, because only the invocation's arguments decide that
-name, and an expansion that invokes a macro through a metavariable is refused
-for the same reason, as is one that reaches a trust item through a metavariable
-path such as `$p::assume` or `kani::$f`, binds an import's item or local name
+an alias may itself be renamed before it is invoked. A module declaration
+passed as an argument is refused when the expansion splices its arguments,
+because the macro may place it inside an inline module and the scan does not
+evaluate the substitution. A macro no invocation in the file names compiles
+nothing there, so its declaration demands no file. An invocation in another
+file is outside the audit's per-file scan, and the audit does not claim to
+follow it. A macro name defined more than once is refused: Rust permits a later
+definition to shadow an earlier one, and the scan cannot tell which one an
+invocation expands. A declaration whose name comes from a metavariable is
+refused, because only the invocation's arguments decide that name, and an
+expansion that invokes a macro through a metavariable is refused for the same
+reason, as is one that reaches a trust item through a metavariable path such as
+`$p::assume` or `kani::$f`, binds an import's item or local name
 (`use std::$name as load;` or `use std::include as $name;`), glob-imports
 through one (`use $p::*;`), or opens an import group through one
 (`use $p::{assume as a};`). A repetition-wrapped form such as `$($p)+::assume`
@@ -861,7 +864,8 @@ A word counts as trust only in a context that gives it meaning:
   `verus_builtin`;
 - a vocabulary word ending a path with two or more qualifier segments, such as
   `exports::k::assume(..)`, because a module the file imports may re-export a
-  trust crate under an alias the file never binds.
+  trust crate under an alias the file never binds; when the word is a name the
+  file binds, the item it names is reported instead.
 
 The unqualified-word rule is deliberately wide. A named import such as
 `use kani::assume;` makes a later bare `assume(..)` ambiguous, so it is
@@ -896,10 +900,10 @@ too, so `use kani::*; use self::assume as a;` reports `a(false)` as `assume`. A
 The lexical rules follow the compiler where they decide what is code. An
 identifier may carry any Unicode XID continuation, so `mod a·b;` is one name; a
 leading shebang is discarded after a leading BOM; a literal's suffix belongs to
-the literal, so `"text"include` is not an `include` call and a numeric
-literal's suffix is equally opaque, so `1assume` is not an `assume` call; and a
-`\u{…}` escape must begin with a hexadecimal digit, so `\u{_63}` is refused
-rather than read as `c`.
+the literal, so `"text"include` is not an `include` call, a numeric literal's
+suffix is equally opaque, so `1assume` is not an `assume` call, and `b'x'` is
+one byte literal rather than an identifier `b`; and a `\u{…}` escape must begin
+with a hexadecimal digit, so `\u{_63}` is refused rather than read as `c`.
 
 Source the audit cannot read is refused rather than skipped: comments and
 literals that never terminate, and the macros `include!`, `paste!` and
@@ -926,7 +930,9 @@ Useful options are:
   provers.
 
 A relative path is read as repository-relative; an absolute one must already be
-beneath the root. The command exits `0` when every source was audited — a
+beneath the root. An outside spelling that reaches an in-root file only through
+a symbolic link is refused, because its child modules would resolve from the
+outside directory. The command exits `0` when every source was audited — a
 non-empty report is not by itself a failure, because the audit keeps no record
 of which requests were justified — and `1` when a source was missing,
 unreadable or outside the root.

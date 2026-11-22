@@ -710,12 +710,13 @@ counts or verdict follow, and `Manual Harness Summary:` only when a
 failed-harness line or the `Complete` counts follow. A description may also
 spell a field-shaped line such as `Location:`, so a field closes the entry only
 when the field run is followed by another field, a report construct or a fresh
-check entry rather than by more description text. An echoed `cbmc` command is
-split at Kani's own boundaries rather than as shell text: the driver wraps an
-argument in double quotes exactly when it holds a space, and an apostrophe is
-an ordinary character, so shell splitting would let one apostrophe hide a flag.
-The expected-panic note and the description rule are both read from the pinned
-release's source rather than inferred from a sample.
+check entry rather than by more description text.  A report marker reached
+after a field is validated by the same rule as one reached directly. An echoed
+`cbmc` command is split at Kani's own boundaries rather than as shell text: the
+driver wraps an argument in double quotes exactly when it holds a space, and an
+apostrophe is an ordinary character, so shell splitting would let one
+apostrophe hide a flag. The expected-panic note and the description rule are
+both read from the pinned release's source rather than inferred from a sample.
 
 A second banner means the capture holds two invocations. The parser refuses it
 rather than returning the first run's facts, because those facts say nothing
@@ -750,7 +751,10 @@ item it found:
 
 - `PATHS` are crate roots, usually each crate's `lib.rs` or `main.rs`. A
   relative path is read as repository-relative so the answer does not depend on
-  the working directory; an absolute path must already sit beneath the root.
+  the working directory; an absolute path must already sit beneath the root. An
+  outside spelling that reaches an in-root file only through a symbolic link is
+  refused, because its children would resolve from the outside directory while
+  the compiler uses the spelling's.
 - `--repo-root` (alias `--root`) anchors every reported location and bounds the
   walk. Defaults to the working directory.
 - `--prover PROVER` applies one prover's vocabulary, named `kani` or `verus`.
@@ -795,35 +799,38 @@ invocation, and a recursive definition is refused because its chain would never
 end. An invocation through a `use` alias
 (`use crate::make as build; build!();`) expands the definition's macro, so the
 alias is resolved before the expansion's declarations are attributed; a rename
-of that alias resolves through the chain to the same definition. A macro name
-defined more than once is refused: Rust lets a later definition shadow an
-earlier one, and the scan cannot tell which one an invocation expands. An
-invocation in another file is outside the per-file scan, which the user guide
-states. A declaration whose name a metavariable supplies is refused, because
-only the invocation's arguments decide that name and the scan never evaluates
-them; an expansion that invokes a macro through a metavariable, reaches a trust
-item through one such as `$p::assume` or `kani::$f`, binds an import's item or
-local name (`use std::$name as load;`, the grouped `use std::{$name as load};`,
-or `use std::include as $name;`), glob-imports through one (`use $p::*;`), or
-opens a group through one (`use $p::{assume as a};`), is refused for the same
-reason: the arguments decide which name or names the expansion binds. A
-repetition-wrapped metavariable is inspected through every enclosing
-repetition, so `$($p)+::assume` and `kani::$($($f),+);+` are refused rather
-than read as ordinary repetitions. A target reached through a symbolic link is
-reported as the physical file, so a cyclic `#[path]` terminates, while the
-children of that module resolve from the pathname the compiler loaded rather
-than the link's target. A file reached with two owners, or two declaring
-directories, that name different directories is refused, because a file-scope
-`#[path]` would resolve its children beneath one or the other. When a plain
-crate and a proc-macro crate both reach one file, the stronger literal-reading
-policy wins and the file and its children are rescanned. A `#[path]` that a
-`cfg_attr` can select is refused: the configuration decides which file
-compiles, so no single answer would be true. A `#[path]` whose value is not a
-literal is refused for the same reason: the expansion's arguments decide the
-file, and reading it as no override would scan the default file in place of the
-one the crate compiles. A nested `cfg_attr` is read through its own payload, so
-a predicate that merely spells `path = …` is not mistaken for an applied path
-attribute; an unrelated attribute's arguments are skipped, so
+of that alias resolves through the chain to the same definition. A module
+declaration passed into an argument-forwarding macro is refused, because the
+expansion may place it inside an inline module and the scan does not substitute
+the arguments. A macro name defined more than once is refused: Rust lets a
+later definition shadow an earlier one, and the scan cannot tell which one an
+invocation expands. An invocation in another file is outside the per-file scan,
+which the user guide states. A declaration whose name a metavariable supplies
+is refused, because only the invocation's arguments decide that name and the
+scan never evaluates them; an expansion that invokes a macro through a
+metavariable, reaches a trust item through one such as `$p::assume` or
+`kani::$f`, binds an import's item or local name (`use std::$name as load;`,
+the grouped `use std::{$name as load};`, or `use std::include as $name;`),
+glob-imports through one (`use $p::*;`), or opens a group through one
+(`use $p::{assume as a};`), is refused for the same reason: the arguments
+decide which name or names the expansion binds. A repetition-wrapped
+metavariable is inspected through every enclosing repetition, so
+`$($p)+::assume` and `kani::$($($f),+);+` are refused rather than read as
+ordinary repetitions. A target reached through a symbolic link is reported as
+the physical file, so a cyclic `#[path]` terminates, while the children of that
+module resolve from the pathname the compiler loaded rather than the link's
+target. A file reached with two owners, or two declaring directories, that name
+different directories is refused, because a file-scope `#[path]` would resolve
+its children beneath one or the other. When a plain crate and a proc-macro
+crate both reach one file, the stronger literal-reading policy wins and the
+file and its children are rescanned. A `#[path]` that a `cfg_attr` can select
+is refused: the configuration decides which file compiles, so no single answer
+would be true. A `#[path]` whose value is not a literal is refused for the same
+reason: the expansion's arguments decide the file, and reading it as no
+override would scan the default file in place of the one the crate compiles. A
+nested `cfg_attr` is read through its own payload, so a predicate that merely
+spells `path = …` is not mistaken for an applied path attribute; an unrelated
+attribute's arguments are skipped, so
 `doc = stringify!(verifier::external_body)` is documentation rather than an
 applied Verus attribute.
 

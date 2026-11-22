@@ -108,6 +108,12 @@ def tokenize(text: str) -> tuple[Token, ...]:
             )
             _skip_literal_suffix(cursor)
             continue
+        if cursor.starts("b'"):
+            # ``b'x'`` is one byte literal.  Lexing the ``b`` as an identifier
+            # would expose it as a local name the compiler never sees.
+            cursor.take(1)
+            _skip_character_literal_or_lifetime(cursor)
+            continue
         numeric = _numeric_literal_length(cursor.text, cursor.index)
         if numeric:
             # A numeric literal is opaque to the audit, but its suffix may hold
