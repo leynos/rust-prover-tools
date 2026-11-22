@@ -103,9 +103,13 @@ records `<tool>.install.start`, `<tool>.install.reuse`,
 together with the extraction, marker, setup, and verification boundaries
 (`z3.extract.complete`, `z3.marker.recorded`, `kani.extract.complete`,
 `kani.setup.complete`, `kani.verify.complete`, `verus.extract.start`, and
-`verus.extract.complete`). Snapshot commands report timed spans as correlated
-start and completion events. `kani.snapshot.install` closes with an `outcome` of
-`activated` or `reused` and a `cache` of `miss` or `hit`;
+`verus.extract.complete`). When a Z3 reuse is refused, `z3.install.cache_miss`
+records one reason from a closed set (`binary_missing`, `not_executable`,
+`marker_missing`, `marker_unusable`, or `digest_mismatch`) before the download
+starts, so a reinstall is diagnosable without reading source; it carries no
+digest, path, or marker text. Snapshot commands report timed spans as
+correlated start and completion events. `kani.snapshot.install` closes with an
+`outcome` of `activated` or `reused` and a `cache` of `miss` or `hit`;
 `kani.snapshot.check` closes with `outcome="valid"`; and `kani.snapshot.run`
 closes with an `outcome` of `success` or `failure` and the launcher's
 `exit_code`. The internal `kani.snapshot.stage`, `kani.snapshot.setup`,

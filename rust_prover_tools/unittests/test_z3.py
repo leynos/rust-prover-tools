@@ -785,11 +785,15 @@ def test_install_z3_reports_extraction_marker_and_completion_events(
     events = events_from(caplog)
     assert [event["event"] for event in events] == [
         "z3.install.start",
+        "z3.install.cache_miss",
         "z3.extract.complete",
         "z3.marker.recorded",
         "z3.install.complete",
     ], "each install boundary should record one event in order"
-    extract, marker, complete = events[1:]
+    miss, extract, marker, complete = events[1:]
+    assert miss["reason"] == "binary_missing", (
+        "a first install should report the missing binary as the cache miss"
+    )
     assert extract["asset"] == Z3_ASSET.name, "extraction names the pinned asset"
     assert extract["bytes"] == len(b"z3-binary"), "extraction reports bytes written"
     assert marker["version"] == Z3_VERSION, "the marker event reports the version"
@@ -830,6 +834,65 @@ def test_install_z3_reports_reuse_instead_of_a_reinstall(
     ], "reuse should be visible without extract or completion events"
 
 
+@pytest.mark.parametrize(
+    ("seed", "reason"),
+    [
+        pytest.param("missing", "binary_missing", id="binary-missing"),
+        pytest.param("not-executable", "not_executable", id="not-executable"),
+        pytest.param("marker-missing", "marker_missing", id="marker-missing"),
+        pytest.param("marker-unusable", "marker_unusable", id="marker-unusable"),
+        pytest.param("digest-mismatch", "digest_mismatch", id="digest-mismatch"),
+    ],
+)
+def test_install_z3_reports_the_cache_miss_reason(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    seed: str,
+    reason: str,
+) -> None:
+    """A refused reuse reports one bounded cache-miss reason."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.z3")
+    install_dir = tmp_path / "install"
+    install_dir.mkdir()
+    if seed != "missing":
+        binary = install_dir / "z3"
+        binary.write_bytes(b"z3-binary")
+        binary.chmod(0o644 if seed == "not-executable" else 0o755)
+    if seed == "digest-mismatch":
+        write_marker(install_dir, digest=hashlib.sha256(b"other").hexdigest())
+    elif seed == "marker-unusable":
+        (install_dir / ".z3-version").write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+    cache_dir = tmp_path / "cache"
+    archive = write_z3_zip(cache_dir / Z3_ASSET.name)
+    stub_download(
+        monkeypatch,
+        archive,
+        expected_destination=cache_dir / Z3_ASSET.name,
+    )
+
+    install_z3(
+        Z3InstallOptions(
+            repo_root=tmp_path,
+            install_dir=install_dir,
+            cache_dir=cache_dir,
+        ),
+    )
+
+    misses = [
+        event
+        for event in events_from(caplog)
+        if event.get("event") == "z3.install.cache_miss"
+    ]
+    assert misses == [
+        {
+            "event": "z3.install.cache_miss",
+            "version": Z3_VERSION,
+            "reason": reason,
+        },
+    ], "a refused reuse should report exactly one bounded reason"
+
+
 def test_install_z3_reports_a_download_failure_event(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -857,6 +920,11 @@ def test_install_z3_reports_a_download_failure_event(
 
     assert events_from(caplog) == [
         {"event": "z3.install.start", "version": Z3_VERSION},
+        {
+            "event": "z3.install.cache_miss",
+            "version": Z3_VERSION,
+            "reason": "binary_missing",
+        },
         {"event": "z3.install.failed", "reason": "download"},
     ], "a download failure must report its own reason"
 

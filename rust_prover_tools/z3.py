@@ -1,10 +1,9 @@
 """Pinned Z3 solver installation for Verus.
 
-Verus downloads Z3 separately from its own release archive. This module
-downloads the pinned official Z3 zip through the bounded verifier in
+Downloads the pinned official Z3 zip through the bounded verifier in
 `rust_prover_tools.downloads`, extracts only `<release>/bin/z3`, and records
-the installed version together with the extracted binary's SHA-256. Repeated
-CI runs reuse the binary only after rehashing it and matching that digest.
+the installed version with the extracted binary's SHA-256. Reuse rehashes the
+binary and matches that digest.
 """
 
 from __future__ import annotations
@@ -62,7 +61,7 @@ class _Extraction(typ.NamedTuple):
     Attributes
     ----------
     size : int
-        Number of bytes written to the installed binary.
+        Bytes written to the installed binary.
     sha256 : str
         Lowercase hexadecimal SHA-256 digest of those bytes.
     """
@@ -93,34 +92,12 @@ class Z3InstallOptions:
 
 
 def default_z3_install_dir(repo_root: Path) -> Path:
-    """Return the versioned directory that holds the `z3` executable.
-
-    Parameters
-    ----------
-    repo_root : Path
-        Repository whose cache tree receives the binary.
-
-    Returns
-    -------
-    Path
-        The versioned install directory below the repository's cache tree.
-    """
+    """Return the versioned install directory below the repository cache."""
     return default_z3_cache_dir(repo_root) / Z3_VERSION
 
 
 def default_z3_cache_dir(repo_root: Path) -> Path:
-    """Return the default Z3 archive cache directory.
-
-    Parameters
-    ----------
-    repo_root : Path
-        Repository root.
-
-    Returns
-    -------
-    Path
-        `.cache/z3` below the repository root.
-    """
+    """Return the `.cache/z3` archive cache below the repository root."""
     return repo_root / ".cache" / "z3"
 
 
@@ -159,16 +136,22 @@ def install_z3(options: Z3InstallOptions) -> tuple[str, ...]:
     started = monotonic()
     log_event(_LOGGER, "z3.install.start", version=Z3_VERSION)
     try:
-        installed = _is_installed(binary, marker)
+        blocker = _reuse_blocker(binary, marker)
     except ProverToolError:
         _log_failure("inspect")
         raise
-    if installed:
+    if blocker is None:
         log_event(_LOGGER, "z3.install.reuse", version=Z3_VERSION)
         return (
             f"Z3 {Z3_VERSION} already installed at {binary}",
             f"Export VERUS_Z3_PATH={binary}",
         )
+    log_event(
+        _LOGGER,
+        "z3.install.cache_miss",
+        version=Z3_VERSION,
+        reason=blocker,
+    )
 
     try:
         archive = download_pinned(Z3_ASSET, cache_dir / Z3_ASSET.name)
@@ -203,24 +186,24 @@ def _log_failure(reason: str) -> None:
     log_event(_LOGGER, "z3.install.failed", reason=reason)
 
 
-def _is_installed(binary: Path, marker: Path) -> bool:
-    """Return whether an executable binary matches its digest-bound marker."""
+def _reuse_blocker(binary: Path, marker: Path) -> str | None:
+    """Return the bounded reason reuse is refused, or `None` to reuse."""
     # Only a missing path means "absent"; other OS errors are reported.
     binary_status = _optional_stat(binary)
     if binary_status is None or not stat.S_ISREG(binary_status.st_mode):
-        return False
+        return "binary_missing"
     if not _has_execute_bit(binary_status):
-        return False
+        return "not_executable"
     marker_text = _optional_text(marker)
     if marker_text is None:
-        return False
+        return "marker_missing"
     recorded_digest = _recorded_digest(marker_text)
     if recorded_digest is None:
-        return False
-    # Rehashing the installed binary makes a modified or replaced solver a
-    # cache miss. A read failure is reported by the caller as an inspect
-    # failure rather than silently reinstalling over a broken environment.
-    return sha256_file(binary) == recorded_digest
+        return "marker_unusable"
+    # A read failure here is reported by the caller as an inspect failure.
+    if sha256_file(binary) != recorded_digest:
+        return "digest_mismatch"
+    return None
 
 
 def _recorded_digest(text: str) -> str | None:

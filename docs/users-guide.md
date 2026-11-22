@@ -459,9 +459,11 @@ exhaust disk space or hang a CI job:
 - opt-in structured events are available through Python logging at debug level
   for download start, completion, cache hits, verification, and bounded failure
   categories, and for each installer's start, reuse, extraction, setup,
-  verification, marker, and completion boundaries. The library installs no
-  handlers, so output is unchanged unless the application lowers the
-  `rust_prover_tools` logger level.
+  verification, marker, and completion boundaries. A refused Z3 reuse also
+  reports `z3.install.cache_miss` with one bounded reason, so a reinstall can
+  be told apart from a first install. The library installs no handlers, so
+  output is unchanged unless the application lowers the `rust_prover_tools`
+  logger level.
 
 ### GitHub Actions inputs
 
