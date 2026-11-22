@@ -1,4 +1,13 @@
-"""Consume the report sections that appear inside a Kani harness block."""
+"""Consume the report sections that appear inside a Kani harness block.
+
+`rust_prover_tools.kani_log.reader` drives the block and calls the section
+readers here for ``RESULTS:``, ``SUMMARY:``, the verdict and the manual
+summary.  The grammars themselves - status names, field patterns and rendered
+shapes - come from :mod:`rust_prover_tools.kani_log.syntax`, while
+`rust_prover_tools.kani_log.checks` reads one ``Check N:`` entry and follows a
+multi-line failure explanation.  This module owns the order those sections are
+allowed in and the counts each one contributes.
+"""
 
 from __future__ import annotations
 

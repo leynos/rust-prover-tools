@@ -16,7 +16,10 @@ prover-tools verus run --proof-file verus/edge_harvest_proofs.rs
 
 `kani install`, `kani check-version`, `verus install`, `verus run`, and
 `z3 install` accept `--repo-root PATH`, which defaults to the current working
-directory. `kani exec` requires `--installation` and `--cwd`.
+directory. `kani exec` requires `--installation` and `--cwd`. The additive
+`kani analyse-log`, `verus analyse-log` and `audit trust` commands are
+introduced in the
+[0.3.0 migration guide](rust-prover-tools-v0-3-0-migration-guide.md).
 
 ### Kani commands
 
