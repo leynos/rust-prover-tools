@@ -12,6 +12,7 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
 from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
+from rust_prover_tools.kani_snapshot.toolchain_model import FileRecord
 from tests.kani_snapshot_bundles import (
     LIBRARY_BYTES,
     LIBRARY_PATH,
@@ -29,6 +30,9 @@ if typ.TYPE_CHECKING:
     from pathlib import Path
 
     from rust_prover_tools.kani_snapshot.models import SnapshotManifest
+
+#: An extra shared object a toolchain may carry beyond `libstd`.
+EXTRA_LIBRARY_BYTES: typ.Final[bytes] = b"extra toolchain library fixture\n"
 
 
 def _runtime(tmp_path: Path) -> SnapshotRuntime:
@@ -130,6 +134,26 @@ def test_verify_toolchain_rejects_an_unrecorded_shared_library(
 
     with pytest.raises(ProverToolError, match=r"does not record"):
         verify_toolchain(runtime, _manifest())
+
+
+def test_verify_toolchain_accepts_a_toolchain_whose_extra_library_is_recorded(
+    tmp_path: Path,
+) -> None:
+    """Recording the extra shared object is what makes the toolchain installable.
+
+    The producer measures every shared object the consumer's walk checks, so a
+    toolchain carrying more than `libstd` installs once those files are
+    recorded. This pairs with the unrecorded-library refusal above.
+    """
+    runtime = _runtime(tmp_path)
+    _write(
+        _toolchain_root(runtime) / "lib" / "libextra.so",
+        EXTRA_LIBRARY_BYTES,
+    )
+    recorded = _manifest().toolchain.libraries
+    extra = FileRecord(path="lib/libextra.so", sha256=sha256_hex(EXTRA_LIBRARY_BYTES))
+
+    verify_toolchain(runtime, _manifest(libraries=(*recorded, extra)))
 
 
 def test_verify_toolchain_rejects_a_library_link_that_escapes(

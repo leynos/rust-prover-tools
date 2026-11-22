@@ -20,7 +20,8 @@ whole job, so a caller that omits the input asks ``uv`` to sync this
 project on an interpreter its ``requires-python`` excludes; ``uv`` then
 refuses the interpreter before collection or mutation. The contract
 therefore requires an explicit, string-valued selection inside
-``requires-python`` and refuses the shared default.
+``requires-python`` and refuses the shared default. The Makefile targets that
+run these checks are covered by `tests.test_workflow_makefile_contract`.
 """
 
 from __future__ import annotations

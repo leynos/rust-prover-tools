@@ -41,8 +41,7 @@ installation never enters either release installer fallback. These consumer
 commands are implemented and are existing APIs:
 
 ```bash
-prover-tools kani snapshot install --pin tools/kani/snapshot.toml \
-  --asset-dir dist/kani-snapshot
+prover-tools kani snapshot install --pin tools/kani/snapshot.toml
 prover-tools kani snapshot check --pin tools/kani/snapshot.toml
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness bounded_push
 ```
@@ -190,8 +189,14 @@ snapshot is built from a released tag, so a commit qualifies only if a release
 object names it, and an unreleased default-branch head is not a candidate even
 when its checks are green. Scheduled runs therefore inspect the newest releases
 (up to 20) rather than raw commits, selecting the newest whose required
-upstream Linux checks completed successfully. This is the rule EP-M4 follows;
-the default-branch wording above is superseded where the two disagree. Record
+upstream Linux checks completed successfully. This is the rule EP-M4 follows,
+with one narrowing that EP-M4 records explicitly: the scheduled route selects
+the newest qualified release, but it builds only the commit a reviewed recipe
+pins, and a newer qualified release is refused with the instruction to update
+the recipe rather than pairing the pinned source with a new release's identity
+(see
+[Implemented producer boundary (EP-M4)](#implemented-producer-boundary-ep-m4)).
+The default-branch wording above is superseded where the two disagree. Record
 the exact check names, run URLs, head SHAs and conclusions; empty or ambiguous
 check sets fail closed. Manual input is a full SHA, with the same checks and
 compiler-floor policy. Never interpret arbitrary input as a shell fragment, ref
@@ -401,14 +406,19 @@ compiler identity. Compare executable digests and effective compiler
 `cargo kani --version`. Record and validate setup-generated paths. Reports omit
 tokens, signed redirect URLs and inherited secret-bearing environment values.
 
-### Implemented consumer boundary (EP-M3)
+### Implemented consumer boundary (EP-M3, EP-M4)
 
 The installation pipeline is manifest digest, pin binding, checksums,
-attestation, payload copies and digests, archive structure, setup, launcher
-placement, probes, receipt, activation. A local `--asset-dir` is the only
-transport implemented so far; refusing to run without it is explicit rather
-than a silent fallback to a host installation. The remote download policy in
-this section remains the design for the later transport milestone.
+attestation, payload arrival and digests, archive structure, setup, launcher
+placement, probes, receipt, activation. Bytes arrive through one of two
+transports selected by `sender_for`: the public release the reviewed pin names
+is the default, and a local `--asset-dir` remains available for offline
+transfers. The manifest is pinned to the reviewed digest, payloads are pinned
+to the manifest's records, and the two self-authenticating evidence files are
+fetched through `download_unverified`, whose name states the contract: it
+bounds the size and reports the digest it observed, and it never compares that
+digest with a pinned value. `install_sender` never decides trust; it bounds the
+transfer and verifies the bytes against the manifest and attestation.
 
 Structural agreement is checked before setup. The manifest pins the backend
 archive's bytes, and the separately hashed `inventory.json` is compared with
@@ -736,10 +746,19 @@ feasibility; no larger paid runner is implied. Proposed job deadlines are 10
 minutes for resolution, 180 for build, 15 for attestation, 45 for clean
 validation and 15 for publication. Exceeding runner/disk/budget limits requires
 review rather than automatic upgrades. Record wall time, cache hit/miss, disk
-high-water mark, asset sizes and failures in run summaries. Cache keys bind
-trust class, OS, target, upstream SHA, recursive submodules, toolchain, locks
-and recipe; privileged jobs do not restore writable source-build caches.
-Ordinary PR caches cannot feed signing or publication.
+high-water mark, asset sizes and failures in run summaries. The build job
+writes those observations to the run summary with `always()`, so a failed run
+still reports them, and uploads whatever it observed under a distinct
+failure-path artefact name that no consumer reads as a publishable build.
+Guarded jobs name their prerequisite's result explicitly as an additional
+guard. A job-level `if` overrides the implicit `success()` check only when its
+condition contains a status-check function such as `always()`, `failure()` or
+`cancelled()`; an ordinary comparison retains that check, so a failed
+prerequisite already prevents the job from running and the explicit result
+documents which outcomes the job accepts. Cache keys bind trust class, OS,
+target, upstream SHA, recursive submodules, toolchain, locks and recipe;
+privileged jobs do not restore writable source-build caches. Ordinary PR caches
+cannot feed signing or publication.
 
 Serialize the entire snapshot workflow, starting before resolution and revision
 allocation, with `cancel-in-progress: false` and a snapshot-specific
@@ -772,6 +791,46 @@ requires a new revision unless reconciliation finds the exact already-published
 release from the previous attempt. A publication timeout is resolved by reading
 state and validating it, not blindly repeating writes.
 
+An upload interrupted after GitHub created its asset record leaves a name
+reserved by a record of zero bytes and no digest. GitHub refuses a second
+upload under a listed name, so that record must be removed before the real file
+can be sent. The policy classifies such a record as a placeholder only when the
+expected asset is non-empty and the record reports neither bytes nor digest; a
+present asset with other non-empty bytes remains a conflict. The publisher then
+deletes the placeholder by its numeric asset identifier and uploads the file
+again, so recovery still never clobbers verified bytes, and an observation that
+does not carry an identifier is refused rather than guessed at.
+
+Before either edit, any present asset whose digest the API did not volunteer is
+downloaded and hashed, because a reported size that matches the manifest is not
+evidence that the bytes do. A draft is therefore repaired only once the bytes
+already present are known to match, and a same-size asset with different bytes
+is refused without deleting or uploading anything. This byte check is separate
+from the full verification that authenticates a release's own evidence: it
+downloads only the assets the edit depends on and claims no provenance, while a
+draft that needs no edit is verified whole before publication.
+
+The write that makes the draft public is decided from a reading taken after
+that download. A download takes time, and the listing it started from cannot
+show an asset removed while its own bytes were being hashed, a draft retargeted
+at another commit, or a body rewritten to record another attempt; publishing
+from that listing would make a release public that the policy never approved
+and report the change only afterwards. Publication therefore reads the draft
+again once verification completes and does not act on a verified set that the
+newer reading no longer matches: the asset that disappeared is uploaded again,
+and a changed tag, target or body is refused.
+
+The confirming read is not limited to the write that publishes. Every download
+whose verdict authorizes a later step is followed by it: the byte check that
+precedes an edit, the whole-release verification a draft needs before it may
+become public, and the verification of a published release that would otherwise
+be reported up to date. A verdict reached across a change is discarded, and the
+newer reading is classified again, so an edit is never made from bytes whose
+listing moved and a published release is never reported current from a body
+that has since been rewritten. The window between the confirming read and the
+next write cannot be closed, because GitHub's release update has no conditional
+form; the observation that follows the write is what reports a divergence there.
+
 Repository-wide immutable releases are proposed for operational bootstrap, not
 enabled by implementation or this planning task. First adjust
 `.github/workflows/release.yml` to assemble all wheels, create a draft, upload
@@ -782,6 +841,139 @@ interrupted drafts, published no-ops and collisions receive regression tests.
 Add narrowly scoped lifecycle tests; this is necessary because the current
 workflow creates a public release before uploading wheels. GitHub documents
 draft-first publication for immutable assets and tags.[^4]
+
+### Implemented producer boundary (EP-M4)
+
+The workflow is thin because every decision it could get wrong moved into a
+tested module. `.github/workflows/kani-monthly.yml` runs five fresh jobs —
+`resolve`, `build`, `assemble`, `validate` and `publish` — behind a `guard` job
+that refuses anything but the canonical repository, `refs/heads/main` and a
+schedule or dispatch. Top-level permissions are empty; only `assemble` receives
+`id-token: write` and `attestations: write`, and only `publish` receives
+`contents: write`. Artefacts are named with `github.run_id` and
+`github.run_attempt`, so a later job downloads this run's attempt or nothing.
+The concurrency group is `kani-snapshot-${{ github.ref }}` with
+`cancel-in-progress: false`, so revision allocation cannot race a run it is
+replacing.
+
+A scheduled run is disabled unless `vars.KANI_SNAPSHOTS_ENABLED` is exactly
+`true`; the guard reports that and finishes successfully without building. A
+dispatch names `upstream_commit`, `publication_id` and `publish`, and always
+creates an attestation, so a non-publishing dispatch still has an OIDC side
+effect.
+
+Each job hands the next one a document, and the developer entrypoint
+`python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint` accepts no
+other input. That entrypoint and every other job command live in
+`rust_prover_tools.kani_snapshot.orchestrator`, the effect layer:
+`rust_prover_tools.kani_snapshot.producer` stays pure policy and rendering, and
+the orchestrator imports it but never the reverse. A structural test refuses an
+effectful import or call in the producer and any producer import of the
+orchestrator. The entrypoint's subcommands are:
+
+- `resolve` runs the scheduled route against `collect_candidates`' projected
+  release and check-run evidence, or the manual route against the dispatched
+  full SHA. The upstream tag is not dispatch input: `operations` defaults it to
+  the pinned recipe's tag, so a dispatch names only a commit and cannot pair a
+  foreign commit with a trusted tag. `collect_releases` projects the bounded
+  release list that identity allocation needs, because the workflow's shell may
+  compose observed documents but must not decide what one means.
+
+  The scheduled route is observation-complete but deliberately not
+  self-advancing. `collect_candidates` records every check run with its head
+  SHA, run URL and conclusion, and refuses a truncated page set or a run about
+  another commit; `resolve` then selects the newest qualified release and
+  refuses to build it unless its commit and tag are the reviewed recipe's,
+  naming the recipe update it needs. D3 says to select the newest qualified
+  release, so this is a recorded design change rather than an accidental
+  divergence: an implementation that built the pinned source while recording a
+  newer release's tag would break D1's immutability, and automatic selection
+  may never drift to an unreviewed upstream commit. A manual dispatch is not a
+  bypass either; it may only resolve the pinned commit, so the dispatch exists
+  for recovery of that build rather than for selecting another.
+- `build` derives the pinned plan from the resolution and identity, and the
+  workflow executes exactly the plan's argument vectors. `measure_build`
+  records the evidence a build job can only observe: re-executed compiler
+  identities, the hashed channel manifest, the lock digests, the solver digests
+  and reported versions read from the produced bundle, and the wall time and
+  disk high-water mark the workflow measured. A missing solver binary or
+  library fails rather than yielding an evidence document with a gap. The
+  recorded shared-library set is the one `shared_libraries` walks out of the
+  toolchain's `lib` directory — the same function the consumer's binding check
+  calls — so a library the producer measured is exactly a library the consumer
+  will require, and no YAML list can narrow the set.
+- `assemble` measures the payloads, writes `manifest.json` and `SHA256SUMS`,
+  and the workflow signs that manifest with `actions/attest-build-provenance`,
+  copying its bundle to `manifest.sigstore.jsonl`. Assembly never executes
+  anything from the build job; it reads the files as bytes. It also compares
+  the build's recorded tag, upstream commit and builder commit with the
+  identity the resolve job wrote, downloaded independently of the build
+  artefact, so the least trusted job cannot choose what the manifest names.
+- `validate` parses the manifest, refuses one from another run or attempt,
+  re-verifies every payload digest, the manifest bytes on disk and the exact
+  `SHA256SUMS` rows, requires a non-empty attestation bundle, and writes a
+  receipt bound to the run, attempt, tag and manifest digest. The recorded
+  `attestation` check is a presence check: the signature policy belongs to the
+  consumer verifier, and the clean-runner verification from D6 arrives with
+  EP-M5. Claiming otherwise would record a check nobody ran.
+- `publish` requires a successful receipt from the same run and attempt,
+  re-verifies the receipt binding and the payloads, and drives the immutable
+  release to a recorded no-op observation. A changed input, a foreign tag or an
+  extra asset is refused rather than repaired, because published bytes are
+  never replaced. The attempt is bounded, and what a spent budget may claim is
+  decided from whether the publish call was entered, not from the action that
+  was decided on. A budget that ends on that call reads the release once more
+  and reports a publication that may have landed as unconfirmed, or reports the
+  conflict that reading found with its reason. A budget that ends on the
+  recheck which withdrew authority for the write decides on the reading that
+  withdrew it: a release the recheck found already published and verified is
+  reported as the no-op it is, an observed conflict as the policy conflict it
+  is, with its reason, and any other withdrawal as a state that did not
+  converge, unless an earlier step entered the publish call, in which case the
+  ending is an unconfirmed publication. A failure after the call was entered,
+  including the call's own failure, carries the same warning and keeps its
+  original error as the cause.
+
+Publication observation resolves `refs/tags/<tag>` rather than trusting the
+release's `target_commitish`, which GitHub ignores once the tag exists: an
+existing tag therefore decides the commit an observation reports, and an
+annotated tag is peeled to its commit. The observation reports that resolution
+as `ObservedRelease.tag_commit` instead of judging it, because what the two
+possible disagreements mean is policy: a tag that no release carries would be
+adopted by a new draft, and a published release whose tag ref cannot be
+resolved has no confirmed target. `release_policy` refuses both, so the adapter
+only translates what it read. A published release is then re-verified from its
+own downloaded bytes — the manifest must record this tag, its checksums and
+payloads must match, its attestation must be a well-formed in-toto provenance
+statement naming its digest, its recorded identities must reproduce the
+build-input fingerprint in the release body, and the bundle must satisfy the
+consumer's own `gh attestation verify` policy for this repository's signer
+workflow, the manifest's builder commit and this run and attempt. The
+structural checks are a cheap refusal; the verifier alone decides
+`provenance_verified`. Exercising the same policy on a clean runner remains D6
+and EP-M5.
+
+`make workflow-check` runs the workflow contract tests and actionlint together,
+and CI runs it once the pinned actionlint release is installed.
+`make kani-snapshot-smoke` dispatches a non-publishing run and is opt-in: the
+ordinary test suite performs no real build.
+
+The Python release lifecycle is now implemented as proposed above:
+`.github/workflows/release.yml` builds the wheel inventory, creates or resumes
+a draft, uploads only the missing wheels, verifies the release serves exactly
+the expected bytes, and publishes last. Its `v*.*.*` namespace, composite
+action, interpreter and artefact name are unchanged, and
+`tests/test_python_release_contract.py` pins both the lifecycle and that
+stability.
+
+A rerun against an already-published release is the recorded no-op D5 asks for,
+not an unconditional refusal: the step records the published state, upload and
+publish write nothing, and the ordinary verification still compares the served
+asset names and bytes with this run's build. A release that serves exactly the
+expected wheels therefore finishes cleanly, while any difference — a missing or
+extra name, or different bytes under a known name — fails as a collision. This
+mirrors the snapshot publisher's rule, where an exactly matching published
+release returns a no-op only after its provenance is verified again.
 
 ## D6: Evidence and operational handoff
 

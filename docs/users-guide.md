@@ -5,6 +5,7 @@
 The `prover-tools` command provides one noun/verb interface for the Kani and
 Verus workflows that were previously handled by repository shell scripts.
 
+<!-- tested-example: prover-tools-commands -->
 ```bash
 prover-tools kani install
 prover-tools kani check-version
@@ -34,6 +35,7 @@ The prebuilt route only covers the release pinned by this package. Any other
 version is rejected with a pointer to the compile fallback. Pass `--compile` to
 build from source instead, which runs the older sequence:
 
+<!-- tested-example: kani-compile-fallback -->
 ```bash
 cargo install --locked kani-verifier --version <version>
 cargo kani setup
@@ -63,6 +65,7 @@ Useful options are:
 The legacy `KANI` environment variable is still supported for `check-version`.
 For example:
 
+<!-- tested-example: kani-check-version-environment -->
 ```bash
 KANI='cargo kani --format=json' prover-tools kani check-version
 ```
@@ -85,6 +88,7 @@ command intentionally refuses that selection rather than remove a configured
 admission boundary. Absent `RUSTDOC` is supported. Other releases and platforms
 require separate qualification.
 
+<!-- tested-example: kani-exec-invocation -->
 ```bash
 prover-tools kani exec --installation "$HOME/.kani/kani-0.67.0" \
   --cwd "$PWD" --extra-arg=list
@@ -156,40 +160,48 @@ for the tag grammar and field constraints.
 `prover-tools kani snapshot install` materializes the identity named by
 `tools/kani/snapshot.toml`:
 
+<!-- tested-example: kani-snapshot-install -->
 ```sh
-prover-tools kani snapshot install --asset-dir dist/kani-snapshot
+prover-tools kani snapshot install
 ```
+
+Add `--asset-dir dist/kani-snapshot` to copy the same files from a local
+directory instead of downloading the release.
 
 Installation requires the prebuilt GitHub CLI (`gh`) on the caller's `PATH`;
 the installer runs `gh attestation verify` and bundles no verifier of its own. A
 `PATH` entry under a directory another user can write can replace `gh`, so run
 the command with a `PATH` whose entries you trust.
 
-Installation requires `--asset-dir` until the release download transport is
-implemented. The directory must contain `manifest.json`,
-`manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the manifest names. The
-installer checks, in order, that the manifest bytes match the reviewed pin
-digest, that the pin binds to the manifest, that the checksums agree, that
-`gh attestation verify` accepts the bundle under the repository policy, and
-that every payload matches its recorded size and digest. It then compares the
-backend archive's members with `inventory.json` and runs the packaged launcher's
-`setup --use-local-bundle` with generation-private `KANI_HOME`, `RUSTUP_HOME`
-and `CARGO_HOME`. Only after the installed `rustc -vV` and
-`kani-compiler --version` match the manifest does the command record the active
-generation. The same check that `snapshot check` performs runs first: every
-runtime file the launcher needs must be present and executable, `pyroot` must
-be a real directory whose links resolve inside that directory and whose members
-exactly match the record written after setup, and the recorded toolchain's
-shared libraries must live inside the private rustup home with no unrecorded
-library beside them. The rustup home itself must also resolve inside the
-generation. When an existing generation is reused, the backend archive is
-rehashed rather than trusted by size, so an equal-size edit is still refused.
-The compiler probes load the verified toolchain's `lib` directory first, so an
-inherited `LD_LIBRARY_PATH` cannot shadow it.
+Installation downloads the release the reviewed pin names: `manifest.json` is
+authenticated against the pin's digest, and every payload and evidence file is
+authenticated against what that manifest records. Add `--asset-dir` to install
+from a local directory instead, which is useful for offline reproduction and
+for reviewing a release before it is published. The directory must contain
+`manifest.json`, `manifest.sigstore.jsonl`, `SHA256SUMS` and every asset the
+manifest names. The installer checks, in order, that the manifest bytes match
+the reviewed pin digest, that the pin binds to the manifest, that the checksums
+agree, that `gh attestation verify` accepts the bundle under the repository
+policy, and that every payload matches its recorded size and digest. It then
+compares the backend archive's members with `inventory.json` and runs the
+packaged launcher's `setup --use-local-bundle` with generation-private
+`KANI_HOME`, `RUSTUP_HOME` and `CARGO_HOME`. Only after the installed
+`rustc -vV` and `kani-compiler --version` match the manifest does the command
+record the active generation. The same check that `snapshot check` performs
+runs first: every runtime file the launcher needs must be present and
+executable, `pyroot` must be a real directory whose links resolve inside that
+directory and whose members exactly match the record written after setup, and
+the recorded toolchain's shared libraries must live inside the private rustup
+home with no unrecorded library beside them. The rustup home itself must also
+resolve inside the generation. When an existing generation is reused, the
+backend archive is rehashed rather than trusted by size, so an equal-size edit
+is still refused. The compiler probes load the verified toolchain's `lib`
+directory first, so an inherited `LD_LIBRARY_PATH` cannot shadow it.
 
 `prover-tools kani snapshot check` revalidates the active generation without
 running setup:
 
+<!-- tested-example: kani-snapshot-check -->
 ```sh
 prover-tools kani snapshot check
 ```
@@ -206,6 +218,7 @@ directory. The byte-validation step never invokes it.
 `prover-tools kani run --snapshot-pin PATH -- ARGS...` executes a proof through
 the active generation:
 
+<!-- tested-example: kani-snapshot-run -->
 ```sh
 prover-tools kani run --snapshot-pin tools/kani/snapshot.toml -- --harness proof
 ```
@@ -275,6 +288,72 @@ run from the proof package. The
 [Explicit legacy Kani execution](#explicit-legacy-kani-execution) section gives
 the detailed rules.
 
+### Snapshot maintenance workflow
+
+`.github/workflows/kani-monthly.yml` builds, attests, validates and publishes
+one immutable Kani snapshot. Scheduled runs are disabled unless the repository
+variable `KANI_SNAPSHOTS_ENABLED` is set to `true`; any other value, including
+an unset variable, makes the run report that it is disabled and finish without
+building anything.
+
+A manual dispatch takes three inputs:
+
+| Input             | Meaning                                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `upstream_commit` | Full 40-hex upstream commit to build. It must be the commit the pinned recipe names; another commit is refused at plan time. |
+| `publication_id`  | The immutable tag to publish, in the form `kani-snapshot-YYYY-MM-<12 hex>-rN`.                                               |
+| `publish`         | Whether to create the release after validation. Defaults to `false`.                                                         |
+
+A dispatch always creates a build attestation with OpenID Connect, even when
+`publish` is `false` and no release is created. A non-publishing dispatch
+therefore still exercises signing and validation without making anything
+public. Published snapshot assets are immutable: correcting a published
+snapshot means choosing a new publication identity, never replacing or moving
+existing bytes. An interrupted draft is resumed only by the same run and
+attempt. Identity allocation reads the published tags alone, because GitHub
+lists drafts only to a token that may push, so a draft left by an earlier
+attempt is not counted when the next run numbers its identity. Publication
+re-reads the tag with the write token and refuses a draft that records another
+run or attempt, naming that disagreement instead of adopting it; remove the
+stale draft, or choose a new publication identity, before retrying. A record
+left by a failed upload that holds no bytes is removed and the file is uploaded
+again, but only after any asset already in the draft whose digest GitHub did
+not report has been downloaded and checked, so a draft that turns out to hold
+conflicting bytes is never edited. Publication re-reads the draft once that
+download finishes, uploads again anything that disappeared while it ran, and
+refuses a draft that was meanwhile retargeted or rewritten to record another
+attempt, so a release is not made public from a reading that went out of date
+while it was being checked. The same confirming read follows every download
+that authorizes a step, including the verification of an already published
+release, and a verdict reached across a change is discarded rather than reused.
+
+This guarantee covers changes the confirming read observes. A change made after
+that read but before the update that makes the draft public can still become
+public, because GitHub's release update has no conditional form that would
+reject it. The read taken after the write reports such a divergence, but only
+after it has happened. Changed inputs, conflicting bytes, or a release that
+moved under the check require a new identity.
+
+To dispatch a non-publishing run from a checkout:
+
+<!-- tested-example: kani-snapshot-smoke -->
+```sh
+make kani-snapshot-smoke \
+  KANI_SNAPSHOT_UPSTREAM_COMMIT=<full upstream commit> \
+  KANI_SNAPSHOT_PUBLICATION_ID=kani-snapshot-2026-12-<12 hex>-r1
+```
+
+The target is opt-in and never part of `all`, because it builds on a hosted
+runner and creates an attestation.
+
+Ordinary Python releases are unaffected by the snapshot schedule. Pushing a
+`v*.*.*` tag creates a draft release, uploads the wheel, verifies that the
+release serves exactly the expected bytes, and publishes the release only
+afterwards. A rerun resumes an existing draft. A rerun against a published
+release is a no-op when the served assets match the expected wheel set and
+bytes. A published release whose assets differ is refused as a collision
+because its assets can no longer be changed.
+
 ### Verus commands
 
 `prover-tools verus install` reads `tools/verus/VERSION` and
@@ -327,6 +406,7 @@ stage instead, which is the prover's status only when no later stage fails. To
 read the prover's status from a pipeline that closes early, inspect the first
 stage explicitly:
 
+<!-- tested-example: verus-pipefail-status -->
 ```bash
 # Read PIPESTATUS in each branch so `set -e` cannot skip the capture.
 if prover-tools verus run --proof-file proofs/example.rs \
@@ -375,6 +455,7 @@ Verus accepts only one input filename per invocation, so `prover-tools` runs
 the verifier once per `--proof-file` value instead of passing several names at
 once. Files are verified in the order given:
 
+<!-- tested-example: verus-multiple-proof-files -->
 ```bash
 prover-tools verus run --repo-root . \
   --proof-file verus/edge_harvest_proofs.rs \
@@ -422,6 +503,7 @@ x86_64, verifies its SHA-256 digest, extracts only `bin/z3`, and records the
 installed version beside the binary. A repeated run reuses a marked
 installation without another download.
 
+<!-- tested-example: z3-install -->
 ```bash
 prover-tools z3 install
 export VERUS_Z3_PATH=".cache/z3/4.16.0/z3"
@@ -466,6 +548,7 @@ Every CLI option can also be provided through an `INPUT_` environment variable
 where the command declares a binding. This keeps the command usable from GitHub
 Actions-style wrappers. For example:
 
+<!-- tested-example: github-actions-inputs -->
 ```bash
 INPUT_REPO_ROOT="$PWD" INPUT_PROOF_FILE=proof.rs prover-tools verus run
 ```

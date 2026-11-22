@@ -151,6 +151,25 @@ lowering the level of the relevant `rust_prover_tools` module logger.
 `docs/prover-tools-cli-design.md` owns the system-design record for the event
 vocabulary.
 
+The producer entrypoint is the one place that opts in. `_configure_logging` in
+`rust_prover_tools.kani_snapshot.orchestrator.entrypoint` attaches a standard
+error handler to the `rust_prover_tools` logger at DEBUG before dispatch, and
+its formatter renders each event's `event_data` beside the event name as
+`key=value` pairs. A hosted job therefore shows the decision sequence, the
+transient retries and the operation's ending without a local rerun; the handler
+belongs to the CLI entrypoint, not to a library import, so embedding the
+package does not reconfigure a host application's logging. The events a
+publication job emits are `kani.snapshot.publish.start`, `.decision` (`step`,
+`action`), `.deferred` (`step`), `.transient` (`action`), and `.complete` or
+`.failed` (`span_id`, `outcome`, `elapsed_seconds`, and `reason` on failure);
+the `gh` transport adds `kani.snapshot.gh.failed` (`kind`, and `exit_code` for
+a command that exited) and `kani.snapshot.gh.absent` (`exit_code`). A timed-out
+command never produced an exit status, so its `kani.snapshot.gh.failed` event
+carries `kind=timeout` and no `exit_code`: a consumer must treat that field as
+present only for a failure that had one. A failure that carried a decided
+outcome reports it, so a budget that ran out reads `outcome=not_converged`
+rather than only the exception's class.
+
 A process or storage boundary that should be timed uses
 `operation_span(logger, event, **fields)` from the same module. It emits
 `event.start` and a matching `event.complete` or `event.failed`; the closing
@@ -162,7 +181,13 @@ a filesystem path.
 When adding a pinned asset, update `binary_assets` with the exact URL, digest,
 byte ceiling, and archive member, and add a test that builds a local archive of
 the expected shape. Never let a download path skip `download_pinned`, and do
-not extract archive members that are not named in the manifest.
+not extract archive members that are not named in the manifest. The one bounded
+exception is the installer's evidence fetch: `downloads.BoundedAsset` names a
+release file with a size ceiling and no pre-known digest, and
+`downloads.download_unverified` transfers the two self-authenticating evidence
+files that fit it. The digest it returns is an observation, not a pinned check:
+the call decides nothing about trust, and it does not replace `download_pinned`
+for anything the manifest pins.
 
 `UrlPolicy` receives two separate checks per download: `check_initial` sees the
 first URL and `check_redirect` sees every redirect target before it is opened,
@@ -236,6 +261,16 @@ strings with `split_command`; it uses `shlex.split` and rejects empty commands.
 Use `run_checked` when non-zero exits should fail the workflow immediately with
 a user-facing `CommandFailedError`. Use `run_command` when the workflow needs
 to inspect the exit code, such as `rustup which` or `verus --version`.
+
+A command that exceeds its wall-clock budget is terminated, process group and
+all, and `run_command` raises `rust_prover_tools.commands.CommandTimeoutError`.
+That class subclasses `ProverToolError`, so existing handling keeps working,
+but a caller that may retry a timeout should catch the narrower type, because a
+genuine command failure is not worth repeating. The release path does this at
+two boundaries: `gh_transport` catches `CommandTimeoutError` and wraps it once
+in `ReleaseTransientError`, and the publication loop catches that wrapper. A
+caller adding retry handling to the release path therefore catches
+`ReleaseTransientError`, not the timeout type, which never reaches it.
 
 Set `CommandSpec.echo=True` only when the child process output is part of the
 public CLI stream, such as a Verus proof run.
@@ -559,14 +594,20 @@ counts. A repository that selects no backend emits no such event.
 `rust_prover_tools.kani_snapshot.install` orchestrates one installation: stage
 and verify transport files, extract the launcher, run setup, probe the
 installed compiler, write the receipt, then publish the next activation record.
-`install_state` owns locking and cache revalidation, `activation` owns the
-ordered create-only records, `completion` owns the per-identity completion
-watermark those records advance, `durability` owns the flushes that make state
-durable, and `cleanup` owns bounded removal of private, uniquely named state.
-`run` only revalidates and executes; it never installs. `kani_snapshot_cli`
-registers the public commands, and `cli_support` holds the repository-root and
-error-exit helpers shared with the legacy CLI. Keep lifecycle code out of the
-legacy `kani_release` modules.
+`install_sender` owns where those files come from: `ReleaseSender` downloads
+the release the reviewed pin names, pinning the manifest to the pin's digest
+and each payload to its manifest record, while `LocalSender` copies from
+`--asset-dir` under the same envelopes. Neither decides trust; both bound and
+verify bytes, and `install_transport` keeps the order in which the manifest,
+checksums, attestation and payloads may be trusted. `install_state` owns
+locking and cache revalidation, `activation` owns the ordered create-only
+records, `completion` owns the per-identity completion watermark those records
+advance, `durability` owns the flushes that make state durable, and `cleanup`
+owns bounded removal of private, uniquely named state. `run` only revalidates
+and executes; it never installs. `kani_snapshot_cli` registers the public
+commands, and `cli_support` holds the repository-root and error-exit helpers
+shared with the legacy CLI. Keep lifecycle code out of the legacy
+`kani_release` modules.
 
 The dependency direction is CLI to orchestration to validated models and
 command adapters. `InstallHooks` is the injection seam for setup, probe and
@@ -602,8 +643,13 @@ Ordering is part of the contract. The manifest digest and pin binding are
 checked before checksums, checksums before attestation and payload copies, and
 payload digests before archive structure. `validate_archive_inventory` then
 requires two-way path equality and equal kind, mode, size and link target.
-Setup runs only after those checks, and the active pointer moves only after the
-receipt is fsynced and the probes match the manifest. Immediately after setup,
+Because that comparison includes the member kind, the producer builds the
+inventory with the archive's headers beside the extracted tree: extraction
+makes every name in a hard-link group the same inode, so only a header can say
+which name carries the bytes, and a walk order that disagreed with it would
+describe the same tree under a designation the consumer refuses. Setup runs
+only after those checks, and the active pointer moves only after the receipt is
+fsynced and the probes match the manifest. Immediately after setup,
 `python_root.record_python_root` writes `pyroot.json` beside the receipt, and
 `validate_installed_tree` requires the tree to match it exactly; that closes
 the inventory's open-ended `pyroot` exemption, because execution puts the tree
@@ -765,10 +811,16 @@ is unsupported.
 
 `rust_prover_tools.kani_snapshot.producer` is the producer-side domain package.
 It decides what may be built and how, and executes nothing: no subprocess,
-network call, environment read or filesystem write belongs in it. Adapters
-elsewhere receive its argument vectors and run them. The package is not named
-`build`: the repository-wide `build/` ignore rule drops such a directory from
-version control at any depth, and the code indexer skips it too.
+network call, environment read or filesystem write belongs in it. Its sibling
+`rust_prover_tools.kani_snapshot.orchestrator` carries every decision out — it
+reads and writes the job documents, runs the pinned commands and performs the
+bounded `gh` reads, and it is the only layer a workflow job invokes. The
+dependency direction is one way: the orchestrator imports the producer, never
+the reverse. `tests/test_kani_snapshot_producer_purity.py` reads the producer's
+syntax trees and refuses an effectful import, an effectful call or an
+orchestrator import, so the boundary cannot erode silently. The package is not
+named `build`: the repository-wide `build/` ignore rule drops such a directory
+from version control at any depth, and the code indexer skips it too.
 
 - `recipe_model` holds the frozen records (`Recipe`, `UpstreamIdentity`,
   `BuilderRecord`, `LauncherRecipe`, `AttestationRecipe`, `LicenceRecord`).
@@ -796,6 +848,103 @@ version control at any depth, and the code indexer skips it too.
 - `commands` derives argument vectors and asset names from validated inputs.
 - `compiler_floor` owns the supported floor and the transcript checks that
   demonstrate it.
+
+The documents and decisions handed between the guarded jobs have their own
+modules, each owning one boundary rather than one file format:
+
+- `lifecycle_model` holds the records a job writes and the next job strictly
+  parses; `lifecycle` renders and parses that canonical JSON and derives the
+  build plan, so one key set serves both directions. A resolution or plan is
+  bound to the run and attempt that produced it, and a stale artefact cannot
+  authorize a later effect.
+- `publication_identity` allocates or reuses the revision,
+  `publication_document` owns the identity document the resolve job hands to
+  the build job, and `input_fingerprint` projects the declared build inputs
+  into one canonical document so identity reuse is decided by the inputs rather
+  than by upstream HEAD alone.
+- `candidate_api` turns the GitHub release and check-run objects into validated
+  shapes; `upstream_evidence` decides what a response may contribute to the
+  evidence document, keeping fetching and shaping separate.
+- `evidence_model` holds the build evidence the build job measured, and
+  `assemble_input` the metadata it hands to assembly. Neither carries payload
+  digests: assembly re-reads and hashes every payload itself, so a build job
+  cannot smuggle a claim into the manifest.
+- `asset_names` derives the release's asset names from validated records, so
+  assembly, publication and the receipt share one ordering.
+  `validation_receipt` records the clean validation that releases the publish
+  job and refuses a receipt from another run, a different manifest digest or an
+  incomplete asset set.
+
+The publication boundary is split the same way. `release_model` holds the
+port-facing records as frozen dataclasses, and `release_policy.decide` maps one
+observation to the next action without performing any effect, so the decision
+rules are testable without a release. Those rules include refusing a tag that
+no release carries, which a new draft would adopt, and a published release
+whose tag does not resolve; `ObservedRelease.tag_commit` is the observation
+that carries the resolution, and the adapter reports it rather than acting on
+it. `release_assets_policy.classify_assets` classifies the assets a draft
+serves, `release_markers` reads and writes the release-body markers, and
+`release_port` declares the `ReleaseApi` port. `publish` owns that port and is
+the only caller of `publish_release`: it observes, decides, acts and observes
+again, re-observes and re-decides before the single irreversible publish call,
+and stops after a bounded number of steps (`max_steps`, 16 by default) instead
+of assuming a state it cannot reconcile. `publish_steps.advance` is one step:
+it decides from a reading, records the decision, and performs the effect that
+decision names, including the pre-publish recheck and the write itself.
+`publish_budget` decides what a spent budget may claim, from `StepOutcome`:
+whether the irreversible call was entered at all, and the newest reading the
+run holds. A budget that ends on the publish call takes one confirming
+observation and reports an unconfirmed publication — or the conflict that
+observation found, with its reason — and never a state that did not converge. A
+budget that ends on the recheck which withdrew authority for the write decides
+on the reading that withdrew it: a release the recheck found already published
+and verified is reported as the no-op it is, an observed conflict as the policy
+conflict it is, with its reason, and any other withdrawal, such as an asset the
+recheck found missing, as a state that did not converge — unless an earlier
+step entered the publish call, in which case an unconfirmed publication is
+reported instead. The same warning covers a failure after the call was entered:
+the publish call's own failure, or a read or verification the run cannot
+complete, each keeps its original error as the cause, because the retry such an
+error invites would be a second publication. The warning is stated once, because
+`PublicationUncertainError` marks an error that already carries it.
+`publish_observation` decides when two readings describe the same release,
+which is what lets a completed download be believed only if the release did not
+move while it ran. `publish_request` holds the record of what one attempt is
+asked to publish; checking the local files against the manifest reads and
+hashes them, so `publish` owns that precondition and runs it before any release
+API call. The policy these steps carry is D5 in the distribution design
+(`docs/kani-snapshot-distribution-design.md#d5-workflow-and-immutable-publication`);
+this guide names the code rather than restating the rules.
+
+`gh_transport` is the one place a `gh` failure is classified. It owns the
+`GhRunner` protocol the adapter runs commands through, the read budget (120 s)
+and the transfer budget (300 s), and it treats a timeout, exit code 124 or a
+transient stderr marker as retryable while the permanent authentication and
+permission markers take precedence. `gh_optional` returns `None` only for a
+confirmed HTTP 404, so "not found" and "could not ask" never collapse into one
+answer, and `GhReleaseApi` refuses any repository but `REPOSITORY`. On the
+consumer side, `install_sender` performs the release transport behind
+`kani snapshot install`, and `shared_libraries` owns the dynamic-library search
+the installed tools use.
+
+The orchestrator's own helpers are named in the workflow section below:
+`documents` writes job documents atomically, `inventory_build` walks a payload
+tree and `inventory_carriers` decides from the archive headers which path
+carries a hard link's bytes. `operations` holds the effect of each producer job
+as one callable, leaving `entrypoint` a dispatch table; `resolve_operations`
+owns the resolve job and the workflow identity it first binds to a document; and
+`release_evidence` derives the complete asset set one publication must serve,
+including the checksums and attestation the manifest does not name.
+
+Three helpers on those paths carry their own contract.
+`documents.write_document` writes and renames a job document so a reader never
+sees a partial one. `inventory_parse.normalize_inventory_path` applies the one
+path grammar both the producer and the consumer use, removing empty and `.`
+components and refusing a name either side could not record, which is what
+makes a comparison between a tarball member and an extracted tree meaningful.
+`producer.commands.launcher_extract_command` derives the argument vector that
+unpacks a packaged launcher crate beside its crate file, so the producer
+validates and the consumer verifies the same spelling.
 
 The package boundary is defined by effects, not by the shape of the data it
 reads. `resolution` converts GitHub API payloads, `upstream_metadata` converts
@@ -852,3 +1001,178 @@ Conventions that keep the recipe trustworthy:
   cannot claim a glibc floor older than the image that linked them, and
   `kani-driver` links the host C library, so a prototype built on another
   distribution measures that distribution's floor, not the published one.
+
+## Kani snapshot producer entrypoint
+
+`python -m rust_prover_tools.kani_snapshot.orchestrator.entrypoint` is the
+developer interface `.github/workflows/kani-monthly.yml` calls. It is not a
+consumer API: the CLI does not register these subcommands, and nothing outside
+the snapshot workflow should depend on them. Each subcommand reads the
+documents earlier jobs produced, checks their identity and same-run binding,
+and only then performs its effect, so a stale or foreign document fails before
+anything is written.
+
+| Subcommand | Inputs                                                                                                    | Effect                                             |
+| ---------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `resolve`  | `--route scheduled --candidates` or `--route manual --commit`, plus `--output` and the run identity flags | Writes the resolved upstream commit.               |
+| `identity` | `--resolution`, `--builder-commit`, and either `--month --releases` or `--publication-id`                 | Writes the immutable publication identity.         |
+| `build`    | `--resolution`, `--identity`, `--builder-commit`                                                          | Writes the pinned build plan.                      |
+| `assemble` | `--input` assembly input, `--identity` the resolve job's `identity.json`, `--payloads` and `--output`     | Writes `manifest.json` and `SHA256SUMS`.           |
+| `validate` | `--manifest`, `--payloads`                                                                                | Writes the receipt naming the checks it performed. |
+| `publish`  | `--manifest`, `--receipt`, `--payloads`                                                                   | Drives the release to a published, verified state. |
+
+Every subcommand also takes `--run-id`, `--run-attempt`, `--event` and
+`--run-url`. Those four flags are the workflow identity the receipt and
+publication refuse to confuse: a document from another run or attempt is
+rejected even when its bytes are otherwise identical.
+
+The workflow's shell is allowed to compose observed documents and to execute a
+plan, but not to interpret one. Anything that projects an external response
+into a document the next job consumes belongs in a tested module. The
+`orchestrator` collectors (`collect_candidates`, `collect_releases`) and the
+file steps (`measure_build`, `build_evidence`, `inventory_build`, `assembly`)
+each own one such projection; the decisions they apply live in the producer
+modules those steps call.
+
+Fetching and shaping are separate modules as well.
+`orchestrator.collect_candidates` performs the upstream `gh` reads;
+`producer.upstream_evidence` decides what a response may contribute and renders
+the document deterministically. Both collectors take a `GhRunner`, so a test
+asserts the exact argument vector each job sends without starting a process,
+and a transport failure keeps its transient or permanent classification through
+the added context.
+
+Publication follows the same rule from the other side: `publish` depends only
+on the `ReleaseApi` port in `release_port`, `gh_release.api` is its one
+adapter, and `orchestrator.entrypoint` is the composition root that chooses it.
+`observe` is a query that downloads nothing; `hash_assets` downloads only the
+assets a draft edit depends on and reports the digests of their bytes; `verify`
+downloads, hashes and authenticates the served bytes as a whole. The policy
+asks for each explicitly, so a digest listed by the API is a claim until a hash
+or a verification has computed the same value locally. A draft that needs an
+edit — a placeholder to delete or a missing asset to upload — is hashed first,
+so a same-size asset whose bytes differ is refused before the draft is changed;
+a draft that needs no edit is verified whole instead, and that download hashes
+it. The write that would publish the draft is then decided from a reading taken
+after that download: the first listing cannot show an asset removed while its
+bytes were being hashed, nor a draft retargeted or re-bodied mid-download, so
+publication reads the draft again, restores anything that disappeared and
+refuses an identity the policy no longer approves before anything becomes
+public. The confirming read follows every download whose verdict authorizes a
+later step — the byte check before an edit and the verification behind a
+published no-op as well as the draft's own verification — and a verdict reached
+across a change is discarded rather than reused. The gap between that read and
+the write remains, because GitHub's release update has no conditional form; the
+observation after the write reports a divergence there. Each side of that
+boundary has one module: `release_assets_policy` classifies an observed asset
+set, `release_markers` reads and writes the release-body markers, and the
+adapter's steps are `gh_release.document` for the served documents,
+`gh_release.attestation` for signature policy and `gh_release.download` for the
+download, digest and verification sequence. A change to one seam therefore
+cannot silently reach across into another.
+
+Scheduled runs collect the existing release list inside the read-only `resolve`
+job, because identity allocation is a decision about the tags that already
+exist. GitHub lists draft releases only to a push-capable token, so that
+document holds the published releases alone; a draft left by an interrupted run
+stays invisible to allocation and is refused by publication, which observes the
+tag again with the writer token and will not adopt a draft bound to another run
+or attempt. A manual dispatch names its own publication id and collects nothing.
+
+`validate` records the checks `verify_release` performs, so a caller cannot
+label work that never ran; the `attestation` check is a presence and non-empty
+check of `manifest.sigstore.jsonl`. The signature policy —
+`gh attestation verify` with explicit repository, workflow, ref, source and
+signer digests, correlated with the manifest's run and attempt — is the
+consumer's, and EP-M5 exercises it on a clean runner. Do not describe the
+receipt as proof that a signature was verified.
+
+The publisher's own release observation does run that policy. When a published
+release is re-verified from its downloaded bytes, the structural attestation
+checks are followed by `verify_attestation` with the consumer's
+`AttestationPolicy`, so a bundle signed by another workflow, or for another run
+or attempt, leaves the release unverified instead of reaching a no-op. The
+ledger still rests on EP-M5: a real clean-runner signature has not yet been
+exercised end to end.
+
+The producer and the consumer share `shared_libraries`:
+`orchestrator.measure_build` hashes every shared object under `<toolchain>/lib`
+that the function returns, and `toolchain_binding` refuses any it returns that
+the manifest does not record. Do not reintroduce a workflow-supplied list — a
+narrow list would let a build publish a toolchain the consumer then refuses.
+
+Identity reuse is decided by `input_fingerprint`, a SHA-256 over a canonical
+document of declared inputs: the upstream commit, this repository's build
+commit, and the pinned recipe's toolchain, prerequisites, submodules, runtime
+and builder facts. Run and attempt numbers, timings, cache outcomes and asset
+sizes are deliberately excluded, because a rebuild of unchanged inputs produces
+a new manifest but the same inputs. The `identity` subcommand writes that
+fingerprint into `identity.json`, `publish` recomputes it from the manifest's
+commits, and `release_body` records it in the release body next to the creating
+run and attempt. A draft is resumable only by that run and attempt; a published
+release answers with a no-op only when the fingerprint matches and the adapter
+re-verified the release's own assets against its own manifest. Nothing compares
+this run's manifest digest with the published one, because they legitimately
+differ.
+
+### Workflow contract tests
+
+Workflows are executable policy, so they are tested like code.
+`tests/workflow_contracts/strict_workflow.py` reads them the way GitHub reads
+them: duplicate keys are refused rather than silently keeping the last one, and
+`on:` stays a string instead of becoming YAML 1.1's boolean. The helpers return
+steps, scripts, `needs` and artefact names without assuming a scalar or a list,
+because both are valid YAML for the same field.
+
+`tests/test_kani_workflow_contract.py` pins the snapshot workflow's guards,
+per-job permissions, Action pin shape, artefact routing, job budgets, the order
+of attestation, validation and publication, and the recipe facts the workflow's
+declared environment must match. `tests/test_python_release_contract.py` pins
+the draft-first Python release lifecycle, including that a rerun of an
+already-published release is a verified no-op rather than a repair. Both follow
+the pin policy above: they assert that a reference is a full 40-hex commit,
+never that it equals a particular one.
+
+Run them together with actionlint:
+
+```sh
+make workflow-check
+```
+
+actionlint is a required host tool for `make actionlint`, `make workflow-check`
+and `make all`. The repository pins 1.7.12: CI downloads the Linux AMD64
+release archive for that version and verifies it against a pinned SHA-256
+checksum before installing it (`.github/workflows/ci.yml`, the "Install
+actionlint" step). A developer host must provide an `actionlint` of the same
+version on `PATH`, either from its package manager or by the same
+download-and-verify route. `ACTIONLINT` overrides the binary the Makefile
+invokes, for a host that installs it elsewhere, and `ensure_tool` fails with
+`'<path>' is required, but not installed` when the resolved binary is absent.
+actionlint lints `.github/workflows/*.yml` only; it cannot lint a composite
+action, so `tests/test_python_release_contract.py` reads
+`.github/actions/pure-python-wheel/action.yml` directly.
+
+### Documented examples
+
+A user-facing example carries a `<!-- tested-example: <identifier> -->` marker
+directly above its fence. `tests/documentation_examples.py` is the shared
+loader: it reads the published document and refuses a marker with no fence, an
+unterminated fence, or a duplicate identifier.
+`tests/test_documented_examples.py` registers the users' guide's smoke
+dispatch. That example cannot be executed in a test because it submits a hosted
+workflow run, so the test holds the boundary it does share with the code: the
+documented command and the Makefile recipe must name the same target and inputs.
+
+The workflow gates also need `jq` on `PATH`. The build job's run summary is a
+`jq` filter, and `tests/test_kani_workflow_build_contract.py` runs that filter
+over a real evidence document rather than trusting its text, so both
+`make test` and `make workflow-check` fail loudly when `jq` is missing. It is a
+host tool the repository does not pin: the GitHub `ubuntu-latest` runner ships
+it, and a developer host needs it installed.
+`tests/test_python_release_lifecycle.py` additionally runs the wheel workflow's
+own steps against a stand-in `gh`, which uses only `bash` and the Python
+standard library.
+
+`make kani-snapshot-smoke` dispatches a real, non-publishing snapshot run. It
+is opt-in and never part of `all`, because it builds on a hosted runner and
+creates an attestation.

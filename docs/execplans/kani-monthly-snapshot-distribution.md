@@ -931,7 +931,35 @@ name verified provenance rather than the verifier command.
   and `test_generation_layout_rejects_the_same_unsafe_names` keeps the
   one-component name rule.
 
-- [ ] EP-M4: guarded workflow and immutable publication state machine.
+- [x] (2026-11-19) EP-M4: guarded workflow and immutable publication state
+  machine. Implementation and tests are in #258; the schedule stays disabled,
+  so nothing is published.
+  - The producer package gained the resolve/build/assemble/validate/publish
+    entrypoint over typed same-run documents, `collect_candidates`,
+    `collect_releases`, `measure_build`, `input_fingerprint`,
+    `evidence_model`, `publication_document`, `candidate_api` and
+    `resolve_operations`. Identity allocation reuses the newest revision only
+    when its body records the same input fingerprint, and resumes a draft only
+    for the run and attempt that created it. A published release answers a
+    reused identity with a no-op only when the fingerprint matches and the
+    adapter re-verified the release's own bytes against its own manifest.
+  - `install_sender` connects the consumer release transport: the manifest is
+    pinned to the reviewed digest, payloads to the manifest's records, and the
+    self-authenticating checksums and attestation are bounded by size only.
+    `--asset-dir` remains an offline override, and its selection is tested at
+    the CLI boundary.
+  - The workflow builds Kissat through `./configure`, records the checked-out
+    source state before and after the build, runs the producer with
+    workspace-absolute paths under `uv --directory`, packs the launcher under
+    the consumer's `kani-<version>/` root, measures the inventory from inside
+    that root, and reads the assembly input from `build/producer/`. Contract
+    tests pin each hand-off.
+  - The Python wheel release verifies downloaded assets by basename against
+    the local inventory, so a release that serves the same wheels under their
+    asset names is no longer compared by build path.
+  - New tests cover the sender contract, fingerprint sensitivity, published
+    no-op recovery, draft binding, the adapter's draft-visible observation and
+    the workflow hand-offs. Full suite: see the gate record below.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
 
@@ -977,11 +1005,11 @@ refusal therefore belongs to a repair attempt and needs an invalid active
 generation first; the behavioural scenario corrupts the receipt to reach that
 path. This is intended cache behaviour, not a missing integrity check.
 
-The local `--asset-dir` requirement is a deliberate plateau. The D4 release
-host policy and downloader are already implemented and tested, but the consumer
-command does not yet fetch release assets from GitHub. EP-M4 must connect that
-transport before the workflow can depend on this command, and the current error
-message says so explicitly.
+The local `--asset-dir` requirement was a deliberate plateau. The D4 release
+host policy and downloader were already implemented and tested, but the
+consumer command did not fetch release assets from GitHub until EP-M4 added
+`install_sender`. The transport now defaults to the release the pin names and
+keeps `--asset-dir` as an offline override; both run the same verification.
 
 A hostile-nesting test that passes locally can fail in hosted CI without any
 code change. `json`'s depth failure arrives as `RecursionError`, whose
@@ -1631,24 +1659,24 @@ manifest's own run and attempt, and V2 wrong-signer, wrong-source and wrong-ref
 refusal evidence at the verifier and installation boundaries, modelled as a
 bundle identity that a matching command accepts and a wrong one is refused
 before launcher extraction and setup. All are repaired with tests recorded in
-Progress. EP-M1 completed on 2026-11-15; EP-M4, EP-M5 and EP-O1, and all
-publication, have not started. The consumer `install` command is deliberately
-limited to a verified local `--asset-dir` until the EP-M4 release transport is
-connected. Independent reviews covered all five requested specialities, with
-amendments recorded in the design and checked by a final testing/consistency
-review. Planning validation passed `make fmt`, `make markdownlint` (including
-spelling and three spelling-helper tests), `make nixie`, and both working/staged
-`git diff --check`. Earlier dependency-network and document spelling/line-wrap
-failures were resolved without weakening gates. Only four Markdown files
-changed during initial planning. The later requested rebase validation ran the
-full gate stack, as recorded below; implementation gates still apply to each
-future milestone. The associated draft PR records the commit, branch, upstream
-tracking and delivery link. Add red/green, smoke and conformance evidence only
-after approval. Only mark implementation roadmap entries complete when their
-actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
-operational work. Before status `COMPLETE`, reconcile discoveries with the
-approved design, requirements and every evidence link; do not conceal an
-unresolved deviation.
+Progress. EP-M1 completed on 2026-11-15; EP-M4 is implemented and in review in
+pull request 258; EP-M5 and EP-O1, and all publication, have not started. The
+consumer `install` command now downloads the release its pin names, using
+`--asset-dir` only as an offline override. Independent reviews covered all five
+requested specialities, with amendments recorded in the design and checked by a
+final testing/consistency review. Planning validation passed `make fmt`,
+`make markdownlint` (including spelling and three spelling-helper tests),
+`make nixie`, and both working/staged `git diff --check`. Earlier
+dependency-network and document spelling/line-wrap failures were resolved
+without weakening gates. Only four Markdown files changed during initial
+planning. The later requested rebase validation ran the full gate stack, as
+recorded below; implementation gates still apply to each future milestone. The
+associated draft PR records the commit, branch, upstream tracking and delivery
+link. Add red/green, smoke and conformance evidence only after approval. Only
+mark implementation roadmap entries complete when their actual acceptance
+criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
+Before status `COMPLETE`, reconcile discoveries with the approved design,
+requirements and every evidence link; do not conceal an unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired

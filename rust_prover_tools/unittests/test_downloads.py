@@ -11,9 +11,11 @@ import pytest
 
 from rust_prover_tools import download_stream, download_transport, downloads
 from rust_prover_tools.downloads import (
+    BoundedAsset,
     DownloadLimits,
     PinnedAsset,
     download_pinned,
+    download_unverified,
     sha256_file,
 )
 from rust_prover_tools.errors import ProverToolError, TransientDownloadError
@@ -590,6 +592,100 @@ def test_download_rejects_urls_outside_the_https_policy(url: str) -> None:
     """Only credential-free HTTPS URLs with a valid host are accepted."""
     with pytest.raises(ProverToolError):
         download_transport._validate_url(url)
+
+
+def _bounded_asset(max_bytes: int = 100) -> BoundedAsset:
+    """Return one unverified asset bounded only by its size."""
+    return BoundedAsset(
+        name="asset.bin",
+        url="https://example.test/asset.bin",
+        max_bytes=max_bytes,
+    )
+
+
+def _refuse_network(request: object, limits: object) -> None:
+    """Fail the test if a reused file falls back to the network."""
+    del request, limits
+    msg = "network must not be used for a reused file"
+    raise AssertionError(msg)
+
+
+def test_download_unverified_reuses_an_existing_file_that_fits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file already within the ceiling is hashed in place, not refetched.
+
+    The digest describes whatever the file holds: this function observes the
+    bytes and makes no claim about them.
+    """
+    payload = b"already here"
+    destination = tmp_path / "asset.bin"
+    destination.write_bytes(payload)
+    monkeypatch.setattr(downloads, "_download", _refuse_network)
+
+    digest = download_unverified(_bounded_asset(), destination)
+
+    assert digest == hashlib.sha256(payload).hexdigest(), (
+        "the reported digest must describe the reused file"
+    )
+    assert destination.read_bytes() == payload
+
+
+def test_download_unverified_replaces_an_oversized_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A file past the ceiling is not trusted, so it is downloaded again."""
+    payload = b"fresh payload"
+    destination = tmp_path / "asset.bin"
+    destination.write_bytes(b"x" * 500)
+
+    def write_payload(
+        request: download_transport._DownloadRequest,
+        limits: float,
+    ) -> None:
+        """Write the served payload to the pending download path."""
+        del limits
+        request.destination.write_bytes(payload)
+
+    monkeypatch.setattr(downloads, "_download", write_payload)
+
+    digest = download_unverified(_bounded_asset(), destination)
+
+    assert digest == hashlib.sha256(payload).hexdigest(), (
+        "the digest must describe the bytes just downloaded"
+    )
+    assert destination.read_bytes() == payload, (
+        "the oversized file must be replaced by the downloaded payload"
+    )
+    assert not destination.with_name("asset.bin.download").exists(), (
+        "the pending file must be renamed, not left behind"
+    )
+
+
+def test_download_unverified_downloads_when_nothing_exists(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An absent destination is downloaded and published atomically."""
+    payload = b"downloaded"
+
+    def write_payload(
+        request: download_transport._DownloadRequest,
+        limits: float,
+    ) -> None:
+        """Write the served payload to the pending download path."""
+        del limits
+        request.destination.write_bytes(payload)
+
+    monkeypatch.setattr(downloads, "_download", write_payload)
+    destination = tmp_path / "nested" / "asset.bin"
+
+    digest = download_unverified(_bounded_asset(), destination)
+
+    assert digest == hashlib.sha256(payload).hexdigest()
+    assert destination.read_bytes() == payload
 
 
 def test_download_pinned_reuses_a_matching_cache_file(

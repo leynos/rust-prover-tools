@@ -27,6 +27,7 @@ from rust_prover_tools.kani_snapshot import (
     durability,
     install_copy,
     install_generation,
+    install_sender,
     install_state,
     install_transport,
     install_validation,
@@ -877,7 +878,7 @@ def test_install_enforces_the_payload_transport_ceiling(
     """A payload larger than the design bound never reaches setup."""
     case = make_case(tmp_path)
     monkeypatch.setattr(
-        "rust_prover_tools.kani_snapshot.install_transport.PAYLOAD_MAX_BYTES",
+        "rust_prover_tools.kani_snapshot.install_sender.PAYLOAD_MAX_BYTES",
         16,
     )
 
@@ -892,7 +893,7 @@ def test_install_enforces_the_inventory_transport_ceiling(
     """The inventory document has its own smaller bound."""
     case = make_case(tmp_path)
     monkeypatch.setattr(
-        "rust_prover_tools.kani_snapshot.install_transport.INVENTORY_MAX_BYTES",
+        "rust_prover_tools.kani_snapshot.install_sender.INVENTORY_MAX_BYTES",
         16,
     )
 
@@ -2282,7 +2283,7 @@ def test_a_timed_out_staging_worker_keeps_its_claim(
         release.wait(30)
         return real_copy(source, destination_dir, file, checkpoint)
 
-    monkeypatch.setattr(install_transport, "_copy_local", stalling_copy)
+    monkeypatch.setattr(install_sender, "copy_local", stalling_copy)
     options = dc.replace(install_options(case), deadline_seconds=0.5)
     try:
         with pytest.raises(ProverToolError, match=r"deadline expired"):
@@ -2337,7 +2338,7 @@ def test_an_abandoned_staging_copy_releases_its_claim_when_it_stops(
         real_release(descriptor)
         released.set()
 
-    monkeypatch.setattr(install_transport, "_copy_local", stalling_copy)
+    monkeypatch.setattr(install_sender, "copy_local", stalling_copy)
     monkeypatch.setattr(cleanup, "release_staging_ownership", recording_release)
     options = dc.replace(install_options(case), deadline_seconds=0.5)
     trees: list[Path] = []
@@ -2415,7 +2416,7 @@ def test_a_worker_paused_before_its_claim_cannot_use_a_finished_tree(
         return install_copy.copy_local(source, destination_dir, file, checkpoint)
 
     monkeypatch.setattr(cleanup.StagingClaim, "guard", pausing_guard)
-    monkeypatch.setattr(install_transport, "_copy_local", recording_copy)
+    monkeypatch.setattr(install_sender, "copy_local", recording_copy)
     try:
         with pytest.raises(ProverToolError, match=r"deadline expired"):
             install_snapshot(

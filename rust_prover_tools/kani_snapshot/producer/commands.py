@@ -22,6 +22,7 @@ __all__ = (
     "bundle_asset_name",
     "bundle_command",
     "launcher_asset_name",
+    "launcher_extract_command",
     "launcher_install_command",
     "launcher_package_command",
     "setup_command",
@@ -98,6 +99,27 @@ def launcher_package_command(package: str) -> tuple[str, ...]:
         Raised when `package` is not a plain Cargo package name.
     """
     return ("cargo", "package", "--package", _require_package(package))
+
+
+def launcher_extract_command(crate: Path) -> tuple[str, ...]:
+    """Return the command that unpacks a packaged launcher crate.
+
+    `cargo package` writes `<package>-<version>.crate` beside the unpacked
+    `<package>-<version>/` directory it verifies. The design installs from
+    that directory, so the archive is extracted beside the crate file rather
+    than into a path the plan would have to invent.
+
+    Parameters
+    ----------
+    crate : Path
+        Packaged crate file Cargo produced.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Argument vector extracting the archive into the crate's directory.
+    """
+    return ("tar", "-xzf", str(crate), "-C", str(crate.parent))
 
 
 def launcher_install_command(package_dir: Path, root: Path) -> tuple[str, ...]:
