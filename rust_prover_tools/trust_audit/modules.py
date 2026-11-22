@@ -50,7 +50,11 @@ _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 # ``macro_rules``, ``!``, the macro's name and its body.
 
 
-def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
+def module_references(
+    tokens: tuple[Token, ...],
+    *,
+    inherited_macro_use: bool = False,
+) -> tuple[ModuleReference, ...]:
     """Collect the module files this source compiles, in source order.
 
     Parameters
@@ -91,7 +95,7 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     references = []
     spans = dict(attribute_spans(tokens))
     rules = macro_rules(tokens)
-    refuse_imported_macros(tokens, rules)
+    refuse_imported_macros(tokens, rules, inherited=inherited_macro_use)
     stringified = stringify_arguments(tokens, defined=rules.heads)
     _refuse_metavariable_modules(tokens, rules.expansions, stringified)
     aliases = _macro_aliases(tokens, rules.heads)

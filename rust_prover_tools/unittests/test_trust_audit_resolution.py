@@ -48,6 +48,21 @@ def test_a_windows_path_attribute_derives_a_windows_owner(
     }
 
 
+def test_an_inherited_macro_use_scope_is_refused(tmp_path: Path) -> None:
+    """Refuse a child that invokes a macro its parent imported with macro_use."""
+    write(
+        tmp_path,
+        {
+            "src/lib.rs": "#[macro_use]\nmod macros;\nmod child;",
+            "src/macros.rs": "macro_rules! emit { () => { mod hidden; }; }",
+            "src/child.rs": "emit!();",
+        },
+    )
+
+    with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
+        audit_tree(tmp_path, ["src/lib.rs"])
+
+
 def test_a_first_inline_path_is_relative_to_the_files_directory(
     tmp_path: Path,
 ) -> None:

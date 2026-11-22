@@ -26,6 +26,7 @@ of a repository root and repository-relative paths.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import pathlib
 import typing as typ
 
@@ -127,12 +128,16 @@ def audit_tree(
             _read_source(root, module.relative),
             procedural_macro=module.procedural_macro,
             vocabularies=vocabularies,
+            inherited_macro_use=module.macro_use,
         )
         scanned[module.relative] = result.items
         policies[module.relative] = module.procedural_macro
         # Re-enqueue after an upgrade too: a child first reached through
         # the plain crate must still receive the stronger policy.
-        pending.extend(_module_targets(root, module, result.modules))
+        pending.extend(
+            dc.replace(target, macro_use=module.macro_use or result.macro_use)
+            for target in _module_targets(root, module, result.modules)
+        )
     return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
 
 

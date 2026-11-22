@@ -76,10 +76,16 @@ class ModuleReference:
 
 @dc.dataclass(frozen=True, slots=True)
 class ScanResult:
-    """Everything one source file contributes to an audit."""
+    """Everything one source file contributes to an audit.
+
+    ``macro_use`` reports whether the file imports macros with ``#[macro_use]``,
+    so the walker can carry that inherited scope into the child modules the
+    file declares.
+    """
 
     items: tuple[TrustItem, ...]
     modules: tuple[ModuleReference, ...]
+    macro_use: bool = False
 
 
 @dc.dataclass(frozen=True, slots=True)

@@ -72,6 +72,10 @@ class Module:
     owner: str
     directory: str
     procedural_macro: bool
+    #: Whether a ``#[macro_use]`` import is in scope for this file.  A file
+    #: reached from one that imports macros can invoke them without repeating
+    #: the attribute, so the walker carries the fact down the module tree.
+    macro_use: bool = False
 
 
 def resolve_repository_path(root: pathlib.Path, relative: str) -> pathlib.Path:
@@ -184,6 +188,7 @@ def module_target(
         # declaring pathname's parent.
         directory=parent_directory(found),
         procedural_macro=module.procedural_macro,
+        macro_use=module.macro_use,
     )
 
 

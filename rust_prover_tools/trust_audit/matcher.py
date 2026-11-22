@@ -33,7 +33,6 @@ never sees.
 from __future__ import annotations
 
 import dataclasses as dc
-import typing as typ
 
 from rust_prover_tools.trust_audit.context import Context
 from rust_prover_tools.trust_audit.crate_bindings import alias_bindings
@@ -44,30 +43,24 @@ from rust_prover_tools.trust_audit.import_renames import (
 )
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import ScanResult
+from rust_prover_tools.trust_audit.module_arguments import imports_macro_use
 from rust_prover_tools.trust_audit.modules import (
     inline_module_names,
     module_references,
 )
+from rust_prover_tools.trust_audit.opaque_macros import opaque_names
 from rust_prover_tools.trust_audit.repetitions import (
     MACRO_DELIMITERS,
     repetition_refusal,
 )
 from rust_prover_tools.trust_audit.structure import stringify_arguments
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
-from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
-from rust_prover_tools.trust_audit.use_tree import (
-    begins_import,
-    member_aliases,
-)
 from rust_prover_tools.trust_audit.vocabulary import (
     OPAQUE_MACROS,
     PROCEDURAL_OPAQUE_MACROS,
     PROVER_VOCABULARIES,
     Vocabulary,
 )
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
 
 __all__ = ("scan",)
 
@@ -82,6 +75,7 @@ def scan(
     *,
     procedural_macro: bool = False,
     vocabularies: tuple[Vocabulary, ...] = PROVER_VOCABULARIES,
+    inherited_macro_use: bool = False,
 ) -> ScanResult:
     """Report every trusted item in one Rust source.
 
@@ -127,7 +121,10 @@ def scan(
             words=words,
             qualifiers=frozenset(qualifiers),
         )
-        modules = module_references(tokens)
+        modules = module_references(
+            tokens,
+            inherited_macro_use=inherited_macro_use,
+        )
         context = Context(
             tokens,
             procedural_macro=procedural_macro,
@@ -142,7 +139,11 @@ def scan(
         # them with a traceback instead.
         msg = "the file's use statements nest too deeply for the trust audit to read"
         raise TrustAuditError(msg) from error
-    return ScanResult(context.run(), modules)
+    return ScanResult(
+        context.run(),
+        modules,
+        macro_use=imports_macro_use(tokens),
+    )
 
 
 def _refuse_opaque_macros(
@@ -173,7 +174,7 @@ def _refuse_opaque_macros(
     if procedural_macro:
         base |= PROCEDURAL_OPAQUE_MACROS
     rules = macro_rules(tokens)
-    names = _opaque_names(tokens, base, rules.patterns)
+    names = opaque_names(tokens, base, rules.patterns)
     # ``stringify!`` turns its argument into text, so an opaque macro inside
     # one does not run.  A proc-macro crate can parse that text, so there the
     # refusal stays.
@@ -345,55 +346,3 @@ def _is_trust_qualified(
         and tokens[index - 2].text == "::"
         and tokens[index - 3].text in qualifiers
     )
-
-
-def _opaque_names(
-    tokens: tuple[Token, ...],
-    base: frozenset[str],
-    patterns: cabc.Container[int],
-) -> frozenset[str]:
-    """Return the opaque macro names, plus every local name bound to one.
-
-    A re-export can pass a name through more than one module —
-    ``mod m { pub use std::include as load; } use m::load as hidden;`` — so the
-    search reads every ``as`` rename in the file and repeats until a pass adds
-    nothing.  Following only the roots of the statements would record
-    ``include → load`` and ``load → hidden`` but never ``include → hidden``,
-    and ``hidden!`` would be read as an ordinary macro.  A ``use`` written in a
-    matcher is input, not an import, so those tokens are skipped.
-    """
-    names = set(base)
-    renames = _all_renames(tokens, patterns)
-    while True:
-        discovered = {alias for item, alias in renames if item in names}
-        if discovered <= names:
-            return frozenset(names)
-        names |= discovered
-
-
-def _all_renames(
-    tokens: tuple[Token, ...],
-    patterns: cabc.Container[int],
-) -> frozenset[tuple[str, str]]:
-    """Return every ``(item, alias)`` a ``use`` statement in the file renames.
-
-    A rename of a macro's item (``use std::include as load;``) and a rename of
-    the name it bound (``use load as hidden;``) are both followed: the second
-    spelling is the same opaque macro, and stopping at the first would let
-    ``hidden!`` expand code the scan never reads.  Tokens inside a
-    ``macro_rules!`` matcher describe input and import nothing.
-    """
-    renames: set[tuple[str, str]] = set()
-    for index, token in enumerate(tokens):
-        if index in patterns:
-            continue
-        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
-            continue
-        end = statement_end(tokens, index + 1)
-        renames.update(member_aliases(tokens, index + 1, end))
-        renames.update(
-            (root, alias)
-            for root, alias in use_roots(tokens, index + 1, end)
-            if alias is not None
-        )
-    return frozenset(renames)

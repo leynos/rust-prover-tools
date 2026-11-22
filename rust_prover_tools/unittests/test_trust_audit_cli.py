@@ -410,3 +410,86 @@ def test_a_directory_without_rust_entry_points_is_refused(
 
     assert status == 1
     assert "contains no Rust entry point to audit" in captured.err
+
+
+def test_a_binary_target_under_src_bin_is_audited(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A crate directory includes every binary under ``src/bin``."""
+    repo = tmp_path / "repo"
+    write(
+        repo,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n',
+            "src/lib.rs": "fn clean() {}",
+            "src/bin/proof.rs": "kani::assume(true);",
+        },
+    )
+
+    status = audit_trust([repo], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 0, captured.err
+    assert "src/bin/proof.rs:1:7: assume\n" in captured.out
+    assert "audited 2 files," in captured.out
+
+
+def test_an_explicit_manifest_target_is_audited(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A crate directory includes the target paths its manifest names."""
+    repo = tmp_path / "repo"
+    write(
+        repo,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            '[[bin]]\nname = "proof"\npath = "tools/proof.rs"\n',
+            "tools/proof.rs": "kani::assume(true);",
+        },
+    )
+
+    status = audit_trust([repo], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 0, captured.err
+    assert "tools/proof.rs:1:7: assume\n" in captured.out
+    assert "audited 1 file," in captured.out
+
+
+def test_an_outside_directory_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A directory outside the repository root gets the containment diagnostic."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "lib.rs").write_text("kani::assume(true);", encoding="utf-8")
+
+    status = audit_trust([outside], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "resolves outside the repository root" in captured.err
+
+
+def test_a_directory_entry_escaping_through_a_symlink_is_refused(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An entry that resolves outside the root is refused, not audited."""
+    repo = tmp_path / "repo"
+    write(repo, {"src/lib.rs": "fn clean() {}"})
+    outside = tmp_path / "outside.rs"
+    outside.write_text("kani::assume(true);", encoding="utf-8")
+    (repo / "tests").mkdir()
+    symlink(repo / "tests" / "escape.rs", outside)
+
+    status = audit_trust([repo], repo_root=repo)
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "resolves outside the repository root" in captured.err

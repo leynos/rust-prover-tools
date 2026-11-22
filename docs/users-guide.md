@@ -808,11 +808,12 @@ prover-tools audit trust --repo-root . verus/lib.rs kani/src/lib.rs
 
 `PATHS` may name Rust files or crate directories. A directory expands to the
 entry points of every crate beneath it: `lib.rs`, `main.rs` and `mod.rs` at the
-crate root or under `src/`, plus every Rust file under `tests/`, `benches/` and
-`examples/`. A directory that contributes no entry point is refused, because an
-audit that read nothing must not look clean. Each item is reported as
-`path:line:column: word`, and the report ends with the number of files read and
-the number of trusted items found. A file that contains no trusted item is
+crate root or under `src/`, every Rust file under `src/bin`, `tests/`,
+`benches/` and `examples/`, and every target path the crate's `Cargo.toml`
+names explicitly. A directory that contributes no entry point is refused,
+because an audit that read nothing must not look clean. Each item is reported as
+`path:line:column: word`, and the report ends with the number of files read
+and the number of trusted items found. A file that contains no trusted item is
 still reported in the count: "audited and clean" is different from "never read".
 
 The audit follows `mod` declarations from the files it is given rather than

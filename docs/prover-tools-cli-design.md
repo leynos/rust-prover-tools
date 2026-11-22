@@ -751,8 +751,9 @@ item it found:
 
 - `PATHS` are files or crate directories. A file is a crate root, usually a
   `lib.rs` or `main.rs`; a directory expands to the entry points of every crate
-  beneath it, including the compiled `tests/`, `benches/` and `examples/`
-  files. A directory with no entry point is refused. A relative path is read as
+  beneath it, including `src/bin`, the compiled `tests/`, `benches/` and
+  `examples/` files, and every target path the manifest names explicitly. A
+  directory with no entry point is refused. A relative path is read as
   repository-relative so the answer does not depend on the working directory;
   an absolute path must already sit beneath the root. An outside spelling that
   reaches an in-root file only through a symbolic link is refused, because its
@@ -811,16 +812,18 @@ declaration passed into an argument-forwarding macro is refused, because the
 expansion may place it inside an inline module and the scan does not substitute
 the arguments. A macro name defined more than once is refused: Rust lets a
 later definition shadow an earlier one, and the scan cannot tell which one an
-invocation expands. A name that is both a definition and a `use` alias is
-refused for the same reason, because Rust resolves a bare invocation by textual
-scope first and the per-file scan does not model that scope's end. An
-invocation in another file is outside the per-file scan, which the user guide
-states. A declaration whose name a metavariable supplies is refused, because
-only the invocation's arguments decide that name and the scan never evaluates
-them; an expansion that invokes a macro through a metavariable, reaches a trust
-item through one such as `$p::assume` or `kani::$f`, binds an import's item or
-local name (`use std::$name as load;`, the grouped `use std::{$name as load};`,
-or `use std::include as $name;`), glob-imports through one (`use $p::*;`), or
+invocation expands. A child module that inherits a `#[macro_use]` import and
+invokes a macro it does not define is refused for the same reason. A name that
+is both a definition and a `use` alias is refused for the same reason, because
+Rust resolves a bare invocation by textual scope first and the per-file scan
+does not model that scope's end. An invocation in another file is outside the
+per-file scan, which the user guide states. A declaration whose name a
+metavariable supplies is refused, because only the invocation's arguments
+decide that name and the scan never evaluates them; an expansion that invokes a
+macro through a metavariable, reaches a trust item through one such as
+`$p::assume` or `kani::$f`, binds an import's item or local name
+(`use std::$name as load;`, the grouped `use std::{$name as load};`, or
+`use std::include as $name;`), glob-imports through one (`use $p::*;`), or
 opens a group through one (`use $p::{assume as a};`), is refused for the same
 reason: the arguments decide which name or names the expansion binds. A
 repetition-wrapped metavariable is inspected through every enclosing

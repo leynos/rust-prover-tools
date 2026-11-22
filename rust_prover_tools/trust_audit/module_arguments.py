@@ -26,7 +26,11 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.trust_audit.macro_rules import MacroRules
 
-__all__ = ("refuse_forwarded_modules", "refuse_imported_macros")
+__all__ = (
+    "imports_macro_use",
+    "refuse_forwarded_modules",
+    "refuse_imported_macros",
+)
 
 # The delimiter pairs a macro invocation's body may open.
 _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
@@ -160,6 +164,8 @@ def _declares_module(
 def refuse_imported_macros(
     tokens: tuple[Token, ...],
     rules: MacroRules,
+    *,
+    inherited: bool = False,
 ) -> None:
     """Refuse a file whose imported macros could hide module declarations.
 
@@ -169,7 +175,7 @@ def refuse_imported_macros(
     it does not define, the audit cannot tell which modules the crate compiles,
     so it refuses rather than report a clean scan of the wrong tree.
     """
-    if not _imports_macro_use(tokens):
+    if not (inherited or imports_macro_use(tokens)):
         return
     for name in rules.invocations:
         if name == "macro_rules" or name in rules.heads:
@@ -182,7 +188,7 @@ def refuse_imported_macros(
         raise TrustAuditError(msg)
 
 
-def _imports_macro_use(tokens: tuple[Token, ...]) -> bool:
+def imports_macro_use(tokens: tuple[Token, ...]) -> bool:
     """Report whether an attribute in the file carries ``macro_use``."""
     return any(
         any(tokens[index].text == "macro_use" for index in range(opener, closer + 1))

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
+import tomllib
 import typing as typ
 from pathlib import Path
 
@@ -223,9 +224,10 @@ def _drivers_for(root: Path, path: Path) -> tuple[str, ...]:
         # single-driver path, so its existing diagnostics are unchanged.
         return (_relative_to(root, path),)
     resolved = candidate.resolve()
+    _require_inside(root, resolved, path)
     drivers = {
-        entry.resolve().relative_to(root).as_posix()
-        for crate_root in _crate_roots(resolved)
+        _contained_relative(root, entry.resolve(), path).as_posix()
+        for crate_root in _crate_roots(root, resolved, path)
         for entry in _entry_points(crate_root)
     }
     if not drivers:
@@ -234,24 +236,98 @@ def _drivers_for(root: Path, path: Path) -> tuple[str, ...]:
     return tuple(sorted(drivers))
 
 
-def _crate_roots(directory: Path) -> tuple[Path, ...]:
+def _require_inside(root: Path, resolved: Path, path: Path) -> None:
+    """Refuse a path whose resolved form leaves the repository root."""
+    if resolved != root and root not in resolved.parents:
+        msg = f"{path} resolves outside the repository root {root}"
+        raise TrustAuditError(msg)
+
+
+def _contained_relative(root: Path, resolved: Path, path: Path) -> Path:
+    """Return a resolved entry's repository-relative path, refusing escape."""
+    _require_inside(root, resolved, path)
+    return resolved.relative_to(root)
+
+
+def _crate_roots(
+    root: Path,
+    directory: Path,
+    path: Path,
+) -> tuple[Path, ...]:
     """Return every crate directory under ``directory``, including itself."""
-    manifests = {
-        manifest.parent.resolve() for manifest in directory.rglob("Cargo.toml")
-    }
+    manifests = set()
+    for manifest in directory.rglob("Cargo.toml"):
+        resolved = manifest.parent.resolve()
+        _contained_relative(root, resolved, path)
+        manifests.add(resolved)
     return tuple(sorted(manifests | {directory}))
 
 
 def _entry_points(crate_root: Path) -> cabc.Iterator[Path]:
-    """Yield the files that start a crate's module tree."""
+    """Yield the files that start a crate's module tree.
+
+    Cargo compiles more entry points than the conventional module roots: every
+    file under ``src/bin`` is a binary crate, and a manifest may name an
+    explicit ``path`` for a library, binary, test, bench or example.  A reader
+    that missed one could report a clean audit that never read it.
+    """
     for name in _CRATE_ROOTS:
         for candidate in (crate_root / name, crate_root / "src" / name):
             if candidate.is_file():
                 yield candidate
+    binary_directory = crate_root / "src" / "bin"
+    if binary_directory.is_dir():
+        yield from sorted(binary_directory.rglob(f"*{RUST_SUFFIX}"))
+    yield from _manifest_targets(crate_root)
     for directory in _COMPILED_DIRECTORIES:
         nested = crate_root / directory
         if nested.is_dir():
             yield from sorted(nested.rglob(f"*{RUST_SUFFIX}"))
+
+
+def _manifest_targets(crate_root: Path) -> cabc.Iterator[Path]:
+    """Yield the target paths a crate's ``Cargo.toml`` names explicitly."""
+    manifest = crate_root / "Cargo.toml"
+    if not manifest.is_file():
+        return
+    document = _read_target_manifest(manifest)
+    for table in _target_tables(document):
+        value = _target_path(manifest, table)
+        if value is None:
+            continue
+        candidate = crate_root / value
+        if candidate.is_file():
+            yield candidate
+
+
+def _read_target_manifest(manifest: Path) -> dict[str, object]:
+    """Return a manifest whose target paths are about to be read."""
+    try:
+        return tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        msg = f"{manifest} cannot be read, so its targets are unknown: {error}"
+        raise TrustAuditError(msg) from error
+
+
+def _target_tables(document: dict[str, object]) -> list[dict[str, object]]:
+    """Return every target table a manifest may declare a path in."""
+    tables: list[object] = [document.get("lib")]
+    for key in ("bin", "test", "bench", "example"):
+        entries = document.get(key)
+        if isinstance(entries, list):
+            tables.extend(entries)
+    return [table for table in tables if isinstance(table, dict)]
+
+
+def _target_path(manifest: Path, table: dict[str, object]) -> str | None:
+    """Return one target's explicit path, refusing a non-string value."""
+    value = table.get("path")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        msg = f"{manifest} declares a target path that is not a string"
+        raise TrustAuditError(msg)
+    return value
 
 
 def _relative_to(root: Path, path: Path) -> str:
