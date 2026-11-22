@@ -263,6 +263,17 @@ Plain-language terms used in this plan:
   documented skips remain the documentation loader, Cuprum's upstream
   incomplete-line buffer, and test-style-only refactors. The full deterministic
   gate passes with 1,922 tests and 6 skips.
+- [x] (2026-11-22 00:15Z) Eighth CodeRabbit pass: 25 findings. Fixed the
+  high-value findings: absolute `::kani` attributes, XID identifiers, parser
+  refusal details, inventory-summary rejection, unknown result kinds, frozen
+  environment snapshots, Boolean measurements, one-row table details, shared
+  launch shielding, empty-group absence, byte-only meminfo fields, memory-sink
+  budgets, expected-identity validation, late-signal status, and launcher
+  protocol documentation. The residual skips are the absent documentation
+  loader, non-portable standard-output alias detection, blocking filesystem
+  writes on the event loop, cgroup mount resolution, observed-identity
+  accounting, requested-stop evidence, and test-style-only refactors. The full
+  deterministic gate passes with 1,929 tests and 6 skips.
 
 ## Surprises & discoveries
 
