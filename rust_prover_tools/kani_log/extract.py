@@ -57,7 +57,10 @@ def parse(text: str, *, exit_code: int = 0) -> KaniLog:
     UnsupportedKaniGrammarError
         Raised if the banner names an unregistered release.
     """
-    return parse_lines(text.splitlines(), exit_code=exit_code)
+    return parse_lines(
+        (line.removesuffix("\r") for line in text.split("\n")),
+        exit_code=exit_code,
+    )
 
 
 def parse_lines(

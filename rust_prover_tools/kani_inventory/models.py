@@ -91,6 +91,9 @@ class InventoryHarness:
         if self.target_kind not in {"lib", "bin", "test"}:
             msg = f"unknown target kind {self.target_kind!r}"
             raise ValueError(msg)
+        if not self.source.strip():
+            msg = "an inventory harness needs a source path"
+            raise ValueError(msg)
         if self.line < 1:
             msg = "an inventory harness needs a positive source line"
             raise ValueError(msg)

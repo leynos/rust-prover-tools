@@ -16,7 +16,7 @@ Examples
 --------
 >>> grammar = grammar_for("0.67.0")
 >>> grammar.output_arguments
-('--output-format=regular',)
+('--output-format=regular', '--jobs=1')
 >>> pretty_name(("harnesses",), "verified")
 'harnesses::verified'
 """

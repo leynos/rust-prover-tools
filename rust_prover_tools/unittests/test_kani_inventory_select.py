@@ -226,17 +226,18 @@ def test_a_duplicate_package_restriction_is_refused() -> None:
         restrict_inventory(_inventory(), ("alpha", "alpha"))
 
 
-def test_a_qualified_identity_wins_over_an_alias() -> None:
-    """One harness's pretty name cannot shadow another's identity."""
+def test_a_name_matching_two_proofs_is_ambiguous() -> None:
+    """An identity and another harness's pretty name must not collide."""
     inventory = HarnessInventory((
         PackageInventory("p", (_harness("x", package="p", target="p"),)),
         PackageInventory("q", (_harness("p::x", package="q", target="q"),)),
     ))
 
-    (chosen,) = select_harnesses(inventory, ("p::x",))
+    with pytest.raises(SelectionError, match="ambiguous"):
+        select_harnesses(inventory, ("p::x",))
 
+    (chosen,) = select_harnesses(restrict_inventory(inventory, ("p",)), ("p::x",))
     assert chosen.package == "p"
-    assert chosen.harness == "x"
 
 
 def test_a_binary_target_composes_its_name() -> None:

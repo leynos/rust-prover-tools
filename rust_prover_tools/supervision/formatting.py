@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import typing as typ
 
 __all__ = (
@@ -156,6 +157,8 @@ def normalise(value: object) -> object:
         return {str(key): normalise(item) for key, item in value.items()}
     if isinstance(value, list | tuple):
         return [normalise(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
     if isinstance(value, bool | int | float | str) or value is None:
         return value
     text = getattr(value, "value", None)

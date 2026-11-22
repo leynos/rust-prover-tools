@@ -75,7 +75,7 @@ type LineStreamName = typ.Literal["stdout", "stderr"]
 BANNER = re.compile(
     r"^Kani Rust Verifier (?P<version>\d+\.\d+\.\d+) \((?P<kind>[^)]+)\)$"
 )
-HARNESS_START = re.compile(r"^Checking harness (?P<name>[\w:.<>]+)\.\.\.$")
+HARNESS_START = re.compile(r"^Checking harness (?P<name>.+)\.\.\.$")
 VERIFICATION = re.compile(
     r"^VERIFICATION:- (?P<verdict>SUCCESSFUL|FAILED)(?: (?P<note>\(.*\)))?$"
 )

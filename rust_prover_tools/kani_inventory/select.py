@@ -95,21 +95,17 @@ def select_harnesses(
         msg = f"the harness selection names a harness twice: {list(requested)}"
         raise SelectionError(msg)
     by_name = _index(inventory)
-    by_identity = {harness.identity: harness for harness in inventory.harnesses}
     chosen: list[InventoryHarness] = []
     for name in requested:
-        if name in by_identity:
-            chosen.append(by_identity[name])
-            continue
         matches = by_name.get(name, [])
         if not matches:
             msg = f"the inventory does not declare harness {name!r}"
             raise SelectionError(msg)
         if len(matches) > 1:
-            packages = sorted(harness.identity for harness in matches)
+            identities = sorted(harness.identity for harness in matches)
             msg = (
-                f"harness {name!r} is ambiguous: it matches {packages}; "
-                "select it by its package-qualified pretty name"
+                f"harness {name!r} is ambiguous: it matches {identities}; "
+                "restrict the run with --package or use a qualified name"
             )
             raise SelectionError(msg)
         chosen.append(matches[0])
@@ -124,10 +120,10 @@ def select_harnesses(
 
 
 def _index(inventory: HarnessInventory) -> dict[str, list[InventoryHarness]]:
-    """Index harnesses by pretty name and leaf name."""
+    """Index harnesses by identity, pretty name, and leaf name."""
     index: dict[str, list[InventoryHarness]] = {}
     for harness in inventory.harnesses:
-        keys = {harness.harness}
+        keys = {harness.harness, harness.identity}
         leaf = harness.harness.rsplit("::", 1)[-1]
         keys.add(leaf)
         for key in keys:

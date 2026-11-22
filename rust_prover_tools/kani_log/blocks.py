@@ -153,7 +153,7 @@ class BlockCursor:
             PropertyResult(
                 identifier=identifier,
                 status=values["Status"],
-                description=values["Description"].strip('"'),
+                description=values["Description"].removeprefix('"').removesuffix('"'),
             )
         )
         return []

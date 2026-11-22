@@ -224,6 +224,7 @@ def run_command_harnesses(
         ``128 + signal`` when a signal interrupted the run.
     """
     executing = False
+    interrupt: SignalInterrupt | None = None
     try:
         root = resolve_repo_root(selection.repo_root)
         route = resolve_route(routing, root=root)
@@ -254,6 +255,8 @@ def run_command_harnesses(
         return 128 + signal.SIGINT
     except _EXPECTED_ERRORS as exc:
         print_lines((str(exc),), stream=sys.stderr)
+        if interrupt is not None and interrupt.signum is not None:
+            return 128 + interrupt.signum
         return 1
     print_lines(run.table)
     if interrupt.signum is not None:

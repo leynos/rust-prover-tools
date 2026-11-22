@@ -26,6 +26,8 @@ __all__ = (
 
 #: Retained issues per attempt.
 MAX_RETAINED_ISSUES: typ.Final[int] = 256
+#: Retained characters per issue message.
+MAX_ISSUE_CHARS: typ.Final[int] = 1024
 
 #: Retained blocks, checks, failures, and manual failure names per attempt.
 MAX_RETAINED_RECORDS: typ.Final[int] = 10_000
@@ -53,6 +55,11 @@ class IssueBudget:
             Newly classified issues, in arrival order.
         """
         for issue in issues:
+            if len(issue.message) > MAX_ISSUE_CHARS:
+                issue = Issue(
+                    issue.kind,
+                    issue.message[:MAX_ISSUE_CHARS] + "…[truncated]",
+                )
             if len(self._issues) < MAX_RETAINED_ISSUES:
                 self._issues.append(issue)
             elif not self._exhausted:

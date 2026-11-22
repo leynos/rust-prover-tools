@@ -274,6 +274,11 @@ Plain-language terms used in this plan:
   writes on the event loop, cgroup mount resolution, observed-identity
   accounting, requested-stop evidence, and test-style-only refactors. The full
   deterministic gate passes with 1,929 tests and 6 skips.
+- [x] (2026-11-22 00:35Z) Live fixture rerun after the selector changes:
+  `RPT_LIVE_KANI=1` passes both tests in 1,400 seconds under the shared compile
+  pool, with a 900-second per-harness budget. The fixture verifies a passing
+  library proof, a passing `#[path]` proof, and a failing proof through the
+  real Kani 0.67.0 driver.
 
 ## Surprises & discoveries
 
