@@ -124,6 +124,7 @@ class _TimeoutCase:
     deadline: float
     error_match: str
     event: dict[str, object]
+    transient: bool
 
 
 @pytest.mark.parametrize(
@@ -134,12 +135,14 @@ class _TimeoutCase:
             1.0,
             "transfer deadline",
             {"event": "download.failed", "reason": "deadline", "written": 0},
+            transient=False,
         ),
         _TimeoutCase(
             0.1,
             10.0,
             "failed to download",
             {"event": "download.failed", "reason": "stream_error"},
+            transient=True,
         ),
     ],
     ids=["at-the-deadline", "before-the-deadline"],
@@ -170,12 +173,16 @@ def test_stream_classifies_a_read_timeout_by_the_deadline(
             msg = "timed out"
             raise TimeoutError(msg)
 
-    with pytest.raises(ProverToolError, match=case.error_match):
+    with pytest.raises(ProverToolError, match=case.error_match) as failure:
         download_stream._stream(
             TimingOutResponse(),
             tmp_path / "asset.bin",
             stream_limits(10, case.deadline),
         )
+
+    assert isinstance(failure.value, TransientDownloadError) is case.transient, (
+        "the retry classification must follow the deadline"
+    )
 
     assert events_from(caplog)[-1] == case.event, (
         "the failure must be classified by where the read ended relative to "
