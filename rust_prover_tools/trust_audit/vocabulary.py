@@ -155,8 +155,10 @@ OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset(
 #: adds nothing the audit reads.  A proc-macro crate's literals are scanned as
 #: potential code, and such a crate can decode a spliced template and parse it
 #: into a token stream, so there both are as opaque as ``include!``.
+#: ``concat!`` joins adjacent literals into a value no single literal holds, so
+#: it too is opaque where literals are treated as code.
 PROCEDURAL_OPAQUE_MACROS: typ.Final[frozenset[str]] = frozenset(
-    {"include_str", "include_bytes"},
+    {"include_str", "include_bytes", "concat"},
 )
 
 

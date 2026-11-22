@@ -82,7 +82,7 @@
     },
     {
       "id": "default_unwind",
-      "expected_outcome": "verified",
+      "expected_outcome": "counterexample-and-verified",
       "arguments": ["--harness", "harnesses::verified", "--harness", "harnesses::seeded_wrapping_mutant", "--exact", "--verbose", "--default-unwind", "2"],
       "expected_exit": 1
     }

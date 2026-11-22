@@ -27,7 +27,7 @@ from rust_prover_tools.trust_audit.inline_modules import (
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
 from rust_prover_tools.trust_audit.module_arguments import refuse_forwarded_modules
-from rust_prover_tools.trust_audit.structure import attribute_spans
+from rust_prover_tools.trust_audit.structure import attribute_spans, matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import begins_import, member_aliases
@@ -86,12 +86,14 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     spans = dict(attribute_spans(tokens))
     rules = macro_rules(tokens)
     _refuse_metavariable_modules(tokens, rules.expansions)
-    refuse_forwarded_modules(tokens, rules)
+    aliases = _macro_aliases(tokens, rules.heads)
+    refuse_forwarded_modules(tokens, rules, aliases)
     inline = InlineModules(tokens, rules.patterns)
-    contexts = _invocation_contexts(tokens, rules, inline)
+    contexts = _invocation_contexts(tokens, rules, inline, aliases)
+    stringified = _stringify_arguments(tokens)
     for index, token in enumerate(tokens):
         head = tokens[index + 1 : index + DECLARATION_TOKENS]
-        if index in rules.patterns:
+        if index in rules.patterns or index in stringified:
             continue
         if not names_module(token, head) or head[1].text != _EXTERNAL:
             continue
@@ -124,10 +126,33 @@ def module_references(tokens: tuple[Token, ...]) -> tuple[ModuleReference, ...]:
     return tuple(references)
 
 
+def _stringify_arguments(tokens: tuple[Token, ...]) -> frozenset[int]:
+    """Return the token indices inside every ``stringify!`` argument group.
+
+    ``stringify!`` returns its argument's spelling and compiles none of it, so
+    a ``mod`` written there is not a declaration.  The argument is skipped by
+    its delimiters rather than by matching each line.
+    """
+    skipped: set[int] = set()
+    for index, token in enumerate(tokens[:-2]):
+        if token.kind is not Kind.IDENT or token.text != "stringify":
+            continue
+        if tokens[index + 1].text != "!":
+            continue
+        opening = index + 2
+        closer = _DELIMITER_PAIRS.get(tokens[opening].text)
+        if closer is None:
+            continue
+        closing = matching(tokens, opening, tokens[opening].text, closer)
+        skipped.update(range(opening, closing + 1))
+    return frozenset(skipped)
+
+
 def _invocation_contexts(
     tokens: tuple[Token, ...],
     rules: MacroRules,
     inline: InlineModules,
+    aliases: cabc.Mapping[str, str],
 ) -> dict[int, tuple[tuple[InlineModule, ...], ...]]:
     """Return every context an expansion token compiles under.
 
@@ -137,7 +162,6 @@ def _invocation_contexts(
     traversal follows those calls; a recursive definition is refused, because
     the chain would never end and the module tree could not be reported.
     """
-    aliases = _macro_aliases(tokens, rules.heads)
     walker = _ContextWalker(tokens, rules, inline, aliases)
     for name in rules.heads:
         for site in _invocation_sites(rules, aliases, name):

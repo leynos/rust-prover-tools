@@ -21,6 +21,8 @@ from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from rust_prover_tools.trust_audit.macro_rules import MacroRules
 
 __all__ = ("refuse_forwarded_modules",)
@@ -32,6 +34,7 @@ _DELIMITER_PAIRS = {"(": ")", "[": "]", "{": "}"}
 def refuse_forwarded_modules(
     tokens: tuple[Token, ...],
     rules: MacroRules,
+    aliases: cabc.Mapping[str, str],
 ) -> None:
     """Refuse a module declaration passed into an argument-forwarding macro.
 
@@ -41,11 +44,12 @@ def refuse_forwarded_modules(
         If a module declaration lies in the arguments of a local macro whose
         expansion splices a metavariable.
     """
-    for name, sites in rules.invocations.items():
-        if name not in rules.heads or not _forwards_arguments(tokens, rules, name):
+    for spelling, sites in rules.invocations.items():
+        name = spelling if spelling in rules.heads else aliases.get(spelling)
+        if name is None or not _forwards_arguments(tokens, rules, name):
             continue
         for site in sites:
-            if site not in rules.definitions and _argument_declares_module(
+            if site not in rules.patterns and _argument_declares_module(
                 tokens,
                 site,
             ):

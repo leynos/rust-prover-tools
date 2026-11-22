@@ -711,7 +711,13 @@ that never reached a verification result is never mistaken for a passing proof.
 
 <!-- tested-example: verus-log-analysis -->
 ```bash
-prover-tools verus run --proof-file proofs/example.rs 2>&1 | tee verus.log
+if prover-tools verus run --proof-file proofs/example.rs >verus.out 2>verus.err; then
+  verus_status=0
+else
+  verus_status=$?
+fi
+cat verus.out verus.err >verus.log
+# verus_status is the verifier's own status; the analysis reports its own below.
 prover-tools verus analyse-log --log verus.log
 ```
 
@@ -817,12 +823,13 @@ followed through the outer invocation's directory, and an invocation through a
 an alias may itself be renamed before it is invoked. A module declaration
 passed as an argument is refused when the expansion splices its arguments,
 because the macro may place it inside an inline module and the scan does not
-evaluate the substitution. A macro no invocation in the file names compiles
-nothing there, so its declaration demands no file. An invocation in another
-file is outside the audit's per-file scan, and the audit does not claim to
-follow it. A macro name defined more than once is refused: Rust permits a later
-definition to shadow an earlier one, and the scan cannot tell which one an
-invocation expands. A declaration whose name comes from a metavariable is
+evaluate the substitution. A `mod` written inside `stringify!` is text, not a
+declaration, and names no file. A macro no invocation in the file names
+compiles nothing there, so its declaration demands no file. An invocation in
+another file is outside the audit's per-file scan, and the audit does not claim
+to follow it. A macro name defined more than once is refused: Rust permits a
+later definition to shadow an earlier one, and the scan cannot tell which one
+an invocation expands. A declaration whose name comes from a metavariable is
 refused, because only the invocation's arguments decide that name, and an
 expansion that invokes a macro through a metavariable is refused for the same
 reason, as is one that reaches a trust item through a metavariable path such as
@@ -908,10 +915,11 @@ with a hexadecimal digit, so `\u{_63}` is refused rather than read as `c`.
 Source the audit cannot read is refused rather than skipped: comments and
 literals that never terminate, and the macros `include!`, `paste!` and
 `concat_idents!`, whose expansion it never sees. For a proc-macro crate, whose
-literals are read as code, `include_str!` and `include_bytes!` join them: the
-crate can decode a template and parse it into a token stream the audit never
-sees. A macro named inside a `macro_rules!` matcher is input rather than an
-invocation, so it is not refused on that account.
+literals are read as code, `include_str!`, `include_bytes!` and `concat!` join
+them: the crate can decode or join a template and parse it into a token stream
+the audit never sees. A macro named inside a `macro_rules!` matcher is input
+rather than an invocation, so it is not refused on that account; an import
+written in a matcher binds nothing either.
 
 Useful options are:
 

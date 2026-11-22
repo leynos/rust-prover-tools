@@ -18,10 +18,11 @@ from __future__ import annotations
 import typing as typ
 
 from rust_prover_tools.trust_audit.structure import matching
-from rust_prover_tools.trust_audit.syntax import Kind, Token
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+
+    from rust_prover_tools.trust_audit.syntax import Token
 
 __all__ = ("attribute_items", "conditional_path", "payload_start")
 
@@ -126,13 +127,18 @@ def _payload_selects_path(tokens: tuple[Token, ...], start: int, end: int) -> bo
 
 
 def _is_path_item(tokens: tuple[Token, ...], start: int, end: int) -> bool:
-    """Report whether one payload item is ``path = "…"``."""
+    """Report whether one payload item is ``path = …``.
+
+    Any value counts, not only a literal.  A ``path`` whose value is not a
+    literal is still a path the configuration can select, and the caller
+    refuses it rather than letting the declaration fall back to its default
+    file.
+    """
     if tuple(token.text for token in tokens[start : start + len(_PATH_HEAD)]) != (
         _PATH_HEAD
     ):
         return False
-    value_index = start + len(_PATH_HEAD)
-    return value_index < end and tokens[value_index].kind is Kind.LITERAL
+    return start + len(_PATH_HEAD) < end
 
 
 def _is_nested_cfg_attr(tokens: tuple[Token, ...], start: int, end: int) -> bool:

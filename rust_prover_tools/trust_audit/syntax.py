@@ -318,7 +318,7 @@ def _numeric_literal_length(text: str, start: int) -> int:
     if start >= len(text) or not "0" <= text[start] <= "9":
         return 0
     end = start + 1
-    while end < len(text) and (text[end].isalnum() or text[end] == "_"):
+    while end < len(text) and _is_identifier_continue(text[end]):
         end += 1
     return end - start
 

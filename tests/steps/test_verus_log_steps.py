@@ -267,11 +267,11 @@ def stdout_reports_unmatched_expectation(cli_run: CliRun) -> None:
 def stdout_is_json_analysis(cli_run: CliRun, outcome: str, run_mode: str) -> None:
     """Parse the JSON object and check its stable fields."""
     payload = json.loads(cli_run.stdout)
-    assert payload["schema_version"] == 1
-    assert payload["outcome"] == outcome
-    assert payload["run_mode"] == run_mode
-    assert payload["passed"] is False
-    assert [failure["line"] for failure in payload["failures"]] == [8, 15]
+    assert payload["schema_version"] == 1, cli_run
+    assert payload["outcome"] == outcome, cli_run
+    assert payload["run_mode"] == run_mode, cli_run
+    assert payload["passed"] is False, cli_run
+    assert [failure["line"] for failure in payload["failures"]] == [8, 15], cli_run
 
 
 @then(parsers.parse('stdout reports the Verus release "{release}"'))

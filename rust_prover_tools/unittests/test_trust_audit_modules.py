@@ -51,6 +51,13 @@ def test_a_nested_declaration_carries_its_inline_chain() -> None:
     assert references(source) == [("x", None, ("outer", "inner"))]
 
 
+def test_a_module_inside_stringify_is_not_a_declaration() -> None:
+    """Skip a ``mod`` in ``stringify!``, which compiles none of its argument."""
+    source = "stringify!(mod ghost;)\nmod real;"
+
+    assert references(source) == [("real", None, ())]
+
+
 def test_a_macro_pattern_is_not_a_module_declaration() -> None:
     """Ignore ``mod sample;`` written as the input a macro matches.
 
@@ -140,6 +147,35 @@ def test_a_module_forwarded_through_a_macro_argument_is_refused() -> None:
         references(source)
 
 
+def test_a_forwarded_module_inside_an_expansion_is_refused() -> None:
+    """Refuse a forwarded declaration written inside another macro's expansion."""
+    source = "\n".join(
+        (
+            "macro_rules! wrap { ($($t:tt)*) => { mod nested { $($t)* } }; }",
+            "macro_rules! relay { () => { wrap! { mod child; } }; }",
+            "relay!();",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="passes a module declaration"):
+        references(source)
+
+
+def test_a_forwarded_module_through_a_macro_alias_is_refused() -> None:
+    """Resolve an invocation alias before checking what it forwards."""
+    source = "\n".join(
+        (
+            "macro_rules! wrap { ($($t:tt)*) => { mod nested { $($t)* } }; }",
+            "pub(crate) use wrap;",
+            "use crate::wrap as build;",
+            "build! { mod child; }",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="passes a module declaration"):
+        references(source)
+
+
 def test_a_macro_invoked_through_an_alias_compiles_its_module() -> None:
     """Resolve the ``use`` alias before attributing an expansion's declaration.
 
@@ -210,6 +246,14 @@ def test_a_metavariable_path_attribute_is_refused() -> None:
     source = "macro_rules! load { ($p:literal) => { #[path = $p] mod child; }; }"
 
     with pytest.raises(TrustAuditError, match="cannot resolve"):
+        references(source)
+
+
+def test_a_cfg_attr_with_a_non_literal_path_is_refused() -> None:
+    """Refuse a conditional path whose value is an expression, not a literal."""
+    source = '#[cfg_attr(feature = "alt", path = concat!("alt", ".rs"))]\nmod platform;'
+
+    with pytest.raises(TrustAuditError, match="conditional #\\[path\\]"):
         references(source)
 
 

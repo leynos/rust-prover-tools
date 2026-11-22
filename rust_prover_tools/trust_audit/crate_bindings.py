@@ -13,7 +13,10 @@ import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
-from rust_prover_tools.trust_audit.inline_modules import inline_module_names
+from rust_prover_tools.trust_audit.inline_modules import (
+    declared_module_aliases,
+    inline_module_names,
+)
 from rust_prover_tools.trust_audit.modules import module_references
 from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
@@ -243,6 +246,7 @@ def _alias_round(
     """Return every name one pass binds to a crate already in ``names``."""
     discovered: set[str] = set()
     modules = _declared_modules(tokens)
+    modules |= declared_module_aliases(tokens, modules)
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT:
             continue

@@ -52,12 +52,36 @@ def is_import_destination(tokens: tuple[Token, ...], index: int) -> bool:
 
 def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether ``index`` sits inside a ``use`` statement's path."""
-    for cursor in range(index - 1, -1, -1):
+    cursor = index - 1
+    while cursor >= 0:
         text = tokens[cursor].text
-        if text == "{" and opens_use_group(tokens, cursor):
+        if text == "}":
+            # A balanced brace group before the metavariable is a sibling
+            # member of the same use tree; step over it.
+            opener = _matching_opener(tokens, cursor)
+            if opener is None:
+                return False
+            cursor = opener - 1
             continue
-        if text in {";", "(", ")", "[", "]", "{", "}"}:
+        if text == "{" and opens_use_group(tokens, cursor):
+            cursor -= 1
+            continue
+        if text in {";", "(", ")", "[", "]", "{"}:
             return False
         if text == "use" and begins_import(tokens, cursor):
             return True
+        cursor -= 1
     return False
+
+
+def _matching_opener(tokens: tuple[Token, ...], close: int) -> int | None:
+    """Return the ``{`` matching the ``}`` at ``close``, if it balances."""
+    depth = 0
+    for index in range(close, -1, -1):
+        if tokens[index].text == "}":
+            depth += 1
+        elif tokens[index].text == "{":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None

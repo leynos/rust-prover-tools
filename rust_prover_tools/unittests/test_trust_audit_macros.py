@@ -97,6 +97,25 @@ def test_include_bytes_is_read_as_trivia_in_an_ordinary_crate() -> None:
     assert scan(source).items == ()
 
 
+def test_a_procedural_macro_scan_refuses_concat() -> None:
+    """Refuse ``concat!`` where literals are read as code.
+
+    It joins adjacent literals into a value no single literal holds, so the
+    scan cannot read the generated text.
+    """
+    source = 'fn f() { concat!("ka", "ni::ass", "ume(false);"); }'
+
+    with pytest.raises(TrustAuditError, match="concat!"):
+        scan(source, procedural_macro=True)
+
+
+def test_concat_is_trivia_in_an_ordinary_crate() -> None:
+    """Leave ``concat!`` alone where a literal is not read as code."""
+    source = 'fn f() { let _ = concat!("ka", "ni"); }'
+
+    assert scan(source).items == ()
+
+
 def test_a_macro_defined_twice_is_refused() -> None:
     """Refuse a shadowed definition whose invocation cannot be attributed."""
     source = "\n".join(
@@ -165,6 +184,21 @@ def test_a_metavariable_import_rename_is_refused() -> None:
             '    ($name:ident) => { use std::$name as load; load!("hidden.rs"); };',
             "}",
             "wrapper!(include);",
+        ),
+    )
+
+    with pytest.raises(TrustAuditError, match="renames an import"):
+        items(source)
+
+
+def test_a_metavariable_rename_after_a_sibling_group_is_refused() -> None:
+    """Skip a balanced sibling group rather than stopping at its closing brace."""
+    source = "\n".join(
+        (
+            "macro_rules! bind {",
+            "    ($name:ident) => { use std::{fmt::{Debug}, $name as load}; };",
+            "}",
+            "bind!(include);",
         ),
     )
 

@@ -211,11 +211,11 @@ def stdout_is_json_analysis(
 ) -> None:
     """Parse the JSON object and check its stable fields."""
     payload = json.loads(cli_run.stdout)
-    assert payload["schema_version"] == 1
-    assert payload["outcome"] == outcome
-    assert payload["run_mode"] == run_mode
-    assert payload["passed"] is True
-    assert [cover["status"] for cover in payload["covers"]] == ["satisfied"]
+    assert payload["schema_version"] == 1, cli_run
+    assert payload["outcome"] == outcome, cli_run
+    assert payload["run_mode"] == run_mode, cli_run
+    assert payload["passed"] is True, cli_run
+    assert [cover["status"] for cover in payload["covers"]] == ["satisfied"], cli_run
     assert [control["status"] for control in payload["controls"]] == [
         "rejected-as-intended",
-    ]
+    ], cli_run

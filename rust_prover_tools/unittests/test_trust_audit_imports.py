@@ -359,6 +359,20 @@ def test_a_deeper_local_wildcard_import_is_refused() -> None:
         items(source)
 
 
+def test_a_crate_alias_through_a_module_alias_is_followed() -> None:
+    """Resolve ``use e::k as kk;`` when ``e`` renames a declared module."""
+    source = "\n".join(
+        (
+            "mod exports { pub use kani as k; }",
+            "use exports as e;",
+            "use e::k as kk;",
+            "fn f() { kk::assume(true); }",
+        ),
+    )
+
+    assert [item for item, _ in items(source)] == ["assume"]
+
+
 def test_a_module_alias_of_an_alias_is_followed() -> None:
     """Follow a renamed module through a second rename to a fixed point."""
     source = "\n".join(

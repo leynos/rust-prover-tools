@@ -297,6 +297,16 @@ def test_a_byte_character_literal_is_not_an_identifier() -> None:
     assert words == ["let", "b"], "the byte literal's prefix must stay inside it"
 
 
+def test_a_unicode_numeric_suffix_is_not_an_identifier() -> None:
+    """Keep a Unicode identifier character inside the numeric literal's suffix."""
+    words = [
+        token.text for token in tokenize("ignore!(1a·assume);") if token.kind == "ident"
+    ]
+
+    assert "assume" not in words, "the suffix continues through the middle dot"
+    assert items("ignore!(1a·assume);") == []
+
+
 def test_a_numeric_literal_suffix_is_not_an_identifier() -> None:
     """Keep a numeric literal's suffix inside the literal, as Rust lexes it."""
     words = [
