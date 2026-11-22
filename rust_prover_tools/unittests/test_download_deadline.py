@@ -137,7 +137,8 @@ def test_open_reports_a_blocked_request_at_the_deadline(
         msg = "connection reset by peer"
         raise OSError(msg)
 
-    hop = FakeHopConnection(sock=sock, on_request=block_until_shutdown)
+    hop = FakeHopConnection(sock=sock)
+    hop.on_request = block_until_shutdown
     monkeypatch.setattr(
         download_transport.http.client,
         "HTTPSConnection",
@@ -193,7 +194,8 @@ def test_open_reports_a_blocked_response_at_the_deadline(
         msg = "connection reset by peer"
         raise OSError(msg)
 
-    hop = FakeHopConnection(sock=sock, on_response=block_until_shutdown)
+    hop = FakeHopConnection(sock=sock)
+    hop.on_response = block_until_shutdown
     monkeypatch.setattr(
         download_transport.http.client,
         "HTTPSConnection",
@@ -240,8 +242,8 @@ def test_open_reads_through_the_socket_it_captured_before_the_response(
         sock=sock,
         clock=clock,
         response=FakeResponse(chunks=(b"payload",)),
-        clear_sock_on_response=True,
     )
+    hop.clear_sock_on_response = True
     monkeypatch.setattr(
         download_transport.http.client,
         "HTTPSConnection",
@@ -303,12 +305,10 @@ def test_download_stops_each_hops_watchdog_before_closing_it(
             status=302,
             headers={"Location": "https://example.test/final"},
         ),
-        on_close=record_close,
     )
-    body = FakeHopConnection(
-        response=FakeResponse(chunks=(b"payload",)),
-        on_close=record_close,
-    )
+    body = FakeHopConnection(response=FakeResponse(chunks=(b"payload",)))
+    redirect.on_close = record_close
+    body.on_close = record_close
     monkeypatch.setattr(
         download_transport.http.client,
         "HTTPSConnection",

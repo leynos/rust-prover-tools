@@ -178,10 +178,14 @@ class FakeSocket:
 class FakeHopConnection:
     """A scripted connection double for one transport hop.
 
-    The transport constructs its connection, so a test builds this double with
-    the phases it scripts and hands it out through `HopFactory`. `connect()`
-    creates the socket the transport captures, which keeps the constructor
-    timeout and the pre-send re-arm distinguishable in `sock.timeouts`.
+    The transport constructs its connection, so a test builds this double and
+    hands it out through `HopFactory`. `connect()` creates the socket the
+    transport captures, which keeps the constructor timeout and the pre-send
+    re-arm distinguishable in `sock.timeouts`.
+
+    The phase hooks are ordinary attributes rather than constructor arguments:
+    a test sets only the phases it scripts, and a phase it leaves unset does
+    its recording and nothing else.
     """
 
     def __init__(
@@ -191,12 +195,8 @@ class FakeHopConnection:
         clock: FakeClock | None = None,
         connect_seconds: float = 0.0,
         response: FakeResponse | None = None,
-        clear_sock_on_response: bool = False,
-        on_request: cabc.Callable[[], None] | None = None,
-        on_response: cabc.Callable[[], None] | None = None,
-        on_close: cabc.Callable[[], None] | None = None,
     ) -> None:
-        """Configure the socket and the work each hop phase performs."""
+        """Configure the socket, the connect cost and the response to serve."""
         self.sock = sock
         self.host: str | None = None
         self.port: int | None = None
@@ -204,13 +204,16 @@ class FakeHopConnection:
         self.requests: list[dict[str, object]] = []
         self.responses = 0
         self.closed = False
+        #: Clear `sock` in `getresponse()`, as `http.client` does when the
+        #: response cannot reuse the connection.
+        self.clear_sock_on_response = False
+        #: Work each phase performs, in addition to its recording.
+        self.on_request: cabc.Callable[[], None] | None = None
+        self.on_response: cabc.Callable[[], None] | None = None
+        self.on_close: cabc.Callable[[], None] | None = None
         self._clock = clock
         self._connect_seconds = connect_seconds
         self._response = response or FakeResponse(chunks=(b"payload",))
-        self._clear_sock_on_response = clear_sock_on_response
-        self._on_request = on_request
-        self._on_response = on_response
-        self._on_close = on_close
 
     def connect(self) -> None:
         """Create the socket the transport captures, spending connect time."""
@@ -235,25 +238,95 @@ class FakeHopConnection:
                 "timeout": None if self.sock is None else self.sock.timeout,
             },
         )
-        if self._on_request is not None:
-            self._on_request()
+        if self.on_request is not None:
+            self.on_request()
 
     def getresponse(self) -> FakeResponse:
         """Return the canned response, clearing the socket when scripted."""
         self.responses += 1
-        if self._on_response is not None:
-            self._on_response()
-        if self._clear_sock_on_response:
-            # `http.client` clears `sock` when it cannot reuse the connection,
-            # so a response double must be able to model that.
+        if self.on_response is not None:
+            self.on_response()
+        if self.clear_sock_on_response:
             self.sock = None
         return self._response
 
     def close(self) -> None:
         """Record closure, then run any scripted close work."""
         self.closed = True
-        if self._on_close is not None:
-            self._on_close()
+        if self.on_close is not None:
+            self.on_close()
+
+
+class RecordedConnection:
+    """One connection exactly as the transport constructed and used it."""
+
+    def __init__(self, sock: FakeSocket, response: FakeResponse) -> None:
+        """Bind the socket the connect phase creates and the response it serves."""
+        self.sock: FakeSocket | None = None
+        self.host: str | None = None
+        self.port: int | None = None
+        self.timeout: float | None = None
+        self.method: str | None = None
+        self.target: str | None = None
+        self.headers: dict[str, str] | None = None
+        self.closed = False
+        self._socket = sock
+        self._response = response
+
+    def connect(self) -> None:
+        """Create the socket the transport captures and re-arms."""
+        self.sock = self._socket
+
+    def request(
+        self,
+        method: str,
+        target: str,
+        *,
+        headers: dict[str, str],
+    ) -> None:
+        """Record the method, target and headers of one request."""
+        self.method = method
+        self.target = target
+        self.headers = headers
+
+    def getresponse(self) -> FakeResponse:
+        """Return the canned response."""
+        return self._response
+
+    def close(self) -> None:
+        """Record closure."""
+        self.closed = True
+
+
+class ConnectionRecorder:
+    """Record the constructor and request of every transport connection.
+
+    A test that needs the transport's own constructor arguments patches
+    `HTTPSConnection` with this recorder. It builds one `RecordedConnection`
+    per call, so the constructor's host, port and timeout sit beside the
+    request the same connection then carried.
+    """
+
+    def __init__(self, sock: FakeSocket, response: FakeResponse) -> None:
+        """Bind the socket connect() creates and the response it serves."""
+        self._sock = sock
+        self._response = response
+        self.connections: list[RecordedConnection] = []
+
+    def __call__(
+        self,
+        host: str,
+        port: int | None,
+        *,
+        timeout: float,
+    ) -> RecordedConnection:
+        """Record the constructor arguments and return the new connection."""
+        connection = RecordedConnection(self._sock, self._response)
+        connection.host = host
+        connection.port = port
+        connection.timeout = timeout
+        self.connections.append(connection)
+        return connection
 
 
 class HopFactory:

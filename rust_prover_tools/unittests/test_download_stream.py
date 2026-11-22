@@ -23,6 +23,7 @@ from rust_prover_tools import download_deadline, download_stream, download_trans
 from rust_prover_tools.downloads import DownloadLimits
 from rust_prover_tools.errors import ProverToolError, TransientDownloadError
 from rust_prover_tools.unittests.download_support import (
+    NO_DEADLINE,
     FakeClock,
     FakeHopConnection,
     FakeResponse,
@@ -321,3 +322,155 @@ def test_deadline_response_reads_to_eof_after_the_connection_closes() -> None:
 
     assert b"".join(chunks) == payload, "the whole body must survive EOF"
     assert raw.isclosed(), "the read that consumed the length closed the response"
+
+
+def test_stream_rejects_oversized_content_length_before_reading(
+    tmp_path: Path,
+) -> None:
+    """A declared oversized body is refused before the destination opens."""
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(
+        headers={"Content-Length": "100"},
+        chunks=(b"x" * 100,),
+    )
+
+    with pytest.raises(ProverToolError, match="Content-Length 100 exceeds"):
+        download_stream._stream(
+            response,
+            destination,
+            stream_limits(10, NO_DEADLINE),
+        )
+
+    assert response.read_count == 0, "the body must not be read"
+    assert not destination.exists(), "no partial file should be created"
+
+
+def test_stream_stops_at_byte_ceiling_without_length_header(
+    tmp_path: Path,
+) -> None:
+    """A streamed response without Content-Length is counted and stopped."""
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(chunks=(b"123456", b"7890"))
+
+    with pytest.raises(ProverToolError, match="streamed size exceeded"):
+        download_stream._stream(
+            response,
+            destination,
+            stream_limits(8, NO_DEADLINE),
+        )
+
+    assert response.read_count == 2, "the offending chunk should stop the read"
+    assert destination.read_bytes() == b"123456", (
+        "the destination must not receive the offending chunk"
+    )
+
+
+def test_stream_emits_a_size_limit_event_at_debug_level(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The size-limit boundary is observable when the logger opts in."""
+    caplog.set_level(logging.DEBUG, logger="rust_prover_tools.download_stream")
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(chunks=(b"123456", b"7890"))
+
+    with pytest.raises(ProverToolError, match="streamed size exceeded"):
+        download_stream._stream(
+            response,
+            destination,
+            stream_limits(8, NO_DEADLINE),
+        )
+
+    events = [
+        typ.cast("dict[str, object]", record.event_data)
+        for record in caplog.records
+        if hasattr(record, "event_data")
+    ]
+    assert any(
+        event["event"] == "download.failed" and event["reason"] == "size_limit"
+        for event in events
+    ), "a rejected stream should report its limit category"
+
+
+def test_stream_is_silent_without_debug_logging(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The default configuration produces no download events."""
+    caplog.set_level(logging.WARNING, logger="rust_prover_tools.download_stream")
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(chunks=(b"payload",))
+
+    download_stream._stream(
+        response,
+        destination,
+        stream_limits(100, NO_DEADLINE),
+    )
+
+    assert not caplog.records, "download events must be opt-in"
+
+
+def test_stream_accepts_a_complete_body_matching_content_length(
+    tmp_path: Path,
+) -> None:
+    """A body within both limits and matching its length is written."""
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(
+        headers={"Content-Length": "6"},
+        chunks=(b"abc", b"def"),
+    )
+
+    download_stream._stream(response, destination, stream_limits(10, NO_DEADLINE))
+
+    assert destination.read_bytes() == b"abcdef", "the complete body must be written"
+
+
+def test_stream_rejects_an_incomplete_body(tmp_path: Path) -> None:
+    """A body shorter than Content-Length is treated as a failed transfer."""
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(
+        headers={"Content-Length": "10"},
+        chunks=(b"abc",),
+    )
+
+    with pytest.raises(ProverToolError, match="incomplete download"):
+        download_stream._stream(
+            response,
+            destination,
+            stream_limits(20, NO_DEADLINE),
+        )
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "-1"])
+def test_stream_rejects_invalid_content_length(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    """Malformed length headers cannot bypass the ceiling."""
+    destination = tmp_path / "asset.bin"
+    response = FakeResponse(headers={"Content-Length": value})
+
+    with pytest.raises(ProverToolError, match="Content-Length"):
+        download_stream._stream(
+            response,
+            destination,
+            stream_limits(10, NO_DEADLINE),
+        )
+
+
+def test_stream_reports_a_write_failure(tmp_path: Path) -> None:
+    """A filesystem error while writing the body is a storage failure.
+
+    Opening or writing the destination cannot be repaired by asking the same
+    server again, so the error must not be classified as a transient download.
+    """
+    destination = tmp_path / "asset.bin"
+    destination.mkdir()
+    response = FakeResponse(chunks=(b"payload",))
+
+    with pytest.raises(ProverToolError, match="failed to store"):
+        download_stream._stream(
+            response,
+            destination,
+            stream_limits(100, NO_DEADLINE),
+        )
