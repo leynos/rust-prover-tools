@@ -16,10 +16,14 @@ from rust_prover_tools.kani_log import (
     UnsupportedKaniGrammarError,
     parse,
 )
+from rust_prover_tools.kani_log.syntax import BANNER
+from rust_prover_tools.kani_log.syntax import HARNESS_START as HARNESS_START_RE
 from rust_prover_tools.unittests.kani_log_support import (
     HARNESS_START,
     LOGS,
+    MANUAL,
     REPORT_PREFIXES,
+    RESULTS,
     TIME,
     VERIFICATION,
     assert_matches_expected,
@@ -246,3 +250,115 @@ def test_chunked_feeding_matches_the_whole_text_parse(
         assert fed == str(whole.value), "chunked refusal text diverged"
         return
     assert fed == parse(log_text(name)), "chunked facts diverged"
+
+
+def _report_slice(lines: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """Split a corpus log into its preamble, report, and summary regions.
+
+    Generated chatter is inserted only in the preamble, where a real Kani run
+    emits Cargo noise and the reader tolerates unknown lines. A report line at
+    an arbitrary position is a different claim, not noise.
+    """
+    first = next(
+        index for index, line in enumerate(lines) if line.startswith(HARNESS_START)
+    )
+    manual = next(
+        (index for index, line in enumerate(lines) if line.startswith(MANUAL)),
+        len(lines),
+    )
+    return lines[:first], lines[first:manual], lines[manual:]
+
+
+def _observed_facts(lines: list[str]) -> tuple[str | None, tuple[str, ...]]:
+    """Return the identity facts an independent reading of the lines recovers.
+
+    This is deliberately not `parse`: it reads the captured lines directly, so
+    a reader that skipped reconciliation or retained nothing cannot agree with
+    it by construction.
+    """
+    banner = next(
+        (
+            match["version"]
+            for line in lines
+            if (match := BANNER.match(line)) is not None
+        ),
+        None,
+    )
+    names = tuple(
+        match["name"]
+        for line in lines
+        if (match := HARNESS_START_RE.match(line)) is not None
+    )
+    return banner, names
+
+
+_SAFE_CHATTER = st.sampled_from((
+    "   Compiling kani-corpus v0.1.0",
+    "    Finished dev profile",
+    "[Kani] Checking harness selection",
+    "warning: unused import: `std::fmt`",
+    "    Blocking waiting for file lock on build directory",
+    "   Downloaded libc v0.2.170",
+))
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    chatter=st.lists(_SAFE_CHATTER, min_size=0, max_size=6),
+    tail=st.lists(_SAFE_CHATTER, min_size=0, max_size=4),
+    chunk_sizes=st.lists(st.integers(min_value=1, max_value=5), max_size=20),
+)
+def test_noise_and_chunking_preserve_an_independently_read_report(
+    chatter: list[str],
+    tail: list[str],
+    chunk_sizes: list[int],
+) -> None:
+    """Generated build noise and feed boundaries cannot change the facts.
+
+    The oracle here reads the captured lines directly rather than through the
+    reader, so agreement is evidence about the reader instead of a tautology.
+    """
+    lines = lines_of("verified")
+    before, report, after = _report_slice(lines)
+    noisy = [*before, *chatter, *tail, *report, *after]
+
+    reader = KaniLogReader()
+    position = 0
+    for size in chunk_sizes:
+        for line in noisy[position : position + size]:
+            reader.feed_line("stdout", line)
+        position += size
+    for line in noisy[position:]:
+        reader.feed_line("stdout", line)
+    fed = _finish(reader)
+    whole = parse("\n".join(noisy))
+
+    banner, names = _observed_facts(noisy)
+    assert banner == "0.67.0"
+    assert names == ("harnesses::verified",)
+    assert fed == whole
+    assert whole.harnesses == names
+    assert whole.banner_version == banner
+
+
+def test_retention_bound_survives_chunked_noise() -> None:
+    """Bounded retention holds whatever the feed grouping is."""
+    for group in (1, 7, 64):
+        reader = KaniLogReader()
+        lines = lines_of("verified")
+        reader.feed_line("stdout", lines[0])
+        reader.feed_line(
+            "stdout",
+            next(line for line in lines if line.startswith(HARNESS_START)),
+        )
+        reader.feed_line("stdout", RESULTS)
+        noisy = [
+            f"unexplained build chatter {index}"
+            for index in range(MAX_RETAINED_ISSUES + 25)
+        ]
+        for start in range(0, len(noisy), group):
+            for line in noisy[start : start + group]:
+                reader.feed_line("stdout", line)
+
+        assert len(reader.retained_issues) == MAX_RETAINED_ISSUES + 1
+        assert reader.facts.selection_records == ("harnesses::verified",)
