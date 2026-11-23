@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import typing as typ
 from pathlib import Path
@@ -12,7 +13,18 @@ from rust_prover_tools.verus import VerusProofFailedError
 if typ.TYPE_CHECKING:
     from rust_prover_tools.errors import ProverToolError
 
-__all__ = ("InputError", "error_exit", "read_input_text", "repo_root")
+__all__ = (
+    "WINDOWS_PATHS",
+    "InputError",
+    "error_exit",
+    "read_input_text",
+    "repo_root",
+)
+
+#: Whether this host spells paths with Windows separators.  A POSIX filename
+#: may contain a literal backslash, so the flavour belongs to the adapter, not
+#: to the parser that compares two paths.
+WINDOWS_PATHS: typ.Final[bool] = os.name == "nt"
 
 
 class InputError(Exception):

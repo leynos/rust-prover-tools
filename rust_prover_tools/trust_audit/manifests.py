@@ -12,6 +12,7 @@ decoder answers both questions.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import tomllib
 import typing as typ
 
@@ -21,7 +22,12 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import pathlib
 
-__all__ = ("CARGO_MANIFEST", "read_cargo_manifest", "read_procedural_macro")
+__all__ = (
+    "CARGO_MANIFEST",
+    "CrateKind",
+    "detect_crate_kind",
+    "read_cargo_manifest",
+)
 
 #: The manifest that says whether a crate is a proc-macro crate.
 CARGO_MANIFEST: str = "Cargo.toml"
@@ -33,12 +39,19 @@ _TRUST_PACKAGES: frozenset[str] = frozenset({"kani", "vstd", "verus_builtin"})
 _DEFAULT_LIBRARY: str = "src/lib.rs"
 
 
-def read_procedural_macro(
+@dc.dataclass(frozen=True, slots=True)
+class CrateKind:
+    """The crate kind a manifest declares, as a value rather than a guess."""
+
+    procedural_macro: bool
+
+
+def detect_crate_kind(
     root: pathlib.Path,
     relative: str,
     *,
     read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]] | None = None,
-) -> bool:
+) -> CrateKind:
     """Report whether the crate owning ``relative`` is a proc-macro crate.
 
     A manifest the audit cannot parse is refused: it says which crate kinds
@@ -65,8 +78,11 @@ def read_procedural_macro(
 
     Returns
     -------
-    bool
-        Whether the nearest manifest declares a proc-macro crate.
+    CrateKind
+        ``procedural_macro`` is true when the owning manifest declares a
+        proc-macro library.  A refusal is raised as :class:`TrustAuditError`,
+        which is part of this boundary rather than a value the walker can
+        mistake for an ordinary crate.
 
     Raises
     ------
@@ -99,17 +115,21 @@ def read_procedural_macro(
                 read_manifest=read_manifest,
             )
             if _declares_procedural_macro(resolved, read_manifest=read_manifest):
-                return True
-            return _manifest_naming_leaf(
-                resolved_root,
-                leaf,
-                read_manifest=read_manifest,
+                return CrateKind(procedural_macro=True)
+            return CrateKind(
+                _manifest_naming_leaf(
+                    resolved_root,
+                    leaf,
+                    read_manifest=read_manifest,
+                )
             )
         if directory == resolved_root or resolved_root not in directory.parents:
-            return _manifest_naming_leaf(
-                resolved_root,
-                leaf,
-                read_manifest=read_manifest,
+            return CrateKind(
+                _manifest_naming_leaf(
+                    resolved_root,
+                    leaf,
+                    read_manifest=read_manifest,
+                )
             )
         directory = directory.parent
 

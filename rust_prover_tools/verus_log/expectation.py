@@ -13,7 +13,6 @@ edit touched.
 from __future__ import annotations
 
 import dataclasses as dc
-import os
 import pathlib
 import re
 import typing as typ
@@ -31,21 +30,17 @@ _EXPECTATION = re.compile(
 )
 
 
-#: Whether the host that captured a log spells paths with Windows separators.
-#: A POSIX filename may contain a literal backslash, so converting it on every
-#: host would make two different files compare equal.
-_WINDOWS = os.name == "nt"
-
-
-def _normalize(path: str) -> str:
+def _normalize(path: str, *, windows: bool) -> str:
     """Return a comparable form of a path Verus printed or a caller typed.
 
     The comparison ignores spellings that cannot change which file a path
     names: a ``.`` component, an empty component, a trailing separator, and —
-    on the host that captured the log — a separator written the other way
-    round.  The host decides the flavour: a POSIX name may contain a literal
-    backslash, which names a different file from a slash-separated one, while a
-    Windows path accepts either separator.
+    on a host that spells paths with Windows separators — a separator written
+    the other way round.  The caller supplies the flavour: a POSIX name may
+    contain a literal backslash, which names a different file from a
+    slash-separated one, while a Windows path accepts either separator.  The
+    selector is a parameter so this module stays a pure function of its
+    arguments; the CLI adapter decides which host captured the log.
 
     A ``..`` component is kept.  It is resolved against the component before
     it, and when that component is a symbolic link, ``linked/../mutant.rs``
@@ -54,7 +49,7 @@ def _normalize(path: str) -> str:
     is resolved against the filesystem either: the log and the expectation may
     describe a machine that is no longer present.
     """
-    flavour = pathlib.PureWindowsPath if _WINDOWS else pathlib.PurePosixPath
+    flavour = pathlib.PureWindowsPath if windows else pathlib.PurePosixPath
     return flavour(path).as_posix()
 
 
@@ -65,6 +60,9 @@ class FailureExpectation:
     path: str
     first_line: int | None = None
     last_line: int | None = None
+    #: Whether a backslash separates components, as on Windows.  The default is
+    #: POSIX, where it is an ordinary filename character.
+    windows_paths: bool = False
 
     def contains(self, failure: VerusFailure) -> bool:
         """Report whether one diagnostic lands inside the expected region.
@@ -84,7 +82,10 @@ class FailureExpectation:
         """
         if not failure.is_located or failure.path is None:
             return False
-        if _normalize(failure.path) != _normalize(self.path):
+        if _normalize(failure.path, windows=self.windows_paths) != _normalize(
+            self.path,
+            windows=self.windows_paths,
+        ):
             return False
         if self.first_line is None:
             return True
@@ -108,13 +109,20 @@ class FailureExpectation:
         return f"{self.path}:{self.first_line}-{self.last_line}"
 
 
-def parse_expectation(text: str) -> FailureExpectation:
+def parse_expectation(
+    text: str,
+    *,
+    windows_paths: bool = False,
+) -> FailureExpectation:
     """Read one ``path[:start[-end]]`` expectation from command-line text.
 
     Parameters
     ----------
     text : str
         The value a caller supplied.
+    windows_paths : bool
+        Whether a backslash separates path components, as on Windows.  The CLI
+        adapter decides this from the host that captured the log.
 
     Returns
     -------
@@ -141,7 +149,7 @@ def parse_expectation(text: str) -> FailureExpectation:
         raise ValueError(msg)
     match = _EXPECTATION.match(stripped)
     if match is None:
-        return FailureExpectation(stripped)
+        return FailureExpectation(stripped, windows_paths=windows_paths)
     start_text = match["start"]
     start = int(start_text)
     end_text = match["end"]
@@ -155,4 +163,5 @@ def parse_expectation(text: str) -> FailureExpectation:
         match["path"],
         start,
         end if end_text is not None and end != start else None,
+        windows_paths,
     )

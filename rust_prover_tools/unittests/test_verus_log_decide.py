@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-import rust_prover_tools.verus_log.expectation as expectation_module
+from rust_prover_tools.cli_support import WINDOWS_PATHS
 from rust_prover_tools.verus_log import (
     FULL_RUN,
     PARTIAL_RUN,
@@ -303,7 +303,7 @@ def test_parse_expectation_refuses_an_unusable_region(text: str) -> None:
             VerusFailure("failed", "proofs\\mutant.rs", 8, 13),
             False,
             marks=pytest.mark.skipif(
-                expectation_module._WINDOWS,
+                WINDOWS_PATHS,
                 reason="a Windows backslash is a separator",
             ),
         ),
@@ -327,12 +327,9 @@ def test_expectation_containment_compares_normalized_paths(
     assert expectation.contains(failure) is expected
 
 
-def test_a_windows_capture_treats_either_separator_as_the_same_file(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """On Windows, the separator a diagnostic used does not change the file."""
-    monkeypatch.setattr(expectation_module, "_WINDOWS", True)
-    subject = FailureExpectation("proofs/mutant.rs", 5, 12)
+def test_a_windows_capture_treats_either_separator_as_the_same_file() -> None:
+    """A Windows flavour makes both separators name the same file."""
+    subject = FailureExpectation("proofs/mutant.rs", 5, 12, windows_paths=True)
 
     assert subject.contains(VerusFailure("failed", "proofs\\mutant.rs", 8, 13))
 

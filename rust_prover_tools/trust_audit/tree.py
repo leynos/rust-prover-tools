@@ -31,7 +31,7 @@ import pathlib
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
-from rust_prover_tools.trust_audit.manifests import read_procedural_macro
+from rust_prover_tools.trust_audit.manifests import detect_crate_kind
 from rust_prover_tools.trust_audit.matcher import scan
 from rust_prover_tools.trust_audit.model import (
     AuditedFile,
@@ -217,7 +217,7 @@ def _driver_module(
     _require_driver_file(root, spelling)
     # The manifest is read even when the caller states the crate kind: its
     # dependency-rename refusal does not depend on how literals are scanned.
-    detected = read_procedural_macro(root, driver)
+    detected = detect_crate_kind(root, driver).procedural_macro
     return Module(
         relative=physical_relative(root, spelling),
         owner=parent_directory(spelling),

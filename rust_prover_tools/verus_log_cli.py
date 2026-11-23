@@ -16,7 +16,7 @@ from pathlib import Path
 
 from cyclopts import Parameter
 
-from rust_prover_tools.cli_support import InputError, read_input_text
+from rust_prover_tools.cli_support import WINDOWS_PATHS, InputError, read_input_text
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.verus import VERUS_VERSION_PATH
 from rust_prover_tools.verus_log import (
@@ -237,7 +237,9 @@ def verus_analyse_log(  # ruff: ignore[too-many-arguments] - one keyword per CLI
     try:
         text = read_input_text(log, "log")
         expectation = (
-            parse_expectation(expect_failure) if expect_failure is not None else None
+            parse_expectation(expect_failure, windows_paths=WINDOWS_PATHS)
+            if expect_failure is not None
+            else None
         )
     except (InputError, ValueError) as error:
         print_lines((str(error),), stream=sys.stderr)
