@@ -5,8 +5,9 @@ because such a crate can turn a literal into an item the lexer never sees.
 Cargo records that fact in the manifest, so this module answers it from the
 nearest ``Cargo.toml`` rather than guessing from a file's name or path.
 
-This module reads the filesystem; `rust_prover_tools.trust_audit.tree` is the
-only other module that does.
+This module reads the filesystem, as do `.drivers`, `.targets` and `.tree`.
+Target discovery and proc-macro detection share `read_cargo_manifest`, so one
+decoder answers both questions.
 """
 
 from __future__ import annotations

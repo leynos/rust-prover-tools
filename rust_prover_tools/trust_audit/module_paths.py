@@ -9,9 +9,10 @@ A ``#[path]`` value is relative to a directory that depends on where it appears.
 At file scope it is the declaring file's own directory; inside an inline module
 it is that module's directory, except that the first inline ``#[path]`` is
 applied before a deferred file-stem component exists.  A bare ``mod x;`` is
-searched beneath the directory the declaring file owns.  Nothing here touches
-the filesystem: a target that leaves the root is refused from its text alone,
-before its existence is asked about.
+searched beneath the directory the declaring file owns.  Resolution reads the
+host filesystem: a target that leaves the root is refused from its text before
+its existence is asked about, and the surviving candidates are then probed for
+existence.
 """
 
 from __future__ import annotations
