@@ -36,6 +36,9 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_log.reader import Reader, _BlockBuilder
 
+#: Largest number of checks or failures one block retains.
+MAX_BLOCK_RECORDS: typ.Final[int] = 10_000
+
 __all__ = (
     "failed_check",
     "manual",
@@ -108,6 +111,12 @@ def _record_check(
     item = check(reader, entry)
     if item.identifier in builder.check_ids:
         msg = f"the block for {builder.name!r} reports check {item.identifier!r} twice"
+        raise KaniLogError(msg)
+    if len(builder.properties) >= MAX_BLOCK_RECORDS:
+        msg = (
+            f"{reader.where()}: the block for {builder.name!r} reports more "
+            f"than {MAX_BLOCK_RECORDS} checks"
+        )
         raise KaniLogError(msg)
     builder.check_ids.add(item.identifier)
     builder.properties.append(item)

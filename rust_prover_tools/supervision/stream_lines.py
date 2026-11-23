@@ -152,11 +152,31 @@ class BoundedLineSplitter:
         lines.append(self._take())
 
     def _take(self) -> str:
-        """Return the retained line and reset the partial buffer."""
+        """Return the retained line and reset the partial buffer.
+
+        A line of invalid UTF-8 expands when replacement characters are
+        substituted, so the encoded result can exceed the byte budget the raw
+        input respected. The decoded line is therefore re-checked here, which
+        is the only place the newline, EOF, and truncation paths all pass.
+        """
         text = self._decode(bytes(self._pending))
         self._pending.clear()
         self._discarding = False
-        return text
+        if len(text.encode("utf-8")) <= self.max_line_bytes:
+            return text
+        return self._truncate(text)
+
+    def _truncate(self, text: str) -> str:
+        """Cut `text` so the encoded line plus its marker fits the budget."""
+        marker = self._marker()
+        budget = max(0, self.max_line_bytes - len(marker.encode("utf-8")))
+        while True:
+            candidate = text.encode("utf-8")[:budget]
+            decoded = candidate.decode("utf-8", errors="ignore")
+            result = f"{decoded}{marker}"
+            if len(result.encode("utf-8")) <= self.max_line_bytes or budget == 0:
+                return result
+            budget -= 1
 
     def _overflow(self) -> str:
         """Return a truncated prefix and start discarding the rest of the line.
@@ -168,13 +188,7 @@ class BoundedLineSplitter:
         raw = bytes(self._pending)
         self._pending.clear()
         self._discarding = True
-        marker = self._marker()
-        budget = max(0, self.max_line_bytes - len(marker.encode("utf-8")))
-        while True:
-            text = f"{self._decode(raw[:budget])}{marker}"
-            if len(text.encode("utf-8")) <= self.max_line_bytes or budget == 0:
-                return text
-            budget -= 1
+        return self._truncate(self._decode(raw))
 
     def _decode(self, data: bytes) -> str:
         """Decode one complete line, flushing any incomplete sequence.

@@ -33,6 +33,9 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_log.reader import Reader, _BlockBuilder
 
+#: Largest quoted description the parser joins, in characters.
+MAX_DESCRIPTION_CHARS: typ.Final[int] = 1024 * 1024
+
 __all__ = ("check",)
 
 _MALFORMED_CHECK = re.compile(r"^Check \d+: ")
@@ -154,6 +157,12 @@ def _joined_description(
         pieces.append(line)
         frame.last = line
         frame.length += 1 + len(line)
+        if frame.length > MAX_DESCRIPTION_CHARS:
+            msg = (
+                f"{reader.where()}: the check description exceeds the "
+                f"{MAX_DESCRIPTION_CHARS}-character budget"
+            )
+            raise KaniLogError(msg)
     return "\n".join(pieces)
 
 

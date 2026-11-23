@@ -322,16 +322,15 @@ Plain-language terms used in this plan:
 - Observation: Combobulate's parser is whole-text, but its grammar is strictly
   line-delimited, and its `Reader` peeks and consumes one line at a time.
   Evidence: `scripts/docs_validation/kani_log/reader.py` and `extract.py` at
-  commit `9dd6e3c`. Impact: an incremental state machine can reproduce it
-  exactly; whole-text `parse()` becomes feed-line plus finish, which makes the
-  equivalence test straightforward.
+  commit `9dd6e3c`. Impact: the shared parser can be driven by a streaming line
+  source, which is how supervision parses a spooled log without holding it.
 - Observation: the reader records refusals and raises at `finish` rather
   than raising on the first bad line. This keeps the selection record and the
   verdict of a proof that was stopped mid-report available to the supervisor
-  while still failing a complete call closed. Evidence: `KaniLogReader.facts`
-  reports `selection_records`, `verdicts`, and `truncation_reason` before
-  `finish` raises. Impact: the classifier can attribute an interruption to the
-  harness that was actually running.
+  while still failing a complete call closed. Evidence: the supervision
+  observer records `selection_records` and `verdicts` from the same grammar the
+  shared parser uses. Impact: the classifier can attribute an interruption to
+  the harness that was actually running.
 - Observation: the corpus contains exactly fifteen logs: `counterexample`,
   `default_unwind`, `expected_panic`, `fail_fast`, `in_place`,
   `insufficient_unwind`, `list`, `multiplication_timeout`,
@@ -522,6 +521,19 @@ Plain-language terms used in this plan:
   banner alone is insufficient. Rationale: a banner proves only that the
   verifier started, so a nonzero exit after it is a process failure until
   selection evidence appears. Date/Author: 2026-11-23, implementation agent.
+- D34. Decision: the supervisor owns the child's stdout and stderr pipes
+  through Cuprum's `StdioTarget.fd` rather than using its line hook, so the
+  partial line is bounded before it is forwarded and Cuprum's pre-hook buffer
+  cannot grow. Date/Author: 2026-11-23, implementation agent.
+- D35. Decision: the forwarded line's encoded size is checked on every path
+  that produces a line, and the truncation marker and UTF-8 replacement
+  characters count against `max_line_bytes`. Date/Author: 2026-11-23,
+  implementation agent.
+- D38. Decision: the final parse streams the spooled log through the shared
+  parser's `parse_kani_log_lines`, whose `StreamingLines` source retains only a
+  bounded lookahead window; block records and joined descriptions are capped
+  and exhaustion is a structural refusal. The CLI exposes the spool budget as
+  `--max-log-mib`. Date/Author: 2026-11-23, implementation agent.
 - D25. Decision: the plan's file and code tolerances were exceeded and the
   overage is accepted. The implementation needed the full parser corpus, two
   route integrations, a new CLI surface, the schema reference, and the
@@ -567,7 +579,7 @@ and this branch's supervision is layered on it: live facts come from the same
 grammar, the report is spooled to a bounded temporary file, and
 `parse_kani_log` is the single parser. The selector policy moved to
 `kani_cli_grammar`, which asserts that its supported releases equal the
-parser's. The deterministic gate passes with 3,205 tests and 6 skips, and the
+parser's. The deterministic gate passes with 3,212 tests and 6 skips, and the
 live Kani fixture passes at this candidate: 2 passed in 1,080.48 s.
 
 ## Blocker: main landed a competing Kani parser
@@ -665,17 +677,15 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at the published head passes with 3,205 tests and 6 skips. The opt-in live Kani
-0.67.0 fixture passes at the merged candidate: 2 passed in 1,229.44 s under the
-shared compile-admission pool. The earlier claim that only tests and
-documentation changed after `6f772f3` was wrong: supervision and inventory code
-changed in `0376a44`, so the fixture was rerun at the corrected candidate and
-this is that result. The parser property suite now checks generated build noise
-and feed groupings against an independent reading of the capture rather than
-against the same reader, and explicitly bounds retained parser state; a
-mutation that retained every issue failed two of those tests, and a mutation
-that skipped reconciliation failed five mutation tests. Those figures replaced
-the earlier 2,422-test and stale live-pass claims.
+at the published head passes with 3,212 tests and 6 skips. The opt-in live Kani
+0.67.0 fixture passes at this candidate: 2 passed in 1,080.48 s. After `main`
+merged #264, this branch adopted that shared parser and deleted its own
+duplicate reader, so the parser's own corpus, structure, count, solver,
+decision, and mutant suites are its verification evidence. The supervision
+suite adds the streaming-source equivalence and retention tests, the encoded
+line bound, the observer's fact and spool budgets, and the real-process 8 MiB
+newline-free witness. Those figures replaced the earlier 2,422-test and stale
+live-pass claims.
 
 The retrospective is complete. The capability shipped as one branch rather than
 the six separately mergeable milestones the plan allowed, because the parser,
@@ -801,10 +811,12 @@ status, in the documented precedence order.
 ### Invariants and lemmas
 
 - `INV-BOUNDED`: parsing and evidence retain at most a configured number of
-  bytes per line and per stream tail, and bounded prefixes of retained record
-  collections (issues, blocks, checks, and failures). The one exception is
-  Cuprum 0.2.0b2's line-drain buffer, which can retain an unterminated line
-  before the bounded hook receives it; no component retains a whole proof log.
+  bytes per line and per stream tail, and bounded record collections. The
+  supervisor owns the child's pipes, so the forwarded line is bounded before it
+  leaves the launcher. The shared parser consumes a spooled log through a
+  streaming line source whose lookahead window, block record lists, and joined
+  descriptions are each capped; exhaustion is a structural refusal rather than
+  unbounded retention. No component holds a whole proof log in memory.
 - `INV-EXACT`: a harness is `passed` only when exactly one selection record
   matches the requested pretty name exactly, the verdict is successful, the
   parser reconciled the whole log, and the child exited zero.
@@ -817,8 +829,9 @@ status, in the documented precedence order.
 - `INV-FINALIZE`: ordinary completion, failure, and catchable interruption
   finalize the available report; an abrupt kill may lose only what was not yet
   flushed.
-- `L-PARSE-EQUIV`: feeding a complete log line by line and calling
-  `finish(exit_code)` yields the same facts as `parse(text)`.
+- `L-PARSE-EQUIV`: feeding a complete log through `parse_kani_log_lines` and
+  parsing the same text with `parse_kani_log` yields the same facts, including
+  a refusal and its reason.
 - `L-PRECEDENCE`: classification applies the stop, launch, selection,
   malformed-output, verdict, exit-status, passed order, so no weaker evidence
   can override a stronger one.
@@ -848,23 +861,20 @@ status, in the documented precedence order.
 ### Methods per obligation
 
 - Obligation: `INV-BOUNDED` and `L-PARSE-EQUIV`.
-  Method: parameterized fixture tests over all fifteen corpus logs, plus a
-  Hypothesis property that inserts generated build noise in the tolerated
-  preamble of every accepted capture and compares the fed facts with an
-  independent reading of the lines and the committed `expected.json`.
-  Rationale: the corpus is the normative grammar, and an oracle that does not
-  call the reader cannot agree with it by construction. Cuprum delivers
-  complete lines, so line grouping is only a reader sanity check, not a
-  streaming boundary. Artefact:
-  `rust_prover_tools/unittests/test_kani_log_reader.py`,
-  `tests/fixtures/kani_logs/`. Evidence: `make test`. Retention is asserted
-  directly by the bounded issue and record budgets; a mutation that admits
-  every record fails `test_record_retention_is_bounded`. A mutation that skips
-  `reconcile_report` fails `test_a_generated_disagreeing_summary_is_refused`
-  and the reconciliation mutation tests. A hypothetical private raw-line buffer
-  is outside the reader's observable contract and is not claimed to be
-  detected. Non-vacuity: the corpus reaches every successful, refused,
-  timed-out, unsupported, cover, panic, and multi-harness class.
+  Method: the shared parser's own corpus, structure, count, solver, decision,
+  and mutant suites cover the grammar and reconciliation against
+  `tests/fixtures/kani_logs/0.67.0/`. `test_kani_log_streaming` covers the
+  streaming entry point: it compares streamed and batch facts for a capture,
+  exercises the bounded window and the released-line refusal, and checks the
+  long-blank-run refusal. The supervision tests cover the launcher's encoded
+  line bound, the observer's fact and spool budgets, and the real-process
+  witness drives an 8 MiB newline-free line. Artefacts: `tests/kani_log_*.py`,
+  `rust_prover_tools/unittests/test_kani_log_*.py`,
+  `rust_prover_tools/unittests/test_supervision_stream_lines.py`,
+  `tests/test_supervision_process_witness.py`. Evidence: `make test`.
+  Non-vacuity: the corpus reaches every successful, refused, timed-out,
+  unsupported, cover, panic, and multi-harness class, and each retention bound
+  has a test that fails when the bound is removed.
 - Obligation: `INV-EXACT`, `INV-FIRST-STOP`, `INV-CONTINUE`, `L-PRECEDENCE`.
   Method: deterministic tests with a virtual clock, scripted launcher, and fake
   resource probe. Rationale: every branch depends on timing and child
@@ -1215,15 +1225,13 @@ Reconnaissance evidence:
 No new dependencies. Authorized interfaces (names are prescriptive):
 
 ```python
-# rust_prover_tools/kani_log/reader.py
-class KaniLogReader:
-    def feed_line(self, stream: LineStreamName, text: str) -> None: ...
-    def finish(self, exit_code: int) -> KaniLog: ...
-    @property
-    def facts(self) -> KaniLogFacts: ...
+# rust_prover_tools/kani_log/extract.py (shared parser, from main's #264)
+def parse_kani_log(text: str) -> KaniLog: ...
+def parse_kani_log_lines(lines: Iterable[str]) -> KaniLog: ...
 
-# rust_prover_tools/kani_log/extract.py
-def parse(text: str, *, exit_code: int = 0) -> KaniLog: ...
+# rust_prover_tools/kani_log/reader.py
+class Reader: ...
+class StreamingLines: ...
 
 # rust_prover_tools/supervision/runner.py
 async def run_supervised(
@@ -1232,8 +1240,10 @@ async def run_supervised(
     environment: SupervisorEnvironment,
 ) -> RunReport: ...
 
-# rust_prover_tools/kani_harness_run.py
-def run_kani_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun: ...
+# rust_prover_tools/supervision/kani.py
+class KaniAdapter:
+    def observer(self, spec: HarnessSpec) -> KaniObserver: ...
+    def classify(self, evidence, observer) -> HarnessClassification: ...
 ```
 
 Reuse policy: `commands.py` remains the only synchronous command boundary; the

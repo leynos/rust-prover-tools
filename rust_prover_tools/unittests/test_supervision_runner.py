@@ -1031,3 +1031,48 @@ async def _monitor_fault_scenario(tmp_path: Path) -> None:
     accounting = typ.cast("dict[str, object]", document["accounting"])
     assert accounting["missing"] == []
     assert accounting["unexpected"] == []
+
+
+def test_a_cancelled_attempt_accounts_for_a_mismatched_observation(
+    tmp_path: Path,
+) -> None:
+    """Accounting uses what the verifier selected, not what was requested."""
+    asyncio.run(_mismatched_cancellation_scenario(tmp_path))
+
+
+async def _mismatched_cancellation_scenario(tmp_path: Path) -> None:
+    """Cancel a run whose child selected a different harness."""
+    from rust_prover_tools.supervision.config import DiagnosticSinks
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(("stdout", "Checking harness harnesses::other..."),),
+            block=True,
+        ),
+        ready=ready,
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=600.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=MemorySink()),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+    task = asyncio.create_task(run_supervised((first, second), config, environment))
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    accounting = typ.cast("dict[str, list[str]]", document["accounting"])
+    assert accounting["unexpected"] == ["example::harnesses::other"]
+    assert first.qualified in accounting["missing"]

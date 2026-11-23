@@ -49,3 +49,23 @@ def test_a_released_line_cannot_be_read_again() -> None:
 
     with pytest.raises(KaniLogError, match="released"):
         source.at(0)
+
+
+def test_a_long_blank_run_fails_closed() -> None:
+    """Lookahead past the retained window is refused, not buffered forever."""
+    from rust_prover_tools.kani_log.lines import MAX_WINDOW_LINES
+
+    lines = ["Kani Rust Verifier 0.67.0 (cargo plugin)"]
+    lines.extend("" for _ in range(MAX_WINDOW_LINES + 10))
+    lines.append("Checking harness h...")
+
+    with pytest.raises(KaniLogError):
+        parse_kani_log_lines(iter(lines))
+
+
+def test_the_window_is_bounded_for_streaming_input() -> None:
+    """A streaming source refuses an index beyond its configured window."""
+    source = StreamingLines(iter(f"line {index}" for index in range(100)), max_window=8)
+
+    with pytest.raises(KaniLogError, match="lookahead"):
+        source.at(20)

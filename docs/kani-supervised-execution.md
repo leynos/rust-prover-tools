@@ -186,6 +186,12 @@ package that declares more than one integration-test target is refused
 outright: a `cfg`-disabled harness can be absent while a same-named generated
 harness elsewhere is selected, so lexical discovery alone cannot attribute it.
 
+Cargo target metadata that discovery does not evaluate, such as
+`required-features`, cannot cause a wrong harness to be credited. Kani builds a
+test target only when Cargo accepts it; a target whose features are unmet fails
+the build, Kani emits no selection record, and the harness is classified
+`exit-nonzero` or `error` rather than passed.
+
 Kani 0.67.0 has no flag that selects one integration-test target. Its `--tests`
 option enables verification of test crates _and_ leaves the library and every
 binary eligible, so a harness name alone does not say which test target

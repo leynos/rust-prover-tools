@@ -16,7 +16,10 @@ from rust_prover_tools.kani_log.syntax import KaniLogError
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("LineSource", "ListLines", "StreamingLines")
+__all__ = ("MAX_WINDOW_LINES", "LineSource", "ListLines", "StreamingLines")
+
+#: Largest lookahead window the streaming source retains.
+MAX_WINDOW_LINES: typ.Final[int] = 4_096
 
 
 class LineSource(typ.Protocol):
@@ -58,12 +61,18 @@ class StreamingLines:
     and drops each line once the parser has consumed it.
     """
 
-    def __init__(self, lines: cabc.Iterable[str]) -> None:
+    def __init__(
+        self,
+        lines: cabc.Iterable[str],
+        *,
+        max_window: int = MAX_WINDOW_LINES,
+    ) -> None:
         """Wrap `lines` without reading more than one line ahead of the cursor."""
         self._lines = iter(lines)
         self._buffer: collections.deque[str] = collections.deque()
         self._base = 0
         self._eof = False
+        self._max_window = max_window
 
     def at(self, index: int) -> str | None:
         """Return the line at `index`, pulling from the iterator as needed."""
@@ -75,6 +84,12 @@ class StreamingLines:
                 self._buffer.append(next(self._lines))
             except StopIteration:
                 self._eof = True
+        if len(self._buffer) > self._max_window:
+            msg = (
+                "the log needs more lookahead than the parser retains "
+                f"({self._max_window} lines)"
+            )
+            raise KaniLogError(msg)
         offset = index - self._base
         if offset >= len(self._buffer):
             return None

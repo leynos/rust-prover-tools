@@ -586,3 +586,32 @@ def test_a_freshly_conditional_test_harness_is_refused() -> None:
 
     with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
         verify_test_target_attribution((pinned,), live, metadata)
+
+
+def test_the_fixture_inventory_is_exactly_what_the_suite_expects() -> None:
+    """Pin every package-qualified identity and its target mapping.
+
+    The proof assessment requires a complete inventory assertion rather than
+    per-target subsets. This records the whole set, including the binary helper
+    proof and the integration-test proof.
+    """
+    inventory = _inventory("alpha", "beta")
+
+    observed = {
+        (harness.identity, harness.target, harness.target_kind)
+        for harness in inventory.harnesses
+    }
+
+    assert observed == {
+        ("alpha::harnesses::bounded", "alpha", "lib"),
+        ("alpha::harnesses::conditional_extra", "alpha", "lib"),
+        ("alpha::harnesses::failing", "alpha", "lib"),
+        ("alpha::harnesses::nested::proof", "alpha", "lib"),
+        ("alpha::harnesses::verified", "alpha", "lib"),
+        ("alpha::inline::inside", "alpha", "lib"),
+        ("alpha::path_proofs::via_path", "alpha", "lib"),
+        ("alpha::shared::proof", "alpha", "lib"),
+        ("beta::helper::in_helper", "beta", "bin"),
+        ("beta::in_main", "beta", "bin"),
+        ("beta::integration_proof", "integration", "test"),
+    }

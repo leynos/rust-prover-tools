@@ -123,3 +123,32 @@ def test_incomplete_utf8_at_truncation_is_replaced() -> None:
     assert "truncated" in line
     assert "\ufffd" in line
     assert len(line.encode("utf-8")) <= 64
+
+
+def test_invalid_bytes_cannot_exceed_the_encoded_limit() -> None:
+    """Replacement characters count against the encoded budget."""
+    splitter = BoundedLineSplitter(max_line_bytes=64)
+
+    (line,) = splitter.feed(b"\xff" * 64 + b"\n")
+
+    assert len(line.encode("utf-8")) <= 64
+    assert "truncated" in line
+
+
+def test_invalid_bytes_at_eof_cannot_exceed_the_limit() -> None:
+    """The EOF path applies the same encoded bound."""
+    splitter = BoundedLineSplitter(max_line_bytes=64)
+
+    splitter.feed(b"\xff" * 64)
+    (line,) = splitter.finish()
+
+    assert len(line.encode("utf-8")) <= 64
+
+
+def test_a_valid_wide_line_stays_within_the_encoded_limit() -> None:
+    """A line of multi-byte characters is bounded by encoded length."""
+    splitter = BoundedLineSplitter(max_line_bytes=64)
+
+    (line,) = splitter.feed("é".encode() * 100 + b"\n")
+
+    assert len(line.encode("utf-8")) <= 64

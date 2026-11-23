@@ -255,7 +255,7 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
 
     def on_line(item: object) -> None:
         """Record the forwarded line length."""
-        forwarded.append(len(typ.cast("typ.Any", item).text))
+        forwarded.append(len(typ.cast("typ.Any", item).text.encode("utf-8")))
 
     async def scenario() -> object:
         """Start the child and wait for it on one loop."""
