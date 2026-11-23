@@ -533,7 +533,14 @@ exhaust disk space or hang a CI job:
   ceiling is rejected before the body is read;
 - streamed bytes are counted, so a response without a length header is still
   cut off at the ceiling;
-- one monotonic deadline covers connection, redirects, and body transfer;
+- one monotonic deadline covers the request that opens each hop, the header
+  parse and every body read. A hop connects explicitly, then re-arms its socket
+  with the time connecting left, so the send is not bounded by a budget the
+  connection setup has already spent;
+- a watchdog shuts the hop's socket down at the deadline, so a blocked send,
+  a stalled header parse and a stalled body read all fail at the deadline
+  rather than waiting out a socket timeout. A read or end of stream at or after
+  the deadline is reported as the deadline, not as a retryable transport fault;
 - bytes are written to a pending file that is removed on any failure, and the
   final path appears only after the pinned digest matches.
 - downloads connect directly over HTTPS; proxy environment variables such as
@@ -548,6 +555,20 @@ exhaust disk space or hang a CI job:
   whose binary was deleted both report `binary_missing`. The library installs
   no handlers, so output is unchanged unless the application lowers the
   `rust_prover_tools` logger level.
+
+The deadline is not a hard wall-clock bound on everything a download does. A
+socket timeout bounds one blocking call rather than a sequence of them, so
+these stay outside it:
+
+- DNS resolution, which has no socket timeout at all;
+- the per-address connection attempts the standard library makes inside one
+  connect call, and the initial TLS handshake, which reuses the same budget, so
+  a multi-address host can overrun the deadline by one hop timeout per address;
+- local file I/O while the body is written, which the watchdog does not
+  supervise;
+- digest verification, which follows the transfer and is bounded only by the
+  byte ceiling; publication, which has no time bound; and a retry, which is
+  bounded by its attempt count and backoff.
 
 ### GitHub Actions inputs
 

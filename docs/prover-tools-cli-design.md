@@ -74,17 +74,41 @@ in `rust_prover_tools.download_url`. Connection and redirect policy lives in
 `rust_prover_tools.download_transport`, which accepts only HTTPS and follows a
 bounded number of re-validated redirects. Body limits live in
 `rust_prover_tools.download_stream`, which rejects an oversized
-`Content-Length` before reading, counts streamed bytes, and enforces one
-monotonic transfer deadline. A body shorter than its declared `Content-Length`
-is raised as a transient transport failure rather than a plain error: a
-truncated stream can end without a read error, and a retry may deliver the
-whole body. Digest, policy and local storage failures stay outside the retry
-path. A pending file is removed on any failure and renamed to the final path
-only after the digest matches. The transport connects directly over HTTPS and
-deliberately does not read proxy environment variables such as `HTTPS_PROXY`.
-`download_pinned` exposes no transport hook, so a proxy-only environment has no
-supported route through this library; a caller that needs a proxy cannot be
-served by the current API.
+`Content-Length` before reading, counts streamed bytes, and re-arms the socket
+for each body read. `rust_prover_tools.download_deadline` owns the one shared
+monotonic transfer budget and the socket watchdog that enforces it.
+
+The deadline is a transport-wide boundary, not a stream-only rule. The
+transport connects explicitly, refuses a hop whose budget the connect phase
+spent, and re-arms the socket with the time the connect phase and the TLS
+handshake left before the request is sent. It arms the watchdog with the
+captured socket before the send, and the watchdog stays armed through the
+header parse and the body, so a blocked send, a stalled header parse and a
+stalled body read all fail at the deadline instead of waiting out a socket
+timeout. A hop stops its watchdog before closing its connection, so a finished
+hop cannot act on a later one.
+
+Failures at or after the deadline are reported as the base deadline error,
+while earlier ones keep their retry classification: an early transport failure
+stays a transient `transport_error`, and a body shorter than its declared
+`Content-Length` stays a transient `incomplete_body`, because a truncated
+stream can end without a read error and a retry may deliver the whole body.
+That includes an EOF at or after the deadline, since a socket the watchdog shut
+down reads as end of stream. Digest, policy and local storage failures stay
+outside the retry path. A pending file is removed on any failure and renamed to
+the final path only after the digest matches. The transport connects directly
+over HTTPS and deliberately does not read proxy environment variables such as
+`HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a proxy-only
+environment has no supported route through this library; a caller that needs a
+proxy cannot be served by the current API.
+
+The deadline is not a hard wall-clock bound. DNS resolution has no socket
+timeout, the standard library applies one connect budget to every resolved
+address in turn and the initial TLS handshake reuses it, and local file I/O
+while the body is written is not supervised. Digest verification, publication
+and retries have their own bounds rather than sharing the transfer's. The
+sections of `docs/developers-guide.md` and `docs/users-guide.md` that describe
+the download deadline own the detailed account of these limits.
 
 `rust_prover_tools.observability` defines the opt-in event helper. The
 downloader records `download.start`, `download.complete`, `download.cache_hit`,
