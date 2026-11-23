@@ -84,7 +84,10 @@ def test_a_binary_walks_its_own_module_tree() -> None:
 
 def test_an_integration_test_is_its_own_crate_root() -> None:
     """A test target starts at an empty module path."""
-    assert _proofs("beta/tests/integration.rs") == [("integration_proof", False)]
+    assert _proofs("beta/tests/integration.rs") == [
+        ("integration_proof", False),
+        ("gated_proof", True),
+    ]
 
 
 def test_a_proof_records_its_source_file_and_line() -> None:

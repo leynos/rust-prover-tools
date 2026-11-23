@@ -178,6 +178,70 @@ def test_an_rlib_library_target_is_verifiable(cmd_mox: CmdMox) -> None:
     assert "alpha::harnesses::verified" in inventory.identities()
 
 
+def test_cargo_metadata_reads_a_targets_required_features(
+    cmd_mox: CmdMox,
+) -> None:
+    """A target's required-features array is carried into CargoTarget."""
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
+
+    document = {
+        "packages": [
+            {
+                "name": "beta",
+                "manifest_path": str(_WORKSPACE / "beta" / "Cargo.toml"),
+                "targets": [
+                    {
+                        "name": "integration",
+                        "kind": ["test"],
+                        "src_path": str(
+                            _WORKSPACE / "beta" / "tests" / "integration.rs"
+                        ),
+                        "required-features": ["gated"],
+                    }
+                ],
+            }
+        ]
+    }
+    cmd_mox.mock("cargo").with_args(
+        "metadata", "--no-deps", "--format-version", "1"
+    ).returns(stdout=json.dumps(document))
+
+    metadata = cargo_metadata(_WORKSPACE)
+
+    (target,) = metadata[0].targets
+    assert target.required_features == ("gated",)
+
+
+def test_a_non_array_required_features_field_is_refused(
+    cmd_mox: CmdMox,
+) -> None:
+    """A malformed metadata field fails closed instead of reading as empty."""
+    document = {
+        "packages": [
+            {
+                "name": "beta",
+                "manifest_path": str(_WORKSPACE / "beta" / "Cargo.toml"),
+                "targets": [
+                    {
+                        "name": "integration",
+                        "kind": ["test"],
+                        "src_path": str(
+                            _WORKSPACE / "beta" / "tests" / "integration.rs"
+                        ),
+                        "required-features": "gated",
+                    }
+                ],
+            }
+        ]
+    }
+    cmd_mox.mock("cargo").with_args(
+        "metadata", "--no-deps", "--format-version", "1"
+    ).returns(stdout=json.dumps(document))
+
+    with pytest.raises(InventoryDiscoveryError, match="non-array"):
+        discover_inventory(_WORKSPACE, ("beta",))
+
+
 def test_a_failed_metadata_call_is_refused(cmd_mox: CmdMox) -> None:
     """A Cargo failure names the status and the diagnostic."""
     cmd_mox.mock("cargo").with_args(
@@ -588,6 +652,45 @@ def test_a_freshly_conditional_test_harness_is_refused() -> None:
         verify_test_target_attribution((pinned,), live, metadata)
 
 
+def test_a_discovered_conditional_test_harness_is_refused_when_pinned() -> None:
+    """Discovery marks the gate, and a stale unconditional pin is refused."""
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+
+    live, metadata = _live_beta()
+    gated = next(
+        harness for harness in live.harnesses if harness.harness == "gated_proof"
+    )
+    assert gated.conditional
+    pinned = dc.replace(gated, conditional=False)
+
+    with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
+        verify_test_target_attribution((pinned,), live, metadata)
+
+
+def test_a_test_target_with_required_features_is_refused() -> None:
+    """Features this run does not enable make the target unattributable."""
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+    from rust_prover_tools.kani_inventory.discover import CargoPackage
+
+    live, metadata = _live_beta()
+    gated = tuple(
+        CargoPackage(
+            name=package.name,
+            manifest_path=package.manifest_path,
+            targets=tuple(
+                dc.replace(target, required_features=("gated",))
+                if package.name == "beta" and target.kind == "test"
+                else target
+                for target in package.targets
+            ),
+        )
+        for package in metadata
+    )
+
+    with pytest.raises(InventoryDiscoveryError, match="requires features"):
+        verify_test_target_attribution((_beta_integration(),), live, gated)
+
+
 def test_the_fixture_inventory_is_exactly_what_the_suite_expects() -> None:
     """Pin every package-qualified identity and its target mapping.
 
@@ -613,5 +716,6 @@ def test_the_fixture_inventory_is_exactly_what_the_suite_expects() -> None:
         ("alpha::shared::proof", "alpha", "lib"),
         ("beta::helper::in_helper", "beta", "bin"),
         ("beta::in_main", "beta", "bin"),
+        ("beta::gated_proof", "integration", "test"),
         ("beta::integration_proof", "integration", "test"),
     }

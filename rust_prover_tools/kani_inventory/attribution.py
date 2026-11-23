@@ -19,7 +19,7 @@ from rust_prover_tools.kani_inventory.models import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from rust_prover_tools.kani_inventory.discover import CargoPackage
+    from rust_prover_tools.kani_inventory.discover import CargoPackage, CargoTarget
 
 __all__ = (
     "test_targets",
@@ -81,6 +81,10 @@ def verify_test_target_attribution(
     """
     by_identity = {harness.identity: harness for harness in live.harnesses}
     declared = test_targets(packages)
+    metadata = {
+        package.name: {target.name: target for target in package.targets}
+        for package in packages
+    }
     for harness in selected:
         if harness.target_kind != "test":
             continue
@@ -92,36 +96,65 @@ def verify_test_target_attribution(
                 "exactly: Kani 0.67.0 has no flag that selects one test target."
             )
             raise InventoryDiscoveryError(msg)
-        actual = by_identity.get(harness.identity)
-        if actual is None:
-            msg = (
-                f"the inventory records {harness.identity!r} in test target "
-                f"{harness.target!r}, but the live tree declares no such "
-                "harness. Refusing to credit a stale inventory."
-            )
-            raise InventoryDiscoveryError(msg)
-        if harness.conditional or actual.conditional:
-            msg = (
-                f"the inventory records {harness.identity!r} behind a cfg gate "
-                "in test target "
-                f"{harness.target!r}. A cfg-disabled harness can be absent "
-                "while a same-named generated harness elsewhere is selected, so "
-                "the entry cannot be attributed."
-            )
-            raise InventoryDiscoveryError(msg)
-        if actual.target_kind != "test" or actual.target != harness.target:
-            msg = (
-                f"the inventory records {harness.identity!r} in "
-                f"{harness.target_kind} target {harness.target!r}, but the live "
-                f"tree declares it in {actual.target_kind} target "
-                f"{actual.target!r}. Kani 0.67.0 cannot select one test target, "
-                "so the stale entry cannot be attributed."
-            )
-            raise InventoryDiscoveryError(msg)
-        if harness.target not in declared.get(harness.package, ()):
-            msg = (
-                f"the inventory records {harness.identity!r} in test target "
-                f"{harness.target!r}, which the live Cargo metadata does not "
-                f"declare for package {harness.package!r}."
-            )
-            raise InventoryDiscoveryError(msg)
+        _verify_live_identity(harness, by_identity.get(harness.identity))
+        _verify_live_target(
+            harness,
+            metadata.get(harness.package, {}).get(harness.target),
+            declared.get(harness.package, ()),
+        )
+
+
+def _verify_live_identity(
+    harness: InventoryHarness,
+    actual: InventoryHarness | None,
+) -> None:
+    """Refuse a pin the live tree does not declare in the same test target."""
+    if actual is None:
+        msg = (
+            f"the inventory records {harness.identity!r} in test target "
+            f"{harness.target!r}, but the live tree declares no such "
+            "harness. Refusing to credit a stale inventory."
+        )
+        raise InventoryDiscoveryError(msg)
+    if harness.conditional or actual.conditional:
+        msg = (
+            f"the inventory records {harness.identity!r} behind a cfg gate "
+            "in test target "
+            f"{harness.target!r}. A cfg-disabled harness can be absent "
+            "while a same-named generated harness elsewhere is selected, so "
+            "the entry cannot be attributed."
+        )
+        raise InventoryDiscoveryError(msg)
+    if actual.target_kind != "test" or actual.target != harness.target:
+        msg = (
+            f"the inventory records {harness.identity!r} in "
+            f"{harness.target_kind} target {harness.target!r}, but the live "
+            f"tree declares it in {actual.target_kind} target "
+            f"{actual.target!r}. Kani 0.67.0 cannot select one test target, "
+            "so the stale entry cannot be attributed."
+        )
+        raise InventoryDiscoveryError(msg)
+
+
+def _verify_live_target(
+    harness: InventoryHarness,
+    target: CargoTarget | None,
+    declared: tuple[str, ...],
+) -> None:
+    """Refuse a pin whose Cargo target is absent or feature-gated."""
+    if harness.target not in declared:
+        msg = (
+            f"the inventory records {harness.identity!r} in test target "
+            f"{harness.target!r}, which the live Cargo metadata does not "
+            f"declare for package {harness.package!r}."
+        )
+        raise InventoryDiscoveryError(msg)
+    if target is not None and target.required_features:
+        msg = (
+            f"test target {harness.target!r} of package "
+            f"{harness.package!r} requires features "
+            f"{list(target.required_features)}, which this run does not "
+            f"enable. Cargo may skip the target, so harness "
+            f"{harness.harness!r} cannot be attributed exactly."
+        )
+        raise InventoryDiscoveryError(msg)

@@ -54,11 +54,16 @@ class CargoTarget:
         ``lib``, ``bin``, or ``test``.
     src_path : Path
         Crate root source file.
+    required_features : tuple[str, ...]
+        Features Cargo requires before it builds this target. Discovery does
+        not enable them, so a non-empty tuple means a pinned harness in this
+        target cannot be attributed to a build this run performs.
     """
 
     name: str
     kind: str
     src_path: Path
+    required_features: tuple[str, ...] = ()
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -158,11 +163,23 @@ def _target(document: object) -> CargoTarget | None:
     )
     if kind is None:
         return None
+    name = _string(root.get("name"), "a target name")
     return CargoTarget(
-        name=_string(root.get("name"), "a target name"),
+        name=name,
         kind=kind,
         src_path=Path(_string(root.get("src_path"), "a target source path")),
+        required_features=_features(root.get("required-features"), name),
     )
+
+
+def _features(value: object, target: str) -> tuple[str, ...]:
+    """Parse a target's ``required-features`` array, which may be absent."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        msg = f"target {target!r} has a non-array required-features field"
+        raise InventoryDiscoveryError(msg)
+    return tuple(_string(item, f"a required feature of {target!r}") for item in value)
 
 
 def _object(value: object, subject: str) -> dict[str, object]:
