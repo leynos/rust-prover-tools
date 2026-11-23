@@ -560,6 +560,16 @@ Plain-language terms used in this plan:
   distinguishable from a quiet report. Date/Author: 2026-11-21, implementation
   agent.
 
+## Merge with main's #264 parser
+
+`origin/main` was merged at `7582753`. Main's `kani_log` package is kept whole
+and this branch's supervision is layered on it: live facts come from the same
+grammar, the report is spooled to a bounded temporary file, and
+`parse_kani_log` is the single parser. The selector policy moved to
+`kani_cli_grammar`, which asserts that its supported releases equal the
+parser's. The deterministic gate passes with 3,198 tests and 6 skips, and the
+live Kani fixture passes in 1,229.44 s.
+
 ## Blocker: main landed a competing Kani parser
 
 **Resolved** by adopting main's parser. On 2026-11-23, `main` merged #264
@@ -655,16 +665,17 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at the published head passes with 2,529 tests and 6 skips. The opt-in live Kani
-0.67.0 fixture passes at this candidate: 2 passed in 100.31 s. The earlier
-claim that only tests and documentation changed after `6f772f3` was wrong:
-supervision and inventory code changed in `0376a44`, so the fixture was rerun
-at the corrected candidate and this is that result. The parser property suite
-now checks generated build noise and feed groupings against an independent
-reading of the capture rather than against the same reader, and explicitly
-bounds retained parser state; a mutation that retained every issue failed two
-of those tests, and a mutation that skipped reconciliation failed five mutation
-tests. Those figures replaced the earlier 2,422-test and stale live-pass claims.
+at the published head passes with 3,198 tests and 6 skips. The opt-in live Kani
+0.67.0 fixture passes at the merged candidate: 2 passed in 1,229.44 s under the
+shared compile-admission pool. The earlier claim that only tests and
+documentation changed after `6f772f3` was wrong: supervision and inventory code
+changed in `0376a44`, so the fixture was rerun at the corrected candidate and
+this is that result. The parser property suite now checks generated build noise
+and feed groupings against an independent reading of the capture rather than
+against the same reader, and explicitly bounds retained parser state; a
+mutation that retained every issue failed two of those tests, and a mutation
+that skipped reconciliation failed five mutation tests. Those figures replaced
+the earlier 2,422-test and stale live-pass claims.
 
 The retrospective is complete. The capability shipped as one branch rather than
 the six separately mergeable milestones the plan allowed, because the parser,
