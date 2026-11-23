@@ -30,7 +30,7 @@ def test_a_renamed_opaque_macro_is_refused() -> None:
 )
 def test_include_str_is_not_opaque_for_an_ordinary_crate(source: str) -> None:
     """Leave the splice alone where a string literal is not read as code."""
-    assert items(source) == [], "the source requests no trust"
+    assert items(source) == [], f"include_str! must request no trust for {source!r}"
 
 
 @pytest.mark.parametrize(
@@ -68,7 +68,7 @@ def test_a_matcher_import_rename_is_not_an_opaque_alias() -> None:
         ),
     )
 
-    assert items(source) == [], "the source requests no trust"
+    assert items(source) == [], "a matcher import rename must bind no alias"
 
 
 def test_an_opaque_macro_in_a_matcher_pattern_is_not_refused() -> None:
@@ -94,14 +94,16 @@ def test_include_bytes_is_read_as_trivia_in_an_ordinary_crate() -> None:
     """An ordinary crate's byte array is not code the audit reads."""
     source = 'fn f() { include_bytes!("template.rs"); }'
 
-    assert not scan(source).items, "the source requests no trust"
+    assert not scan(source).items, (
+        "a metavariable inside stringify! must not be reported"
+    )
 
 
 def test_an_opaque_macro_inside_stringify_is_not_refused() -> None:
     """``stringify!`` turns its argument into text; the macro inside does not run."""
     source = 'const S: &str = stringify!(include!("absent.rs"));'
 
-    assert not scan(source).items, "the source requests no trust"
+    assert not scan(source).items, "concat! is trivia in an ordinary crate"
 
 
 def test_a_metavariable_inside_stringify_is_not_refused() -> None:
@@ -111,7 +113,7 @@ def test_a_metavariable_inside_stringify_is_not_refused() -> None:
         "macro_rules! m { ($p:ident) => { $p::assume(true); } } };"
     )
 
-    assert not scan(source).items, "the source requests no trust"
+    assert not scan(source).items, "a definition inside a matcher must define nothing"
 
 
 def test_a_locally_defined_stringify_keeps_the_opaque_refusal() -> None:
@@ -151,7 +153,9 @@ def test_concat_is_trivia_in_an_ordinary_crate() -> None:
     """Leave ``concat!`` alone where a literal is not read as code."""
     source = 'fn f() { let _ = concat!("ka", "ni"); }'
 
-    assert not scan(source).items, "the source requests no trust"
+    assert not scan(source).items, (
+        "a metavariable invocation in a nested matcher must not run"
+    )
 
 
 def test_a_macro_defined_twice_is_refused() -> None:
@@ -197,7 +201,7 @@ def test_a_macro_rules_definition_inside_a_matcher_is_not_a_definition() -> None
         ),
     )
 
-    assert items(source) == [], "the source requests no trust"
+    assert items(source) == [], "include_bytes! is trivia in an ordinary crate"
 
 
 def test_a_metavariable_invocation_in_a_nested_matcher_is_accepted() -> None:
@@ -211,7 +215,7 @@ def test_a_metavariable_invocation_in_a_nested_matcher_is_accepted() -> None:
         ),
     )
 
-    assert items(source) == [], "the source requests no trust"
+    assert items(source) == [], "a macro inside stringify! must not run"
 
 
 def test_a_qualified_stringify_keeps_the_opaque_refusal() -> None:

@@ -21,7 +21,7 @@ def test_a_multisegment_nontrust_repetition_is_accepted() -> None:
     """Leave a repetition rooted at a non-trust crate alone."""
     source = "macro_rules! call { ($($f:ident)+) => { other::nested::$($f)+(true) }; }"
 
-    assert items(source) == [], "the repetition requests no trust"
+    assert items(source) == [], "a non-trust repetition requests no trust"
 
 
 def test_a_multitoken_repetition_separator_is_refused() -> None:
@@ -142,7 +142,7 @@ def test_a_metavariable_cast_is_not_an_import_rename() -> None:
         ),
     )
 
-    assert items(source) == [], "the repetition requests no trust"
+    assert items(source) == [], "a cast is not an import rename"
 
 
 def test_a_metavariable_final_path_segment_is_refused() -> None:
@@ -239,7 +239,7 @@ def test_an_ordinary_repetition_is_accepted() -> None:
         ),
     )
 
-    assert items(source) == [], "the repetition requests no trust"
+    assert items(source) == [], "an ordinary repetition requests no trust"
 
 
 def test_a_nested_repetition_with_a_call_is_refused() -> None:
@@ -271,7 +271,9 @@ def test_a_nested_repetition_without_a_trust_path_is_accepted() -> None:
     """Leave a nested repetition that emits no trust path alone."""
     source = "macro_rules! list { ($($($x:ident),+);+) => { $($($x),+);+ }; }"
 
-    assert items(source) == [], "the repetition requests no trust"
+    assert items(source) == [], (
+        "a nested repetition without a trust path requests no trust"
+    )
 
 
 def test_a_repetition_that_can_supply_mod_is_refused() -> None:
