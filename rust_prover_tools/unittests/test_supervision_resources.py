@@ -321,3 +321,51 @@ def test_a_membership_outside_the_mount_root_is_unavailable(tmp_path: Path) -> N
     reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
 
     assert reader.discover() is None
+
+
+def test_the_applicable_cgroup2_mount_is_chosen(tmp_path: Path) -> None:
+    """A first mount that excludes the membership does not hide a later one."""
+    second = tmp_path / "second"
+    job = second / "leaf"
+    job.mkdir(parents=True)
+    (job / "memory.current").write_text("2048\n", encoding="utf-8")
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/job.scope/leaf\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        (
+            "36 24 0:32 /other /first rw - cgroup2 cgroup2 rw\n"
+            "37 24 0:33 /job.scope /second rw - cgroup2 cgroup2 rw\n"
+        ),
+        encoding="utf-8",
+    )
+    reader = CgroupV2Reader(root=second, self_cgroup=membership, mountinfo=mountinfo)
+
+    path = reader.discover()
+
+    assert path == str(job)
+    assert reader.read(path).current.value == 2048
+
+
+def test_readable_mountinfo_without_cgroup2_is_unavailable(tmp_path: Path) -> None:
+    """A readable table with no cgroup2 entry does not use the fallback."""
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/job.scope\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text("24 1 8:1 / / rw - ext4 /dev/sda1 rw\n", encoding="utf-8")
+    reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
+
+    assert reader.discover() is None
+
+
+def test_unreadable_mountinfo_uses_the_documented_fallback(tmp_path: Path) -> None:
+    """Only an unreadable table falls back to the conventional mount."""
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/job.scope\n", encoding="utf-8")
+    reader = CgroupV2Reader(
+        self_cgroup=membership,
+        mountinfo=tmp_path / "missing-mountinfo",
+        root=tmp_path / "fallback",
+    )
+
+    assert reader.discover() == str(tmp_path / "fallback" / "job.scope")

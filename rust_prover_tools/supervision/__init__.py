@@ -104,12 +104,14 @@ from rust_prover_tools.supervision.results import (
     RunOutcome,
     RunReport,
 )
+from rust_prover_tools.supervision.run_entry import (
+    run_supervised,
+    run_supervised_sync,
+)
 from rust_prover_tools.supervision.run_environment import RunEnvironment
 from rust_prover_tools.supervision.runner import (
     SupervisedRun,
     new_run_id,
-    run_supervised,
-    run_supervised_sync,
 )
 from rust_prover_tools.supervision.schema import (
     JSONL_FIELDS,

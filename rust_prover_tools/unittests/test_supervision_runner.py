@@ -914,3 +914,92 @@ async def test_a_matching_observation_is_complete() -> None:
 
     assert report.accounting.is_empty
     assert report.is_complete
+
+
+def test_a_cancelled_attempt_is_reported_as_interrupted(tmp_path: Path) -> None:
+    """The reported result names the stop, not an ordinary exit."""
+    asyncio.run(_cancelled_attempt_scenario(tmp_path))
+
+
+async def _cancelled_attempt_scenario(tmp_path: Path) -> None:
+    """Cancel a run and inspect its report and JSONL evidence."""
+    from rust_prover_tools.supervision.config import DiagnosticSinks
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(script=Script(block=True), ready=ready)
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=600.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+    task = asyncio.create_task(run_supervised((first, second), config, environment))
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    finish = next(
+        record
+        for record in jsonl.records
+        if record["record"] == "harness-finish" and record["harness"] == first.harness
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["stop_reason"] == "interrupted"
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert [entry["status"] for entry in results] == ["interrupted", "not-run"]
+    assert results[0]["stop_reason"] == "interrupted"
+    assert results[0]["diagnostic"] is not None
+
+
+def test_a_monitor_fault_is_reported_as_interrupted() -> None:
+    """A fault the supervisor caused is recorded as its own stop."""
+    asyncio.run(_monitor_fault_scenario())
+
+
+async def _monitor_fault_scenario() -> None:
+    """Fail the probe and inspect the reported stop reason."""
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    class _FailingProbe(ScriptedProbe):
+        """A probe that fails on every sample."""
+
+        def sample(self, spec: HarnessSpec, **kwargs: object) -> ResourceSample:
+            """Raise the fault the monitor must survive."""
+            del spec, kwargs
+            msg = "probe failed"
+            raise RuntimeError(msg)
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True)),
+        clock,
+        probe=_FailingProbe(),
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        await run_supervised(
+            (spec(),),
+            _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+            environment,
+        )
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["stop_reason"] == "interrupted"

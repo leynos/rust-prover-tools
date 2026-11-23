@@ -90,16 +90,26 @@ class CgroupV2Reader:
         membership = self._membership()
         if membership is None:
             return None
-        mount = _cgroup2_mount(
+        mounts = _cgroup2_mounts(
             self.mountinfo if self.mountinfo is not None else _mountinfo_path()
         )
-        mount_root, mount_point = mount if mount is not None else ("/", _CGROUP_ROOT)
-        if self.root is not None:
-            mount_point = str(self.root)
-        relative = _relative_membership(membership, mount_root)
-        if relative is None:
-            return None
-        return str(Path(mount_point) / relative)
+        if mounts is None:
+            # Mountinfo itself is unreadable. The documented fallback is the
+            # conventional mount point, used only here.
+            base = self.root if self.root is not None else Path(_CGROUP_ROOT)
+            return str(base / membership.lstrip("/"))
+        # Several cgroup2 superblocks can be mounted. The applicable one is
+        # the mount whose own root contains the membership; the longest
+        # matching root wins when mounts nest.
+        for mount_root, mount_point in sorted(
+            mounts, key=lambda mount: len(mount[0]), reverse=True
+        ):
+            relative = _relative_membership(membership, mount_root)
+            if relative is None:
+                continue
+            base = self.root if self.root is not None else Path(mount_point)
+            return str(base / relative)
+        return None
 
     def _membership(self) -> str | None:
         """Return the ``0::`` cgroup v2 membership path, when one exists."""
@@ -160,16 +170,18 @@ def _mountinfo_path() -> Path:
     return Path(_CGROUP_MOUNTINFO)
 
 
-def _cgroup2_mount(path: Path) -> tuple[str, str] | None:
-    r"""Return the ``(root, mount point)`` of the cgroup2 superblock.
+def _cgroup2_mounts(path: Path) -> list[tuple[str, str]] | None:
+    r"""Return every cgroup2 superblock's ``(root, mount point)``.
 
     A mountinfo line is ``id parent major:minor root mount-point options
     [optional...] - fstype source super-options``. Spaces inside a field are
-    escaped as ``\040``.
+    escaped as ``\040``. `None` means mountinfo could not be read at all,
+    which is different from a readable table with no cgroup2 entry.
     """
     text = _read_text(path)
     if text is None:
         return None
+    mounts: list[tuple[str, str]] = []
     for line in text.splitlines():
         before, separator, after = line.partition(" - ")
         if not separator:
@@ -180,8 +192,8 @@ def _cgroup2_mount(path: Path) -> tuple[str, str] | None:
             continue
         if trailing[0] != "cgroup2":
             continue
-        return _unescape(fields[3]), _unescape(fields[4])
-    return None
+        mounts.append((_unescape(fields[3]), _unescape(fields[4])))
+    return mounts
 
 
 def _unescape(field: str) -> str:

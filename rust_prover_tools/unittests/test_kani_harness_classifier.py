@@ -314,8 +314,8 @@ def test_a_nonzero_exit_with_no_output_is_not_a_selection_diagnosis() -> None:
     assert "no output" in classification.detail
 
 
-def test_a_verifier_that_never_ran_is_not_a_no_match() -> None:
-    """An explicit no-match needs the verifier to have printed its banner."""
+def test_a_banner_only_failure_is_not_a_no_match() -> None:
+    """A banner proves Kani started, not that selection completed."""
     evidence = _evidence("harnesses::absent", exit_code=1)
     observer = KaniObserver()
     observer.observe(
@@ -329,4 +329,27 @@ def test_a_verifier_that_never_ran_is_not_a_no_match() -> None:
 
     classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
 
+    assert classification.status is ExecutionStatus.EXIT_NONZERO
+
+
+def test_kanis_own_no_match_diagnostic_is_a_selection_diagnosis() -> None:
+    """Kani stating that nothing matched is selection evidence."""
+    evidence = _evidence("harnesses::absent", exit_code=1)
+    observer = KaniObserver()
+    for text in (
+        "Kani Rust Verifier 0.67.0 (cargo plugin)",
+        "*no harnesses matched the harness filter: `harnesses::absent`",
+    ):
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=text,
+                timestamp_utc=VirtualClock().now(),
+                elapsed_seconds=0.0,
+            )
+        )
+
+    classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
+
     assert classification.status is ExecutionStatus.NO_MATCH
+    assert "no harnesses matched" in classification.detail

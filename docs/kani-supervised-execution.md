@@ -179,6 +179,11 @@ selector or output override is refused, in separate-value form
 (`-pvalue`), on either side of `--`. Proof-affecting flags such as `--unwind`,
 `--default-unwind`, `-Z`, and `--fail-fast` are preserved.
 
+A pinned inventory is revalidated against a fresh discovery of the tree the run
+will build. A test-target entry whose harness was removed, renamed, or moved to
+another target is refused, so a stale document cannot be credited to a target
+Kani never built.
+
 Kani 0.67.0 has no flag that selects one integration-test target. Its `--tests`
 option enables verification of test crates _and_ leaves the library and every
 binary eligible, so a harness name alone does not say which test target
@@ -253,10 +258,15 @@ separately in the report and in the detail text.
 
 A stop outranks the status, but not evidence the verifier already produced: a
 harness that reported a verdict before the supervisor ended it keeps that
-verdict in `proof_verdict` while its status records the stop. A child that
-exits nonzero without printing any verifier output is classified
-`exit-nonzero`, not `no-match`: the exit status is the only evidence, and a
-selection diagnosis is never inferred from silence.
+verdict in `proof_verdict` while its status records the stop. A stop the
+supervisor itself causes, because its monitor failed or its caller cancelled
+it, is recorded as `interrupted`, and that attempt keeps its diagnostic
+reference and emits its own finish record.
+
+A child that exits nonzero without selection evidence is classified
+`exit-nonzero`, not `no-match`: a banner proves only that the verifier started.
+`no-match` requires a completed report, verdict records, or Kani's own "no
+harnesses matched" diagnostic.
 
 ## Evidence
 

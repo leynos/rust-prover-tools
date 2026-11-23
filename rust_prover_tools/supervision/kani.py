@@ -35,6 +35,7 @@ from rust_prover_tools.kani_log import (
     UnsupportedKaniGrammarError,
     grammar_for,
 )
+from rust_prover_tools.kani_log.syntax import NO_HARNESS_MATCH
 from rust_prover_tools.kani_release import KANI_RELEASE_VERSION
 from rust_prover_tools.supervision.models import (
     ExecutionStatus,
@@ -66,12 +67,15 @@ class KaniObserver:
         Why an opening banner could not be attributed, when it could not be.
     failure_reason : str | None
         Why the parser refused the completed log, when it did.
+    no_match_reason : str | None
+        Kani's own "no harnesses matched" diagnostic, when it printed one.
     """
 
     reader: KaniLogReader = dc.field(default_factory=KaniLogReader)
     last_progress: str | None = None
     banner_error: str | None = None
     failure_reason: str | None = None
+    no_match_reason: str | None = None
 
     def observe(self, line: OutputLine) -> None:
         """Feed one decoded line to the reader and remember its progress.
@@ -91,6 +95,8 @@ class KaniObserver:
         progress = self.reader.facts.last_progress
         if progress is not None:
             self.last_progress = progress
+        if NO_HARNESS_MATCH.match(line.text) is not None:
+            self.no_match_reason = line.text
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -237,10 +243,10 @@ def _verifier_ran(observer: KaniObserver) -> bool:
     """
     facts = observer.reader.facts
     return bool(
-        facts.banner_version
-        or facts.selection_records
+        facts.selection_records
         or facts.verdicts
-        or facts.last_progress
+        or facts.completed
+        or observer.no_match_reason is not None
     )
 
 
@@ -274,6 +280,12 @@ def _selection_status(
     expected = evidence.spec.harness
     matching = [name for name in records if name == expected]
     if not records:
+        if observer.no_match_reason is not None:
+            return _classification(
+                ExecutionStatus.NO_MATCH,
+                detail=observer.no_match_reason,
+                observed=observed,
+            )
         if not _verifier_ran(observer):
             # Nothing was printed, so nothing about the selection is known.
             # The raw exit status is the only evidence, and inventing a

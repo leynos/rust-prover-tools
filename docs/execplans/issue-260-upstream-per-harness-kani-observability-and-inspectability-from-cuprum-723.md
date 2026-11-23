@@ -501,6 +501,28 @@ Plain-language terms used in this plan:
   bounded issue and record budgets, and reconciliation by a generated
   disagreeing-summary property; both were confirmed by mutation. Date/Author:
   2026-11-23, implementation agent.
+- D30. Decision: the supervisor records `interrupted` as the first stop reason
+  when its own monitor fails or its caller cancels, because it did stop the
+  child. Rationale: without a recorded reason the launcher's cancellation looks
+  like an ordinary exit, and the Kani adapter can report `exit-nonzero` or
+  `no-match` for an attempt the supervisor ended. Date/Author: 2026-11-23,
+  implementation agent.
+- D31. Decision: an interrupted attempt keeps its diagnostic reference, emits
+  a `harness-finish` record, and accounts for the identities the verifier
+  observed. Rationale: the attempt started, so reporting it as `not-run` or
+  omitting its evidence breaks `INV-FINALIZE` and the accounting contract.
+  Date/Author: 2026-11-23, implementation agent.
+- D32. Decision: the cgroup reader selects the cgroup2 mount whose root
+  contains the membership, not the first cgroup2 mount, and applies the
+  `/sys/fs/cgroup` fallback only when mountinfo itself is unreadable.
+  Rationale: several cgroup2 superblocks can be mounted, and a readable table
+  with no cgroup2 entry is a definite absence rather than a reason to guess.
+  Date/Author: 2026-11-23, implementation agent.
+- D33. Decision: `no-match` requires selection evidence, which includes Kani's
+  own "no harnesses matched" diagnostic, a completed report, or verdicts; a
+  banner alone is insufficient. Rationale: a banner proves only that the
+  verifier started, so a nonzero exit after it is a process failure until
+  selection evidence appears. Date/Author: 2026-11-23, implementation agent.
 - D25. Decision: the plan's file and code tolerances were exceeded and the
   overage is accepted. The implementation needed the full parser corpus, two
   route integrations, a new CLI surface, the schema reference, and the
@@ -600,15 +622,17 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at the published head passes with 2,507 tests and 6 skips. The opt-in live Kani
-0.67.0 fixture passes at product head `6f772f3`: 2 passed in 678.97 s under the
-shared compile-admission pool; after that commit only tests and documentation
-changed, so the exercised product code is identical. The parser property suite
-now checks generated build noise and feed groupings against an independent
-reading of the capture rather than against the same reader, and explicitly
-bounds retained parser state; a mutation that retained every issue failed two
-of those tests, and a mutation that skipped reconciliation failed five mutation
-tests. Those figures replaced the earlier 2,422-test and stale live-pass claims.
+at the published head passes with 2,513 tests and 6 skips. The opt-in live Kani
+0.67.0 fixture passes at this candidate: 2 passed in 735.21 s under the shared
+compile-admission pool. The earlier claim that only tests and documentation
+changed after `6f772f3` was wrong: supervision and inventory code changed in
+`0376a44`, so the fixture was rerun at the corrected candidate and this is that
+result. The parser property suite now checks generated build noise and feed
+groupings against an independent reading of the capture rather than against the
+same reader, and explicitly bounds retained parser state; a mutation that
+retained every issue failed two of those tests, and a mutation that skipped
+reconciliation failed five mutation tests. Those figures replaced the earlier
+2,422-test and stale live-pass claims.
 
 The retrospective is complete. The capability shipped as one branch rather than
 the six separately mergeable milestones the plan allowed, because the parser,
@@ -782,15 +806,22 @@ status, in the documented precedence order.
 
 - Obligation: `INV-BOUNDED` and `L-PARSE-EQUIV`.
   Method: parameterized fixture tests over all fifteen corpus logs, plus a
-  Hypothesis property that feeds each log in random line chunks and injects
-  arbitrary chatter between reports. Rationale: the corpus is the normative
-  grammar; generated chunking explores the incremental boundary without a live
-  prover. Artefact: `rust_prover_tools/unittests/test_kani_log_reader.py`,
-  `tests/fixtures/kani_logs/`. Evidence: `make test`; the property must fail if
-  `feed_line` buffers the whole log or if `finish` skips reconciliation.
-  Non-vacuity: the corpus reaches every successful, refused, timed-out,
-  unsupported, cover, panic, and multi-harness class; a mutation that deletes a
-  reconciliation is rejected by at least one corpus log.
+  Hypothesis property that inserts generated build noise in the tolerated
+  preamble of every accepted capture and compares the fed facts with an
+  independent reading of the lines and the committed `expected.json`.
+  Rationale: the corpus is the normative grammar, and an oracle that does not
+  call the reader cannot agree with it by construction. Cuprum delivers
+  complete lines, so line grouping is only a reader sanity check, not a
+  streaming boundary. Artefact:
+  `rust_prover_tools/unittests/test_kani_log_reader.py`,
+  `tests/fixtures/kani_logs/`. Evidence: `make test`. Retention is asserted
+  directly by the bounded issue and record budgets; a mutation that admits
+  every record fails `test_record_retention_is_bounded`. A mutation that skips
+  `reconcile_report` fails `test_a_generated_disagreeing_summary_is_refused`
+  and the reconciliation mutation tests. A hypothetical private raw-line buffer
+  is outside the reader's observable contract and is not claimed to be
+  detected. Non-vacuity: the corpus reaches every successful, refused,
+  timed-out, unsupported, cover, panic, and multi-harness class.
 - Obligation: `INV-EXACT`, `INV-FIRST-STOP`, `INV-CONTINUE`, `L-PRECEDENCE`.
   Method: deterministic tests with a virtual clock, scripted launcher, and fake
   resource probe. Rationale: every branch depends on timing and child

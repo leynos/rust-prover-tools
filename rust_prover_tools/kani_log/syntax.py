@@ -48,6 +48,7 @@ __all__ = (
     "HARNESS_START",
     "LIST_WRITTEN",
     "NOISE_PREFIXES",
+    "NO_HARNESS_MATCH",
     "NO_UNWINDING_ASSERTIONS_FLAG",
     "OTHER_STATUS",
     "SOLVER_COMMAND",
@@ -76,6 +77,9 @@ BANNER = re.compile(
     r"^Kani Rust Verifier (?P<version>\d+\.\d+\.\d+) \((?P<kind>[^)]+)\)$"
 )
 HARNESS_START = re.compile(r"^Checking harness (?P<name>.+)\.\.\.$")
+NO_HARNESS_MATCH = re.compile(
+    r"^[+*]?no harnesses matched the harness filters?: (?P<filters>.*)$"
+)
 VERIFICATION = re.compile(
     r"^VERIFICATION:- (?P<verdict>SUCCESSFUL|FAILED)(?: (?P<note>\(.*\)))?$"
 )

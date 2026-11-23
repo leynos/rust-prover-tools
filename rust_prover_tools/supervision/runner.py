@@ -51,12 +51,12 @@ from rust_prover_tools.supervision.run_finalize import (
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
     import datetime as dt
 
     from rust_prover_tools.supervision.attempt_state import AttemptEvidence
     from rust_prover_tools.supervision.config import SupervisionConfig
     from rust_prover_tools.supervision.results import (
+        DiagnosticRef,
         HarnessClassification,
         HarnessResult,
         RunReport,
@@ -66,8 +66,6 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "SupervisedRun",
     "new_run_id",
-    "run_supervised",
-    "run_supervised_sync",
 )
 
 
@@ -149,12 +147,9 @@ class SupervisedRun:
         as `not-run`.
         """
         recorded = len(ledger.results)
-        remaining = self.expected[recorded:]
-        if ledger.active is not None and remaining:
-            ledger.results.append(ledger.active)
-            ledger.executed.append(remaining[0].qualified)
-            remaining = remaining[1:]
-        ledger.results.extend(not_run_result(spec, detail) for spec in remaining)
+        ledger.results.extend(
+            not_run_result(spec, detail) for spec in self.expected[recorded:]
+        )
 
     def _emit_start(self, started_at: dt.datetime, ledger: RunLedger) -> None:
         """Write the run's opening evidence record, retaining a sink failure."""
@@ -197,19 +192,58 @@ class SupervisedRun:
             )
         except (OSError, ValueError) as error:
             ledger.diagnostic_error = error
-        evidence, classification = await self._supervise(spec, ledger)
-        if evidence.stop_reason is not StopReason.LAUNCH_FAILED:
-            if classification.observed is None:
-                ledger.executed.append(spec.qualified)
-            else:
-                # Accounting compares what the verifier actually selected, not
-                # only what was requested. A wrong, duplicated, or extra name
-                # therefore shows up as drift even when a result was recorded.
-                ledger.executed.extend(classification.observed)
+        try:
+            evidence, classification = await self._supervise(spec, ledger)
+        except BaseException:
+            self._record_interrupted(spec, ledger, reference)
+            raise
+        self._account(spec, ledger, evidence, classification)
+        result = result_for(evidence, classification, reference)
+        self._emit_finish(ledger, result)
+        return result
+
+    def _record_interrupted(
+        self,
+        spec: HarnessSpec,
+        ledger: RunLedger,
+        reference: DiagnosticRef | None,
+    ) -> None:
+        """Record the attempt a cancellation or fault stopped."""
+        attempt = ledger.interrupted_attempt
+        ledger.interrupted_attempt = None
+        if attempt is None:
+            return
+        evidence, classification = typ.cast(
+            "tuple[AttemptEvidence, HarnessClassification]", attempt
+        )
+        self._account(spec, ledger, evidence, classification)
+        result = result_for(evidence, classification, reference)
+        ledger.results.append(result)
+        self._emit_finish(ledger, result)
+
+    def _account(
+        self,
+        spec: HarnessSpec,
+        ledger: RunLedger,
+        evidence: AttemptEvidence,
+        classification: HarnessClassification,
+    ) -> None:
+        """Account for an attempt's observed identities."""
+        if evidence.stop_reason is StopReason.LAUNCH_FAILED:
+            return
+        if classification.observed is None:
+            ledger.executed.append(spec.qualified)
+        else:
+            # Accounting compares what the verifier actually selected, not
+            # only what was requested. A wrong, duplicated, or extra name
+            # therefore shows up as drift even when a result was recorded.
+            ledger.executed.extend(classification.observed)
         if evidence.stop_reason is StopReason.INTERRUPTED:
             ledger.interrupted = True
             ledger.interrupt_signal = self._signum()
-        result = result_for(evidence, classification, reference)
+
+    def _emit_finish(self, ledger: RunLedger, result: HarnessResult) -> None:
+        """Emit one harness-finish record, retaining a sink failure."""
         try:
             self.environment.diagnostics.emit(
                 harness_finish_record(run_id=self.run_id, result=result)
@@ -217,7 +251,6 @@ class SupervisedRun:
         except (OSError, ValueError) as error:
             if ledger.diagnostic_error is None:
                 ledger.diagnostic_error = error
-        return result
 
     async def _supervise(
         self, spec: HarnessSpec, ledger: RunLedger
@@ -242,11 +275,9 @@ class SupervisedRun:
         except BaseException:
             # The supervision layer stopped and joined the child before
             # re-raising. Keep the evidence of the attempt that was in flight
-            # so the finalized report describes an interrupted attempt rather
-            # than work that never started.
-            if supervisor.interrupted is not None:
-                evidence, classification = supervisor.interrupted
-                ledger.active = result_for(evidence, classification, None)
+            # so the caller can report an interrupted attempt with its timing,
+            # stop reason, and diagnostic reference.
+            ledger.interrupted_attempt = supervisor.interrupted
             raise
 
     def _interrupted(self) -> bool:
@@ -310,79 +341,3 @@ class SupervisedRun:
         path = self.config.sinks.report_path
         if path is not None:
             write_report(path, report)
-
-
-async def run_supervised(
-    expected: cabc.Sequence[HarnessSpec],
-    config: SupervisionConfig,
-    environment: RunEnvironment,
-    *,
-    run_id: str | None = None,
-) -> RunReport:
-    """Run every expected harness under supervision.
-
-    Parameters
-    ----------
-    expected : cabc.Sequence[HarnessSpec]
-        Identities the run must execute, in selection order.
-    config : SupervisionConfig
-        Per-harness policy.
-    environment : RunEnvironment
-        Injected dependencies.
-    run_id : str | None
-        Run identifier, or `None` to mint one.
-
-    Returns
-    -------
-    RunReport
-        The typed report with one result per expected identity.
-    """
-    run = SupervisedRun(
-        expected=tuple(expected),
-        config=config,
-        environment=environment,
-        run_id=run_id if run_id is not None else new_run_id(),
-    )
-    return await run.execute()
-
-
-def run_supervised_sync(
-    expected: cabc.Sequence[HarnessSpec],
-    config: SupervisionConfig,
-    environment: RunEnvironment,
-    *,
-    run_id: str | None = None,
-) -> RunReport:
-    """Run every expected harness under supervision, from synchronous code.
-
-    Parameters
-    ----------
-    expected : cabc.Sequence[HarnessSpec]
-        Identities the run must execute, in selection order.
-    config : SupervisionConfig
-        Per-harness policy.
-    environment : RunEnvironment
-        Injected dependencies.
-    run_id : str | None
-        Run identifier, or `None` to mint one.
-
-    Returns
-    -------
-    RunReport
-        The typed report with one result per expected identity.
-
-    Raises
-    ------
-    RuntimeError
-        Raised when called from inside a running event loop, where it cannot
-        drive one of its own. An async caller must await `run_supervised`.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(run_supervised(expected, config, environment, run_id=run_id))
-    msg = (
-        "run_supervised_sync cannot run inside an event loop; await "
-        "run_supervised instead"
-    )
-    raise RuntimeError(msg)

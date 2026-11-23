@@ -204,18 +204,14 @@ class AttemptSupervisor:
                 # below before the failure is surfaced.
                 failure = monitor.exception()
                 if failure is not None:
-                    self._stop_detail = "the supervisor monitor failed"
-                    running.stop(StopReason.INTERRUPTED)
+                    self._request_stop(running, "the supervisor monitor failed")
             result = await waiter
         finally:
             monitor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await monitor
             if not running.done and running.stop_reason is None:
-                self._stop_detail = (
-                    self._stop_detail or "the supervisor stopped the run"
-                )
-                running.stop(StopReason.INTERRUPTED)
+                self._request_stop(running, "the supervisor stopped the run")
             joined = await running.settle()
             self._settled = joined
             waiter.cancel()
@@ -224,11 +220,6 @@ class AttemptSupervisor:
         if failure is not None:
             raise failure
         return joined if result is None else result
-
-    @property
-    def stop_detail(self) -> str:
-        """The bounded explanation for the first stop, when one was requested."""
-        return self._stop_detail
 
     def _cgroup_start(self) -> CgroupObservation:
         """Read the cgroup evidence once, before the child starts."""
@@ -303,6 +294,19 @@ class AttemptSupervisor:
         """Record and deliver an interruption stop."""
         self._stop_reason = StopReason.INTERRUPTED
         self._stop_detail = "a signal interrupted the harness"
+        running.stop(StopReason.INTERRUPTED)
+
+    def _request_stop(self, running: RunningHarness, detail: str) -> None:
+        """Record the first stop reason and request it from the launcher.
+
+        A stop the supervisor initiates itself, because its monitor failed or
+        its caller cancelled it, is still an interruption of the child. Setting
+        the reason here keeps the reported result `interrupted` instead of
+        letting the launcher's cancellation look like an ordinary exit.
+        """
+        if self._stop_reason is None:
+            self._stop_reason = StopReason.INTERRUPTED
+            self._stop_detail = detail
         running.stop(StopReason.INTERRUPTED)
 
     def _tick(

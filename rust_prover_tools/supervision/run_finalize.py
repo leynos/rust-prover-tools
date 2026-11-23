@@ -62,7 +62,7 @@ class RunLedger:
     interrupt_signal: int | None = None
     finished_at: dt.datetime | None = None
     diagnostic_error: Exception | None = None
-    active: HarnessResult | None = None
+    interrupted_attempt: object | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
