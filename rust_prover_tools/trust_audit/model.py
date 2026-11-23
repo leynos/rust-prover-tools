@@ -31,6 +31,15 @@ class TrustItem:
     ``r#assume`` loses its prefix. What separates them is ``line`` and
     ``column``: they locate the original occurrence, so a consumer that needs
     the qualifier reads the source at that position.
+
+    Attributes
+    ----------
+    item : str
+        The vocabulary word the occurrence names.
+    line : int
+        One-based line number in the scanned file.
+    column : int
+        One-based column number of the item's first character.
     """
 
     item: str
@@ -46,6 +55,13 @@ class InlineModule:
     replaces that module's directory component with the attribute's value, so a
     bare ``mod x;`` inside ``#[path = "thread_files"] mod thread { … }``
     compiles ``thread_files/x.rs`` and not ``thread/x.rs``.
+
+    Attributes
+    ----------
+    name : str
+        The module's declared name.
+    path : str | None
+        Its ``#[path]`` value when it has one, otherwise ``None``.
     """
 
     name: str
@@ -65,6 +81,19 @@ class ModuleReference:
     separates ``mod nested { mod trusted; }`` in ``src/lib.rs`` — which compiles
     ``src/nested/trusted.rs`` — from a top-level ``mod trusted;``, which
     compiles ``src/trusted.rs``.
+
+    Attributes
+    ----------
+    name : str
+        The module's declared name.
+    path : str | None
+        The declaration's ``#[path]`` value when it has one.
+    line : int
+        One-based line of the module name in the declaring file.
+    column : int
+        One-based column of the module name.
+    enclosing : tuple[InlineModule, ...]
+        Inline modules around the declaration, outermost first.
     """
 
     name: str
@@ -81,6 +110,15 @@ class ScanResult:
     ``macro_use`` reports whether the file imports macros with ``#[macro_use]``,
     so the walker can carry that inherited scope into the child modules the
     file declares.
+
+    Attributes
+    ----------
+    items : tuple[TrustItem, ...]
+        Trusted occurrences in source order.
+    modules : tuple[ModuleReference, ...]
+        Module files the source declares, in source order.
+    macro_use : bool
+        Whether ``#[macro_use]`` is in scope for this file's children.
     """
 
     items: tuple[TrustItem, ...]
@@ -90,7 +128,15 @@ class ScanResult:
 
 @dc.dataclass(frozen=True, slots=True)
 class AuditedFile:
-    """One scanned file, named by the repository-relative path it was read as."""
+    """One scanned file, named by the repository-relative path it was read as.
+
+    Attributes
+    ----------
+    path : str
+        Repository-relative POSIX path of the physical file that was read.
+    items : tuple[TrustItem, ...]
+        Trusted occurrences in that file, in source order.
+    """
 
     path: str
     items: tuple[TrustItem, ...]

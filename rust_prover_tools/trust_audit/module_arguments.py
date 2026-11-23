@@ -13,6 +13,10 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.trust_audit.conditions import (
+    attribute_items,
+    payload_start,
+)
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.inline_modules import (
     DECLARATION_TOKENS,
@@ -141,22 +145,29 @@ def _declares_module(
     tokens: tuple[Token, ...],
     index: int,
     scope: _ForwardScope,
+    *,
+    seen: frozenset[str] = frozenset(),
 ) -> bool:
-    """Report whether one argument token declares or invokes a declaration."""
+    """Report whether one argument token declares or invokes a declaration.
+
+    A local macro may forward its argument to another local macro, so the
+    invocation is followed through every expansion in the chain.  A recursive
+    chain ends the search: it declares nothing this static walk can name.  The
+    invocation itself is still refused when any reachable expansion declares a
+    module, because the forwarding macro may wrap that declaration in an inline
+    module the scan never sees.
+    """
     if index in scope.stringified:
         return False
     if names_module(tokens[index], tokens[index + 1 : index + DECLARATION_TOKENS]):
         return True
     name = _invoked_definition(tokens, index, scope)
-    if name is None:
+    if name is None or name in seen:
         return False
     return any(
         expansion not in scope.rules.patterns
         and expansion not in scope.stringified
-        and names_module(
-            tokens[expansion],
-            tokens[expansion + 1 : expansion + DECLARATION_TOKENS],
-        )
+        and _declares_module(tokens, expansion, scope, seen=seen | {name})
         for expansion in scope.rules.expansions_by_name.get(name, ())
     )
 
@@ -189,8 +200,38 @@ def refuse_imported_macros(
 
 
 def imports_macro_use(tokens: tuple[Token, ...]) -> bool:
-    """Report whether an attribute in the file carries ``macro_use``."""
+    """Report whether an attribute in the file applies ``macro_use``.
+
+    The word can appear where it does nothing: ``cfg_attr``'s first argument
+    is a configuration predicate, so ``#[cfg_attr(macro_use, allow(dead_code))]``
+    never imports a macro.  Only an attribute name counts, including one the
+    payload of a ``cfg_attr`` applies.
+    """
     return any(
-        any(tokens[index].text == "macro_use" for index in range(opener, closer + 1))
+        _attribute_list_imports(tokens, opener + 1, closer)
         for opener, closer in attribute_spans(tokens)
     )
+
+
+def _attribute_list_imports(
+    tokens: tuple[Token, ...],
+    start: int,
+    end: int,
+) -> bool:
+    """Report whether one attribute list applies ``macro_use``."""
+    for item_start, item_end in attribute_items(tokens, start, end):
+        if tokens[item_start].text == "macro_use":
+            return True
+        if tokens[item_start].text == "cfg_attr":
+            inner_open = item_start + 1
+            if inner_open >= item_end or tokens[inner_open].text != "(":
+                continue
+            inner_close = matching(tokens, inner_open, "(", ")")
+            payload = payload_start(tokens, inner_open, inner_close)
+            if payload is not None and _attribute_list_imports(
+                tokens,
+                payload,
+                inner_close,
+            ):
+                return True
+    return False

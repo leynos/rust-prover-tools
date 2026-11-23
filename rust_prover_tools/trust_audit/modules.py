@@ -20,6 +20,7 @@ from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.inline_modules import (
     DECLARATION_TOKENS,
     InlineModules,
+    declaration_disabled,
     inline_module_names,
     names_module,
     path_attribute,
@@ -30,10 +31,8 @@ from rust_prover_tools.trust_audit.module_arguments import (
     refuse_forwarded_modules,
     refuse_imported_macros,
 )
-from rust_prover_tools.trust_audit.structure import (
-    attribute_spans,
-    stringify_arguments,
-)
+from rust_prover_tools.trust_audit.stringify import stringify_arguments
+from rust_prover_tools.trust_audit.structure import attribute_spans
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
 from rust_prover_tools.trust_audit.use_tree import begins_import, member_aliases
@@ -112,6 +111,8 @@ def module_references(
         if index in rules.patterns or index in stringified:
             continue
         if not names_module(token, head) or head[1].text != _EXTERNAL:
+            continue
+        if declaration_disabled(tokens, spans, index) or inline.is_disabled(index):
             continue
         name = head[0]
         path = path_attribute(tokens, spans, index)

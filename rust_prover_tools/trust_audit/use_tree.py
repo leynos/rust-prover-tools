@@ -44,9 +44,33 @@ __all__ = (
     "begins_import",
     "file_roots",
     "imported_roots",
+    "imports_root_glob",
     "member_aliases",
     "rooted_spans",
 )
+
+
+def imports_root_glob(
+    tokens: tuple[Token, ...],
+    roots: cabc.Container[str],
+) -> bool:
+    """Report whether the file glob-imports from one of the trust roots.
+
+    The glob may sit in a module this file declares —
+    ``mod m { pub use kani::*; }`` — so every ``use`` statement is read, not
+    only one rooted at the file's own scope.
+    """
+    for index, token in enumerate(tokens):
+        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
+            continue
+        end = statement_end(tokens, index + 1)
+        for root, start, stop in rooted_spans(tokens, index + 1, end):
+            if root in roots and any(
+                tokens[pos].text == "*" for pos in range(start, stop)
+            ):
+                return True
+    return False
+
 
 #: The path qualifiers that name a binding in this file rather than another
 #: module: ``self`` for the current one, ``crate`` for the root, ``super`` for

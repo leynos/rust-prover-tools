@@ -88,6 +88,14 @@ UNSUPPORTED_PRELUDE = "warning: Found the following unsupported constructs:"
 UNWINDING_FAILED = (
     "[Kani] info: Verification output shows one or more unwinding failures."
 )
+# The renderer decides whether to print ``UNWINDING_FAILED`` from the failed
+# properties' descriptions, not from their property identifiers.  A description
+# holding either phrase is what makes a failure a bound failure, while the
+# identifier still decides whether the check reads as a counterexample.
+UNWINDING_DESCRIPTIONS = (
+    "unwinding assertion loop",
+    "recursion unwinding assertion",
+)
 UNSUPPORTED_REACHABLE = (
     "** WARNING: A Rust construct that is not currently supported by Kani was "
     "found to be reachable. Check the results for more details."

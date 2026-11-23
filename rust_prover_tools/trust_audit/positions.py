@@ -10,42 +10,17 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_bindings import member_bindings
-from rust_prover_tools.trust_audit.use_paths import statement_end
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
-    begins_import,
-    rooted_spans,
+    imports_root_glob,
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+    from rust_prover_tools.trust_audit.syntax import Token
 
 # The ``::`` and the qualifier in front of a path's last segment.
 _QUALIFIED_SEGMENTS = 2
-
-
-def imports_root_glob(
-    tokens: tuple[Token, ...],
-    roots: cabc.Container[str],
-) -> bool:
-    """Report whether the file glob-imports from one of the trust roots.
-
-    The glob may sit in a module this file declares —
-    ``mod m { pub use kani::*; }`` — so every ``use`` statement is read, not
-    only one rooted at the file's own scope.
-    """
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
-            continue
-        end = statement_end(tokens, index + 1)
-        for root, start, stop in rooted_spans(tokens, index + 1, end):
-            if root in roots and any(
-                tokens[pos].text == "*" for pos in range(start, stop)
-            ):
-                return True
-    return False
 
 
 def is_bare_use(tokens: tuple[Token, ...], index: int) -> bool:

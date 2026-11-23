@@ -27,6 +27,7 @@ from rust_prover_tools.trust_audit.literals import (
     consume_escaped_body,
     consume_quote_literal,
 )
+from rust_prover_tools.trust_audit.shebang import skip_shebang
 
 __all__ = (
     "Kind",
@@ -36,7 +37,14 @@ __all__ = (
 
 
 class Kind(enum.StrEnum):
-    """Distinguish an identifier, one punctuator, and one whole literal."""
+    """Distinguish an identifier, one opaque marker, and one whole literal.
+
+    ``PUNCT`` carries a punctuator as well as a token the scan reads as opaque:
+    a numeric literal and a character literal or lifetime are emitted under it
+    so their text never reaches the identifier vocabulary or the string
+    decoder.  What matters is that the token stays in the stream, keeping the
+    tokens around it non-adjacent exactly as Rust lexes them.
+    """
 
     IDENT = "ident"
     PUNCT = "punct"
@@ -100,7 +108,7 @@ def tokenize(text: str) -> tuple[Token, ...]:
     # not otherwise part of the source text, so removing it keeps reported
     # columns aligned with the characters an author sees.
     cursor = Cursor(text.removeprefix("﻿"))
-    _skip_shebang(cursor)
+    skip_shebang(cursor)
     tokens: list[Token] = []
     while not cursor.at_end:
         if _skip_trivia(cursor):
@@ -112,35 +120,11 @@ def tokenize(text: str) -> tuple[Token, ...]:
             )
             _skip_literal_suffix(cursor)
             continue
-        if cursor.starts("b'"):
-            # ``b'x'`` is one byte literal.  Lexing the ``b`` as an identifier
-            # would expose it as a local name the compiler never sees.
-            cursor.take(1)
-            _skip_character_literal_or_lifetime(cursor)
-            continue
-        numeric = _numeric_literal_length(cursor.text, cursor.index)
-        if numeric:
-            # A numeric literal is opaque to the audit, but its suffix may hold
-            # a vocabulary word: Rust lexes ``1assume`` as one literal, so
-            # emitting ``1`` and ``assume`` would invent a trust use.  It is
-            # recorded as a punctuator rather than a literal because a
-            # proc-macro scan decodes literal text as code.
-            line, column = cursor.line, cursor.column
-            tokens.append(Token(Kind.PUNCT, cursor.take(numeric), line, column))
-            continue
-        length = _identifier_length(cursor.text, cursor.index)
-        if length:
-            # The bare name is what the vocabulary matches, and Rust compares
-            # identifiers by their NFC forms, so the text is normalized once
-            # here rather than at every comparison. The column stays at the
-            # prefix so a location names the token the author wrote.
-            line, column = cursor.line, cursor.column
-            written = cursor.take(length)
-            raw = written.startswith("r#")
-            name = unicodedata.normalize("NFC", written.removeprefix("r#"))
-            tokens.append(Token(Kind.IDENT, name, line, column, raw=raw))
-            continue
-        if _skip_character_literal_or_lifetime(cursor):
+        opaque = _character_token(cursor) or _numeric_token(cursor)
+        if opaque is None:
+            opaque = _identifier_token(cursor)
+        if opaque is not None:
+            tokens.append(opaque)
             continue
         # The position is read before consuming, because ``_punct`` advances the
         # cursor past the token it returns. Reading afterwards would report a
@@ -149,65 +133,6 @@ def tokenize(text: str) -> tuple[Token, ...]:
         line, column = cursor.line, cursor.column
         tokens.append(Token(Kind.PUNCT, _punct(cursor), line, column))
     return tuple(tokens)
-
-
-def _skip_shebang(cursor: Cursor) -> None:
-    """Consume a leading shebang, which Rust discards before lexing.
-
-    Rust treats a first line beginning ``#!`` as a shebang unless the next
-    token is ``[``, which makes it an inner attribute; whitespace and comments
-    may sit between the two.  The shebang line is not Rust code, so an
-    apostrophe in the interpreter arguments must not open a character literal
-    and a quote there must not open a string the file never contains.
-    """
-    if not cursor.starts("#!"):
-        return
-    if _next_code_character(cursor.text, cursor.index + 2) == "[":
-        return
-    newline = cursor.text.find("\n", cursor.index)
-    end = len(cursor.text) if newline < 0 else newline
-    cursor.take(end - cursor.index)
-
-
-def _next_code_character(text: str, index: int) -> str | None:
-    """Return the next character after whitespace and comments, or ``None``.
-
-    Only the decision between a shebang and an inner attribute needs this
-    lookahead; the cursor is not moved.
-    """
-    while index < len(text):
-        if text[index] in RUST_WHITESPACE:
-            index += 1
-        elif text.startswith("//", index):
-            newline = text.find("\n", index)
-            index = len(text) if newline < 0 else newline
-        elif text.startswith("/*", index):
-            index = _after_block_comment(text, index)
-        else:
-            return text[index]
-    return None
-
-
-def _after_block_comment(text: str, index: int) -> int:
-    """Return the index after the block comment opening at ``index``.
-
-    Rust nests block comments, so the scan counts openers rather than stopping
-    at the first ``*/``.
-    """
-    depth = 0
-    position = index
-    while position < len(text):
-        if text.startswith("/*", position):
-            depth += 1
-            position += 2
-        elif text.startswith("*/", position):
-            depth -= 1
-            position += 2
-            if depth == 0:
-                return position
-        else:
-            position += 1
-    return len(text)
 
 
 def _skip_literal_suffix(cursor: Cursor) -> None:
@@ -267,6 +192,59 @@ def _skip_block_comment(cursor: Cursor) -> None:
             depth -= 1
         else:
             cursor.take(1)
+
+
+def _character_token(cursor: Cursor) -> Token | None:
+    """Consume a character literal or lifetime, including a byte prefix.
+
+    ``'a`` is a lifetime and ``'a'`` a character, while ``b'x'`` is a byte
+    literal.  Each is one opaque token: dropping it would make the tokens on
+    either side adjacent, and the audit reads adjacency to recognise syntax
+    Rust never lexed.
+    """
+    start, line, column = cursor.index, cursor.line, cursor.column
+    if cursor.starts("b'"):
+        # Lexing the ``b`` as an identifier would expose a local name the
+        # compiler never sees.
+        cursor.take(1)
+    elif not cursor.starts("'"):
+        return None
+    if not _skip_character_literal_or_lifetime(cursor):
+        return None
+    return Token(Kind.PUNCT, cursor.text[start : cursor.index], line, column)
+
+
+def _numeric_token(cursor: Cursor) -> Token | None:
+    """Return one numeric literal as an opaque token, or ``None``.
+
+    A numeric suffix may hold a vocabulary word: Rust lexes ``1assume`` as one
+    literal, so emitting ``1`` and ``assume`` would invent a trust use.  The
+    token is a punctuator rather than a literal because a proc-macro scan
+    decodes literal text as code.
+    """
+    length = _numeric_literal_length(cursor.text, cursor.index)
+    if not length:
+        return None
+    line, column = cursor.line, cursor.column
+    return Token(Kind.PUNCT, cursor.take(length), line, column)
+
+
+def _identifier_token(cursor: Cursor) -> Token | None:
+    """Return one identifier token, or ``None``.
+
+    The bare name is what the vocabulary matches, and Rust compares identifiers
+    by their NFC forms, so the text is normalized once here rather than at
+    every comparison.  The column stays at the prefix so a location names the
+    token the author wrote.
+    """
+    length = _identifier_length(cursor.text, cursor.index)
+    if not length:
+        return None
+    line, column = cursor.line, cursor.column
+    written = cursor.take(length)
+    raw = written.startswith("r#")
+    name = unicodedata.normalize("NFC", written.removeprefix("r#"))
+    return Token(Kind.IDENT, name, line, column, raw=raw)
 
 
 def _skip_character_literal_or_lifetime(cursor: Cursor) -> bool:

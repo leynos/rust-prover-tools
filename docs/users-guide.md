@@ -265,22 +265,29 @@ other kind beside it is an independent failure and still a counterexample. A
 claim declared to panic is verified only when the note is present; a successful
 block without it is reported as `undetermined`, and a block carrying the note
 with no failed check is refused as a report the release cannot print. A block
-carrying Kani's unwinding-failure note whose checks list no failed unwinding
-check is refused for the same reason: the note says a failure exists, and the
-block does not show it. The exemption reaches a failed assertion under a called
-routine, which is the same panic seen one frame down, and an unreachable check
-after the panic is explained the same way rather than reported as undetermined.
-The run is still bounded: none of these outcomes proves a property over every
-execution.
+carrying Kani's unwinding-failure note whose failed checks describe no bound is
+refused for the same reason: the note says a failure exists, and the block does
+not show it. The renderer decides that note from the failed properties'
+descriptions, so an assertion-shaped identifier whose description carries the
+bound phrase is still refused as a counterexample, while the note stays
+explicable. The same holds for the verdict: a `SUCCESSFUL` block with a failed
+check and no expected-panic note is refused, and a status subtotal the renderer
+would have printed must be present and agree with the checks listed. The
+exemption reaches a failed assertion under a called routine, which is the same
+panic seen one frame down, and an unreachable check after the panic is
+explained the same way rather than reported as undetermined. The run is still
+bounded: none of these outcomes proves a property over every execution.
 
 `tool-error` covers a log that cannot be decided from at all: truncated or
 otherwise structurally invalid output, two invocations concatenated so a second
 banner appears, a release other than 0.67.0, `kani list` inventory output, or a
 log that reports a harness the manifest does not declare. It completes the
 analysis with exit status `2`; it is not an input error. A log captured with
-`--fail-fast` is valid when the manual summary counts only the failing
-harnesses: the driver stops at the first failure and passes only that result to
-its final-summary routine, so an earlier success is a block the counts omit.
+`--fail-fast` is valid only when the manual summary counts exactly one failing
+harness and no successes: the driver stops at the first failure and passes only
+that result to its final-summary routine, so an earlier success is a block the
+counts omit and a summary naming several failures matches no shape either mode
+prints.
 
 Each declared cover is reported as `satisfied` or `unsatisfied`. A cover that
 Kani reported unreachable, or did not report at all, is `unsatisfied`. Each
@@ -807,14 +814,19 @@ prover-tools audit trust --repo-root . verus/lib.rs kani/src/lib.rs
 ```
 
 `PATHS` may name Rust files or crate directories. A directory expands to the
-entry points of every crate beneath it: `lib.rs`, `main.rs` and `mod.rs` at the
-crate root or under `src/`, every Rust file under `src/bin`, `tests/`,
-`benches/` and `examples/`, and every target path the crate's `Cargo.toml`
-names explicitly. A directory that contributes no entry point is refused,
-because an audit that read nothing must not look clean. Each item is reported as
-`path:line:column: word`, and the report ends with the number of files read
-and the number of trusted items found. A file that contains no trusted item is
-still reported in the count: "audited and clean" is different from "never read".
+targets Cargo compiles for every crate beneath it: `src/lib.rs`, `src/main.rs`,
+the `*.rs` files and `*/main.rs` entries directly under `src/bin`, `tests/`,
+`benches/` and `examples/`, and every target the crate's `Cargo.toml` names
+explicitly. A file deeper in one of those directories is a module of a target,
+not a target itself, so it is read when the target's `mod` declaration reaches
+it. The manifest's `autolib`, `autobins`, `autotests`, `autobenches` and
+`autoexamples` flags are honoured. A target the manifest names but no file
+supplies, and a directory that contributes no target, are refused: an audit
+that read nothing, or that silently skipped a target Cargo builds, must not
+look clean. Each item is reported as `path:line:column: word`, and the report
+ends with the number of files read and the number of trusted items found. A
+file that contains no trusted item is still reported in the count: "audited and
+clean" is different from "never read".
 
 The audit follows `mod` declarations from the files it is given rather than
 listing directories, so dead files nobody compiles are not reported and every

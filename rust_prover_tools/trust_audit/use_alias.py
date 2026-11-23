@@ -70,20 +70,44 @@ def _renames_crate(tokens: tuple[Token, ...], start: int, as_index: int) -> bool
     (``root::{self as name}``). Every other ``as`` in the statement belongs to a
     member path.
 
-    A bare ``self`` is the root itself, so ``self as name`` renames the crate
-    wherever it appears. Any other identifier is the root only when it is the
-    first one in the statement: ``root::name as alias`` puts a second identifier
-    in front of the ``as``, and that is a member rename.
+    A bare ``self`` names the crate only when the prefix before it is the
+    crate's own path: ``use root::{self as name};`` and ``use root::self as
+    name;`` rename ``root``, while ``use root::nested::{self as name};`` binds
+    ``name`` to ``root::nested`` and is a member rename.  Any other identifier
+    is the root only when it is the first one in the statement:
+    ``root::name as alias`` puts a second identifier in front of the ``as``,
+    and that is a member rename.
     """
     target = as_index - 1
     if target < start or tokens[target].kind is not Kind.IDENT:
         return False
     if tokens[target].text == "self":
-        # In a whole statement, bare `self` is invalid at the root and only
-        # appears as `root::{self as name}`. A member span begins *after* its
-        # opening brace, so `self` first there is the grouped-spelling root.
-        return target > start or tokens[start - 1].text == "::"
+        return _self_prefix_is_root(tokens, start, target)
     return _is_root_reference(tokens, start, target)
+
+
+def _self_prefix_is_root(
+    tokens: tuple[Token, ...],
+    start: int,
+    self_index: int,
+) -> bool:
+    """Report whether the path before ``self`` names only the crate root.
+
+    ``root::{self as n}`` has the prefix ``root :: {`` and ``root::self`` has
+    ``root ::``.  A deeper prefix such as ``root :: nested :: {`` names
+    ``root::nested``, so its ``self`` renames a member rather than the crate.
+    """
+    cursor = start
+    if cursor < self_index and tokens[cursor].text == "::":
+        cursor += 1
+    if cursor >= self_index or tokens[cursor].kind is not Kind.IDENT:
+        return False
+    cursor += 1
+    if cursor < self_index and tokens[cursor].text == "::":
+        cursor += 1
+    if cursor < self_index and tokens[cursor].text == "{":
+        cursor += 1
+    return cursor == self_index
 
 
 def _is_root_reference(tokens: tuple[Token, ...], start: int, index: int) -> bool:

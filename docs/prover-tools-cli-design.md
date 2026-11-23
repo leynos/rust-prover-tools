@@ -750,10 +750,14 @@ root that bounds them, and reports `path:line:column: word` for every trusted
 item it found:
 
 - `PATHS` are files or crate directories. A file is a crate root, usually a
-  `lib.rs` or `main.rs`; a directory expands to the entry points of every crate
-  beneath it, including `src/bin`, the compiled `tests/`, `benches/` and
-  `examples/` files, and every target path the manifest names explicitly. A
-  directory with no entry point is refused. A relative path is read as
+  `lib.rs` or `main.rs`; a directory expands to the Cargo targets of every
+  crate beneath it, following Cargo's own discovery rules: `src/lib.rs`,
+  `src/main.rs`, the `*.rs` files and `*/main.rs` entries directly under
+  `src/bin`, `tests/`, `benches/` and `examples/`, and every target the
+  manifest names explicitly. A file deeper in one of those directories is a
+  module of a target, so the module walk reaches it rather than the directory
+  listing. The manifest's `auto*` flags are honoured, and a target with no
+  file, or a directory with no target, is refused. A relative path is read as
   repository-relative so the answer does not depend on the working directory;
   an absolute path must already sit beneath the root. An outside spelling that
   reaches an in-root file only through a symbolic link is refused, because its

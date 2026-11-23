@@ -9,6 +9,7 @@ is an expression rather than an import and stays accepted.
 
 from __future__ import annotations
 
+from rust_prover_tools.trust_audit.structure import opening_paren
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import opens_use_group
 from rust_prover_tools.trust_audit.use_tree import begins_import
@@ -55,33 +56,69 @@ def _opens_repetition(tokens: tuple[Token, ...], index: int) -> bool:
     return index >= 1 and tokens[index].text == "(" and tokens[index - 1].text == "$"
 
 
+#: Tokens that end an expression rather than continue an import.
+_END_TOKENS = frozenset({";", "(", "[", "]", "{"})
+
+
 def _inside_import(tokens: tuple[Token, ...], index: int) -> bool:
     """Report whether ``index`` sits inside a ``use`` statement's path."""
     cursor = index - 1
     while cursor >= 0:
-        text = tokens[cursor].text
-        if text == "}":
-            # A balanced brace group before the metavariable is a sibling
-            # member of the same use tree; step over it.
-            opener = _matching_opener(tokens, cursor)
-            if opener is None:
-                return False
-            cursor = opener - 1
-            continue
-        if text == "{" and opens_use_group(tokens, cursor):
-            cursor -= 1
-            continue
-        if _opens_repetition(tokens, cursor):
-            # A use repetition wraps its members in ``$( … )``; the group is
-            # part of the enclosing import, not a closing delimiter.
-            cursor -= 2
-            continue
-        if text in {";", "(", ")", "[", "]", "{"}:
-            return False
-        if text == "use" and begins_import(tokens, cursor):
-            return True
-        cursor -= 1
+        cursor, verdict = _step_back(tokens, cursor)
+        if verdict is not None:
+            return verdict
     return False
+
+
+def _step_back(
+    tokens: tuple[Token, ...],
+    cursor: int,
+) -> tuple[int, bool | None]:
+    """Return the next cursor and, when the walk is decided, its verdict.
+
+    A balanced sibling group belongs to the same use tree and is stepped over.
+    An ordinary ``)`` ends the walk: a cast such as ``$value as u64`` is not an
+    import, and continuing past it could reach a ``use`` elsewhere in the file.
+    """
+    text = tokens[cursor].text
+    if text in {")", "}"}:
+        skipped = (
+            _before_repetition(tokens, cursor)
+            if text == ")"
+            else _before_brace_group(tokens, cursor)
+        )
+        return (-1, False) if skipped is None else (skipped, None)
+    if text == "{" and opens_use_group(tokens, cursor):
+        return cursor - 1, None
+    if _opens_repetition(tokens, cursor):
+        # A use repetition wraps its members in ``$( … )``; the group is part
+        # of the enclosing import, not a closing delimiter.
+        return cursor - 2, None
+    if text == "use" and begins_import(tokens, cursor):
+        return -1, True
+    if text in _END_TOKENS:
+        return -1, False
+    return cursor - 1, None
+
+
+def _before_brace_group(tokens: tuple[Token, ...], close: int) -> int | None:
+    """Return the index before the brace group closing at ``close``."""
+    opener = _matching_opener(tokens, close)
+    return None if opener is None else opener - 1
+
+
+def _before_repetition(tokens: tuple[Token, ...], close: int) -> int | None:
+    """Return the index before a ``$( … )`` group closing at ``close``.
+
+    ``None`` means the ``)`` closes an ordinary expression, which ends the
+    search: a cast such as ``$value as u64`` is not an import.
+    """
+    opener = opening_paren(tokens, close)
+    if opener is None or not _opens_repetition(tokens, opener):
+        return None
+    # The repetition is a sibling member of the enclosing use tree, so the walk
+    # resumes before its introducing ``$``.
+    return opener - 2
 
 
 def _matching_opener(tokens: tuple[Token, ...], close: int) -> int | None:

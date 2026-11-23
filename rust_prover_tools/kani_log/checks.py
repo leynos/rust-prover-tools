@@ -15,6 +15,7 @@ release.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import re
 import typing as typ
 
@@ -143,27 +144,43 @@ def _joined_description(
         If the log ends before the description's closing quote.
 
     """
-    while _is_open_quotation(reader, value, seen):
+    pieces = [value]
+    frame = _Frame(value, value, len(value))
+    while _is_open_quotation(reader, frame, seen):
         if reader.exhausted:
             msg = f"{reader.where()}: the log ends inside a check description"
             raise KaniLogError(msg)
-        value = f"{value}\n{reader.take()}"
-    return value
+        line = reader.take()
+        pieces.append(line)
+        frame.last = line
+        frame.length += 1 + len(line)
+    return "\n".join(pieces)
+
+
+@dc.dataclass(slots=True)
+class _Frame:
+    """The first and last lines of a quoted description and their total size."""
+
+    first: str
+    last: str
+    length: int
 
 
 def _is_open_quotation(
     reader: Reader,
-    value: str,
+    frame: _Frame,
     seen: cabc.Container[str],
 ) -> bool:
     """Report whether a rendered description still waits for its closing quote.
 
     A line ending with a quote does not by itself close the frame, because an
     embedded quote can end a printed line.  The report's own boundary decides.
+    The caller keeps the first and last lines apart so a description is joined
+    once at the end rather than copied again for every continuation line.
     """
-    if not value.startswith('"'):
+    if not frame.first.startswith('"'):
         return False
-    if not (len(value) >= _FRAMED_LENGTH and value.endswith('"')):
+    if not (frame.length >= _FRAMED_LENGTH and frame.last.endswith('"')):
         return True
     return not ends_entry(reader, seen)
 

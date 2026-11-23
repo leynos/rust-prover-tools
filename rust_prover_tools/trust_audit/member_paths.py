@@ -19,16 +19,13 @@ from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import (
     is_grouped,
-    statement_end,
     top_level_members,
     use_root,
     use_roots,
 )
 from rust_prover_tools.trust_audit.use_tree import (
     LOCAL_QUALIFIERS,
-    begins_import,
     member_aliases,
-    rooted_spans,
 )
 
 if typ.TYPE_CHECKING:
@@ -39,10 +36,17 @@ __all__ = ("Scope", "span_bindings")
 
 @dc.dataclass(frozen=True, slots=True)
 class Scope:
-    """The crate roots and member bindings one pass reads a statement against."""
+    """The crate roots, member bindings and glob fact one pass reads.
+
+    ``root_glob`` is computed once for the file's tokens rather than per
+    qualified import: the search reads every ``use`` statement, so repeating it
+    for each import would rescan the file once per import and once more for
+    every nested group.
+    """
 
     roots: cabc.Container[str]
     bindings: cabc.Mapping[str, cabc.Iterable[str]]
+    root_glob: bool = False
 
 
 def span_bindings(
@@ -86,6 +90,10 @@ def span_bindings(
         if _names_root(tokens, index, scope.roots):
             _merge(discovered, _member_bindings(tokens, index, stop))
             break
+    # ``use kani::assume as _;`` imports the item without binding a name, so a
+    # later ``let _ = 0;`` is not a use of Kani's ``assume``.  Every path above
+    # funnels through this map, so the placeholder is discarded once here.
+    discovered.pop("_", None)
     return discovered
 
 
@@ -208,7 +216,7 @@ def _requalified_bindings(
         member_index, member = qualified
         if member in scope.roots:
             _merge(discovered, _member_bindings(tokens, member_index, stop))
-    glob_root = _has_root_glob(tokens, scope.roots)
+    glob_root = scope.root_glob
     for member, alias in member_aliases(tokens, start, stop):
         if member in scope.bindings:
             discovered.setdefault(alias, set()).update(scope.bindings[member])
@@ -217,23 +225,6 @@ def _requalified_bindings(
             # local qualifier that renames it names the same item.
             discovered.setdefault(alias, set()).add(member)
     return discovered
-
-
-def _has_root_glob(
-    tokens: tuple[Token, ...],
-    roots: cabc.Container[str],
-) -> bool:
-    """Report whether the file glob-imports from one of the trust roots."""
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
-            continue
-        end = statement_end(tokens, index + 1)
-        for root, start, stop in rooted_spans(tokens, index + 1, end):
-            if root in roots and any(
-                tokens[pos].text == "*" for pos in range(start, stop)
-            ):
-                return True
-    return False
 
 
 def _qualified_root_member(
@@ -281,7 +272,7 @@ def _grouped_requalified_bindings(
     """
     closing = matching(tokens, opener, "{", "}")
     discovered: dict[str, set[str]] = {}
-    glob_root = _has_root_glob(tokens, scope.roots)
+    glob_root = scope.root_glob
     for member_start, member_end in top_level_members(tokens, opener, closing + 1):
         _merge(
             discovered,

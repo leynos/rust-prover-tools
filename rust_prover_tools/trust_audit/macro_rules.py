@@ -21,6 +21,7 @@ import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.stringify import stringify_arguments
 from rust_prover_tools.trust_audit.structure import matching, texts
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 
@@ -112,11 +113,38 @@ def _definition_bounds(
         if (spans := _definition_spans(tokens, index)) is not None
     ]
     patterns = _candidate_patterns(tokens, candidates)
+    inert = _stringified_candidates(tokens, candidates, patterns)
     found = _Definitions()
     for index, spans in candidates:
-        if index not in patterns:
+        if index not in patterns and index not in inert:
             _record_definition(tokens, found, index, spans)
     return found.heads, found.definitions
+
+
+def _stringified_candidates(
+    tokens: tuple[Token, ...],
+    candidates: cabc.Iterable[tuple[int, tuple[str, int, int]]],
+    patterns: cabc.Container[int],
+) -> frozenset[int]:
+    """Return candidate heads whose ``macro_rules!`` is text, not a definition.
+
+    The builtin ``stringify!`` turns its argument into a spelling, so a macro
+    definition written there defines nothing.  Candidate discovery happens
+    before that span is known, so a duplicate check run first would refuse a
+    file whose only "second definition" is stringified text.  A file with its
+    own ``stringify`` compiles the argument, and `stringify_arguments` reports
+    no span for it.
+    """
+    heads = [index for index, _ in candidates if index not in patterns]
+    if not heads:
+        return frozenset()
+    names = frozenset(
+        tokens[index + len(_MACRO_HEAD)].text
+        for index in heads
+        if tokens[index + len(_MACRO_HEAD)].kind is Kind.IDENT
+    )
+    skipped = stringify_arguments(tokens, defined=names)
+    return frozenset(index for index in heads if index in skipped)
 
 
 def _candidate_patterns(

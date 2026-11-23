@@ -35,30 +35,8 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("ends_entry",)
 
-#: The shortest description that can carry a pair of framing quotes.
-_FRAMED_LENGTH = 2
 #: A ``Check`` header with an ordinal but not the rest of the report grammar.
 _MALFORMED_CHECK = re.compile(r"^Check \d+: ")
-
-
-def _is_open_quotation(
-    reader: Reader,
-    value: str,
-    seen: cabc.Container[str],
-) -> bool:
-    """Report whether a rendered description still waits for its closing quote.
-
-    Kani prints the value between one pair of quotes without escaping anything
-    inside it, so a line ending with a quote does not by itself close the
-    frame: an embedded quote may end a printed line.  The frame closes on the
-    line the entry ends on, and the report's own boundary is what says where
-    that is.  A line that closes no quote is unfinished whatever follows it.
-    """
-    if not value.startswith('"'):
-        return False
-    if not (len(value) >= _FRAMED_LENGTH and value.endswith('"')):
-        return True
-    return not ends_entry(reader, seen)
 
 
 #: Report constructs that can follow a check entry.  A blank line only closes
@@ -115,29 +93,39 @@ def _field_closes_entry(reader: Reader, seen: cabc.Container[str]) -> bool:
     field, a report construct, a fresh check entry or the end of the log; a
     description continuation is followed by ordinary text.  Scanning past the
     run is what keeps ``first"`` + a field-shaped line + ``last"`` inside one
-    description.
+    description.  The run is not classified by its first key alone: a repeated
+    ``Description:`` that is followed by the report's own boundary is a real
+    duplicate, which the entry reader refuses, while the same spelling followed
+    by continuation text stays inside the description.  A field run that begins
+    with an already-read key is also read more strictly: a malformed ``Check``
+    header after it is continuation text, not the structural fault a complete
+    entry's trailing malformed header reports.
     """
     first = FIELD.match(reader.peek())
-    if first is not None and first["key"] in seen:
-        return False
+    repeated = first is not None and first["key"] in seen
     offset = 0
     while (following := reader.peek_at(offset)) is not None:
         if not following.strip() or FIELD.match(following) is not None:
             offset += 1
             continue
-        return _marker_closes_entry(reader, offset, seen)
+        return _marker_closes_entry(reader, offset, seen, repeated=repeated)
     return True
 
 
-def _is_report_line(line: str, seen: cabc.Container[str]) -> bool:
+def _is_report_line(
+    line: str,
+    seen: cabc.Container[str],
+    *,
+    repeated: bool = False,
+) -> bool:
     """Report whether ``line`` can follow a check entry's field list.
 
-    A malformed ``Check`` header counts too.  It is not a report construct the
-    block can read, but it is also not description continuation: keeping the
-    description open would swallow the line and hide the structural fault the
-    outer parser reports.
+    A malformed ``Check`` header counts too, unless the field run before it
+    begins with an already-read key: that run is description content printing a
+    field-shaped line, and the malformed header after it is the continuation
+    the description is expected to hold.
     """
-    if _MALFORMED_CHECK.match(line) is not None:
+    if not repeated and _MALFORMED_CHECK.match(line) is not None:
         return True
     field = FIELD.match(line)
     if field is not None:
@@ -174,13 +162,17 @@ def _field_run_closes_entry(
     A description may print a blank line and then a field-shaped line as
     content, exactly as it may print one without the blank line.  The run is
     read the same way here: it is a boundary only when what follows it is
-    another field, a report construct or the end of the log.
+    another field, a report construct or the end of the log.  A run whose first
+    field repeats one already read is read more strictly, as in
+    `_field_closes_entry`.
     """
+    first = FIELD.match(reader.peek_at(offset) or "")
+    repeated = first is not None and first["key"] in seen
     while (following := reader.peek_at(offset)) is not None:
         if not following.strip() or FIELD.match(following) is not None:
             offset += 1
             continue
-        return _marker_closes_entry(reader, offset, seen)
+        return _marker_closes_entry(reader, offset, seen, repeated=repeated)
     return True
 
 
@@ -194,15 +186,16 @@ def _starts_results(reader: Reader, offset: int) -> bool:
 def _starts_summary(reader: Reader, offset: int) -> bool:
     """Report whether a real summary section follows the ``SUMMARY:`` marker.
 
-    Kani prints its counts as `` ** …`` lines and then the verdict, so a
-    marker followed by anything else is description content that happens to
-    spell the word.
+    Kani's renderer always prints the `` ** N of M failed`` total before any
+    other summary line, so only that grammar makes the marker a real boundary.
+    A description can print `` ** example`` as content, and accepting any line
+    that merely starts with `` **`` would cut the description short.
     """
     while (following := reader.peek_at(offset)) is not None and not following.strip():
         offset += 1
     if following is None:
         return True
-    return following.startswith(" **") or VERIFICATION.match(following) is not None
+    return TOTAL.match(following) is not None
 
 
 def _starts_manual_summary(reader: Reader, offset: int) -> bool:
@@ -225,6 +218,8 @@ def _marker_closes_entry(
     reader: Reader,
     offset: int,
     seen: cabc.Container[str],
+    *,
+    repeated: bool = False,
 ) -> bool:
     """Report whether the line at ``offset`` is a real entry boundary.
 
@@ -240,4 +235,4 @@ def _marker_closes_entry(
         return _starts_summary(reader, offset + 1)
     if following == "Manual Harness Summary:":
         return _starts_manual_summary(reader, offset + 1)
-    return _is_report_line(following, seen)
+    return _is_report_line(following, seen, repeated=repeated)

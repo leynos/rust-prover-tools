@@ -32,11 +32,13 @@ additive: they read files and print a report, and they do not change the exit
 status of `kani exec` or `verus run`. A caller that already captures verifier
 output can pass that file to the matching `analyse-log` command.
 
-A captured log is qualified against a pinned release. `kani analyse-log`
-accepts Kani 0.67.0, and `verus analyse-log` accepts the releases named by
-`verus analyse-log --help` and the corpus under `tests/fixtures/verus_logs/`.
-Name the release with `--verus-release`, or run in a repository whose
-`tools/verus/VERSION` pin records it.
+A captured log is qualified against a pinned release when one is named or found.
+`kani analyse-log` accepts Kani 0.67.0, and `verus analyse-log` accepts the
+releases named by `verus analyse-log --help` and the corpus under
+`tests/fixtures/verus_logs/`. Name the release with `--verus-release`, or run
+in a repository whose `tools/verus/VERSION` pin records it. When neither names
+a release, Verus analysis proceeds with an unnamed release and says so rather
+than guessing one.
 
 ## Compatibility
 

@@ -254,16 +254,26 @@ def test_two_resolution_contexts_for_one_file_are_refused(
         audit_tree(tmp_path, ["src/lib.rs"])
 
 
-def test_a_shared_module_is_rescanned_under_inherited_macro_scope(
+@pytest.mark.parametrize(
+    ("drivers", "first"),
+    [
+        pytest.param(("src/main.rs", "src/lib.rs"), "lib.rs", id="lib-first"),
+        pytest.param(("src/lib.rs", "src/main.rs"), "main.rs", id="main-first"),
+    ],
+)
+def test_a_shared_module_is_rescanned_in_either_traversal_order(
     tmp_path: Path,
+    drivers: tuple[str, str],
+    first: str,
 ) -> None:
     """Rescan a shared module when a later arrival sees imported macros.
 
-    ``main.rs`` reaches ``shared.rs`` first without ``#[macro_use]`` scope and
+    ``main.rs`` reaches ``shared.rs`` without ``#[macro_use]`` scope and
     defines its own ``emit!``, so the file looks clean.  ``lib.rs`` imports a
     macro with ``#[macro_use]``, and under that scope ``emit!()`` is a macro the
     audit cannot attribute, so the second arrival must be refused rather than
-    skipped as already scanned.
+    skipped as already scanned.  ``audit_tree`` pops the last driver first, so
+    the ids name the file the traversal actually reads first.
     """
     write(
         tmp_path,
@@ -278,27 +288,9 @@ def test_a_shared_module_is_rescanned_under_inherited_macro_scope(
     )
 
     with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
-        audit_tree(tmp_path, ["src/main.rs", "src/lib.rs"])
+        audit_tree(tmp_path, list(drivers))
 
-
-def test_a_shared_module_is_rescanned_in_either_traversal_order(
-    tmp_path: Path,
-) -> None:
-    """The refusal does not depend on which crate root the walk reads first."""
-    write(
-        tmp_path,
-        {
-            "src/main.rs": (
-                "macro_rules! emit { () => {}; }\nmod shared;\nfn main() { emit!(); }"
-            ),
-            "src/lib.rs": "#[macro_use]\nmod macros;\nmod shared;",
-            "src/macros.rs": "macro_rules! emit { () => { mod hidden; }; }",
-            "src/shared.rs": "fn f() { emit!(); }",
-        },
-    )
-
-    with pytest.raises(TrustAuditError, match="#\\[macro_use\\]"):
-        audit_tree(tmp_path, ["src/lib.rs", "src/main.rs"])
+    assert drivers[-1].endswith(first), "the id names the first driver read"
 
 
 @pytest.mark.parametrize(
@@ -307,7 +299,7 @@ def test_a_shared_module_is_rescanned_in_either_traversal_order(
         ("proc/src/lib.rs", "plain/src/lib.rs"),
         ("plain/src/lib.rs", "proc/src/lib.rs"),
     ],
-    ids=["proc-first", "plain-first"],
+    ids=["plain-first", "proc-first"],
 )
 def test_a_macro_scope_rescan_keeps_the_procedural_policy(
     tmp_path: Path,
@@ -347,3 +339,28 @@ def test_a_macro_scope_rescan_keeps_the_procedural_policy(
     assert result["shared/child.rs"] == ["assume"], (
         "a child module must inherit both policies from the rescan"
     )
+
+
+def test_a_driver_spelling_with_a_missing_component_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Require every component of the driver spelling to exist.
+
+    ``src/missing/../lib.rs`` is not a path the compiler can open, although a
+    non-strict resolution would fold it into ``src/lib.rs`` and report success.
+    """
+    write(tmp_path, {"src/lib.rs": "fn clean() {}"})
+
+    with pytest.raises(TrustAuditError, match="cannot be read"):
+        audit_tree(tmp_path, ["src/missing/../lib.rs"])
+
+
+def test_a_nul_in_a_path_attribute_is_refused(tmp_path: Path) -> None:
+    """Refuse a decoded ``#[path]`` value no filesystem can hold."""
+    write(
+        tmp_path,
+        {"src/lib.rs": '#[path = "a\\0b.rs"]\nmod child;'},
+    )
+
+    with pytest.raises(TrustAuditError, match="NUL"):
+        audit_tree(tmp_path, ["src/lib.rs"])

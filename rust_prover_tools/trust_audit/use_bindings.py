@@ -25,7 +25,11 @@ from rust_prover_tools.trust_audit.crate_bindings import (
 from rust_prover_tools.trust_audit.member_paths import Scope, span_bindings
 from rust_prover_tools.trust_audit.syntax import Kind, Token
 from rust_prover_tools.trust_audit.use_paths import statement_end
-from rust_prover_tools.trust_audit.use_tree import begins_import, rooted_spans
+from rust_prover_tools.trust_audit.use_tree import (
+    begins_import,
+    imports_root_glob,
+    rooted_spans,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -82,12 +86,13 @@ def member_bindings(
     ``use kani::{assume as a};`` reports ``(('assume', 'a'),)``.
     """
     bindings: dict[str, set[str]] = {}
+    root_glob = imports_root_glob(tokens, roots)
     while True:
         # The pairs already explained, so a round that only re-reports them
         # ends the search.  Extending with the rest would leave the loop with
         # work to do forever.
         known = {(alias, item) for alias, items in bindings.items() for item in items}
-        discovered = _binding_round(tokens, roots, bindings)
+        discovered = _binding_round(tokens, roots, bindings, root_glob=root_glob)
         fresh = {
             (alias, item)
             for alias, items in discovered.items()
@@ -103,15 +108,19 @@ def _binding_round(
     tokens: tuple[Token, ...],
     roots: cabc.Container[str],
     bindings: cabc.Mapping[str, cabc.Iterable[str]],
+    *,
+    root_glob: bool,
 ) -> dict[str, set[str]]:
     """Return the names one pass binds to items, keyed by the local name.
 
     A path rooted at one of ``roots`` names a member of that crate. A path
     rooted at a name ``bindings`` already maps to items is a further rename of
-    those same items, which Rust permits as ``use alias as another;``.
+    those same items, which Rust permits as ``use alias as another;``.  The
+    file-scoped glob fact is computed once by the caller and carried in
+    ``Scope``.
     """
     discovered: dict[str, set[str]] = {}
-    scope = Scope(roots, bindings)
+    scope = Scope(roots, bindings, root_glob)
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue

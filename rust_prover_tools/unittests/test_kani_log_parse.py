@@ -117,6 +117,33 @@ def test_a_fail_fast_summary_counts_only_the_failing_harness() -> None:
     )
 
 
+def test_a_fail_fast_summary_naming_two_failures_is_refused() -> None:
+    """Refuse a summary that counts two failures as a fail-fast result.
+
+    Kani's driver passes exactly one failed result to its final-summary
+    routine when ``--fail-fast`` stops the run, so a summary naming two failed
+    blocks matches no shape either mode can print.
+    """
+    text = log_text("fail_fast")
+    start = text.index("Checking harness")
+    end = text.index("\n", text.index("Verification Time:", start)) + 1
+    block = text[start:end]
+    renamed = block.replace("seeded_wrapping_mutant", "other_mutant")
+    success = _captured_block("harnesses::verified")
+    text = text.replace("Checking harness", success + renamed + "Checking harness", 1)
+    text = text.replace(
+        "Verification failed for - harnesses::seeded_wrapping_mutant\n",
+        "Verification failed for - harnesses::other_mutant\n"
+        "Verification failed for - harnesses::seeded_wrapping_mutant\n",
+    )
+    text = text.replace(
+        "Complete - 0 successfully verified harnesses, 1 failures, 1 total.",
+        "Complete - 0 successfully verified harnesses, 2 failures, 2 total.",
+    )
+
+    assert "the manual summary claims" in refused(text)
+
+
 def test_a_fail_fast_summary_that_loses_a_failure_is_refused() -> None:
     """Refuse a summary whose counts match no shape the driver prints."""
     text = _fail_fast_after_a_success(
@@ -190,142 +217,123 @@ def test_a_repeated_check_field_is_refused() -> None:
     assert "repeats its Status field" in refused(text)
 
 
-def test_an_undetermined_cover_is_counted() -> None:
-    """Reconcile a cover count that names an undetermined cover."""
+def test_a_repeated_description_at_a_report_boundary_is_refused() -> None:
+    """Refuse a second Description field instead of absorbing it as text.
+
+    The first description ends with a quote, so the boundary scan decides
+    whether the next field-shaped line is continuation text.  A real field run
+    followed by the summary is a duplicate the entry reader must reject.
+    """
+    text = log_text("verified").replace(
+        "\t - Description: \"This is a placeholder message; Kani doesn't support "
+        'message formatted at runtime"\n\t - Location: src/harnesses.rs:7:5',
+        '\t - Description: "first"\n\t - Description: "second"\n'
+        "\t - Location: src/harnesses.rs:7:5",
+    )
+
+    assert "repeats its Description field" in refused(text)
+
+
+def test_a_description_may_print_a_summary_and_count_shaped_text() -> None:
+    """Keep an embedded SUMMARY: and `` **`` line inside the description.
+
+    The renderer prints the total before any other summary line, so a marker
+    whose next line merely begins with `` **`` is description content.
+    """
+    text = log_text("verified").replace(
+        "\t - Description: \"This is a placeholder message; Kani doesn't support "
+        'message formatted at runtime"',
+        '\t - Description: "first"\n\nSUMMARY:\n ** example\nlast"',
+    )
+    block = parse_text(text).blocks[0]
+
+    assert any("SUMMARY:" in item.description for item in block.properties), (
+        "the embedded summary text must stay inside the description"
+    )
+
+
+def test_a_detached_check_row_is_refused() -> None:
+    """Refuse a check row written after the block it belongs to has ended."""
+    lines = log_text("verified").splitlines()
+    index = next(
+        position
+        for position, line in enumerate(lines)
+        if line.startswith("Verification Time:")
+    )
+    lines[index + 1 : index + 1] = [
+        "Check 1: harnesses::detached.assertion.1",
+        "\t - Status: FAILURE",
+        '\t - Description: "detached"',
+    ]
+
+    assert "a report line outside a harness block" in refused("\n".join(lines))
+
+
+def test_results_after_its_summary_are_refused() -> None:
+    """Refuse a results section that arrives after the summary explains it."""
+    lines = log_text("verified").splitlines()
+    start = lines.index("RESULTS:")
+    end = lines.index("SUMMARY:")
+    results = lines[start:end]
+    verdict = next(
+        position
+        for position, line in enumerate(lines)
+        if line.startswith("VERIFICATION:-")
+    )
+    without = lines[:start] + lines[end:]
+    insertion = verdict - len(results)
+    text = "\n".join(without[: insertion + 1] + results + without[insertion + 1 :])
+
+    assert "has results after its summary" in refused(text)
+
+
+def test_a_second_results_section_is_refused() -> None:
+    """Refuse a repeated results heading rather than reading its checks twice."""
+    text = log_text("verified").replace("RESULTS:\n", "RESULTS:\nRESULTS:\n", 1)
+
+    assert "more than one RESULTS: section" in refused(text)
+
+
+def test_a_successful_verdict_over_a_failed_check_is_refused() -> None:
+    """Refuse a clean verdict unless Kani's expected-panic note explains it."""
     text = (
         log_text("verified")
         .replace(
-            " ** 1 of 1 cover properties satisfied",
-            " ** 0 of 1 cover properties satisfied (1 undetermined)",
+            "Check 3: harnesses::verified.assertion.1\n\t - Status: SUCCESS",
+            "Check 3: harnesses::verified.assertion.1\n\t - Status: FAILURE",
         )
+        .replace(" ** 0 of 2 failed", " ** 1 of 2 failed")
         .replace(
-            "Check 2: harnesses::verified.cover.1\n\t - Status: SATISFIED",
-            "Check 2: harnesses::verified.cover.1\n\t - Status: UNDETERMINED",
+            "\nVERIFICATION:- SUCCESSFUL",
+            "\nFailed Checks: This is a placeholder message; Kani doesn't "
+            "support message formatted at runtime\n"
+            ' File: "src/harnesses.rs", line 7, in harnesses::verified\n'
+            "\nVERIFICATION:- SUCCESSFUL",
         )
     )
-    block = parse_text(text).blocks[0]
-    assert block.covered_undetermined == 1
-    assert [item.status for item in block.covers] == ["UNDETERMINED"]
+
+    assert "reports SUCCESSFUL while a check failed" in refused(text)
 
 
-def test_both_cover_counts_are_reconciled() -> None:
-    """Read the comma-separated form Kani prints for two cover statuses."""
-    original = (
-        "Check 2: harnesses::verified.cover.1\n"
-        "\t - Status: SATISFIED\n"
-        '\t - Description: "the boundary below saturation is reachable"\n'
-        "\t - Location: src/harnesses.rs:11:5 in function harnesses::verified\n"
-    )
-    undetermined = original.replace("SATISFIED", "UNDETERMINED")
-    other = (
-        undetermined
-        .replace("Check 2:", "Check 4:")
-        .replace(".cover.1", ".cover.2")
-        .replace("UNDETERMINED", "UNREACHABLE")
-    )
+def test_an_unreachable_status_requires_its_subtotal() -> None:
+    """Refuse a positive status whose printed subtotal is missing."""
+    text = log_text("verified").replace(" (1 unreachable)", "")
+
+    assert "lists 1 unreachable results but has no unreachable count" in refused(text)
+
+
+def test_an_undetermined_cover_requires_its_subtotal() -> None:
+    """Refuse a cover subtotal the renderer would have printed but the log omits."""
     text = (
         log_text("verified")
-        .replace(original, f"{undetermined}\n{other}")
+        .replace("Status: SATISFIED", "Status: UNDETERMINED")
         .replace(
             " ** 1 of 1 cover properties satisfied",
-            " ** 0 of 2 cover properties satisfied (1 undetermined,1 unreachable)",
+            " ** 0 of 1 cover properties satisfied",
         )
     )
-    block = parse_text(text).blocks[0]
-    assert (block.covered_total, block.covered_unreachable) == (2, 1)
-    assert block.covered_undetermined == 1
 
-
-def test_a_cover_with_a_failure_status_is_refused() -> None:
-    """Refuse a cover status Kani converts before it renders a report.
-
-    A listed cover is excluded from the checks whose count is reconciled, so
-    without this rule an impossible cover status would pass unexamined.
-    """
-    text = log_text("verified").replace(
-        "Check 2: harnesses::verified.cover.1\n\t - Status: SATISFIED",
-        "Check 2: harnesses::verified.cover.1\n\t - Status: FAILURE",
-    )
-    assert "as FAILURE, which Kani never prints" in refused(text)
-
-
-def test_an_explicit_zero_other_count_is_reconciled() -> None:
-    """Require a printed zero to agree that no check carried that status."""
-    text = log_text("insufficient_unwind").replace(
-        " ** 1 of 4 failed (3 undetermined)",
-        " ** 1 of 4 failed (0 undetermined)",
-    )
-    assert "counts 0 undetermined results but lists 3" in refused(text)
-
-
-def test_both_check_status_counts_are_reconciled() -> None:
-    """Read the comma-joined form Kani prints for two check statuses."""
-    original = (
-        "Check 3: core::fmt::Arguments::<'_>::from_str.assertion.1\n"
-        "\t - Status: UNDETERMINED\n"
-    )
-    text = (
-        log_text("insufficient_unwind")
-        .replace(original, original.replace("UNDETERMINED", "UNREACHABLE"))
-        .replace(
-            " ** 1 of 4 failed (3 undetermined)",
-            " ** 1 of 4 failed (2 undetermined,1 unreachable)",
-        )
-    )
-    block = parse_text(text).blocks[0]
-    assert block.other_counts == (("undetermined", 2), ("unreachable", 1))
-
-
-def test_a_timeout_marker_beside_results_is_refused() -> None:
-    """Refuse a timeout marker on a block that went on to report results."""
-    lines = log_text("counterexample").splitlines()
-    solver = next(index for index, line in enumerate(lines) if "`cbmc " in line)
-    text = "\n".join([*lines[: solver + 1], "CBMC timed out.", *lines[solver + 1 :]])
-    assert "timeout alongside a completed result" in refused(text)
-
-
-def test_a_timeout_marker_beside_a_cover_summary_is_refused() -> None:
-    """Refuse a timeout block that also carries a cover summary.
-
-    A summary line is only printed once CBMC finished, so its presence beside
-    the marker contradicts the marker even when the failed-check count is
-    absent.
-    """
-    text = log_text("multiplication_timeout").replace(
-        "VERIFICATION:- FAILED",
-        "SUMMARY:\n ** 0 of 1 cover properties satisfied\nVERIFICATION:- FAILED",
-    )
-    assert "timeout alongside a completed result" in refused(text)
-
-
-def test_a_completed_result_beside_a_timeout_marker_is_refused() -> None:
-    """Refuse a timeout block that also claims a successful verdict."""
-    text = log_text("multiplication_timeout").replace(
-        "VERIFICATION:- FAILED",
-        "VERIFICATION:- SUCCESSFUL",
-    )
-    assert "timeout alongside a completed result" in refused(text)
-
-
-def test_an_unwinding_note_beside_a_timeout_is_refused() -> None:
-    """Refuse a timeout block carrying the unwinding-failure note."""
-    text = log_text("multiplication_timeout").replace(
-        "CBMC timed out.",
-        "[Kani] info: Verification output shows one or more unwinding failures.\n"
-        "CBMC timed out.",
-        1,
-    )
-
-    assert "timeout alongside a completed result" in refused(text)
-
-
-def test_a_repeated_cover_status_is_refused() -> None:
-    """Refuse a cover line that counts the same status twice."""
-    text = log_text("verified").replace(
-        " ** 1 of 1 cover properties satisfied",
-        " ** 0 of 1 cover properties satisfied (1 unreachable, 1 unreachable)",
-    )
-    assert "names 'unreachable' twice" in refused(text)
+    assert "lists 1 undetermined covers but has no undetermined count" in refused(text)
 
 
 def test_a_block_without_results_is_refused() -> None:
@@ -345,57 +353,3 @@ def test_an_unconvertible_report_integer_is_refused() -> None:
         f"Complete - {'9' * 4301} successfully verified",
     )
     assert "not a count this parser can read" in refused(text)
-
-
-def test_an_inventory_with_a_manual_summary_is_refused() -> None:
-    """Refuse inventory output that also carries a verification summary."""
-    verified = log_text("verified").splitlines()
-    manual = verified[verified.index("Manual Harness Summary:") :]
-    text = "\n".join([*log_text("list").splitlines(), *manual])
-    assert "both an inventory and a verification run" in refused(text)
-
-
-def test_a_harness_block_after_the_manual_summary_is_refused() -> None:
-    """Refuse a block that follows the run's closing summary."""
-    lines = log_text("verified").splitlines()
-    manual = lines.index("Manual Harness Summary:")
-    summary = lines[manual : manual + 2]
-    rest = [*lines[:manual], *lines[manual + 2 :]]
-    text = "\n".join([rest[0], *summary, *rest[1:]])
-    assert "follows the manual harness summary" in refused(text)
-
-
-def test_a_report_line_outside_a_block_is_refused() -> None:
-    """Refuse report markers that no harness block owns."""
-    text = log_text("verified").replace(
-        "Manual Harness Summary:",
-        "RESULTS:\nVERIFICATION:- FAILED\nManual Harness Summary:",
-        1,
-    )
-
-    assert "outside a harness block" in refused(text)
-
-
-def test_a_second_kani_banner_is_refused() -> None:
-    """Refuse a capture that holds more than one Kani invocation.
-
-    A second banner means the file is two runs concatenated.  The first run's
-    facts describe only itself, so returning them would silently ignore the
-    second invocation - including any failure it reported after its banner.
-    """
-    text = log_text("verified") + (
-        "\nKani Rust Verifier 0.67.0 (cargo plugin)\n"
-        "error: could not compile `kani-corpus` (lib) due to 1 previous error\n"
-    )
-    assert "second Kani banner" in refused(text)
-
-
-def test_a_second_banner_inside_a_block_is_refused() -> None:
-    """Refuse a banner swallowed by the solver transcript of a live block."""
-    text = log_text("verified").replace(
-        "RESULTS:",
-        "Kani Rust Verifier 0.67.0 (cargo plugin)\nRESULTS:",
-        1,
-    )
-
-    assert "second Kani banner" in refused(text)

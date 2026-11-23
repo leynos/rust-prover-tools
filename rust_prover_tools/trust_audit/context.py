@@ -12,6 +12,7 @@ state those rules read.  A note on the constants:
 from __future__ import annotations
 
 import bisect
+import dataclasses as dc
 import re
 import typing as typ
 
@@ -38,13 +39,31 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.trust_audit.vocabulary import Vocabulary
 
-__all__ = ("Context",)
+__all__ = ("Context", "FileFacts")
 
 # The ``::`` and the qualifier in front of a path's last segment.
 _QUALIFIED_SEGMENTS = 2
 # The alias and both ``::`` separators of a two-segment qualified path.
 _DEEP_QUALIFIED_SEGMENTS = 3
 _WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+@dc.dataclass(frozen=True, slots=True)
+class FileFacts:
+    """The file-scoped facts a scan supplies before the rules run.
+
+    ``module_names`` holds the modules the file declares, so a qualified use
+    such as ``m::a`` names a local binding when ``m`` is one of them.  A module
+    declared elsewhere is not shown, so its names are not read.
+
+    ``ignored`` holds tokens that request nothing: a ``macro_rules!`` matcher
+    describes the input it matches, and a builtin ``stringify!`` argument
+    becomes text.  A ``kani::assume`` spelled there is not a call, so reporting
+    it would demand justification for a request no compilation makes.
+    """
+
+    module_names: frozenset[str] = frozenset()
+    ignored: frozenset[int] = frozenset()
 
 
 class Context:
@@ -60,21 +79,17 @@ class Context:
         *,
         procedural_macro: bool,
         vocabularies: tuple[Vocabulary, ...],
-        module_names: frozenset[str] = frozenset(),
+        facts: FileFacts = FileFacts(),
     ) -> None:
-        """Record the tokens and the file-scoped facts the rules depend on.
-
-        ``module_names`` holds the modules this file declares.  A qualified use
-        such as ``m::a`` names a local binding when ``m`` is one of them; a
-        module declared elsewhere is not shown, so its names are not read.
-        """
+        """Record the tokens and the file-scoped facts the rules depend on."""
         self.tokens = tokens
+        self._ignored = facts.ignored
         self.vocabularies = vocabularies
         # ``use m as n;`` makes ``n::a`` the same call as ``m::a`` when the
         # file declares ``m``, so the alias is a module name for rule 3.
-        self.module_names = module_names | declared_module_aliases(
+        self.module_names = facts.module_names | declared_module_aliases(
             tokens,
-            module_names,
+            facts.module_names,
         )
         self.words = frozenset(
             item for vocabulary in vocabularies for item in vocabulary.items
@@ -130,6 +145,8 @@ class Context:
     def run(self) -> tuple[TrustItem, ...]:
         """Apply the rules to every token, in source order."""
         for index, token in enumerate(self.tokens):
+            if index in self._ignored:
+                continue
             if token.kind is Kind.LITERAL:
                 if self._procedural_macro:
                     self._scan_literal(token)

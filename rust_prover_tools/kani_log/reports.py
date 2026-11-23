@@ -23,7 +23,6 @@ from rust_prover_tools.kani_log.syntax import (
     FAILED_CHECK,
     FAILED_FOR,
     FAILED_LOCATION,
-    NOISE_PREFIXES,
     TOTAL,
     UNSUPPORTED_ENTRY,
     UNSUPPORTED_REACHABLE,
@@ -39,7 +38,6 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "failed_check",
-    "is_noise",
     "manual",
     "results",
     "summary",
@@ -70,8 +68,18 @@ def results(reader: Reader, builder: _BlockBuilder) -> None:
     Raises
     ------
     KaniLogError
-        If a check entry is malformed or the log ends inside one.
+        If a check entry is malformed, the log ends inside one, the block
+        already reported a results section, or a summary preceded this one.
     """
+    if builder.has_results:
+        msg = f"the block for {builder.name!r} has more than one RESULTS: section"
+        raise KaniLogError(msg)
+    if builder.saw_summary:
+        # The summary explains the properties the results list, so a results
+        # section that arrives afterwards was never compared with its
+        # explanations and cannot be accepted as a reconciliation.
+        msg = f"the block for {builder.name!r} has results after its summary"
+        raise KaniLogError(msg)
     builder.has_results = True
     while not reader.exhausted:
         line = reader.peek()
@@ -146,6 +154,7 @@ def summary(reader: Reader, builder: _BlockBuilder) -> None:
         If a summary line is unrecognised or the log is truncated before the
         verdict.
     """
+    builder.saw_summary = True
     while not reader.exhausted:
         line = reader.peek()
         total = TOTAL.match(line)
@@ -378,20 +387,3 @@ def unsupported_constructs(reader: Reader) -> list[str]:
         names.append(entry["name"])
         reader.take()
     return names
-
-
-def is_noise(line: str) -> bool:
-    """Report whether a line is build or driver chatter, not report content.
-
-    Parameters
-    ----------
-    line : str
-        One rendered log line.
-
-    Returns
-    -------
-    bool
-        ``True`` for a blank line or one beginning with a known chatter
-        prefix.
-    """
-    return not line.strip() or line.startswith(NOISE_PREFIXES)

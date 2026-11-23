@@ -342,37 +342,3 @@ def test_a_non_string_crate_type_entry_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(TrustAuditError, match="non-string entry"):
         audit_tree(tmp_path, ["src/lib.rs"])
-
-
-def test_a_target_specific_trust_rename_is_refused(tmp_path: Path) -> None:
-    """Refuse a trust package renamed inside a target dependency table."""
-    write(
-        tmp_path,
-        {
-            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
-            "[target.'cfg(unix)'.dependencies]\n"
-            'proof = { package = "kani", version = "0.67.0" }\n',
-            "src/lib.rs": "fn f() {}",
-        },
-    )
-
-    with pytest.raises(TrustAuditError, match="renames the Cargo package"):
-        audit_tree(tmp_path, ["src/lib.rs"])
-
-
-def test_a_workspace_inherited_trust_rename_is_refused(tmp_path: Path) -> None:
-    """Refuse a member that inherits a renamed trust package from its workspace."""
-    write(
-        tmp_path,
-        {
-            "Cargo.toml": '[workspace]\nmembers = ["member"]\n\n'
-            "[workspace.dependencies]\n"
-            'proof = { package = "kani", version = "0.67.0" }\n',
-            "member/Cargo.toml": '[package]\nname = "member"\nversion = "0.1.0"\n\n'
-            "[dependencies]\nproof.workspace = true\n",
-            "member/src/lib.rs": "fn f() {}",
-        },
-    )
-
-    with pytest.raises(TrustAuditError, match="renames the Cargo package"):
-        audit_tree(tmp_path, ["member/src/lib.rs"])

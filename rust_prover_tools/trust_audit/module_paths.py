@@ -108,6 +108,12 @@ def resolve_repository_path(root: pathlib.Path, relative: str) -> pathlib.Path:
     if pathlib.PurePosixPath(relative).is_absolute():
         msg = f"{relative} is absolute; the audit reads only repository files"
         raise TrustAuditError(msg)
+    if "\x00" in relative:
+        # A NUL cannot appear in a filesystem path; CPython raises
+        # ``ValueError`` from ``resolve`` and the audit's callers would see a
+        # traceback instead of their promised refusal.
+        msg = f"{relative!r} contains a NUL character, which names no file"
+        raise TrustAuditError(msg)
     resolved = (root / relative).resolve()
     root_resolved = root.resolve()
     if resolved != root_resolved and root_resolved not in resolved.parents:
@@ -150,6 +156,12 @@ def module_target(
         one file.
     """
     candidates = _module_candidates(module, reference)
+    if any("\x00" in candidate for candidate in candidates):
+        msg = (
+            f"{module.relative}:{reference.line}:{reference.column} declares "
+            f"module {reference.name!r}, whose path contains a NUL character"
+        )
+        raise TrustAuditError(msg)
     # Containment is checked before existence so an escaping `#[path]` is
     # refused for what it is. Reporting only that the file is absent would
     # invite someone to create it outside the repository and call the audit

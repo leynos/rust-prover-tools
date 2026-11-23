@@ -24,6 +24,8 @@ def opaque_names(
     tokens: tuple[Token, ...],
     base: frozenset[str],
     patterns: cabc.Container[int],
+    *,
+    inert: cabc.Container[int] = frozenset(),
 ) -> frozenset[str]:
     """Return the opaque macro names, plus every local name bound to one.
 
@@ -33,10 +35,11 @@ def opaque_names(
     nothing.  Following only the roots of the statements would record
     ``include → load`` and ``load → hidden`` but never ``include → hidden``,
     and ``hidden!`` would be read as an ordinary macro.  A ``use`` written in a
-    matcher is input, not an import, so those tokens are skipped.
+    matcher is input, not an import, so those tokens are skipped, and so is one
+    written inside the builtin ``stringify!``, whose argument becomes text.
     """
     names = set(base)
-    renames = _all_renames(tokens, patterns)
+    renames = _all_renames(tokens, patterns, inert)
     while True:
         discovered = {alias for item, alias in renames if item in names}
         if discovered <= names:
@@ -47,6 +50,7 @@ def opaque_names(
 def _all_renames(
     tokens: tuple[Token, ...],
     patterns: cabc.Container[int],
+    inert: cabc.Container[int],
 ) -> frozenset[tuple[str, str]]:
     """Return every ``(item, alias)`` a ``use`` statement in the file renames.
 
@@ -54,11 +58,12 @@ def _all_renames(
     the name it bound (``use load as hidden;``) are both followed: the second
     spelling is the same opaque macro, and stopping at the first would let
     ``hidden!`` expand code the scan never reads.  Tokens inside a
-    ``macro_rules!`` matcher describe input and import nothing.
+    ``macro_rules!`` matcher, or inside a builtin ``stringify!`` argument,
+    import nothing, so the aliases they spell bind no local name.
     """
     renames: set[tuple[str, str]] = set()
     for index, token in enumerate(tokens):
-        if index in patterns:
+        if index in patterns or index in inert:
             continue
         if token.kind is not Kind.IDENT or not begins_import(tokens, index):
             continue

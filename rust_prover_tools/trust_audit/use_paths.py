@@ -247,7 +247,13 @@ def top_level_members(
 
 
 def opens_use_group(tokens: tuple[Token, ...], index: int) -> bool:
-    """Report whether the ``{`` at ``index`` opens a ``use`` tree."""
+    """Report whether the ``{`` at ``index`` opens a ``use`` tree.
+
+    A member may itself be a group, so a brace after another brace or a comma
+    inside the enclosing tree is still part of it.  A block that a comma
+    separates elsewhere is stopped by the caller's own delimiter check, which
+    keeps an ordinary expression's braces out of the import walk.
+    """
     if index < 1:
         return False
-    return tokens[index - 1].text in {"::", "use"}
+    return tokens[index - 1].text in {"::", "use", "{", ","}

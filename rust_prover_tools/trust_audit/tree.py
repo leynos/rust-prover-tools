@@ -195,6 +195,7 @@ def _driver_module(
     reaches through ``#[path]``.
     """
     spelling = _normalize(driver)
+    _require_driver_file(root, spelling)
     return Module(
         relative=physical_relative(root, spelling),
         owner=parent_directory(spelling),
@@ -205,6 +206,34 @@ def _driver_module(
             else procedural_macro
         ),
     )
+
+
+def _require_driver_file(root: pathlib.Path, spelling: str) -> None:
+    """Refuse a driver spelling that names no existing file.
+
+    Resolution for module arithmetic is non-strict, so ``src/missing/../lib.rs``
+    would become ``src/lib.rs`` even though the compiler could not open the
+    path as written.  The audit would then report success for a file it was
+    never handed.  The original spelling is kept for the child lookup; this
+    check only requires that every component it names exists.
+    """
+    resolved = resolve_repository_path(root, spelling)
+    try:
+        physical = (root / spelling).resolve(strict=True)
+    except (OSError, ValueError) as error:
+        msg = f"{spelling} cannot be read: {error}"
+        raise TrustAuditError(msg) from error
+    if not physical.is_file():
+        msg = f"{spelling} cannot be read: it is not a file"
+        raise TrustAuditError(msg)
+    if physical != resolved:
+        # A non-strict resolution that disagrees with the strict one means a
+        # component before ``..`` does not exist, which is the fault above.
+        msg = (
+            f"{spelling} cannot be read: it does not resolve to {resolved}, "
+            "so the path as written names no file"
+        )
+        raise TrustAuditError(msg)
 
 
 def _normalize(relative: str) -> str:

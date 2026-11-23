@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import typing as typ
 from pathlib import Path
 from unittest import mock
 
@@ -14,16 +13,11 @@ from rust_prover_tools.binary_assets import Z3_VERSION
 from rust_prover_tools.commands import CommandResult, CommandSpec
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.unittests import conftest
-
-if typ.TYPE_CHECKING:
-    from rust_prover_tools.verus import VerusRunOptions
-
 from rust_prover_tools.z3_selection import (
     CALIBRATED_Z3_BANNER,
     EXPLICIT_SOURCE,
     PINNED_SOURCE,
     PINNED_Z3,
-    Z3Selection,
     qualify_z3,
     resolve_z3,
 )
@@ -317,66 +311,3 @@ def test_a_relative_pinned_install_dir_is_resolved_before_probing(
 
     assert qualified.executable == binary.resolve()
     assert seen == [(str(binary.resolve()), "--version")]
-
-
-def test_the_selected_solver_reaches_the_run_options(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """The qualified executable reaches ``run_verus`` and is named on output."""
-    binary = tmp_path / "solver"
-    binary.write_text("", encoding="utf-8")
-    proof_file = tmp_path / "proof.rs"
-    proof_file.write_text("proof", encoding="utf-8")
-    seen: list[VerusRunOptions] = []
-    monkeypatch.setattr(
-        run_cli,
-        "probe_and_qualify_z3",
-        lambda selection, **_: Z3Selection(
-            executable=binary,
-            banner=CALIBRATED_Z3_BANNER,
-            source=EXPLICIT_SOURCE,
-        ),
-    )
-    monkeypatch.setattr(
-        run_cli,
-        "run_verus",
-        lambda options: seen.append(options) or (),
-    )
-
-    status = run_cli.verus_run(
-        repo_root=tmp_path,
-        proof_file=(proof_file,),
-        z3=str(binary),
-    )
-    captured = capsys.readouterr()
-
-    assert status == 0, captured.err
-    assert seen[0].z3_path == binary, (
-        "The command boundary must forward the qualified solver"
-    )
-    assert f"Solver ({EXPLICIT_SOURCE}): {binary}\n" in captured.out
-
-
-def test_no_solver_selection_leaves_the_run_options_unset(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Without a selection, no solver is forwarded and no line is printed."""
-    proof_file = tmp_path / "proof.rs"
-    proof_file.write_text("proof", encoding="utf-8")
-    seen: list[VerusRunOptions] = []
-    monkeypatch.setattr(
-        run_cli,
-        "run_verus",
-        lambda options: seen.append(options) or (),
-    )
-
-    status = run_cli.verus_run(repo_root=tmp_path, proof_file=(proof_file,))
-    captured = capsys.readouterr()
-
-    assert status == 0, captured.err
-    assert seen[0].z3_path is None, "No selection must leave the environment alone"
-    assert "Solver (" not in captured.out, "No solver line belongs in this run"

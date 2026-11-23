@@ -24,7 +24,12 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.trust_audit.syntax import Token
 
-__all__ = ("attribute_items", "conditional_path", "payload_start")
+__all__ = (
+    "attribute_disables",
+    "attribute_items",
+    "conditional_path",
+    "payload_start",
+)
 
 #: The tokens between ``#[`` and a path attribute's value.
 _PATH_HEAD = ("path", "=")
@@ -72,6 +77,38 @@ def payload_start(
         elif text == "," and depth == 0:
             return index + 1
     return None
+
+
+def attribute_disables(
+    tokens: tuple[Token, ...],
+    open_index: int,
+    close_index: int,
+) -> bool:
+    """Report whether a ``cfg`` span is disabled in every configuration.
+
+    ``#[cfg(any())]`` has an empty ``any``, which is false whatever is set, so
+    the item it decorates is never compiled.  The audit reads one tree, and a
+    module that tree cannot contain must not be demanded as a file.  Only that
+    one provably false shape is recognised; every other predicate may be
+    enabled by some configuration, and is left to the ordinary conservative
+    handling.
+    """
+    head_index = open_index + 1
+    if head_index >= close_index or tokens[head_index].text != "cfg":
+        return False
+    payload = head_index + 1
+    if payload >= close_index or tokens[payload].text != "(":
+        return False
+    closing = matching(tokens, payload, "(", ")")
+    if closing <= payload + 1 or tokens[payload + 1].text != "any":
+        return False
+    inner = payload + 2
+    return (
+        inner < closing
+        and tokens[inner].text == "("
+        and matching(tokens, inner, "(", ")") == inner + 1
+        and inner + 2 == closing
+    )
 
 
 def conditional_path(

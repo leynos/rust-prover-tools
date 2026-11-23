@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import pathlib
 import sys
-import tomllib
 import typing as typ
 from pathlib import Path
 
@@ -25,11 +24,11 @@ from cyclopts import Parameter
 
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.trust_audit import AuditedFile, TrustAuditError, audit_tree
-from rust_prover_tools.trust_audit.module_paths import RUST_SUFFIX
 from rust_prover_tools.trust_audit.vocabulary import (
     Vocabulary,
     select_vocabularies,
 )
+from rust_prover_tools.trust_audit_targets import entry_points
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -194,12 +193,6 @@ def audit_trust(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
     return 0
 
 
-#: The module roots a crate directory contributes.
-_CRATE_ROOTS: typ.Final[tuple[str, ...]] = ("lib.rs", "main.rs", "mod.rs")
-#: Directories whose Rust files are crate roots in their own right.
-_COMPILED_DIRECTORIES: typ.Final[tuple[str, ...]] = ("tests", "benches", "examples")
-
-
 def _expand_drivers(root: Path, paths: cabc.Iterable[Path]) -> tuple[str, ...]:
     """Expand files and crate directories into repository-relative drivers.
 
@@ -217,7 +210,13 @@ def _expand_drivers(root: Path, paths: cabc.Iterable[Path]) -> tuple[str, ...]:
 
 
 def _drivers_for(root: Path, path: Path) -> tuple[str, ...]:
-    """Return the drivers one argument names, refusing a missing path."""
+    """Return the drivers one argument names, refusing a missing path.
+
+    A directory contributes each Cargo target beneath it.  The target's
+    physical file checks containment, but the driver is passed to the audit
+    under the pathname Cargo compiles, so a target that is a symbolic link
+    resolves its child modules from the linking directory as rustc does.
+    """
     candidate = path if path.is_absolute() else root / path
     if not candidate.is_dir():
         # A file, a missing path, or one outside the root keeps the ordinary
@@ -226,14 +225,27 @@ def _drivers_for(root: Path, path: Path) -> tuple[str, ...]:
     resolved = candidate.resolve()
     _require_inside(root, resolved, path)
     drivers = {
-        _contained_relative(root, entry.resolve(), path).as_posix()
+        _in_root_spelling(root, entry, path)
         for crate_root in _crate_roots(root, resolved, path)
-        for entry in _entry_points(crate_root)
+        for entry in entry_points(root, crate_root)
     }
     if not drivers:
         msg = f"{path} contains no Rust entry point to audit"
         raise TrustAuditError(msg)
     return tuple(sorted(drivers))
+
+
+def _in_root_spelling(root: Path, entry: Path, path: Path) -> str:
+    """Return an entry's pathname after checking its resolved file is in root."""
+    _require_inside(root, entry.resolve(), path)
+    try:
+        return entry.relative_to(root).as_posix()
+    except ValueError as error:
+        msg = (
+            f"{entry} names a file inside {root} only through a symbolic link, "
+            "so its module directory cannot be derived from the spelling"
+        )
+        raise TrustAuditError(msg) from error
 
 
 def _require_inside(root: Path, resolved: Path, path: Path) -> None:
@@ -261,73 +273,6 @@ def _crate_roots(
         _contained_relative(root, resolved, path)
         manifests.add(resolved)
     return tuple(sorted(manifests | {directory}))
-
-
-def _entry_points(crate_root: Path) -> cabc.Iterator[Path]:
-    """Yield the files that start a crate's module tree.
-
-    Cargo compiles more entry points than the conventional module roots: every
-    file under ``src/bin`` is a binary crate, and a manifest may name an
-    explicit ``path`` for a library, binary, test, bench or example.  A reader
-    that missed one could report a clean audit that never read it.
-    """
-    for name in _CRATE_ROOTS:
-        for candidate in (crate_root / name, crate_root / "src" / name):
-            if candidate.is_file():
-                yield candidate
-    binary_directory = crate_root / "src" / "bin"
-    if binary_directory.is_dir():
-        yield from sorted(binary_directory.rglob(f"*{RUST_SUFFIX}"))
-    yield from _manifest_targets(crate_root)
-    for directory in _COMPILED_DIRECTORIES:
-        nested = crate_root / directory
-        if nested.is_dir():
-            yield from sorted(nested.rglob(f"*{RUST_SUFFIX}"))
-
-
-def _manifest_targets(crate_root: Path) -> cabc.Iterator[Path]:
-    """Yield the target paths a crate's ``Cargo.toml`` names explicitly."""
-    manifest = crate_root / "Cargo.toml"
-    if not manifest.is_file():
-        return
-    document = _read_target_manifest(manifest)
-    for table in _target_tables(document):
-        value = _target_path(manifest, table)
-        if value is None:
-            continue
-        candidate = crate_root / value
-        if candidate.is_file():
-            yield candidate
-
-
-def _read_target_manifest(manifest: Path) -> dict[str, object]:
-    """Return a manifest whose target paths are about to be read."""
-    try:
-        return tomllib.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        msg = f"{manifest} cannot be read, so its targets are unknown: {error}"
-        raise TrustAuditError(msg) from error
-
-
-def _target_tables(document: dict[str, object]) -> list[dict[str, object]]:
-    """Return every target table a manifest may declare a path in."""
-    tables: list[object] = [document.get("lib")]
-    for key in ("bin", "test", "bench", "example"):
-        entries = document.get(key)
-        if isinstance(entries, list):
-            tables.extend(entries)
-    return [table for table in tables if isinstance(table, dict)]
-
-
-def _target_path(manifest: Path, table: dict[str, object]) -> str | None:
-    """Return one target's explicit path, refusing a non-string value."""
-    value = table.get("path")
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        msg = f"{manifest} declares a target path that is not a string"
-        raise TrustAuditError(msg)
-    return value
 
 
 def _relative_to(root: Path, path: Path) -> str:

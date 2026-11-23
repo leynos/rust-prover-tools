@@ -128,7 +128,41 @@ def test_an_unwinding_note_without_a_failed_unwinding_check_is_refused() -> None
         "Verification Time:",
     )
 
-    assert "reports unwinding failures but no failed unwinding check" in refused(text)
+    assert (
+        "reports unwinding failures but no failed check describes a bound"
+        in refused(
+            text,
+        )
+    )
+
+
+def test_an_unwinding_note_follows_the_failed_description() -> None:
+    """Accept the note when a failed description carries the renderer's phrase.
+
+    Kani 0.67.0 decides the note from the failed properties' descriptions, not
+    from their identifiers, so an assertion-shaped identifier must not make the
+    genuine capture contradictory.  The identifier still leaves the failure a
+    counterexample rather than a resource exhaustion.
+    """
+    text = (
+        log_text("counterexample")
+        .replace(
+            "This is a placeholder message; Kani doesn't support message "
+            "formatted at runtime",
+            "unwinding assertion loop 9",
+        )
+        .replace(
+            "Verification Time:",
+            "[Kani] info: Verification output shows one or more unwinding "
+            "failures.\nVerification Time:",
+        )
+    )
+    block = parse_text(text).blocks[0]
+    failed = [item for item in block.properties if item.status == "FAILURE"]
+
+    assert [item.is_unwinding for item in failed] == [False], (
+        "the property identifier, not the note, classifies the failure"
+    )
 
 
 def test_a_wrong_version_names_the_observed_and_supported_versions() -> None:

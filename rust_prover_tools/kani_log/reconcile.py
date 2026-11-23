@@ -9,11 +9,13 @@ it.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.kani_log.syntax import (
     COVER_PROPERTY_STATUSES,
     OTHER_STATUS,
+    UNWINDING_DESCRIPTIONS,
     KaniLogError,
 )
 
@@ -42,6 +44,9 @@ def require_complete(builder: _BlockBuilder) -> None:
     if builder.verdict is None:
         msg = f"the block for {builder.name!r} ends without a verification result"
         raise KaniLogError(msg)
+    # A status Kani never renders is a more specific fault than any verdict
+    # disagreement it also causes, so it is reported first.
+    _require_cover_statuses(builder)
     _require_panic_note(builder)
     if builder.timed_out:
         # A timeout aborts CBMC before ``RESULTS:``, so a block carrying the
@@ -80,25 +85,35 @@ def require_complete(builder: _BlockBuilder) -> None:
 
 
 def _require_panic_note(builder: _BlockBuilder) -> None:
-    """Reconcile the expected-panic note against the block it certifies.
+    """Reconcile the verdict against the checks it reports.
 
-    Kani prints the note only when it excused a failed property as the panic
-    the harness declared, and that is the same condition under which it calls
-    the harness successful.  A failed verdict, or a block with no failed check
-    to excuse, is therefore a report the pinned release cannot produce.
+    Kani calls a harness successful only when no check failed, unless it
+    excused the failed property as the panic the harness declared.  The
+    expected-panic note is printed only under that excuse, and only for a
+    successful verdict.  A plain ``SUCCESSFUL`` verdict above a failed property
+    is therefore a report the pinned release cannot produce, and accepting it
+    would turn a counterexample into a clean result.
     """
-    if not builder.panics_as_expected:
+    failed = any(item.status == "FAILURE" for item in builder.properties)
+    if builder.panics_as_expected:
+        if not failed:
+            msg = (
+                f"the block for {builder.name!r} reports the expected-panic note "
+                "but no check failed"
+            )
+            raise KaniLogError(msg)
+        if builder.verdict != "SUCCESSFUL":
+            msg = (
+                f"the block for {builder.name!r} reports {builder.verdict} with "
+                "the expected-panic note, which Kani prints only for a "
+                "successful verdict"
+            )
+            raise KaniLogError(msg)
         return
-    if not any(item.status == "FAILURE" for item in builder.properties):
+    if builder.verdict == "SUCCESSFUL" and failed:
         msg = (
-            f"the block for {builder.name!r} reports the expected-panic note "
-            "but no check failed"
-        )
-        raise KaniLogError(msg)
-    if builder.verdict != "SUCCESSFUL":
-        msg = (
-            f"the block for {builder.name!r} reports {builder.verdict} with the "
-            "expected-panic note, which Kani prints only for a successful verdict"
+            f"the block for {builder.name!r} reports SUCCESSFUL while a check "
+            "failed, without the expected-panic note"
         )
         raise KaniLogError(msg)
 
@@ -106,21 +121,26 @@ def _require_panic_note(builder: _BlockBuilder) -> None:
 def _require_unwinding_note(builder: _BlockBuilder) -> None:
     """Reconcile the unwinding-failure note against the checks beneath it.
 
-    Kani prints the note only when a check failed because the harness reached
-    the unwinding bound, and that check is listed under an unwinding kind.  A
+    The renderer prints the note when any failed property's description holds
+    one of its bound phrases; the property identifier does not decide it.  A
     block carrying the note without such a failure is a report the pinned
     release cannot produce, and accepting it would certify a run whose stated
-    failure the analysis never saw.  A timed-out block keeps its own path: it
-    is reconciled by `_require_timeout`, which refuses every completed field.
+    failure the analysis never saw.  The identifier still classifies a failed
+    bound check as an unwinding failure rather than a counterexample; this
+    check only asks whether the note is explicable.  A timed-out block keeps
+    its own path: `_require_timeout` reconciles it and refuses every completed
+    field.
     """
     if not builder.unwinding_reported:
         return
     if not any(
-        item.is_unwinding and item.status == "FAILURE" for item in builder.checks
+        item.status == "FAILURE"
+        and any(phrase in item.description for phrase in UNWINDING_DESCRIPTIONS)
+        for item in builder.properties
     ):
         msg = (
             f"the block for {builder.name!r} reports unwinding failures "
-            "but no failed unwinding check"
+            "but no failed check describes a bound"
         )
         raise KaniLogError(msg)
 
@@ -151,6 +171,7 @@ def _require_timeout(builder: _BlockBuilder) -> None:
         builder.failed_count is not None,
         builder.covered_total is not None,
         builder.unwinding_reported,
+        builder.saw_summary,
     )
     if builder.verdict != "FAILED" or any(completed_fields):
         msg = (
@@ -183,7 +204,6 @@ def _require_counts(
 
 def _require_covers(builder: _BlockBuilder) -> None:
     """Require cover counts and statuses to reconcile."""
-    _require_cover_statuses(builder)
     if builder.covered_total is None and builder.covers:
         msg = (
             f"the block for {builder.name!r} lists {len(builder.covers)} "
@@ -205,26 +225,58 @@ def _require_covers(builder: _BlockBuilder) -> None:
             f"{satisfied}"
         )
         raise KaniLogError(msg)
-    observed_unreachable = sum(1 for item in covers if item.status == "UNREACHABLE")
-    if (
-        builder.covered_unreachable is not None
-        and builder.covered_unreachable != observed_unreachable
-    ):
+    _require_subtotal(
+        builder,
+        _Subtotal(
+            "unreachable",
+            builder.covered_unreachable,
+            sum(1 for item in covers if item.status == "UNREACHABLE"),
+            "covers",
+        ),
+    )
+    _require_subtotal(
+        builder,
+        _Subtotal(
+            "undetermined",
+            builder.covered_undetermined,
+            sum(1 for item in covers if item.status == "UNDETERMINED"),
+            "covers",
+        ),
+    )
+
+
+@dc.dataclass(frozen=True, slots=True)
+class _Subtotal:
+    """One parenthesised status count and the checks it must agree with."""
+
+    kind: str
+    counted: int | None
+    observed: int
+    subject: str
+
+
+def _require_subtotal(builder: _BlockBuilder, subtotal: _Subtotal) -> None:
+    """Require a positive status count to have its printed subtotal.
+
+    The renderer prints a parenthesised subtotal for every positive count and
+    omits it otherwise, so a subtotal is not optional evidence.  A block that
+    lists such a status without its subtotal is a report the pinned release
+    cannot produce, and accepting it would leave the count it exists to
+    validate unexamined.
+    """
+    if subtotal.counted is None:
+        if subtotal.observed:
+            msg = (
+                f"the block for {builder.name!r} lists {subtotal.observed} "
+                f"{subtotal.kind} {subtotal.subject} but has no "
+                f"{subtotal.kind} count"
+            )
+            raise KaniLogError(msg)
+        return
+    if subtotal.counted != subtotal.observed:
         msg = (
-            f"the block for {builder.name!r} counts "
-            f"{builder.covered_unreachable} unreachable covers but lists "
-            f"{observed_unreachable}"
-        )
-        raise KaniLogError(msg)
-    observed_undetermined = sum(1 for item in covers if item.status == "UNDETERMINED")
-    if (
-        builder.covered_undetermined is not None
-        and builder.covered_undetermined != observed_undetermined
-    ):
-        msg = (
-            f"the block for {builder.name!r} counts "
-            f"{builder.covered_undetermined} undetermined covers but lists "
-            f"{observed_undetermined}"
+            f"the block for {builder.name!r} counts {subtotal.counted} "
+            f"{subtotal.kind} {subtotal.subject} but lists {subtotal.observed}"
         )
         raise KaniLogError(msg)
 
@@ -253,16 +305,15 @@ def _require_other(
 ) -> None:
     """Require each parenthesised status count to reconcile.
 
-    An absent count says nothing about the checks, but a printed one does -
-    including a printed zero, which must agree that no check carried that
-    status.
+    The renderer prints a subtotal for every positive count, so a check that
+    carries one of these statuses without its subtotal is a report the pinned
+    release cannot produce; the subtotal would otherwise be the one piece of
+    evidence that the status counts agree with the checks.  A printed zero must
+    likewise agree that no check carried that status.
     """
-    for kind, counted in builder.other_counts.items():
-        expected = OTHER_STATUS.get(kind, "")
+    for kind, expected in OTHER_STATUS.items():
         observed = sum(1 for item in checks if item.status == expected)
-        if counted != observed:
-            msg = (
-                f"the block for {builder.name!r} counts {counted} "
-                f"{kind} results but lists {observed}"
-            )
-            raise KaniLogError(msg)
+        _require_subtotal(
+            builder,
+            _Subtotal(kind, builder.other_counts.get(kind), observed, "results"),
+        )

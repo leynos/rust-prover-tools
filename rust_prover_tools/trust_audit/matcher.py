@@ -34,13 +34,14 @@ from __future__ import annotations
 
 import dataclasses as dc
 
-from rust_prover_tools.trust_audit.context import Context
+from rust_prover_tools.trust_audit.context import Context, FileFacts
 from rust_prover_tools.trust_audit.crate_bindings import alias_bindings
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.import_renames import (
     is_import_destination,
     is_import_rename,
 )
+from rust_prover_tools.trust_audit.keywords import is_path_segment
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import ScanResult
 from rust_prover_tools.trust_audit.module_arguments import imports_macro_use
@@ -51,9 +52,11 @@ from rust_prover_tools.trust_audit.modules import (
 from rust_prover_tools.trust_audit.opaque_macros import opaque_names
 from rust_prover_tools.trust_audit.repetitions import (
     MACRO_DELIMITERS,
+    RepetitionIndex,
+    repetition_index,
     repetition_refusal,
 )
-from rust_prover_tools.trust_audit.structure import stringify_arguments
+from rust_prover_tools.trust_audit.stringify import stringify_arguments
 from rust_prover_tools.trust_audit.syntax import Kind, Token, tokenize
 from rust_prover_tools.trust_audit.vocabulary import (
     OPAQUE_MACROS,
@@ -112,14 +115,29 @@ def scan(
     words = frozenset(item for vocabulary in vocabularies for item in vocabulary.items)
     roots = frozenset(root for vocabulary in vocabularies for root in vocabulary.roots)
     try:
+        rules = macro_rules(tokens)
+        repetitions = repetition_index(tokens)
+        # ``stringify!`` turns its argument into text, so an item spelled there
+        # compiles nothing and requests nothing.  A proc-macro crate can parse
+        # that text back into code, so it keeps the stricter reading.
+        stringified = (
+            frozenset()
+            if procedural_macro
+            else stringify_arguments(tokens, defined=rules.heads)
+        )
         qualifiers = set(roots)
         for root in roots:
             qualifiers.update(alias_bindings(tokens, root))
         _refuse_opaque_macros(
             tokens,
             procedural_macro=procedural_macro,
-            words=words,
-            qualifiers=frozenset(qualifiers),
+            context=_RefusalContext(
+                rules,
+                words,
+                frozenset(qualifiers),
+                stringified,
+                repetitions,
+            ),
         )
         modules = module_references(
             tokens,
@@ -129,8 +147,11 @@ def scan(
             tokens,
             procedural_macro=procedural_macro,
             vocabularies=vocabularies,
-            module_names=frozenset(reference.name for reference in modules)
-            | inline_module_names(tokens),
+            facts=FileFacts(
+                module_names=frozenset(reference.name for reference in modules)
+                | inline_module_names(tokens),
+                ignored=rules.patterns | stringified,
+            ),
         )
     except RecursionError as error:
         # A grouped ``use`` nests, so a deeply nested one recurses through the
@@ -146,12 +167,22 @@ def scan(
     )
 
 
+@dc.dataclass(frozen=True, slots=True)
+class _RefusalContext:
+    """Everything one opaque-macro refusal pass reads."""
+
+    rules: MacroRules
+    words: frozenset[str]
+    qualifiers: frozenset[str]
+    stringified: frozenset[int]
+    repetitions: RepetitionIndex
+
+
 def _refuse_opaque_macros(
     tokens: tuple[Token, ...],
     *,
     procedural_macro: bool,
-    words: frozenset[str],
-    qualifiers: frozenset[str],
+    context: _RefusalContext,
 ) -> None:
     """Fail closed on a macro whose expansion the scan cannot read.
 
@@ -173,24 +204,19 @@ def _refuse_opaque_macros(
     base = OPAQUE_MACROS
     if procedural_macro:
         base |= PROCEDURAL_OPAQUE_MACROS
-    rules = macro_rules(tokens)
-    names = opaque_names(tokens, base, rules.patterns)
-    # ``stringify!`` turns its argument into text, so an opaque macro inside
-    # one does not run.  A proc-macro crate can parse that text, so there the
-    # refusal stays.
-    stringified = (
-        frozenset()
-        if procedural_macro
-        else stringify_arguments(tokens, defined=rules.heads)
+    names = opaque_names(
+        tokens,
+        base,
+        context.rules.patterns,
+        inert=context.stringified,
     )
     _refuse_metavariable_invocations(
         tokens,
-        rules,
-        _Vocabulary(words, qualifiers, stringified),
+        context,
     )
     for index, token in enumerate(tokens[:-1]):
         following = tokens[index + 1]
-        if index in rules.patterns or index in stringified:
+        if index in context.rules.patterns or index in context.stringified:
             continue
         if token.kind is not Kind.IDENT or token.text not in names:
             continue
@@ -203,19 +229,9 @@ def _refuse_opaque_macros(
         raise TrustAuditError(msg)
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _Vocabulary:
-    """The vocabulary and exclusions one refusal pass reads."""
-
-    words: frozenset[str]
-    qualifiers: frozenset[str]
-    stringified: frozenset[int]
-
-
 def _refuse_metavariable_invocations(
     tokens: tuple[Token, ...],
-    rules: MacroRules,
-    scope: _Vocabulary,
+    context: _RefusalContext,
 ) -> None:
     """Fail closed on an expansion whose metavariable hides a trust use.
 
@@ -226,10 +242,10 @@ def _refuse_metavariable_invocations(
     path; the file is refused instead of reported clean.  ``$crate`` is the
     defining crate rather than an argument, so it is not refused.
     """
-    for index in rules.expansions:
-        if index in scope.stringified or not _is_expansion_metavariable(
+    for index in context.rules.expansions:
+        if index in context.stringified or not _is_expansion_metavariable(
             tokens,
-            rules,
+            context.rules,
             index,
         ):
             continue
@@ -239,8 +255,7 @@ def _refuse_metavariable_invocations(
         refusal = _metavariable_refusal(
             tokens,
             index,
-            scope.words,
-            scope.qualifiers,
+            context,
         )
         if refusal is not None:
             raise TrustAuditError(refusal)
@@ -265,8 +280,7 @@ def _is_expansion_metavariable(
 def _metavariable_refusal(
     tokens: tuple[Token, ...],
     index: int,
-    words: frozenset[str],
-    qualifiers: frozenset[str],
+    context: _RefusalContext,
 ) -> str | None:
     """Return the diagnostic for a hidden trust use, or ``None`` when clear."""
     token = tokens[index]
@@ -278,7 +292,7 @@ def _metavariable_refusal(
             f"{token.column} invokes a macro through the metavariable "
             f"'${token.text}', so the audit cannot tell which macro runs"
         )
-    path_refusal = _path_refusal(token, following, second, words)
+    path_refusal = _path_refusal(token, following, second, context.words)
     if path_refusal is not None:
         return path_refusal
     if is_import_rename(tokens, index):
@@ -293,14 +307,19 @@ def _metavariable_refusal(
             f"{token.column} binds an import's local name to the metavariable "
             f"'${token.text}', so the audit cannot tell which name it binds"
         )
-    if _is_trust_qualified(tokens, index, qualifiers):
+    if _is_trust_qualified(tokens, index, context.qualifiers):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
             f"{token.column} reaches a trust item through the metavariable "
             f"'${token.text}' as its final path segment, so the audit cannot "
             "tell which item is called"
         )
-    return repetition_refusal(tokens, index, qualifiers)
+    return repetition_refusal(
+        tokens,
+        index,
+        context.qualifiers,
+        repetitions=context.repetitions,
+    )
 
 
 def _path_refusal(
@@ -339,10 +358,25 @@ def _is_trust_qualified(
     index: int,
     qualifiers: frozenset[str],
 ) -> bool:
-    """Report whether a metavariable ends a path rooted at a trust crate."""
-    return (
-        index >= _TRUST_PATH_SEGMENTS
-        and tokens[index - 1].text == "$"
-        and tokens[index - 2].text == "::"
-        and tokens[index - 3].text in qualifiers
-    )
+    """Report whether a metavariable ends a path rooted at a trust crate.
+
+    The path may be several segments deep — ``core::mem::$f`` — so the walk
+    follows the static segments back to the crate at the root.  Checking only
+    the segment immediately before the metavariable would exonerate a nested
+    path rooted at a trust crate, and the dynamic final segment could then be a
+    vocabulary item the scan never sees.
+    """
+    if index < _TRUST_PATH_SEGMENTS or tokens[index - 1].text != "$":
+        return False
+    cursor = index - 2
+    if tokens[cursor].text != "::":
+        return False
+    cursor -= 1
+    while True:
+        if not is_path_segment(tokens[cursor]):
+            return False
+        if tokens[cursor].text in qualifiers:
+            return True
+        if cursor < _TRUST_PATH_SEGMENTS or tokens[cursor - 1].text != "::":
+            return False
+        cursor -= 2

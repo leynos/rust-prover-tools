@@ -27,6 +27,9 @@ CARGO_MANIFEST: str = "Cargo.toml"
 #: Cargo packages whose names a manifest may rename to another key.
 _TRUST_PACKAGES: frozenset[str] = frozenset({"kani", "vstd", "verus_builtin"})
 
+#: The library path Cargo auto-discovers when a manifest names none.
+_DEFAULT_LIBRARY: str = "src/lib.rs"
+
 
 def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
     """Report whether the crate owning ``relative`` is a proc-macro crate.
@@ -58,7 +61,12 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
     """
     resolved_root = root.resolve()
     leaf = (resolved_root / relative).resolve()
-    directory = leaf.parent
+    # The driver's own spelling decides which crate owns it: its directory is
+    # where Cargo looks first for the manifest that names it.  A ``#[path]``
+    # that links the driver to a file in another directory also links it to a
+    # manifest there, and reading that one would answer for the wrong crate.
+    spelling = (resolved_root / relative).parent
+    directory = spelling
     while True:
         manifest = directory / CARGO_MANIFEST
         if manifest.is_file():
@@ -123,7 +131,13 @@ def _read_manifest(manifest: pathlib.Path) -> dict[str, object]:
 
 
 def _library_path(manifest: pathlib.Path) -> str | None:
-    """Return a manifest's ``[lib] path`` value, if it declares one."""
+    """Return a manifest's library path, defaulting to ``src/lib.rs``.
+
+    Cargo defaults a library target to ``src/lib.rs`` when the manifest names
+    none.  A proc-macro crate usually declares only ``[lib] proc-macro = true``,
+    so returning ``None`` here would leave its default library file owned by no
+    manifest, and the audit would scan its literals as ordinary text.
+    """
     document = _read_manifest(manifest)
     _refuse_renamed_trust_package(manifest, document)
     library = document.get("lib")
@@ -131,7 +145,7 @@ def _library_path(manifest: pathlib.Path) -> str | None:
         return None
     value = library.get("path")
     if value is None:
-        return None
+        return _DEFAULT_LIBRARY
     if not isinstance(value, str):
         msg = f"{manifest} sets [lib] path to a non-string value"
         raise TrustAuditError(msg)
@@ -188,12 +202,25 @@ def _refuse_renamed_trust_package(
             if not isinstance(spec, dict):
                 continue
             package = spec.get("package")
-            if package in _TRUST_PACKAGES:
+            if package in _TRUST_PACKAGES and _renamed(name, package):
                 msg = (
                     f"{manifest} renames the Cargo package {package!r} to "
                     f"{name!r}, so the audit cannot tell which calls reach it"
                 )
                 raise TrustAuditError(msg)
+
+
+def _renamed(name: object, package: object) -> bool:
+    """Report whether a dependency key differs from its package name.
+
+    ``vstd = { package = "vstd", ... }`` states the package without changing
+    the name it binds, so it is the same import as a plain version.  Cargo
+    normalizes ``-`` to ``_`` when a package name becomes a crate name, so the
+    comparison does the same: ``verus-builtin`` binds ``verus_builtin``.
+    """
+    if not isinstance(name, str) or not isinstance(package, str):
+        return True
+    return name.replace("-", "_") != package.replace("-", "_")
 
 
 def _dependency_tables(document: dict[str, object]) -> list[object]:

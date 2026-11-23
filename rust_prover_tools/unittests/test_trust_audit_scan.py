@@ -297,6 +297,28 @@ def test_a_byte_character_literal_is_not_an_identifier() -> None:
     assert words == ["let", "b"], "the byte literal's prefix must stay inside it"
 
 
+@pytest.mark.parametrize("source", ["'x'", "b'x'", "'label"])
+def test_a_character_literal_or_lifetime_stays_in_the_stream(source: str) -> None:
+    """Keep an opaque token so the tokens around it stay non-adjacent."""
+    texts = [token.text for token in tokenize(f"hold!(before {source} after)")]
+
+    assert source in texts, "dropping the token would join its neighbours"
+    assert not any(
+        token.kind == "ident" and token.text == source for token in tokenize(source)
+    ), "the literal must not become an identifier"
+
+
+def test_a_shebang_ends_at_a_doc_comment() -> None:
+    """Treat ``#!/** doc */[allow(dead_code)]`` as a shebang, as rustc does.
+
+    A doc comment is expanded into an attribute, so it is not trivia standing
+    between ``#!`` and a possible inner attribute.
+    """
+    source = "#!/** doc */[allow(dead_code)]\nkani::assume(x);"
+
+    assert items(source) == [("assume", 2)]
+
+
 def test_a_unicode_numeric_suffix_is_not_an_identifier() -> None:
     """Keep a Unicode identifier character inside the numeric literal's suffix."""
     words = [

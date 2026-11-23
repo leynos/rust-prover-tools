@@ -10,15 +10,20 @@ lexer never resolves.
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.trust_audit.structure import matching
-from rust_prover_tools.trust_audit.syntax import Kind
+from rust_prover_tools.trust_audit.keywords import is_path_segment
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.trust_audit.syntax import Token
 
-__all__ = ("MACRO_DELIMITERS", "repetition_refusal")
+__all__ = (
+    "MACRO_DELIMITERS",
+    "RepetitionIndex",
+    "repetition_index",
+    "repetition_refusal",
+)
 
 # A path segment and its ``::``, as in ``vstd::prelude``.
 _PATH_SEGMENT = 2
@@ -29,10 +34,69 @@ _MAX_SEPARATOR_TOKENS = 3
 MACRO_DELIMITERS = frozenset({"(", "[", "{"})
 
 
+@dc.dataclass(frozen=True, slots=True)
+class RepetitionIndex:
+    """Every token's enclosing repetitions, built in one pass.
+
+    Each token records the innermost ``$( … )`` holding it, and each repetition
+    opener records its parent.  A metavariable's extents are then read by
+    walking outwards, so a transcriber with many ordinary metavariables does
+    not rescan the file for each one.
+    """
+
+    _innermost: tuple[int | None, ...]
+    _parents: tuple[int | None, ...]
+    _extents: tuple[tuple[int, int] | None, ...]
+
+    def extents(self, index: int) -> tuple[tuple[int, int], ...]:
+        """Return the extents enclosing ``index``, innermost first."""
+        if index < 0 or index >= len(self._innermost):
+            return ()
+        found: list[tuple[int, int]] = []
+        opener = self._innermost[index]
+        while opener is not None:
+            extent = self._extents[opener]
+            if extent is not None:
+                found.append(extent)
+            opener = self._parents[opener]
+        return tuple(found)
+
+
+def repetition_index(tokens: tuple[Token, ...]) -> RepetitionIndex:
+    """Index every repetition group and the token ranges they enclose."""
+    innermost: list[int | None] = [None] * len(tokens)
+    parents: list[int | None] = [None] * len(tokens)
+    extents: list[tuple[int, int] | None] = [None] * len(tokens)
+    openers: list[int] = []
+    repetitions: list[int] = []
+    for index, token in enumerate(tokens):
+        if token.text == "(":
+            openers.append(index)
+            innermost[index] = repetitions[-1] if repetitions else None
+            if index >= 1 and tokens[index - 1].text == "$":
+                parents[index] = repetitions[-1] if repetitions else None
+                repetitions.append(index)
+                innermost[index] = index
+        elif token.text == ")" and openers:
+            opener = openers.pop()
+            if opener >= 1 and tokens[opener - 1].text == "$":
+                if repetitions and repetitions[-1] == opener:
+                    repetitions.pop()
+                after = _after_repetition(tokens, index)
+                if after is not None:
+                    extents[opener] = (opener - 2, after)
+            innermost[index] = repetitions[-1] if repetitions else None
+        else:
+            innermost[index] = repetitions[-1] if repetitions else None
+    return RepetitionIndex(tuple(innermost), tuple(parents), tuple(extents))
+
+
 def repetition_refusal(
     tokens: tuple[Token, ...],
     index: int,
     qualifiers: frozenset[str],
+    *,
+    repetitions: RepetitionIndex | None = None,
 ) -> str | None:
     """Refuse a metavariable whose enclosing repetition hides a trust use.
 
@@ -40,10 +104,12 @@ def repetition_refusal(
     ``$($p)+::assume(..)`` — the item itself — ``kani::$($($f),+);+(..)`` —
     or an invocation — ``$($m)+!("hidden.rs")``.  Each produces a trust use
     the arguments decide, and the enclosing groups must be walked outwards
-    because they may nest.
+    because they may nest.  A caller that scans many metavariables supplies
+    one index for the whole token stream; otherwise it is built here.
     """
     token = tokens[index]
-    for extent in _repetition_extents(tokens, index):
+    lookup = repetitions if repetitions is not None else repetition_index(tokens)
+    for extent in lookup.extents(index):
         refusal = _boundary_refusal(tokens, token, extent, qualifiers)
         if refusal is not None:
             return refusal
@@ -89,50 +155,23 @@ def _follows_trust_qualifier(
     before: int,
     qualifiers: frozenset[str],
 ) -> bool:
-    """Report whether ``before`` is the ``::`` following a trust qualifier."""
+    """Report whether ``before`` is the ``::`` following a trust qualifier.
+
+    The walk stops at a keyword such as ``return``: in ``return ::kani::$($f)+``
+    the leading ``::`` starts an absolute path, and the keyword in front of it
+    is not the path's root.  Reading it as a segment would make the same item
+    refuse or pass depending on the expression the repetition is written in.
+    """
     if before < 1 or tokens[before].text != "::":
         return False
     index = before - 1
     while (
         index >= _PATH_SEGMENT
         and tokens[index - 1].text == "::"
-        and tokens[index - 2].kind is Kind.IDENT
+        and is_path_segment(tokens[index - 2])
     ):
         index -= _PATH_SEGMENT
     return tokens[index].text in qualifiers
-
-
-def _repetition_extents(
-    tokens: tuple[Token, ...],
-    index: int,
-) -> tuple[tuple[int, int], ...]:
-    """Return every enclosing repetition's boundary, innermost first.
-
-    Each pair is ``(before, after)``: the token in front of that group's ``$(``
-    and the token after its repetition operator.  Every level is reported
-    because an inner repetition can wrap a macro invocation while an outer one
-    wraps the same expression, and only the inner boundary names the macro that
-    runs.  A metavariable outside any repetition yields no pairs.
-    """
-    extents = []
-    opener = _enclosing_repetition(tokens, index)
-    while opener is not None:
-        close = matching(tokens, opener, "(", ")")
-        after = _after_repetition(tokens, close)
-        if after is not None:
-            extents.append((opener - 2, after))
-        opener = _enclosing_repetition(tokens, opener)
-    return tuple(extents)
-
-
-def _enclosing_repetition(tokens: tuple[Token, ...], index: int) -> int | None:
-    """Return the nearest ``$(`` group whose body holds the token at ``index``."""
-    for opener in range(index - 2, 0, -1):
-        if tokens[opener].text != "(" or tokens[opener - 1].text != "$":
-            continue
-        if matching(tokens, opener, "(", ")") > index:
-            return opener
-    return None
 
 
 def _after_repetition(tokens: tuple[Token, ...], close: int) -> int | None:

@@ -33,6 +33,9 @@ from rust_prover_tools.z3_selection import (
     resolve_z3,
 )
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 
 def _single_env_token(
     _type: object,
@@ -99,6 +102,40 @@ def probe_and_qualify_z3(
         reported=probe.stdout,
         source=PINNED_SOURCE if selection == PINNED_Z3 else EXPLICIT_SOURCE,
     )
+
+
+#: Verus's extended ``-V`` key that selects the CVC5 solver.
+_CVC5_OVERRIDE = "cvc5"
+#: The length of the ``-V`` flag before an attached value.
+_SHORT_OPTION_LENGTH = 2
+
+
+def _refuse_solver_override(z3: str | None, extra_args: cabc.Sequence[str]) -> None:
+    """Refuse extra arguments that override a selected Z3 solver.
+
+    Verus reads ``-V cvc5`` (or ``-Vcvc5``) as a request for CVC5 and then
+    ignores ``VERUS_Z3_PATH`` for solver execution.  Reporting the qualified
+    Z3 while the proof actually runs on CVC5 would describe a run that never
+    happened, so the combination is refused before the solver is probed.
+    """
+    if z3 is None:
+        return
+    for index, argument in enumerate(extra_args):
+        selection: str | None = None
+        if argument == "-V" and index + 1 < len(extra_args):
+            selection = extra_args[index + 1]
+        elif argument.startswith("-V") and len(argument) > _SHORT_OPTION_LENGTH:
+            selection = argument[_SHORT_OPTION_LENGTH:]
+        if (
+            selection is not None
+            and selection.split("=", 1)[0].strip() == _CVC5_OVERRIDE
+        ):
+            msg = (
+                "--z3 selects Z3, but the extra argument "
+                f"{argument!r} selects the cvc5 solver, so Verus would ignore "
+                "VERUS_Z3_PATH"
+            )
+            raise ProverToolError(msg)
 
 
 # CLI parameter binding needs one explicit parameter per flag/env-var mapping.
@@ -198,6 +235,7 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
     """
     try:
         root = (repo_root or Path.cwd()).resolve()
+        _refuse_solver_override(z3, extra_arg or ())
         solver = None if z3 is None else probe_and_qualify_z3(z3, repo_root=root)
         if solver is not None:
             print_lines((f"Solver ({solver.source}): {solver.executable}",))

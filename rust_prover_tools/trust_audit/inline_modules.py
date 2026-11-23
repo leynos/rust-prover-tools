@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import typing as typ
 
-from rust_prover_tools.trust_audit.conditions import conditional_path
+from rust_prover_tools.trust_audit.conditions import (
+    attribute_disables,
+    conditional_path,
+)
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.macro_rules import macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule
@@ -34,6 +37,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "InlineModules",
+    "declaration_disabled",
     "declared_module_aliases",
     "inline_module_names",
     "path_attribute",
@@ -94,6 +98,7 @@ class InlineModules:
         """Pair every inline module's braces and record each token's chain."""
         # Each entry is (module, index of the enclosing entry, closing brace).
         self._modules: list[tuple[InlineModule, int | None, int]] = []
+        self._disabled: set[int] = set()
         self._innermost: list[int | None] = [None] * len(tokens)
         stack: list[int] = []
         spans = dict(attribute_spans(tokens))
@@ -112,7 +117,10 @@ class InlineModules:
                 self._modules.append(
                     (module, parent, matching(tokens, index + 2, "{", "}")),
                 )
-                stack.append(len(self._modules) - 1)
+                entry = len(self._modules) - 1
+                if declaration_disabled(tokens, spans, index):
+                    self._disabled.add(entry)
+                stack.append(entry)
 
     @property
     def names(self) -> frozenset[str]:
@@ -133,6 +141,39 @@ class InlineModules:
             current = parent
         chain.reverse()
         return tuple(chain)
+
+    def is_disabled(self, index: int) -> bool:
+        """Report whether ``index`` sits inside a module no build compiles."""
+        current = self._innermost[index]
+        while current is not None:
+            if current in self._disabled:
+                return True
+            current = self._modules[current][1]
+        return False
+
+
+def declaration_disabled(
+    tokens: tuple[Token, ...],
+    spans: cabc.Mapping[int, int],
+    mod_index: int,
+) -> bool:
+    """Report whether a declaration is disabled in every configuration.
+
+    ``#[cfg(any())] mod unused;`` names a file no build compiles, so demanding
+    it would refuse a valid crate.  Only the attribution attributes before the
+    declaration are read, which is where a ``cfg`` that disables it must sit.
+    A visibility modifier may sit between the attribute and the declaration, so
+    the walk starts by stepping over it, as ``#[path]`` does.
+    """
+    index = skip_visibility(tokens, mod_index - 1)
+    while index >= 0 and tokens[index].text == "]":
+        opener = opening_bracket(tokens, index)
+        if opener is None or opener not in spans:
+            break
+        if attribute_disables(tokens, opener, index):
+            return True
+        index = previous_closer(tokens, opener)
+    return False
 
 
 def path_attribute(

@@ -19,6 +19,7 @@ from rust_prover_tools.kani_log.syntax import (
     BANNER,
     CBMC_FAILED,
     HARNESS_START,
+    NOISE_PREFIXES,
     SOLVER_COMMAND,
     TIMED_OUT,
     UNSUPPORTED_REACHABLE,
@@ -62,6 +63,7 @@ class _BlockBuilder:
     timed_out: bool = False
     unwinding_reported: bool = False
     has_results: bool = False
+    saw_summary: bool = False
 
     @property
     def checks(self) -> tuple[PropertyResult, ...]:
@@ -114,7 +116,20 @@ class Reader:
         return f"line {self._index + 1}"
 
     def peek(self) -> str:
-        """Return the current line without consuming it."""
+        """Return the current line without consuming it.
+
+        Returns
+        -------
+        str
+            The line at the cursor.
+
+        Raises
+        ------
+        IndexError
+            If the cursor is exhausted.  Callers that may sit at the end check
+            `exhausted` first; `peek_at` is the EOF-safe lookahead.
+
+        """
         return self._lines[self._index]
 
     def peek_at(self, offset: int) -> str | None:
@@ -127,7 +142,8 @@ class Reader:
         Parameters
         ----------
         offset : int
-            How many lines past the current one to read.
+            How many lines past the current one to read.  It must not be
+            negative: a negative offset would address the lines already read.
 
         Returns
         -------
@@ -290,7 +306,7 @@ class Reader:
             builder.timed_out = True
         elif line.startswith(SOLVER_COMMAND):
             _record_solver_command(builder, line)
-        elif line in {CBMC_FAILED, UNSUPPORTED_REACHABLE} or reports.is_noise(line):
+        elif line in {CBMC_FAILED, UNSUPPORTED_REACHABLE} or _is_noise(line):
             # Build and driver chatter carries no fact the analysis reads.
             pass
         else:
@@ -332,3 +348,8 @@ def _is_solver_transcript(builder: _BlockBuilder) -> bool:
     if builder.has_results:
         return False
     return builder.failed_count is None
+
+
+def _is_noise(line: str) -> bool:
+    """Report whether a line is build or driver chatter, not report content."""
+    return not line.strip() or line.startswith(NOISE_PREFIXES)

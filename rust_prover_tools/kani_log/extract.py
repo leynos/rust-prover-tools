@@ -16,6 +16,8 @@ from rust_prover_tools.kani_log.model import HarnessBlock, KaniLog, ManualSummar
 from rust_prover_tools.kani_log.reader import Reader
 from rust_prover_tools.kani_log.syntax import (
     BANNER,
+    CHECK,
+    FIELD,
     HARNESS_START,
     LIST_WRITTEN,
     NO_UNWINDING_ASSERTIONS_FLAG,
@@ -149,11 +151,28 @@ def _refuse_orphan_report_line(reader: Reader, line: str) -> None:
     """Refuse a report marker that no harness block owns.
 
     Discarding one would accept a malformed capture and return an earlier
-    block's facts as though the report were complete.
+    block's facts as though the report were complete.  A detached ``Check N:``
+    row matters as much as a section marker: the block it was written into had
+    already ended, so the failure it reports is never reconciled against a
+    verdict, and the earlier clean block would be returned as the run's result.
     """
-    if line in {"RESULTS:", "SUMMARY:"} or VERIFICATION.match(line) is not None:
+    if _is_report_line(line):
         msg = f"{reader.where()}: a report line outside a harness block"
         raise KaniLogError(msg)
+
+
+def _is_report_line(line: str) -> bool:
+    """Report whether ``line`` belongs to a harness report."""
+    if line in {"RESULTS:", "SUMMARY:"}:
+        return True
+    return any(
+        pattern.match(line) is not None
+        for pattern in (
+            VERIFICATION,
+            CHECK,
+            FIELD,
+        )
+    )
 
 
 def _refuse_harness_after_manual(
@@ -229,18 +248,15 @@ def _fail_fast_counts(
 
     ``--fail-fast`` stops the run at the first failing harness and passes only
     that result to Kani's final-summary routine, so successes printed before
-    it appear as blocks but not in the counts.  The valid shape is therefore a
-    summary with no successes whose total is exactly the failed set; any other
-    disagreement is still refused.  The reader cannot see the driver flag in
-    the transcript, so this shape is the only evidence of the mode.
+    it appear as blocks but not in the counts.  The driver summarises exactly
+    one failed result in that mode, so the only accepted shape is a summary
+    that counts one failure and no successes.  A summary naming several failed
+    blocks is a run Kani 0.67.0 cannot have produced under either mode, and is
+    still refused.  The reader cannot see the driver flag in the transcript, so
+    this shape is the only evidence of the mode.
     """
     verified, failures, total = counts
-    return (
-        verified == 0
-        and bool(failed)
-        and failures == len(failed)
-        and total == len(failed)
-    )
+    return verified == 0 and len(failed) == 1 and failures == 1 and total == 1
 
 
 def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:
