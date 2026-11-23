@@ -64,9 +64,60 @@ def test_undecodable_bytes_are_replaced() -> None:
 
 def test_a_discarding_stream_drops_the_rest_of_the_line() -> None:
     """Overflow state ends only at the next terminator."""
-    splitter = BoundedLineSplitter(max_line_bytes=4)
+    splitter = BoundedLineSplitter(max_line_bytes=16)
 
-    splitter.feed(b"abcdef")
+    splitter.feed(b"x" * 100)
     assert splitter.feed(b"ghij") == ()
     assert splitter.finish() == ()
     assert splitter.feed(b"\nafter\n") == ("after",)
+
+
+def test_a_terminator_in_the_same_chunk_still_truncates() -> None:
+    """An over-long line followed by a newline is truncated, not emitted whole."""
+    splitter = BoundedLineSplitter(max_line_bytes=4)
+
+    lines = splitter.feed(b"abcdef\nnext\n")
+
+    assert len(lines) == 2
+    assert "truncated" in lines[0]
+    assert lines[0].startswith("abcd")
+    assert lines[1] == "next"
+
+
+def test_the_partial_buffer_never_exceeds_the_limit() -> None:
+    """The bound applies while bytes accumulate, not only after the chunk."""
+    splitter = BoundedLineSplitter(max_line_bytes=4)
+
+    splitter.feed(b"x" * 100)
+    assert len(splitter._pending) <= 4
+
+
+def test_incomplete_utf8_at_a_newline_is_replaced() -> None:
+    """An incomplete sequence does not leak into the next line."""
+    splitter = BoundedLineSplitter(max_line_bytes=32)
+
+    first, second = splitter.feed(b"bad \xe2\x82\nok\n")
+
+    assert first.startswith("bad ")
+    assert "" in first
+    assert second == "ok"
+
+
+def test_incomplete_utf8_at_eof_is_replaced() -> None:
+    """An incomplete trailing sequence is reported, not lost."""
+    splitter = BoundedLineSplitter(max_line_bytes=32)
+
+    splitter.feed(b"tail \xe2\x82")
+    (line,) = splitter.finish()
+
+    assert line.startswith("tail ")
+    assert "" in line
+
+
+def test_incomplete_utf8_at_truncation_is_replaced() -> None:
+    """A truncated line ending mid-sequence still decodes."""
+    splitter = BoundedLineSplitter(max_line_bytes=4)
+
+    (line,) = splitter.feed(b"abcd\xe2\x82")
+
+    assert "truncated" in line

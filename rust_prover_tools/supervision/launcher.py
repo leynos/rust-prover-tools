@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import dataclasses as dc
 import os
 import typing as typ
 
@@ -42,9 +41,12 @@ from cuprum import (
     BrokenPipePolicy,
     RunOutputOptions,
 )
-from cuprum.context import EnvMode
 from cuprum.sh.stdio import StdioTarget
 
+from rust_prover_tools.supervision.launch_command import (
+    CommandBuilder,
+    LaunchCommand,
+)
 from rust_prover_tools.supervision.models import (
     LaunchResult,
     StopReason,
@@ -59,9 +61,7 @@ from rust_prover_tools.supervision.pipe_drain import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import datetime as dt
-    from pathlib import Path
 
-    from cuprum.context import UnsetType
     from cuprum.events import ExecEvent
 
     from rust_prover_tools.supervision.models import HarnessSpec
@@ -73,36 +73,6 @@ __all__ = (
     "PidSource",
     "RunningHarness",
 )
-
-
-@dc.dataclass(frozen=True, slots=True)
-class LaunchCommand:
-    """One composed invocation the launcher will run.
-
-    Attributes
-    ----------
-    argv : tuple[str, ...]
-        Program and arguments.
-    cwd : Path | None
-        Working directory for the child.
-    env : cabc.Mapping[str, str | UnsetType] | None
-        Environment for the child. Wrapper values and removal markers are
-        retained verbatim.
-    env_mode : cuprum.EnvMode
-        How `env` relates to the child's inherited environment. A supervised
-        legacy route uses `REPLACE` so a later host change cannot reach a
-        derived command; a snapshot route keeps the overlay its removal
-        markers require.
-    """
-
-    argv: tuple[str, ...]
-    cwd: Path | None = None
-    env: cabc.Mapping[str, str | UnsetType] | None = None
-    env_mode: EnvMode = EnvMode.OVERLAY
-
-
-type CommandBuilder = cabc.Callable[[HarnessSpec], LaunchCommand]
-"""Composes the argv and environment for one harness identity."""
 
 
 class PidSource(typ.Protocol):
@@ -300,6 +270,17 @@ class CuprumHarnessLauncher:
         self._clock = clock
         self._monotonic = monotonic
         self._max_line_bytes = max_line_bytes
+
+    @property
+    def max_line_bytes(self) -> int:
+        """The bound this launcher applies to one forwarded line.
+
+        Returns
+        -------
+        int
+            The configured per-line byte bound.
+        """
+        return self._max_line_bytes
 
     def start(
         self,

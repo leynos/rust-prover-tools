@@ -180,9 +180,11 @@ selector or output override is refused, in separate-value form
 `--default-unwind`, `-Z`, and `--fail-fast` are preserved.
 
 A pinned inventory is revalidated against a fresh discovery of the tree the run
-will build. A test-target entry whose harness was removed, renamed, or moved to
-another target is refused, so a stale document cannot be credited to a target
-Kani never built.
+will build. A test-target entry whose harness was removed, renamed, moved to
+another target, or is gated by a `cfg` other than `cfg(kani)` is refused, and a
+package that declares more than one integration-test target is refused
+outright: a `cfg`-disabled harness can be absent while a same-named generated
+harness elsewhere is selected, so lexical discovery alone cannot attribute it.
 
 Kani 0.67.0 has no flag that selects one integration-test target. Its `--tests`
 option enables verification of test crates _and_ leaves the library and every
@@ -286,25 +288,26 @@ result carries a diagnostic reference to the absolute byte offset where that
 harness's JSONL evidence begins, including when the file is appended to across
 runs.
 
-Cuprum mirrors an echoed line through a 64 KiB default bound
-(`max_echo_line_bytes`). Supervision does not echo; it observes decoded lines
-and forwards at most 8 KiB of each with an explicit marker. Cuprum 0.2.0b2
-accumulates a line with no terminator in its own drain buffer before invoking
-the line hook, and its public options expose no chunk-level line bound.
-Supervision therefore cannot bound that single pathological line; the forwarded
-line, the sinks, and the report remain bounded, and a child that writes one
-newline-free line delays delivery until the line ends. This is a documented
-residual limitation of line-oriented observation, not of the supervisor's
-record handling.
+Supervision does not echo. It borrows the child's stdout and stderr pipe ends
+through Cuprum's `StdioTarget.fd`, reads them in 64 KiB chunks on the event
+loop, and splits lines itself. The splitter caps the partial line at
+`max_line_bytes`; a longer newline-free line is forwarded truncated with an
+explicit marker and the rest of it is discarded until its terminator. Line
+endings follow Cuprum's CR, LF, and CRLF rules, and a CR that ends one chunk
+waits for the next chunk before it is treated as a boundary. Each complete line
+is decoded independently, so an incomplete byte sequence becomes the
+replacement character at the boundary where it occurs rather than leaking into
+the next line or disappearing at end of stream.
 
-**This library does not claim an end-to-end memory bound.** The requirement it
-meets is that it never accumulates a whole proof log: every buffer it owns is
-bounded. The one exception is upstream and was measured: an 8 MiB newline-free
-line was held in full by Cuprum and delivered as one 8 MiB event (peak child
-RSS 29 MiB). Closing that boundary needs a chunk-level line bound in Cuprum's
-public API; it cannot be imposed from outside. A deployment that may face
-newline-free output of unbounded length must treat this as an accepted upstream
-gap, not as satisfied by supervision.
+The bound is therefore end to end for everything the supervisor retains: a
+partial line, a forwarded line, a JSONL record, a stream tail, and a report are
+each bounded, and no whole proof log is retained.
+`test_a_newline_free_line_is_bounded_end_to_end` drives a real 8 MiB
+newline-free line through the production launcher and asserts that no forwarded
+line exceeds the configured bound. Cuprum's own line hook retains an
+unterminated line before invoking the hook, which is why supervision does not
+use it; that remains true of Cuprum 0.2.0b2 and is recorded here as historical
+context, not as an active limitation of this route.
 
 ### JSONL records, version 1
 

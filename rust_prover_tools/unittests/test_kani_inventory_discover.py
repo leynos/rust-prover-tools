@@ -486,3 +486,77 @@ def test_a_pinned_target_absent_from_cargo_metadata_is_refused() -> None:
 
     with pytest.raises(InventoryDiscoveryError, match="does not"):
         verify_test_target_attribution((selected,), live, metadata)
+
+
+def test_multiple_test_targets_are_refused_even_when_the_entry_matches() -> None:
+    """D14 requires the multi-test-target refusal, not only a live match."""
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        PackageInventory,
+        verify_test_target_attribution,
+    )
+    from rust_prover_tools.kani_inventory.discover import (
+        CargoPackage,
+        CargoTarget,
+        cargo_metadata,
+    )
+
+    harness = InventoryHarness(
+        package="beta",
+        target="integration",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    live = HarnessInventory((PackageInventory("beta", (harness,)),))
+    metadata = list(cargo_metadata(_WORKSPACE))
+    beta = next(package for package in metadata if package.name == "beta")
+    doubled = tuple(
+        CargoPackage(
+            name=package.name,
+            manifest_path=package.manifest_path,
+            targets=package.targets
+            + (
+                (
+                    CargoTarget(
+                        name="second",
+                        kind="test",
+                        src_path=package.targets[0].src_path,
+                    ),
+                )
+                if package.name == "beta"
+                else ()
+            ),
+        )
+        for package in metadata
+    )
+    del beta
+
+    with pytest.raises(InventoryDiscoveryError, match="no flag"):
+        verify_test_target_attribution((harness,), live, doubled)
+
+
+def test_a_conditional_test_harness_is_refused() -> None:
+    """A cfg-gated test harness cannot be attributed to its target."""
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        PackageInventory,
+        verify_test_target_attribution,
+    )
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
+
+    harness = InventoryHarness(
+        package="beta",
+        target="integration",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+        conditional=True,
+    )
+    live = HarnessInventory((PackageInventory("beta", (harness,)),))
+    metadata = cargo_metadata(_WORKSPACE)
+
+    with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
+        verify_test_target_attribution((harness,), live, metadata)

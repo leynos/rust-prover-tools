@@ -313,7 +313,12 @@ def execute_harnesses(
         config,
         diagnostics or dependencies.diagnostics,
     ) as opened:
-        environment = _environment(preparation, dependencies, opened)
+        environment = _environment(
+            preparation,
+            dependencies,
+            opened,
+            max_line_bytes=config.max_line_bytes,
+        )
         report = run_supervised_sync(
             tuple(harness.to_spec() for harness in preparation.selected),
             config,
@@ -357,12 +362,15 @@ def _environment(
     preparation: KaniHarnessPreparation,
     dependencies: KaniHarnessDependencies,
     diagnostics: Diagnostics,
+    *,
+    max_line_bytes: int,
 ) -> RunEnvironment:
     """Build the supervision environment around the prepared route."""
     clock = dependencies.clock or SystemClock()
     launcher = dependencies.launcher or CuprumHarnessLauncher(
         clock=clock.now,
         monotonic=clock.monotonic,
+        max_line_bytes=max_line_bytes,
     )
 
     def build(spec: HarnessSpec) -> LaunchCommand:

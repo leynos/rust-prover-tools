@@ -622,8 +622,8 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at the published head passes with 2,521 tests and 6 skips. The opt-in live Kani
-0.67.0 fixture passes at this candidate: 2 passed in 336.78 s. The earlier
+at the published head passes with 2,529 tests and 6 skips. The opt-in live Kani
+0.67.0 fixture passes at this candidate: 2 passed in 100.31 s. The earlier
 claim that only tests and documentation changed after `6f772f3` was wrong:
 supervision and inventory code changed in `0376a44`, so the fixture was rerun
 at the corrected candidate and this is that result. The parser property suite

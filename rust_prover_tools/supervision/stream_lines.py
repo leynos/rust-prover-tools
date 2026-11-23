@@ -13,7 +13,6 @@ real verifier writes is forwarded whole rather than split on a carriage return.
 
 from __future__ import annotations
 
-import codecs
 import dataclasses as dc
 
 __all__ = ("BoundedLineSplitter",)
@@ -46,7 +45,6 @@ class BoundedLineSplitter:
     _discarding: bool = dc.field(default=False, init=False)
     _pending_cr: bool = dc.field(default=False, init=False)
     _skip_lf: bool = dc.field(default=False, init=False)
-    _decoder: codecs.IncrementalDecoder | None = dc.field(default=None, init=False)
 
     def feed(self, chunk: bytes) -> tuple[str, ...]:
         """Return the complete lines one chunk finished.
@@ -64,29 +62,40 @@ class BoundedLineSplitter:
         lines: list[str] = []
         for index, byte in enumerate(chunk):
             self._consume(byte, last=index + 1 == len(chunk), lines=lines)
-        if not self._discarding and len(self._pending) > self.max_line_bytes:
-            lines.append(self._overflow())
         return tuple(lines)
 
     def _consume(self, byte: int, *, last: bool, lines: list[str]) -> None:
         """Consume one byte, finishing a line when it is a terminator."""
-        if self._skip_lf:
-            self._skip_lf = False
-            if byte == _LF:
-                return
+        if self._skip_boundary_byte(byte):
+            return
         if self._pending_cr:
             self._pending_cr = False
             self._boundary(lines)
             if byte == _LF:
-                # The previous chunk ended with CR and this one starts with
-                # LF: together they are one boundary.
                 return
         if byte == _CR:
             self._at_cr(last=last, lines=lines)
         elif byte == _LF:
             self._boundary(lines)
-        elif not self._discarding:
-            self._pending.append(byte)
+        else:
+            self._append(byte, lines)
+
+    def _skip_boundary_byte(self, byte: int) -> bool:
+        """Skip an LF already consumed as the second half of CRLF."""
+        if not self._skip_lf:
+            return False
+        self._skip_lf = False
+        return byte == _LF
+
+    def _append(self, byte: int, lines: list[str]) -> None:
+        """Append one ordinary byte, enforcing the bound while consuming."""
+        if self._discarding:
+            return
+        self._pending.append(byte)
+        if len(self._pending) > self.max_line_bytes:
+            # Waiting until the chunk ends would let a terminator in the same
+            # chunk emit an over-long line untruncated.
+            lines.append(self._overflow())
 
     def _at_cr(self, *, last: bool, lines: list[str]) -> None:
         """Handle a carriage return, holding a trailing one for the next chunk."""
@@ -121,6 +130,10 @@ class BoundedLineSplitter:
         if self._discarding:
             self._discarding = False
             return
+        if len(self._pending) > self.max_line_bytes:
+            lines.append(self._overflow())
+            self._discarding = False
+            return
         lines.append(self._take())
 
     def _take(self) -> str:
@@ -139,9 +152,10 @@ class BoundedLineSplitter:
         return f"{self._decode(prefix)}{marker}"
 
     def _decode(self, data: bytes) -> str:
-        """Decode one complete line under the configured policy."""
-        if self._decoder is None:
-            self._decoder = codecs.getincrementaldecoder(self.encoding)(
-                errors=self.errors
-            )
-        return self._decoder.decode(data, final=False)
+        """Decode one complete line, flushing any incomplete sequence.
+
+        A fresh decoder per line means an incomplete byte sequence cannot leak
+        into the next line or be lost silently at end of stream: it becomes the
+        replacement character at the boundary where it belongs.
+        """
+        return data.decode(self.encoding, errors=self.errors)

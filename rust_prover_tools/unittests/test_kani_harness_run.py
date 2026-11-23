@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import typing as typ
 from pathlib import Path
 
 import pytest
@@ -408,3 +409,25 @@ def test_the_plan_prescribed_entry_point_is_public() -> None:
     assert callable(rust_prover_tools.run_kani_harnesses)
     assert "run_kani_harnesses" in rust_prover_tools.__all__
     assert rust_prover_tools.run_kani_harnesses is not rust_prover_tools.run_harnesses
+
+
+def test_the_configured_line_limit_reaches_the_launcher() -> None:
+    """The run policy's line bound is the launcher's bound, not a default."""
+    from rust_prover_tools.kani_harness_models import KaniHarnessPreparation
+    from rust_prover_tools.kani_harness_run import _environment
+
+    preparation = KaniHarnessPreparation(
+        inventory=_inventory("harnesses::a"),
+        selected=(),
+        prepared=_prepared(),
+        commands={},
+    )
+    environment = _environment(
+        preparation,
+        KaniHarnessDependencies(),
+        Diagnostics(jsonl=MemorySink()),
+        max_line_bytes=64,
+    )
+
+    launcher = typ.cast("typ.Any", environment.launcher)
+    assert launcher.max_line_bytes == 64

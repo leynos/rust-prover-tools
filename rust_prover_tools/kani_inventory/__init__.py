@@ -21,14 +21,16 @@ not select the identity the inventory names.
 
 from __future__ import annotations
 
+from rust_prover_tools.kani_inventory.attribution import (
+    test_targets,
+    verify_test_target_attribution,
+)
 from rust_prover_tools.kani_inventory.discover import (
     CargoPackage,
     CargoTarget,
     cargo_metadata,
     discover_inventory,
     select_packages,
-    test_targets,
-    verify_test_target_attribution,
 )
 from rust_prover_tools.kani_inventory.document import (
     inventory_document,
