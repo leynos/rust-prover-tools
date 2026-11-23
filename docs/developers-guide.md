@@ -171,9 +171,10 @@ Feature modules should own workflow behaviour:
   set of entry points; `drivers` expands command arguments into Cargo target
   pathnames; `targets` applies Cargo's own target discovery and `auto*` flags;
   and `manifests` reads each crate's kind with the one `read_cargo_manifest`
-  decoder both target discovery and proc-macro detection share. `drivers`,
-  `targets`, `manifests` and `tree` are the package's I/O edge; every other
-  module is a pure function of the text it is given.
+  decoder both target discovery and proc-macro detection share. `module_paths`
+  probes the host paths a declaration names. `drivers`, `targets`, `manifests`,
+  `module_paths` and `tree` are the package's I/O edge; every other module is a
+  pure function of the text it is given.
 - `rust_prover_tools.z3_selection` for resolving a solver selection and
   qualifying an observed version. Resolution reads the filesystem and `PATH`;
   the `--version` probe lives in `verus_run_cli`, which also refuses an extra

@@ -23,9 +23,10 @@ one per request, so a reviewer can read each against a justification:
 
 The walk needs a filesystem.  :mod:`.drivers` and :mod:`.targets` expand the
 command's arguments into Cargo targets, :mod:`.manifests` reads the crate kind,
-and :mod:`.tree` reads the sources and follows their declarations; those four
-rooms are the package's I/O edge.  Every other module is a pure function of the
-text it is given.
+:mod:`.module_paths` probes the host paths a declaration names, and
+:mod:`.tree` reads the sources and follows their declarations; those five
+modules are the package's I/O edge.  Every other module is a pure function of
+the text it is given.
 
 Examples
 --------
