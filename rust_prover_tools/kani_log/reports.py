@@ -24,7 +24,6 @@ from rust_prover_tools.kani_log.syntax import (
     FAILED_FOR,
     FAILED_LOCATION,
     TOTAL,
-    UNSUPPORTED_ENTRY,
     UNSUPPORTED_REACHABLE,
     VERIFICATION,
     FailedCheck,
@@ -44,7 +43,6 @@ __all__ = (
     "manual",
     "results",
     "summary",
-    "unsupported_constructs",
     "verification",
 )
 
@@ -173,6 +171,12 @@ def summary(reader: Reader, builder: _BlockBuilder) -> None:
         elif cover is not None:
             _record_cover(reader, builder, cover)
         elif message := FAILED_CHECK.match(line):
+            if len(builder.failures) >= MAX_BLOCK_RECORDS:
+                msg = (
+                    f"{reader.where()}: the block for {builder.name!r} reports "
+                    f"more than {MAX_BLOCK_RECORDS} failures"
+                )
+                raise KaniLogError(msg)
             reader.take()
             builder.failures.append(failed_check(reader, builder, message))
         elif VERIFICATION.match(line) or line == UNSUPPORTED_REACHABLE:
@@ -345,6 +349,12 @@ def manual(reader: Reader) -> ManualSummary:
         failure = FAILED_FOR.match(line)
         complete = COMPLETE.match(line)
         if failure is not None:
+            if len(failed) >= MAX_BLOCK_RECORDS:
+                msg = (
+                    f"{reader.where()}: the manual summary lists more than "
+                    f"{MAX_BLOCK_RECORDS} failed harnesses"
+                )
+                raise KaniLogError(msg)
             reader.take()
             failed.append(failure["name"])
         elif complete is not None:
@@ -362,37 +372,3 @@ def manual(reader: Reader) -> ManualSummary:
             raise KaniLogError(msg)
     msg = "the log is truncated: the manual harness summary has no counts"
     raise KaniLogError(msg)
-
-
-def unsupported_constructs(reader: Reader) -> list[str]:
-    """Consume Kani's pre-flight list of constructs it cannot model.
-
-    Parameters
-    ----------
-    reader : Reader
-        The log cursor, positioned at the list's heading line.
-
-    Returns
-    -------
-    list[str]
-        One name per listed construct, in source order.  The heading and the
-        entries are behind the cursor; the first non-entry line is left for
-        the caller.
-
-    Raises
-    ------
-    KaniLogError
-        Never directly; a truncated list simply ends at the last entry.
-    """
-    reader.take()
-    names: list[str] = []
-    while not reader.exhausted:
-        entry = UNSUPPORTED_ENTRY.match(reader.peek())
-        if entry is None:
-            if reader.peek().strip():
-                return names
-            reader.take()
-            continue
-        names.append(entry["name"])
-        reader.take()
-    return names

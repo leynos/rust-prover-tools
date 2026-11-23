@@ -19,13 +19,20 @@ _CORPUS = (
 
 
 def test_streaming_parse_matches_the_batch_parse() -> None:
-    """The streaming entry point yields exactly the batch facts."""
-    text = (_CORPUS / "verified.log").read_text(encoding="utf-8")
-    lines = [line.removesuffix("\r") for line in text.split("\n")]
-
-    streamed = parse_kani_log_lines(iter(lines))
-
-    assert streamed.harnesses == parse_kani_log(text).harnesses
+    """Every corpus log yields the same facts or the same refusal."""
+    for path in sorted(_CORPUS.glob("*.log")):
+        text = path.read_text(encoding="utf-8")
+        lines = [line.removesuffix("\r") for line in text.split("\n")]
+        try:
+            batch = parse_kani_log(text)
+        except KaniLogError as error:
+            batch_refusal = str(error)
+        else:
+            assert parse_kani_log_lines(iter(lines)) == batch
+            continue
+        with pytest.raises(KaniLogError) as streamed:
+            parse_kani_log_lines(iter(lines))
+        assert str(streamed.value) == batch_refusal
 
 
 def test_the_window_stays_small_while_parsing() -> None:
@@ -69,3 +76,4 @@ def test_the_window_is_bounded_for_streaming_input() -> None:
 
     with pytest.raises(KaniLogError, match="lookahead"):
         source.at(20)
+    assert source.buffered == 0

@@ -13,7 +13,7 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.kani_log import reconcile, reports
+from rust_prover_tools.kani_log import reconcile, reports, unsupported
 from rust_prover_tools.kani_log.lines import LineSource, ListLines, StreamingLines
 from rust_prover_tools.kani_log.model import HarnessBlock, ManualSummary
 from rust_prover_tools.kani_log.syntax import (
@@ -227,7 +227,7 @@ class Reader:
 
     def unsupported_constructs(self) -> list[str]:
         """Consume Kani's pre-flight list of constructs it cannot model."""
-        return reports.unsupported_constructs(self)
+        return unsupported.unsupported_constructs(self)
 
     def block(self, match: re.Match[str]) -> HarnessBlock:
         """Consume one ``Checking harness`` block through its verification time.

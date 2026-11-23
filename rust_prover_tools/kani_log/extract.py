@@ -29,8 +29,12 @@ from rust_prover_tools.kani_log.syntax import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    import re
 
 from rust_prover_tools.kani_log.unwinding import unwinding_checks_enabled
+
+#: Largest number of harness blocks or unsupported constructs one log retains.
+MAX_PARSER_RECORDS: typ.Final[int] = 10_000
 
 __all__ = ("parse_kani_log", "parse_kani_log_lines", "unwinding_checks_enabled")
 
@@ -63,9 +67,7 @@ def parse_kani_log(text: str) -> KaniLog:
     banner``.
 
     """
-    reader = Reader(_physical_lines(text))
-    version = _require_supported_banner(reader)
-    return _reconcile(version, _scan(reader))
+    return parse_kani_log_lines(_physical_lines(text))
 
 
 def parse_kani_log_lines(lines: cabc.Iterable[str]) -> KaniLog:
@@ -152,13 +154,12 @@ def _scan(reader: Reader) -> _ObservedLog:
                 raise KaniLogError(msg)
             manual = reader.manual()
         elif line == UNSUPPORTED_PRELUDE:
-            unsupported.extend(reader.unsupported_constructs())
+            _extend_unsupported(reader, unsupported)
         elif line.startswith(LIST_WRITTEN):
             is_list = True
             reader.take()
         elif header := HARNESS_START.match(line):
-            _refuse_harness_after_manual(reader, manual)
-            blocks.append(reader.block(header))
+            _append_block(reader, blocks, manual, header)
         elif BANNER.match(line) is not None:
             # A second banner means the capture is two invocations
             # concatenated.  The first run's facts describe only itself, so
@@ -178,6 +179,34 @@ def _scan(reader: Reader) -> _ObservedLog:
         is_list,
         tuple(unsupported),
     )
+
+
+def _append_block(
+    reader: Reader,
+    blocks: list[HarnessBlock],
+    manual: ManualSummary | None,
+    header: re.Match[str],
+) -> None:
+    """Append one block, refusing a log beyond the block budget."""
+    if len(blocks) >= MAX_PARSER_RECORDS:
+        msg = (
+            f"{reader.where()}: the log reports more than "
+            f"{MAX_PARSER_RECORDS} harness blocks"
+        )
+        raise KaniLogError(msg)
+    _refuse_harness_after_manual(reader, manual)
+    blocks.append(reader.block(header))
+
+
+def _extend_unsupported(reader: Reader, unsupported: list[str]) -> None:
+    """Append one unsupported list, refusing a log beyond the budget."""
+    unsupported.extend(reader.unsupported_constructs())
+    if len(unsupported) > MAX_PARSER_RECORDS:
+        msg = (
+            f"{reader.where()}: the log names more than "
+            f"{MAX_PARSER_RECORDS} unsupported constructs"
+        )
+        raise KaniLogError(msg)
 
 
 def _refuse_orphan_report_line(reader: Reader, line: str) -> None:
