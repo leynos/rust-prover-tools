@@ -18,7 +18,17 @@ import itertools
 import re
 import typing as typ
 
-from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.producer.proof_transcript import (
+    HarnessOutcome,
+    ProofCompileError,
+    ProofSolverError,
+    ProofTranscriptError,
+    Summary,
+    harness_outcome,
+    harness_sections,
+    has_no_harness_message,
+    summary_counts,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -39,74 +49,25 @@ __all__ = (
 #: larger value would only be a log a caller assembled itself.
 MAX_TRANSCRIPT_BYTES: typ.Final[int] = 4 * 1024 * 1024
 
-#: `cargo kani --jobs N` prefixes some lines with the rayon thread index. The
-#: verdict and summary lines are part of a multi-line block, so only their first
-#: line carries the marker; every pattern therefore tolerates it optionally.
-_PREFIX = r"(?:Thread [0-9]+: )?"
-_HARNESS_START: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PREFIX}Checking harness (?P<name>\S+?)\.\.\.$", re.MULTILINE
-)
-_VERDICT: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PREFIX}VERIFICATION:- (?P<verdict>SUCCESSFUL|FAILED)(?P<note>.*)$",
-    re.MULTILINE,
-)
-_SUMMARY: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PREFIX}Complete - (?P<verified>[0-9]+) successfully verified harnesses, "
-    rf"(?P<failed>[0-9]+) failures, (?P<total>[0-9]+) total\.$",
-    re.MULTILINE,
-)
-_NO_HARNESSES: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PREFIX}No proof harnesses .* were found to verify\.$", re.MULTILINE
-)
-_FAILED_FOR: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PREFIX}Verification failed for - (?P<name>\S+)$", re.MULTILINE
-)
-_COMPILE_ERROR: typ.Final[re.Pattern[str]] = re.compile(
-    r"^error(?:\[[A-Za-z0-9]+\])?: ", re.MULTILINE
-)
-_CANNOT_COMPILE: typ.Final[re.Pattern[str]] = re.compile(
-    r"could not compile", re.IGNORECASE
-)
-_SOLVER_FAILURE: typ.Final[re.Pattern[str]] = re.compile(
-    r"\bCBMC (?:failed|timed out)\b|\bFailed to run cbmc\b|"
-    r"CBMC appears to have run out of memory",
-    re.IGNORECASE,
-)
-
-
 #: How to describe a harness that carried the status opposite the expectation.
 _OPPOSITE_STATUS: typ.Final[dict[str, str]] = {
     "verify": "failed but was expected to verify",
     "fail": "verified but was expected to fail",
 }
 
-
-class ProofTranscriptError(ProverToolError):
-    """A Kani transcript does not state one consistent proof result."""
-
-
-class ProofCompileError(ProofTranscriptError):
-    """Kani failed while compiling the fixture, not while proving it."""
-
-
-class ProofSolverError(ProofTranscriptError):
-    """The solver failed, so no harness obtained a verification verdict."""
-
-
-@dc.dataclass(frozen=True, slots=True)
-class HarnessOutcome:
-    """One harness and the verdict Kani reported for it.
-
-    Attributes
-    ----------
-    name : str
-        Harness name as printed after `Checking harness`.
-    verified : bool
-        `True` for a successful verification, `False` for a failed one.
-    """
-
-    name: str
-    verified: bool
+#: A compiler diagnostic, as opposed to a verification verdict.
+_COMPILE_ERROR: typ.Final[re.Pattern[str]] = re.compile(
+    r"^error(?:\[[A-Za-z0-9]+\])?: ", re.MULTILINE
+)
+_CANNOT_COMPILE: typ.Final[re.Pattern[str]] = re.compile(
+    r"could not compile", re.IGNORECASE
+)
+#: A CBMC failure, which is not a proof result.
+_SOLVER_FAILURE: typ.Final[re.Pattern[str]] = re.compile(
+    r"\bCBMC (?:failed|timed out)\b|\bFailed to run cbmc\b|"
+    r"CBMC appears to have run out of memory",
+    re.IGNORECASE,
+)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -154,68 +115,30 @@ def _bounded(transcript: str) -> str:
 
 def _diagnose(transcript: str) -> None:
     """Refuse a transcript whose failure is compilation or the solver."""
-    compile_failure = (
-        _COMPILE_ERROR.search(transcript) is not None
-        or _CANNOT_COMPILE.search(transcript) is not None
-    )
     solver_failure = _SOLVER_FAILURE.search(transcript) is not None
-    if solver_failure and compile_failure:
-        msg = "proof transcript names both a compiler error and a solver failure"
-        raise ProofSolverError(msg)
+    compile_failure = _has_compile_failure(transcript)
     if solver_failure:
-        msg = "proof transcript reports a CBMC solver failure, not a proof result"
-        raise ProofSolverError(msg)
+        _raise_solver_failure(has_compile_failure=compile_failure)
     if compile_failure:
         msg = "proof transcript reports a compile error, not a verification failure"
         raise ProofCompileError(msg)
 
 
-def _sections(transcript: str) -> dict[str, str]:
-    """Split a transcript into the text belonging to each named harness.
-
-    A duplicate harness start is refused because two sections for one name
-    would make "the" verdict for that harness depend on document order, which
-    is exactly the ambiguity a contradictory transcript is meant to expose.
-    """
-    starts = list(_HARNESS_START.finditer(transcript))
-    sections: dict[str, str] = {}
-    for index, start in enumerate(starts):
-        name = start.group("name")
-        if name in sections:
-            msg = f"proof transcript checks harness {name!r} more than once"
-            raise ProofTranscriptError(msg)
-        end = starts[index + 1].start() if index + 1 < len(starts) else len(transcript)
-        sections[name] = transcript[start.end() : end]
-    return sections
-
-
-def _outcome(name: str, body: str) -> HarnessOutcome:
-    """Return the single verdict a harness section states."""
-    verdicts = _VERDICT.findall(body)
-    if not verdicts:
-        msg = f"proof transcript states no verdict for harness {name!r}"
-        raise ProofTranscriptError(msg)
-    if len(verdicts) > 1:
-        msg = f"proof transcript states more than one verdict for harness {name!r}"
-        raise ProofTranscriptError(msg)
-    verdict = verdicts[0][0]
-    return HarnessOutcome(name=name, verified=verdict == "SUCCESSFUL")
-
-
-def _summary_counts(transcript: str) -> tuple[int, int, int, frozenset[str]]:
-    """Return the single manual summary and the harnesses it names as failed."""
-    summaries = _SUMMARY.findall(transcript)
-    if not summaries:
-        msg = "proof transcript does not report a manual harness summary"
-        raise ProofTranscriptError(msg)
-    if len(summaries) > 1:
-        msg = "proof transcript reports more than one manual harness summary"
-        raise ProofTranscriptError(msg)
-    verified, failed, total = (int(value) for value in summaries[0])
-    named_failures = frozenset(
-        match.group("name") for match in _FAILED_FOR.finditer(transcript)
+def _has_compile_failure(transcript: str) -> bool:
+    """Say whether the transcript reports a compiler diagnostic."""
+    return (
+        _COMPILE_ERROR.search(transcript) is not None
+        or _CANNOT_COMPILE.search(transcript) is not None
     )
-    return verified, failed, total, named_failures
+
+
+def _raise_solver_failure(*, has_compile_failure: bool) -> typ.NoReturn:
+    """Raise the solver failure, naming an accompanying compiler error."""
+    if has_compile_failure:
+        msg = "proof transcript names both a compiler error and a solver failure"
+    else:
+        msg = "proof transcript reports a CBMC solver failure, not a proof result"
+    raise ProofSolverError(msg)
 
 
 def parse_proof_report(transcript: str) -> ProofReport:
@@ -244,41 +167,59 @@ def parse_proof_report(transcript: str) -> ProofReport:
     """
     text = _bounded(transcript)
     _diagnose(text)
-    sections = _sections(text)
+    outcomes = _outcomes(text)
+    summary = summary_counts(text)
+    _require_summary_agrees(summary, outcomes)
+    return ProofReport(
+        outcomes=outcomes,
+        verified_count=summary.verified,
+        failed_count=summary.failed,
+        total_count=summary.total,
+    )
+
+
+def _outcomes(text: str) -> tuple[HarnessOutcome, ...]:
+    """Return the named verdicts, refusing a transcript with none."""
+    sections = harness_sections(text)
     if not sections:
-        if _NO_HARNESSES.search(text) is not None:
-            msg = "proof transcript reports that no proof harnesses were found"
-            raise ProofTranscriptError(msg)
+        _raise_missing_harnesses(text)
+    return tuple(itertools.starmap(harness_outcome, sections.items()))
+
+
+def _raise_missing_harnesses(text: str) -> typ.NoReturn:
+    """Raise the failure a transcript with no harness section states."""
+    if has_no_harness_message(text):
+        msg = "proof transcript reports that no proof harnesses were found"
+    else:
         msg = "proof transcript contains no named harness verdicts"
-        raise ProofTranscriptError(msg)
-    outcomes = tuple(itertools.starmap(_outcome, sections.items()))
-    verified, failed, total, named_failures = _summary_counts(text)
+    raise ProofTranscriptError(msg)
+
+
+def _require_summary_agrees(
+    summary: Summary, outcomes: tuple[HarnessOutcome, ...]
+) -> None:
+    """Require the summary's counts and named failures to match the verdicts."""
     verified_names = frozenset(item.name for item in outcomes if item.verified)
     failed_names = frozenset(item.name for item in outcomes if not item.verified)
-    if (verified, failed, total) != (
+    if (summary.verified, summary.failed, summary.total) != (
         len(verified_names),
         len(failed_names),
         len(outcomes),
     ):
         msg = (
             "proof transcript manual summary "
-            f"({verified} verified, {failed} failed, {total} total) contradicts "
-            f"the {len(verified_names)} verified and {len(failed_names)} failed "
-            "harness verdicts"
+            f"({summary.verified} verified, {summary.failed} failed, "
+            f"{summary.total} total) contradicts the {len(verified_names)} "
+            f"verified and {len(failed_names)} failed harness verdicts"
         )
         raise ProofTranscriptError(msg)
-    if named_failures != failed_names:
+    if summary.named_failures != failed_names:
         msg = (
             "proof transcript manual summary names failures "
-            f"{sorted(named_failures)} but the verdicts name {sorted(failed_names)}"
+            f"{sorted(summary.named_failures)} but the verdicts name "
+            f"{sorted(failed_names)}"
         )
         raise ProofTranscriptError(msg)
-    return ProofReport(
-        outcomes=outcomes,
-        verified_count=verified,
-        failed_count=failed,
-        total_count=total,
-    )
 
 
 def require_named_harnesses(

@@ -52,14 +52,24 @@ def canonical_component_names(data: bytes) -> bytes:
         Raised when the record is larger than `MAX_COMPONENTS_BYTES`, is not
         UTF-8, lists no components, or lists one component more than once.
     """
+    names = _component_names(_decode_components(data))
+    return "".join(f"{name}\n" for name in sorted(names)).encode("utf-8")
+
+
+def _decode_components(data: bytes) -> str:
+    """Decode a bounded component record as UTF-8."""
     if len(data) > MAX_COMPONENTS_BYTES:
         msg = f"rustup component record exceeds the {MAX_COMPONENTS_BYTES}-byte ceiling"
         raise ProverToolError(msg)
     try:
-        text = data.decode("utf-8")
+        return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         msg = f"rustup component record is not valid UTF-8: {exc}"
         raise ProverToolError(msg) from exc
+
+
+def _component_names(text: str) -> list[str]:
+    """Return the non-blank names, requiring a unique non-empty set."""
     names = [line.strip() for line in text.splitlines() if line.strip()]
     if not names:
         msg = "rustup component record lists no components"
@@ -67,7 +77,7 @@ def canonical_component_names(data: bytes) -> bytes:
     if len(set(names)) != len(names):
         msg = "rustup component record lists a component more than once"
         raise ProverToolError(msg)
-    return "".join(f"{name}\n" for name in sorted(names)).encode("utf-8")
+    return names
 
 
 def components_digest(data: bytes) -> str:

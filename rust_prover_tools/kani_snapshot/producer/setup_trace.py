@@ -156,43 +156,66 @@ def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:
         Raised when the trace is not text, exceeds the byte ceiling, or holds
         more records than the record ceiling.
     """
-    if not isinstance(trace, str):
-        msg = "setup trace must be text"
-        raise SetupTraceError(msg)
-    if len(trace) > MAX_TRACE_BYTES:
-        msg = f"setup trace exceeds the {MAX_TRACE_BYTES}-byte ceiling"
-        raise SetupTraceError(msg)
+    _require_bounded_trace(trace)
     records: list[ExecRecord] = []
     for line in trace.splitlines():
-        match = _EXECVE.match(line)
-        if match is None:
-            continue
-        records.append(
-            ExecRecord(
-                executable=_unescape(match.group("path")),
-                argv=_argv(match.group("argv")),
-            )
-        )
+        record = _record(line)
+        if record is not None:
+            records.append(record)
         if len(records) > MAX_EXEC_RECORDS:
             msg = f"setup trace exceeds the {MAX_EXEC_RECORDS}-record ceiling"
             raise SetupTraceError(msg)
     return tuple(records)
 
 
+def _require_bounded_trace(trace: str) -> None:
+    """Require a text trace within the documented byte ceiling."""
+    if not isinstance(trace, str):
+        msg = "setup trace must be text"
+        raise SetupTraceError(msg)
+    if len(trace) > MAX_TRACE_BYTES:
+        msg = f"setup trace exceeds the {MAX_TRACE_BYTES}-byte ceiling"
+        raise SetupTraceError(msg)
+
+
+def _record(line: str) -> ExecRecord | None:
+    """Return the record one trace line states, or `None` for a non-execve line."""
+    match = _EXECVE.match(line)
+    if match is None:
+        return None
+    return ExecRecord(
+        executable=_unescape(match.group("path")),
+        argv=_argv(match.group("argv")),
+    )
+
+
 def _forbidden(record: ExecRecord) -> str | None:
     """Return the forbidden action a record names, or `None` when allowed."""
     name = record.name
-    if name in {"cargo", "rustdoc"}:
+    if _is_named_forbidden(name):
         return name
-    if name == "rustc" and _rustc_generates_code(record.argv[1:]):
+    if _is_code_generation(name, record.argv[1:]):
         return name
-    if name in _BUILD_TOOLS:
-        return name
-    if name in _SHELLS and _runs_build_script(record.argv[1:]):
-        return name
-    if name in _PYTHONS and _runs_python_build(record.argv[1:]):
+    if _is_build_script(name, record.argv[1:]):
         return name
     return None
+
+
+def _is_named_forbidden(name: str) -> bool:
+    """Say whether the executable is itself a forbidden tool."""
+    return name in {"cargo", "rustdoc"} or name in _BUILD_TOOLS
+
+
+def _is_code_generation(name: str, arguments: tuple[str, ...]) -> bool:
+    """Say whether a `rustc` invocation compiles rather than probes."""
+    return name == "rustc" and _rustc_generates_code(arguments)
+
+
+def _is_build_script(name: str, arguments: tuple[str, ...]) -> bool:
+    """Say whether a shell or interpreter was asked to build source."""
+    shell = name in _SHELLS and _runs_build_script(arguments)
+    python = name in _PYTHONS and _runs_python_build(arguments)
+    return shell or python
 
 
 def _rustc_generates_code(arguments: tuple[str, ...]) -> bool:
@@ -233,9 +256,21 @@ def require_prebuilt_setup(trace: str) -> tuple[ExecRecord, ...]:
         `cargo-kani setup`, or names a forbidden build action.
     """
     records = parse_exec_trace(trace)
+    _require_present(records)
+    _require_allowed(records)
+    _require_launcher_setup(records)
+    return records
+
+
+def _require_present(records: tuple[ExecRecord, ...]) -> None:
+    """Require at least one record, so an empty trace cannot pass."""
     if not records:
         msg = "setup trace contains no execve records"
         raise SetupTraceError(msg)
+
+
+def _require_allowed(records: tuple[ExecRecord, ...]) -> None:
+    """Require every record to name an action setup may perform."""
     for record in records:
         forbidden = _forbidden(record)
         if forbidden is not None:
@@ -244,9 +279,17 @@ def require_prebuilt_setup(trace: str) -> tuple[ExecRecord, ...]:
                 f"{list(record.argv)}"
             )
             raise SetupTraceError(msg)
-    if not any(
-        record.name == "cargo-kani" and "setup" in record.argv[1:] for record in records
-    ):
+
+
+def _require_launcher_setup(records: tuple[ExecRecord, ...]) -> None:
+    """Require the packaged launcher's own setup record."""
+    if not _has_launcher_setup(records):
         msg = "setup trace does not show the packaged cargo-kani setup"
         raise SetupTraceError(msg)
-    return records
+
+
+def _has_launcher_setup(records: tuple[ExecRecord, ...]) -> bool:
+    """Say whether the trace ran `cargo-kani setup`."""
+    return any(
+        record.name == "cargo-kani" and "setup" in record.argv[1:] for record in records
+    )

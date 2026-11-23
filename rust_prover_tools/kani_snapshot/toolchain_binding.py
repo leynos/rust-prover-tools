@@ -76,24 +76,39 @@ def toolchain_root(runtime: SnapshotRuntime) -> Path:
         rustup home escapes the generation, or the resolved toolchain escapes
         the private rustup home.
     """
-    name = runtime.toolchain
+    name = _require_safe_name(runtime.toolchain)
+    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
+    home = _require_private_home(runtime, generation)
+    root = home / "toolchains" / name
+    _require_contained_toolchain(root, home)
+    return root
+
+
+def _require_safe_name(name: str) -> str:
+    """Require one plain toolchain name and return it."""
     if not is_safe_toolchain_name(name):
         msg = f"snapshot toolchain identifier must be one plain name: {name!r}"
         raise ProverToolError(msg)
-    toolchains = runtime.layout.rustup_home / "toolchains"
-    root = toolchains / name
-    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
+    return name
+
+
+def _require_private_home(runtime: SnapshotRuntime, generation: Path) -> Path:
+    """Require the rustup home to resolve inside the generation."""
     home = _resolve(runtime.layout.rustup_home, "private rustup home")
     if not home.is_relative_to(generation):
         msg = (
             f"snapshot rustup home escapes its generation: {runtime.layout.rustup_home}"
         )
         raise ProverToolError(msg)
+    return home
+
+
+def _require_contained_toolchain(root: Path, home: Path) -> None:
+    """Require the toolchain to resolve inside the private rustup home."""
     resolved = _resolve(root, "private toolchain")
     if not resolved.is_relative_to(home):
         msg = f"snapshot toolchain escapes the private rustup home: {root}"
         raise ProverToolError(msg)
-    return root
 
 
 def verify_toolchain(
