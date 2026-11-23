@@ -961,8 +961,9 @@ name verified provenance rather than the verifier command.
     no-op recovery, draft binding, the adapter's draft-visible observation and
     the workflow hand-offs. Full suite: see the gate record below.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
-  BLOCKED on the component-record deviation below; its implementation, runbook
-  and offline gates are complete.
+  Implementation, runbook and offline gates are complete; the component-record
+  deviation was approved as D6a and implemented. Corrected hosted evidence from
+  trusted `main` remains.
   - [x] (2026-11-22) Added the pure proof-transcript and setup-trace
     validators, the four named proof fixtures, the transcript and trace
     controls, and their unit, property and Syrupy tests.
@@ -981,17 +982,18 @@ name verified provenance rather than the verifier command.
     installs. Both are repaired with tests and recorded in the decision log.
   - [x] (2026-11-22) Found a third consumer-blocking defect in the trust
     policy, and proposed a deviation rather than working around it. The
-    manifest's `rustup_components_sha256` is a byte digest of
+    manifest's `rustup_components_sha256` was a byte digest of
     `<toolchain>/lib/rustlib/components`, and rustup writes that file in
     nondeterministic order: three default-profile installs of the same channel
-    produced three different digests with identical sorted component sets. No
-    consumer can ever accept a hosted manifest while that contract stands.
-    EP-M5 is `BLOCKED` pending explicit approval of the proposed amendment in
-    this plan's decision log; the recommended form keeps the field and schema
-    but digests the sorted component names.
+    produced three different digests with identical sorted component sets.
+  - [x] (2026-11-23) The deviation was approved as D6a and implemented. The
+    manifest keeps the field and schema, but the digest now covers the
+    canonical sorted component names, produced and checked by one shared pure
+    helper. Order independence is proved by a permutation property; added,
+    removed and renamed components still fail.
   - [ ] Corrected hosted non-publishing run and consumer smoke from trusted
-    `main`, after this branch merges and the component-record deviation is
-    approved. Until then EP-M5 and roadmap 1.1.5 stay open.
+    `main`, after this branch merges. Until then EP-M5 and roadmap 1.1.5 stay
+    open.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
 
 ## Surprises & discoveries
@@ -1115,6 +1117,15 @@ zero-harness run, which is what V8 requires. The consumer smoke is opt-in
 (`make kani-snapshot-verify`) because it installs a pinned toolchain and runs
 real proofs; `docs/kani-snapshot-operations.md` carries the bootstrap,
 recovery, rollback, retention and monitoring handoff.
+
+2026-11-23, D6a approved: the manifest's `rustup_components_sha256` now digests
+the canonical sorted component names rather than the raw file bytes. Rustup's
+write order is nondeterministic, so the raw digest could never match between
+two installs. `toolchain_model.components_digest` is the single pure definition
+used by both the producer measurement and the consumer check; the field, schema
+version, pin grammar and every other check are unchanged. A permutation
+property proves order independence, and added, removed or renamed components
+are still refused.
 
 2026-11-22, D6 target reconciliation: the plan's proposed
 `make kani-snapshot-smoke` name with `SNAPSHOT_PIN`, `SNAPSHOT_ASSET_DIR` and

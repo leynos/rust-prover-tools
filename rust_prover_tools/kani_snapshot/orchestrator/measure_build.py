@@ -38,8 +38,10 @@ from rust_prover_tools.kani_snapshot.producer.assemble_input import (
 )
 from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_model import (
+    MAX_COMPONENTS_BYTES,
     FileRecord,
     ToolchainIdentity,
+    components_digest,
 )
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,
@@ -72,6 +74,23 @@ def _require_file(path: Path, what: str) -> Path:
         msg = f"{what} '{path}' is not a regular file"
         raise ProverToolError(msg)
     return path
+
+
+def _components_digest(path: Path) -> str:
+    """Return the canonical component-name digest of one rustup record.
+
+    Rustup writes the record in component-completion order, so the digest is
+    of the sorted names. The read is bounded; `components_digest` refuses an
+    oversized record, and the extra byte makes an over-limit file visible
+    without reading it whole.
+    """
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_COMPONENTS_BYTES + 1)
+    except OSError as exc:
+        msg = f"failed to read rustup components list: {exc}"
+        raise ProverToolError(msg) from exc
+    return components_digest(data)
 
 
 def _library_records(sysroot: Path) -> tuple[FileRecord, ...]:
@@ -188,7 +207,7 @@ def measure(namespace: argparse.Namespace) -> BuildEvidence:
         ),
         components=(),
         rustc_sha256=sha256_file(rustc),
-        rustup_components_sha256=sha256_file(
+        rustup_components_sha256=_components_digest(
             _require_file(sysroot / _COMPONENTS, "rustup components list")
         ),
         libraries=_library_records(sysroot),

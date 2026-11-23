@@ -26,6 +26,7 @@ from rust_prover_tools.kani_snapshot.orchestrator.measure_build import (
     measure,
 )
 from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
+from rust_prover_tools.kani_snapshot.toolchain_model import components_digest
 
 RUSTC_VV = """\
 rustc 1.95.0-nightly (0d2328a93 2026-08-21)
@@ -121,8 +122,8 @@ def test_the_measurement_records_what_it_observed(tmp_path: pathlib.Path) -> Non
     assert toolchain.rustc_vv == RUSTC_VV.strip()
     assert toolchain.kani_compiler == "kani-compiler 0.68.0 (rustc 1.95.0-nightly)"
     assert toolchain.rustc_sha256 == sha256_file(sysroot / "bin" / "rustc")
-    assert toolchain.rustup_components_sha256 == sha256_file(
-        sysroot / "lib" / "rustlib" / "components"
+    assert toolchain.rustup_components_sha256 == components_digest(
+        (sysroot / "lib" / "rustlib" / "components").read_bytes()
     )
     assert toolchain.channel_metadata_sha256 == sha256_file(
         tmp_path / "channel-rust-nightly.toml"

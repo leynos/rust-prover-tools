@@ -5,8 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: BLOCKED (D4 component-record digest is unsatisfiable; deviation
-proposed in the decision log and awaiting explicit approval)
+Status: IN PROGRESS (deviation D6a approved 2026-11-23 and implemented;
+corrected hosted evidence remains outstanding)
 
 Branch: `1-1-5-validate-clean-proofs-and-document-operational-handoff`
 
@@ -162,10 +162,12 @@ only entries in scope.
       failed against the generation-private `CARGO_HOME`, and the manifest
       recorded the builder's minimal-plus-`rustc-dev` toolchain instead of the
       default profile a consumer installs.
-- [ ] `EP-M5-D` (remaining) A third defect blocks the milestone: the recorded
-      `rustup_components_sha256` is a byte digest of a rustup file whose write
-      order is nondeterministic, so it cannot match between any two
-      installations. Deviation D6 is proposed and awaits approval.
+- [x] (2026-11-23) D6a approved and implemented: the manifest's
+      `rustup_components_sha256` now covers the canonical sorted component
+      names, produced and verified by one shared pure helper. A permutation
+      property and added/removed/renamed/duplicate/oversize controls pin it.
+- [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
+      after this branch merges.
 - [ ] Re-run the consumer smoke against a corrected hosted release from trusted
       `main` and close EP-M5 and roadmap 1.1.5 only if it passes.
 - [ ] Run every gate and create the draft PR.
@@ -202,7 +204,13 @@ only entries in scope.
   Rationale: renaming the shipped target would break the documented operator
   command and its contract tests for no functional gain. The runbook names the
   two phases explicitly, and the parent plan records the reconciliation.
-  Date/Author: 2026-11-22, agent.
+  Decision: the user approved D6a on 2026-11-23. `toolchain_model` now owns
+  `canonical_component_names` and `components_digest`; the producer measures
+  the canonical form and `toolchain_binding` verifies it. The schema, field
+  name and pin grammar are unchanged. A Hypothesis permutation property proves
+  order independence, and named controls prove that an added, removed or
+  renamed component still fails. Date/Author: 2026-11-23, user approved; agent
+  implemented.
 - D2. Decision: the transcript validator requires an exact named harness set,
   accepts verification failure only for the deliberately false harness, and
   refuses a missing summary whose counts disagree with the observed harness
@@ -230,7 +238,7 @@ only entries in scope.
   Rationale: EP-M5 requires trusted-main hosted evidence. The builder path is
   unchanged by this milestone, so the dispatched run is representative.
   Date/Author: 2026-11-22, agent.
-- D6. **Proposed deviation, awaiting approval. Status `BLOCKED`.** The design's
+- D6. **Approved 2026-11-23 as D6a. Implemented.** The design's
   D4 and manifest schema v1 bind a toolchain to `rustup_components_sha256`, a
   SHA-256 of the exact bytes of `<toolchain>/lib/rustlib/components`. Rustup
   writes that file in component-completion order, which is not deterministic:

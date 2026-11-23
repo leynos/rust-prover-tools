@@ -255,8 +255,11 @@ The install verifies the manifest digest against the pin, the checksums against
 the manifest, the attestation against the signer workflow and source digests,
 and every payload against its recorded digest. It then runs the packaged
 launcher's prebuilt setup and probes the installed compiler before activating
-the generation. Repeating the install reuses a validated generation; a failed
-install leaves the previous generation and activation record unchanged.
+the generation. The recorded component digest covers the sorted component
+names, so rustup's nondeterministic write order does not affect it; an added,
+removed or renamed component is still refused. Repeating the install reuses a
+validated generation; a failed install leaves the previous generation and
+activation record unchanged.
 
 ## Draft recovery
 

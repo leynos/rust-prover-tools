@@ -7,6 +7,9 @@ records the digest of the installed compiler, of the extracted libraries the
 binary loads, and of the rustup component list. This module compares the
 installed tree with those records before the probe runs.
 
+Rustup writes `lib/rustlib/components` in nondeterministic component-completion
+order, so the recorded digest is of the canonical sorted names, not the file's
+raw bytes. Any change to the set is still detected; a reordering is not.
 Rustup component artifacts are recorded with their URLs, sizes and digests for
 audit and reproducibility. They are not re-derived here: installation never
 re-downloads a component, so there are no downloaded bytes to compare. The
@@ -24,6 +27,10 @@ from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
+from rust_prover_tools.kani_snapshot.toolchain_model import (
+    MAX_COMPONENTS_BYTES,
+    components_digest,
+)
 from rust_prover_tools.kani_snapshot.toolchain_name import is_safe_toolchain_name
 from rust_prover_tools.kani_snapshot.validation import is_contained_relative_path
 
@@ -124,9 +131,9 @@ def verify_toolchain(
         progress=as_checkpoint(checkpoint),
     )
     toolchain = manifest.toolchain
+    _require_components(tree, toolchain.rustup_components_sha256)
     checks = (
         ("compiler", _RUSTC, toolchain.rustc_sha256),
-        ("component records", _RUSTUP_COMPONENTS, toolchain.rustup_components_sha256),
         *(
             (f"library '{library.path}'", library.path, library.sha256)
             for library in toolchain.libraries
@@ -153,13 +160,12 @@ def _resolve(path: Path, description: str) -> Path:
         raise ProverToolError(msg) from exc
 
 
-def _require_matching(
+def _require_regular(
     tree: _ToolchainTree,
     relative: str,
-    expected: str,
     description: str,
-) -> None:
-    """Require one contained toolchain file to match its recorded digest."""
+) -> Path:
+    """Require one contained, regular toolchain file and return its path."""
     if not is_contained_relative_path(relative):
         msg = f"snapshot toolchain {description} is not a contained relative path"
         raise ProverToolError(msg)
@@ -173,7 +179,43 @@ def _require_matching(
         msg = f"snapshot toolchain {description} is not a regular file: {path}"
         raise ProverToolError(msg)
     _require_contained(path, tree, description)
+    return path
+
+
+def _require_matching(
+    tree: _ToolchainTree,
+    relative: str,
+    expected: str,
+    description: str,
+) -> None:
+    """Require one contained toolchain file to match its recorded digest."""
+    path = _require_regular(tree, relative, description)
     actual = sha256_file(path, checkpoint=tree.progress)
+    if actual != expected:
+        msg = (
+            f"snapshot toolchain {description} does not match the manifest: "
+            f"expected {expected}, got {actual}"
+        )
+        raise ProverToolError(msg)
+
+
+def _require_components(tree: _ToolchainTree, expected: str) -> None:
+    """Require the installed component names to match their recorded set.
+
+    The digest covers the canonical sorted names rather than the file's raw
+    bytes, because rustup's write order is not deterministic. A bounded read
+    keeps a hostile or corrupted file from sizing the process.
+    """
+    description = "component records"
+    path = _require_regular(tree, _RUSTUP_COMPONENTS, description)
+    tree.progress()
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_COMPONENTS_BYTES + 1)
+    except OSError as exc:
+        msg = f"snapshot toolchain {description} is unreadable: {exc}"
+        raise ProverToolError(msg) from exc
+    actual = components_digest(data)
     if actual != expected:
         msg = (
             f"snapshot toolchain {description} does not match the manifest: "

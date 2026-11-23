@@ -10,10 +10,12 @@ handoff) is implemented in this branch: the transcript and setup-trace
 validators, the named proof fixtures, the opt-in consumer smoke and the
 operations runbook exist and pass their offline gates. A hosted non-publishing
 run completed its build, assembly and validation, but the consumer smoke found
-two real defects, recorded under D6; corrected hosted evidence remains
-outstanding until the corrected builder is merged and dispatched. Nothing is
-published. EP-O1 (operational bootstrap) remains separately authorized.
-Revision: 8, 2026-11-22. Scope: `leynos/rust-prover-tools` only.
+three real defects, recorded under D6. The third, the component-record digest,
+was approved as D6a and implemented: the record now digests the canonical
+sorted component names. Corrected hosted evidence remains outstanding until the
+corrected builder is merged and dispatched. Nothing is published. EP-O1
+(operational bootstrap) remains separately authorized. Revision: 9, 2026-11-23.
+Scope: `leynos/rust-prover-tools` only.
 
 ## Purpose and boundaries
 
@@ -1045,11 +1047,18 @@ manifest recorded the builder's minimal-plus-`rustc-dev` toolchain, while
 upstream setup installs rustup's default profile; the recorded component digest
 and `rustc-dev` shared libraries therefore could not exist on any consumer. The
 build now installs that default profile under a private rustup home and
-measures it, so the record describes what a consumer receives. The schema, pin
-grammar and verification checks are unchanged; only the measured toolchain
-changed. Corrected hosted evidence requires a new non-publishing dispatch from
-trusted `main` after this branch merges, so EP-M5 and roadmap 1.1.5 stay open
-until that evidence exists.
+measures it, so the record describes what a consumer receives. Third, the
+recorded `lib/rustlib/components` digest covered the file's raw bytes, but
+rustup writes that file in nondeterministic component-completion order: three
+default-profile installs of one channel produced three digests with identical
+sorted component sets. No consumer could ever accept a hosted manifest while
+that contract stood. The approved D6a amendment keeps the field and schema but
+digests the canonical sorted component names, so order is irrelevant while an
+added, removed or renamed component is still refused. `toolchain_model` defines
+that canonical form once for both measurement and verification. The schema, pin
+grammar and every other verification check are unchanged. Corrected hosted
+evidence requires a new non-publishing dispatch from trusted `main` after this
+branch merges, so EP-M5 and roadmap 1.1.5 stay open until that evidence exists.
 
 After implementation, write `docs/kani-snapshot-operations.md` with exact
 settings, permission checks, default-disabled schedule, dispatch examples,
