@@ -382,3 +382,23 @@ def test_the_json_form_reports_the_analysis_before_the_full_run_gate(
     assert status == 2
     assert payload["run_mode"] == "partial"
     assert payload["passed"] is True
+
+
+def test_a_non_utf8_log_is_an_input_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject a log that is not UTF-8 before any parsing."""
+    log = tmp_path / "captured.log"
+    log.write_bytes(b"\xff\xfe")
+
+    status = verus_analyse_log(
+        log=log,
+        verus_release=CLI_RELEASE,
+        repo_root=tmp_path,
+    )
+    captured = capsys.readouterr()
+
+    assert status == 1, "A non-UTF-8 log is unreadable input"
+    assert "log" in captured.err
+    assert str(log) in captured.err

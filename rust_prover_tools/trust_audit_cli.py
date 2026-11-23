@@ -1,10 +1,10 @@
 """Adapt the trust audit and a repository root to the command line.
 
-The audit reads source files, and every file it reads must sit beneath the
-repository root: a location it reports is a repository-relative path, so a
-target outside the root would name a file the report cannot describe. The
-adapter owns that boundary, the output shape and the exit status; deciding what
-is trust belongs to :mod:`rust_prover_tools.trust_audit`.
+The adapter maps arguments, asks :mod:`rust_prover_tools.trust_audit` for the
+drivers and the audit, and renders the report.  Every file the audit reads must
+sit beneath the repository root, because a reported location is a
+repository-relative path; that boundary and the driver expansion belong to the
+package rather than to the command.
 
 The status says whether the audit *completed*, not whether it liked the answer.
 A proof may legitimately ask its verifier to accept something, and this command
@@ -15,7 +15,6 @@ failure. Only source that could not be audited is.
 from __future__ import annotations
 
 import json
-import pathlib
 import sys
 import typing as typ
 from pathlib import Path
@@ -24,11 +23,11 @@ from cyclopts import Parameter
 
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.trust_audit import AuditedFile, TrustAuditError, audit_tree
+from rust_prover_tools.trust_audit.drivers import expand_drivers
 from rust_prover_tools.trust_audit.vocabulary import (
     Vocabulary,
     select_vocabularies,
 )
-from rust_prover_tools.trust_audit_targets import entry_points
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -175,7 +174,7 @@ def audit_trust(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
         return AUDIT_FAILED
     root = (repo_root or Path.cwd()).resolve()
     try:
-        drivers = _expand_drivers(root, paths)
+        drivers = expand_drivers(root, paths)
         files = audit_tree(
             root,
             drivers,
@@ -191,134 +190,3 @@ def audit_trust(  # ruff: ignore[too-many-arguments] - one keyword per CLI flag
         lines = _text_lines(files, vocabularies)
     print_lines(lines)
     return 0
-
-
-def _expand_drivers(root: Path, paths: cabc.Iterable[Path]) -> tuple[str, ...]:
-    """Expand files and crate directories into repository-relative drivers.
-
-    A file is its own driver.  A directory contributes the entry points of
-    every crate beneath it: the module roots at the crate directory and under
-    ``src/``, and every Rust file under ``tests/``, ``benches/`` and
-    ``examples/``.  No entry point is a refusal, because an audit that read
-    nothing must not look like a clean one.
-    """
-    drivers: dict[str, None] = {}
-    for path in paths:
-        for driver in _drivers_for(root, path):
-            drivers[driver] = None
-    return tuple(drivers)
-
-
-def _drivers_for(root: Path, path: Path) -> tuple[str, ...]:
-    """Return the drivers one argument names, refusing a missing path.
-
-    A directory contributes each Cargo target beneath it.  The target's
-    physical file checks containment, but the driver is passed to the audit
-    under the pathname Cargo compiles, so a target that is a symbolic link
-    resolves its child modules from the linking directory as rustc does.
-    """
-    candidate = path if path.is_absolute() else root / path
-    if not candidate.is_dir():
-        # A file, a missing path, or one outside the root keeps the ordinary
-        # single-driver path, so its existing diagnostics are unchanged.
-        return (_relative_to(root, path),)
-    resolved = candidate.resolve()
-    _require_inside(root, resolved, path)
-    drivers = {
-        _in_root_spelling(root, entry, path)
-        for crate_root in _crate_roots(root, resolved, path)
-        for entry in entry_points(root, crate_root)
-    }
-    if not drivers:
-        msg = f"{path} contains no Rust entry point to audit"
-        raise TrustAuditError(msg)
-    return tuple(sorted(drivers))
-
-
-def _in_root_spelling(root: Path, entry: Path, path: Path) -> str:
-    """Return an entry's pathname after checking its resolved file is in root."""
-    _require_inside(root, entry.resolve(), path)
-    try:
-        return entry.relative_to(root).as_posix()
-    except ValueError as error:
-        msg = (
-            f"{entry} names a file inside {root} only through a symbolic link, "
-            "so its module directory cannot be derived from the spelling"
-        )
-        raise TrustAuditError(msg) from error
-
-
-def _require_inside(root: Path, resolved: Path, path: Path) -> None:
-    """Refuse a path whose resolved form leaves the repository root."""
-    if resolved != root and root not in resolved.parents:
-        msg = f"{path} resolves outside the repository root {root}"
-        raise TrustAuditError(msg)
-
-
-def _contained_relative(root: Path, resolved: Path, path: Path) -> Path:
-    """Return a resolved entry's repository-relative path, refusing escape."""
-    _require_inside(root, resolved, path)
-    return resolved.relative_to(root)
-
-
-def _crate_roots(
-    root: Path,
-    directory: Path,
-    path: Path,
-) -> tuple[Path, ...]:
-    """Return every crate directory under ``directory``, including itself."""
-    manifests = set()
-    for manifest in directory.rglob("Cargo.toml"):
-        resolved = manifest.parent.resolve()
-        _contained_relative(root, resolved, path)
-        manifests.add(resolved)
-    return tuple(sorted(manifests | {directory}))
-
-
-def _relative_to(root: Path, path: Path) -> str:
-    """Return ``path`` as a repository-relative POSIX path.
-
-    A relative path is read as repository-relative rather than as relative to
-    the working directory, so the answer does not depend on where the command
-    was started: ``--repo-root R src/lib.rs`` names ``R/src/lib.rs`` from any
-    directory. Containment is still checked downstream, so a relative path that
-    climbs out of the root is refused there.
-
-    Parameters
-    ----------
-    root : Path
-        Resolved repository root.
-    path : Path
-        File to start the audit from.
-
-    Returns
-    -------
-    str
-        The path relative to ``root``, as POSIX text.
-
-    Raises
-    ------
-    TrustAuditError
-        If an absolute ``path`` resolves outside ``root``, or reaches an
-        in-root file only through a symbolic link outside it.
-    """
-    if not path.is_absolute():
-        return pathlib.PurePosixPath(path.as_posix()).as_posix()
-    try:
-        path.resolve().relative_to(root)
-    except ValueError as error:
-        msg = f"{path} is outside the repository root {root}"
-        raise TrustAuditError(msg) from error
-    try:
-        # Keep the spelling the caller supplied; the module walk resolves its
-        # children from that spelling's directory, exactly as rustc does.
-        return path.relative_to(root).as_posix()
-    except ValueError as error:
-        # The path names an in-root file only through a link outside the root.
-        # Substituting the resolved spelling would resolve children from the
-        # target's directory while the compiler uses the supplied one.
-        msg = (
-            f"{path} names a file inside {root} only through a symbolic link, "
-            "so its module directory cannot be derived from the spelling"
-        )
-        raise TrustAuditError(msg) from error

@@ -21,8 +21,11 @@ one per request, so a reviewer can read each against a justification:
 - :mod:`.tree` follows ``mod`` declarations from a set of entry points, so the
   audit covers compiled code and not stray files.
 
-The walk needs a filesystem, so only :mod:`.tree` touches one; every other
-module is a pure function of the text it is given.
+The walk needs a filesystem.  :mod:`.drivers` and :mod:`.targets` expand the
+command's arguments into Cargo targets, :mod:`.manifests` reads the crate kind,
+and :mod:`.tree` reads the sources and follows their declarations; those four
+rooms are the package's I/O edge.  Every other module is a pure function of the
+text it is given.
 
 Examples
 --------
@@ -32,6 +35,7 @@ Examples
 
 from __future__ import annotations
 
+from rust_prover_tools.trust_audit.drivers import expand_drivers
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.matcher import scan
 from rust_prover_tools.trust_audit.model import (
@@ -59,6 +63,7 @@ __all__ = (
     "TrustItem",
     "Vocabulary",
     "audit_tree",
+    "expand_drivers",
     "scan",
     "select_vocabularies",
 )

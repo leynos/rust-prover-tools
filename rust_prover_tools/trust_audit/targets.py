@@ -12,10 +12,10 @@ sits at the audit's I/O edge.
 
 from __future__ import annotations
 
-import tomllib
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.manifests import read_cargo_manifest
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -137,11 +137,7 @@ def _read_manifest(
             "targets cannot be audited"
         )
         raise TrustAuditError(msg)
-    try:
-        return tomllib.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        msg = f"{manifest} cannot be read, so its targets are unknown: {error}"
-        raise TrustAuditError(msg) from error
+    return read_cargo_manifest(resolved, unknown="its targets are unknown")
 
 
 def _explicit_library_path(document: dict[str, object]) -> bool:

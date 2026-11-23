@@ -19,7 +19,7 @@ from rust_prover_tools.trust_audit.errors import TrustAuditError
 if typ.TYPE_CHECKING:
     import pathlib
 
-__all__ = ("CARGO_MANIFEST", "is_procedural_macro")
+__all__ = ("CARGO_MANIFEST", "is_procedural_macro", "read_cargo_manifest")
 
 #: The manifest that says whether a crate is a proc-macro crate.
 CARGO_MANIFEST: str = "Cargo.toml"
@@ -121,13 +121,28 @@ def _manifest_covers(
     return target == leaf
 
 
-def _read_manifest(manifest: pathlib.Path) -> dict[str, object]:
-    """Return one manifest's parsed document, refusing an unreadable file."""
+def read_cargo_manifest(
+    manifest: pathlib.Path,
+    *,
+    unknown: str,
+) -> dict[str, object]:
+    """Read and decode one Cargo manifest, refusing an unreadable file.
+
+    Both the crate-kind question and target discovery read ``Cargo.toml``.  One
+    decoder keeps them from drifting in how they treat a missing file, a
+    non-UTF-8 document or malformed TOML.  ``unknown`` completes the message
+    with what the caller cannot answer without the document.
+    """
     try:
         return tomllib.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        msg = f"{manifest} cannot be read, so the crate kind is unknown: {error}"
+        msg = f"{manifest} cannot be read, so {unknown}: {error}"
         raise TrustAuditError(msg) from error
+
+
+def _read_manifest(manifest: pathlib.Path) -> dict[str, object]:
+    """Return one manifest's parsed document, refusing an unreadable file."""
+    return read_cargo_manifest(manifest, unknown="the crate kind is unknown")
 
 
 def _library_path(manifest: pathlib.Path) -> str | None:

@@ -110,7 +110,11 @@ variables, output printing, and exit-code mapping:
 - `rust_prover_tools.verus_run_cli` for `verus run`. It binds `--proof-file`
   as a repeatable tuple, keeps `VERUS_PROOF_FILE` and `INPUT_PROOF_FILE` as
   single-file environment bindings, and supplies `env_var_split` so a path
-  separator inside one value is not split into several proof files.
+  separator inside one value is not split into several proof files. It also
+  binds `--z3` and `VERUS_Z3_PATH`, probes and qualifies that executable with
+  `probe_and_qualify_z3`, refuses an extra argument that selects CVC5 beside a
+  Z3 selection, and forwards the qualified path to `run_verus` as
+  `VERUS_Z3_PATH`.
 - `rust_prover_tools.kani_log_cli` for `kani analyse-log`. It disables inherited
   `INPUT_*` configuration and maps unreadable inputs to status `1` and a
   completed non-passing analysis to status `2`.
@@ -120,12 +124,14 @@ variables, output printing, and exit-code mapping:
   the parser is not qualified against, parses `--expect-failure` into a
   `FailureExpectation`, and renders either text or the schema-versioned JSON
   object.
-- `rust_prover_tools.trust_audit_cli` for `audit trust`. It resolves the
-  repository root, bounds every reported location to it, selects the prover
-  vocabularies named by `--prover` (both by default), and renders either the
-  item list or the schema-versioned JSON object. A refused source or an unknown
-  prover is status `1`; a completed audit is `0` however many items it found,
-  because the audit keeps no record of which requests were justified.
+- `rust_prover_tools.trust_audit_cli` for `audit trust`. It maps arguments,
+  resolves the repository root, selects the prover vocabularies named by
+  `--prover` (both by default), and renders either the item list or the
+  schema-versioned JSON object. Driver and target discovery belong to the
+  `trust_audit` package, so the adapter holds no Cargo rules. A refused source
+  or an unknown prover is status `1`; a completed audit is `0` however many
+  items it found, because the audit keeps no record of which requests were
+  justified.
 
 Feature modules should own workflow behaviour:
 
@@ -161,13 +167,17 @@ Feature modules should own workflow behaviour:
   the path attribute on a declaration; `use_tree`, `use_paths`,
   `crate_bindings`, `use_bindings`, `manifests` and `modules` locate imports,
   crate kinds and module declarations; `context` applies the rules; `matcher`
-  refuses code it cannot see and exposes `scan`; and `tree` walks the crate
-  from a set of entry points and reads each driver's proc-macro flag from the
-  nearest `Cargo.toml` with `tomllib`. `tree` and `manifests` are the only
-  modules that read files.
+  refuses code it cannot see and exposes `scan`; `tree` walks the crate from a
+  set of entry points; `drivers` expands command arguments into Cargo target
+  pathnames; `targets` applies Cargo's own target discovery and `auto*` flags;
+  and `manifests` reads each crate's kind with the one `read_cargo_manifest`
+  decoder both target discovery and proc-macro detection share. `drivers`,
+  `targets`, `manifests` and `tree` are the package's I/O edge; every other
+  module is a pure function of the text it is given.
 - `rust_prover_tools.z3_selection` for resolving a solver selection and
-  qualifying an observed version. It runs nothing: the `--version` probe lives
-  in `verus_run_cli`.
+  qualifying an observed version. Resolution reads the filesystem and `PATH`;
+  the `--version` probe lives in `verus_run_cli`, which also refuses an extra
+  argument that would override a selected Z3 with CVC5.
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified
@@ -719,6 +729,24 @@ The shared test helpers are split by concern so each module stays reviewable:
   checks range over. A variant added there widens every property stated over it.
 - `tests/kani_log_properties.py` states the properties themselves.
 
+## Verus log analysis and corpus
+
+The Verus grammar is likewise read from captured transcripts. Each supported
+release has its own corpus under `tests/fixtures/verus_logs/<verus-release>/`,
+and the corpus directory must exist before the release joins
+`SUPPORTED_VERUS_VERSIONS`.
+
+- Recapture a transcript rather than hand-editing it, and keep the complete
+  output of one invocation.
+- `tests/verus_log_corpus.py` reads the committed logs, their expected facts
+  and the negative-control expectations the tests assert against.
+- The release named by `--verus-release`, or by the consumer's
+  `tools/verus/VERSION` pin, is checked against the supported set. When neither
+  names a release, analysis proceeds with an unnamed release rather than
+  guessing one.
+- A run that is expected to fail names a region (`path[:start[-end]]`) with
+  `--expect-failure`; exactly one located failure must land inside it.
+
 ## Kani snapshot installation and execution
 
 `rust_prover_tools.kani_snapshot.install` orchestrates one installation: stage
@@ -735,8 +763,10 @@ records, `completion` owns the per-identity completion watermark those records
 advance, `durability` owns the flushes that make state durable, and `cleanup`
 owns bounded removal of private, uniquely named state. `run` only revalidates
 and executes; it never installs. `kani_snapshot_cli` registers the public
-commands, and `cli_support` holds the repository-root and error-exit helpers
-shared with the legacy CLI. Keep lifecycle code out of the legacy
+commands, and `cli_support` holds the repository-root and error-exit helpers,
+plus `read_input_text` and `InputError`, the strict UTF-8 reader the
+log-analysis commands use so an unreadable or non-UTF-8 input becomes status
+`1` with a diagnostic naming the input. Keep lifecycle code out of the legacy
 `kani_release` modules.
 
 The dependency direction is CLI to orchestration to validated models and

@@ -233,3 +233,35 @@ def test_json_output_is_a_stable_object(
             "status": "rejected-as-intended",
         },
     ], "Emit the documented object with one record per cover and control."
+
+
+def test_a_non_utf8_log_is_an_input_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject a log that is not UTF-8 before any parsing."""
+    log = tmp_path / "captured.log"
+    log.write_bytes(b"\xff\xfe")
+
+    status = kani_analyse_log(log=log, manifest=MANIFEST)
+    captured = capsys.readouterr()
+
+    assert status == 1, "A non-UTF-8 log is unreadable input"
+    assert "log" in captured.err
+    assert str(log) in captured.err
+
+
+def test_a_non_utf8_manifest_is_an_input_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject a manifest that is not UTF-8 before any parsing."""
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(b"\xff\xfe")
+
+    status = run("verified", manifest=manifest)
+    captured = capsys.readouterr()
+
+    assert status == 1, "A non-UTF-8 manifest is unreadable input"
+    assert "manifest" in captured.err
+    assert str(manifest) in captured.err

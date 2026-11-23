@@ -1018,13 +1018,15 @@ Verus runs whichever Z3 `VERUS_Z3_PATH` names, so two runs that differ only in
 the solver can disagree. `prover-tools verus run --z3` resolves a selection to
 one executable and holds it to the pinned release by running
 `<solver> --version` and comparing the banner with
-`Z3 version <Z3_VERSION> - 64 bit`. Resolution stays pure and lives in
-`rust_prover_tools/z3_selection.py`; the probe belongs to the command boundary,
-`rust_prover_tools/verus_run_cli.py`, because it needs a process. The qualified
-path is carried on `VerusRunOptions` and `VerusRunSettings` and exported as
-`VERUS_Z3_PATH` for every invocation. Omitting the selection leaves the child
-environment untouched, which keeps the previous behaviour for callers who
-manage the variable themselves.
+`Z3 version <Z3_VERSION> - 64 bit`. Resolution lives in
+`rust_prover_tools/z3_selection.py` and reads the filesystem and `PATH`; the
+probe belongs to the command boundary, `rust_prover_tools/verus_run_cli.py`,
+because it needs a process, and that boundary refuses an extra argument that
+would select CVC5 beside a Z3 selection. The qualified path is carried on
+`VerusRunOptions` and `VerusRunSettings` and exported as `VERUS_Z3_PATH` for
+every invocation. Omitting the selection leaves the child environment
+untouched, which keeps the previous behaviour for callers who manage the
+variable themselves.
 
 ### Exit statuses
 
