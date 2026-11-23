@@ -14,6 +14,7 @@ import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.trust_audit.keywords import is_path_segment
+from rust_prover_tools.trust_audit.syntax import Kind
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.trust_audit.syntax import Token
@@ -140,6 +141,13 @@ def _boundary_refusal(
             f"metavariable '${token.text}', so the audit cannot tell which "
             "crate or item it names"
         )
+    if _may_supply_module_keyword(tokens, after, second):
+        return (
+            f"the macro_rules! expansion at line {token.line}, column "
+            f"{token.column} may supply a module declaration keyword through "
+            f"the repetition-wrapped metavariable '${token.text}', so the "
+            "audit cannot tell which module it declares"
+        )
     if _follows_trust_qualifier(tokens, before, qualifiers):
         return (
             f"the macro_rules! expansion at line {token.line}, column "
@@ -148,6 +156,19 @@ def _boundary_refusal(
             "is called"
         )
     return None
+
+
+def _may_supply_module_keyword(
+    tokens: tuple[Token, ...],
+    after: int,
+    second: str,
+) -> bool:
+    """Report whether an ``ident`` metavariable can become ``mod`` here."""
+    return (
+        after < len(tokens)
+        and tokens[after].kind is Kind.IDENT
+        and second in {";", "{"}
+    )
 
 
 def _follows_trust_qualifier(

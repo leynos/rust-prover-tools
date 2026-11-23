@@ -170,7 +170,7 @@ class Context:
             self._report(token.text, token)
             return
         if self.root_glob and self._is_glob_qualified(index, token):
-            self._report(token.text, token)
+            self._report_glob_qualified(index, token)
             return
         if self._is_deep_qualified(index, token):
             if self._names_member(index, token):
@@ -182,6 +182,14 @@ class Context:
         if token.text in self.region_words and self._is_verus_context(index):
             self._report(token.text, token)
         self._report_if_imported(index, token)
+
+    def _report_glob_qualified(self, index: int, token: Token) -> None:
+        """Report a glob-qualified word under a named binding when one exists."""
+        if self._names_member(index, token):
+            for item in sorted(self.member_names[token.text]):
+                self._report(item, token)
+        else:
+            self._report(token.text, token)
 
     def _names_member(self, index: int, token: Token) -> bool:
         """Report whether this token reaches an item a local import bound."""

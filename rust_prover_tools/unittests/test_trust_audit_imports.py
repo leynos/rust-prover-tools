@@ -382,3 +382,18 @@ def test_a_root_alias_and_a_member_alias_of_one_name_both_survive() -> None:
         ("assume", 5),
         ("assume", 6),
     ], "the member's rename and both of its surviving meanings must report"
+
+
+def test_a_named_member_binding_wins_over_a_glob_qualification() -> None:
+    """Report the item a named binding denotes, not the glob-matched spelling."""
+    source = "\n".join(
+        (
+            "mod m { pub use kani::*; }",
+            "use kani::any_where as assume;",
+            "fn f() { m::assume(true); }",
+        ),
+    )
+
+    assert items(source) == [("any_where", 2), ("any_where", 3)], (
+        "the named binding, not the glob-matched word, must be reported"
+    )

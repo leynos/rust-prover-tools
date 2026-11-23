@@ -25,7 +25,7 @@ def test_a_stringified_macro_definition_does_not_collide() -> None:
         ),
     )
 
-    assert not scan(source).items
+    assert not scan(source).items, "a stringified definition defines no macro"
 
 
 def test_a_stringified_import_is_not_an_opaque_alias() -> None:
@@ -38,7 +38,7 @@ def test_a_stringified_import_is_not_an_opaque_alias() -> None:
         ),
     )
 
-    assert not scan(source).items
+    assert not scan(source).items, "a stringified import binds no alias"
 
 
 def test_an_import_rename_after_a_sibling_repetition_is_refused() -> None:
@@ -46,11 +46,11 @@ def test_an_import_rename_after_a_sibling_repetition_is_refused() -> None:
     source = "\n".join(
         (
             "macro_rules! bind {",
-            "    ($($extra:ident,)* $item:ident) => {",
+            "    ($($extra:ident,)* ; $item:ident) => {",
             "        use std::{ $($extra,)* $item as target };",
             "    };",
             "}",
-            "bind!(fmt, include);",
+            "bind!(fmt, ; include);",
         ),
     )
 
@@ -96,7 +96,7 @@ def test_a_cfg_attr_predicate_named_macro_use_is_not_imported() -> None:
         ),
     )
 
-    assert not scan(source).items
+    assert not scan(source).items, "the configuration predicate imports no macro"
 
 
 def test_a_cfg_attr_payload_carrying_macro_use_is_imported() -> None:
@@ -115,7 +115,7 @@ def test_a_cfg_attr_payload_carrying_macro_use_is_imported() -> None:
 
 @pytest.mark.parametrize(
     "statement",
-    ["return ::kani::$($f)+(true);", "in ::kani::$($f)+(true);"],
+    ["return ::kani::$($f)+(true);", "for _ in ::kani::$($f)+(true) {}"],
 )
 def test_a_keyword_before_an_absolute_trust_path_is_refused(statement: str) -> None:
     """Skip the keyword so the root is the crate name after the leading ``::``."""
@@ -137,4 +137,13 @@ def test_a_glob_import_without_stringify_is_accepted() -> None:
     """A glob alone does not make an unrelated file unreadable."""
     source = "use generated::*;\nfn f() {}\n"
 
-    assert not scan(source).items
+    assert not scan(source).items, "an unused glob imports no trust item"
+
+
+def test_a_shadowed_std_path_does_not_exempt_stringify() -> None:
+    """A local ``std`` binding makes ``std::stringify!`` a user macro."""
+    source = "use other::nested as std;\nconst S: &str = std::stringify!(mod hidden;);"
+
+    assert [module.name for module in scan(source).modules] == ["hidden"], (
+        "a shadowed std must not exempt the argument from module discovery"
+    )

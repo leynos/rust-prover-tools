@@ -88,7 +88,12 @@ def probe_and_qualify_z3(
     """
     executable = resolve_z3(selection, repo_root=repo_root, install_dir=install_dir)
     try:
-        probe = run_command(CommandSpec((str(executable), "--version")))
+        probe = run_command(
+            CommandSpec(
+                (str(executable), "--version"),
+                timeout_seconds=_SOLVER_PROBE_TIMEOUT_SECONDS,
+            ),
+        )
     except OSError as error:
         # A file that exists but is not executable passes resolution; the
         # failure only surfaces when the process is launched.  It is a solver
@@ -106,6 +111,8 @@ def probe_and_qualify_z3(
 
 #: Verus's extended ``-V`` key that selects the CVC5 solver.
 _CVC5_OVERRIDE = "cvc5"
+#: How long a solver may take to answer ``--version`` before the run is refused.
+_SOLVER_PROBE_TIMEOUT_SECONDS: typ.Final[float] = 30.0
 #: The length of the ``-V`` flag before an attached value.
 _SHORT_OPTION_LENGTH = 2
 

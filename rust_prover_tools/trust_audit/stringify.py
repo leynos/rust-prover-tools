@@ -13,6 +13,8 @@ import typing as typ
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.structure import matching
 from rust_prover_tools.trust_audit.syntax import Kind, Token
+from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
+from rust_prover_tools.trust_audit.use_tree import begins_import, rooted_spans
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -80,12 +82,70 @@ def _is_builtin_stringify(tokens: tuple[Token, ...], index: int) -> bool:
     separator = qualifier - 1
     if separator < 0 or tokens[separator].text != "::":
         # ``std::stringify`` with nothing before it: the path starts at std.
-        return True
+        return not _shadows_builtin_root(tokens, tokens[qualifier].text)
     head = separator - 1
     if head < 0:
         # A leading ``::std::stringify``: the path starts at std.
-        return True
-    return not (tokens[head].kind is Kind.IDENT or tokens[head].text == ">")
+        return not _shadows_builtin_root(tokens, tokens[qualifier].text)
+    if tokens[head].kind is Kind.IDENT or tokens[head].text == ">":
+        return False
+    return not _shadows_builtin_root(tokens, tokens[qualifier].text)
+
+
+def _shadows_builtin_root(tokens: tuple[Token, ...], name: str) -> bool:
+    """Report whether a local binding can shadow the ``std`` or ``core`` path.
+
+    A module, an import of the same name or a rename to it makes a qualified
+    ``std::stringify`` name that local item instead of the standard library.
+    """
+    return any(
+        _item_shadows(tokens, index, token, name)
+        for index, token in enumerate(tokens)
+        if token.kind is Kind.IDENT and not token.raw
+    )
+
+
+def _item_shadows(
+    tokens: tuple[Token, ...],
+    index: int,
+    token: Token,
+    name: str,
+) -> bool:
+    """Report whether one item at ``index`` binds ``name`` locally."""
+    if token.text == "mod":
+        return _next_text(tokens, index + 1) == name
+    if token.text == "extern":
+        return (
+            _next_text(tokens, index + 1) == "crate"
+            and _next_text(tokens, index + 3) == name
+        )
+    if token.text == "use" and begins_import(tokens, index):
+        return _import_shadows(tokens, index, name)
+    return False
+
+
+def _next_text(tokens: tuple[Token, ...], index: int) -> str | None:
+    """Return the text at ``index``, or ``None`` past the end."""
+    return tokens[index].text if index < len(tokens) else None
+
+
+def _import_shadows(tokens: tuple[Token, ...], index: int, name: str) -> bool:
+    """Report whether the import at ``index`` binds ``name`` locally."""
+    end = statement_end(tokens, index + 1)
+    for _root, alias in use_roots(tokens, index + 1, end):
+        if alias == name:
+            return True
+    for root, start, stop in rooted_spans(tokens, index + 1, end):
+        if root == name:
+            continue
+        idents = [
+            item.text
+            for item in tokens[start:stop]
+            if item.kind is Kind.IDENT and not item.raw
+        ]
+        if idents and idents[-1] == name:
+            return True
+    return False
 
 
 def _imports_stringify(tokens: tuple[Token, ...]) -> bool:
@@ -93,7 +153,7 @@ def _imports_stringify(tokens: tuple[Token, ...]) -> bool:
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or token.raw:
             continue
-        if token.text != "use":
+        if not begins_import(tokens, index):
             continue
         for cursor in range(index + 1, len(tokens)):
             if tokens[cursor].text == ";":
@@ -112,7 +172,7 @@ def _imports_glob(tokens: tuple[Token, ...]) -> bool:
     for index, token in enumerate(tokens):
         if token.kind is not Kind.IDENT or token.raw:
             continue
-        if token.text != "use":
+        if not begins_import(tokens, index):
             continue
         for cursor in range(index + 1, len(tokens)):
             if tokens[cursor].text == ";":

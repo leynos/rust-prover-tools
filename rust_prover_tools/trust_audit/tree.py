@@ -31,7 +31,7 @@ import pathlib
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
-from rust_prover_tools.trust_audit.manifests import is_procedural_macro
+from rust_prover_tools.trust_audit.manifests import read_procedural_macro
 from rust_prover_tools.trust_audit.matcher import scan
 from rust_prover_tools.trust_audit.model import (
     AuditedFile,
@@ -57,12 +57,16 @@ if typ.TYPE_CHECKING:
 __all__ = ("RUST_SUFFIX", "audit_tree", "resolve_repository_path")
 
 
+# The public entry point exposes one independent knob per audit policy.
+# ruff: ignore[too-many-arguments]
+# pylint: disable-next=too-many-arguments
 def audit_tree(
     root: pathlib.Path,
     drivers: cabc.Iterable[str],
     *,
     procedural_macro: bool | None = None,
     vocabularies: tuple[Vocabulary, ...] = PROVER_VOCABULARIES,
+    source_reader: cabc.Callable[[str], str] | None = None,
 ) -> tuple[AuditedFile, ...]:
     """Audit every Rust source reachable from the given entry points.
 
@@ -78,7 +82,12 @@ def audit_tree(
         code.  ``None``, the default, reads the flag from the nearest
         ``Cargo.toml`` above each driver; ``True`` or ``False`` states it for
         every file instead, so a caller can correct a manifest the audit cannot
-        read.
+        read.  The manifest is still read when a flag is supplied, because its
+        dependency-rename refusals apply either way.
+    source_reader : Callable[[str], str] | None
+        How to read one repository-relative source.  The default reads strict
+        UTF-8 through the repository boundary; a caller that owns the read
+        policy can inject one.
     vocabularies : tuple[Vocabulary, ...]
         The prover vocabularies to apply.  Defaults to every known vocabulary;
         a caller narrows it to audit one prover.
@@ -105,43 +114,41 @@ def audit_tree(
     # Every driver is a crate root by definition: Cargo compiles each of them as
     # a crate root, so its declarations are searched for beside it rather than
     # in a subdirectory named after it — however Cargo chose to name the file.
+    read_source = source_reader or (lambda relative: _read_source(root, relative))
     pending = [
         _driver_module(root, driver, procedural_macro=procedural_macro)
         for driver in drivers
     ]
-    scanned: dict[str, tuple[TrustItem, ...]] = {}
-    contexts: dict[str, tuple[str, str]] = {}
-    policies: dict[str, bool] = {}
-    macro_scopes: dict[str, bool] = {}
+    state = _WalkState()
     while pending:
         module = pending.pop()
         # Every arrival is claimed before the deduplication below: skipping a
         # file already scanned would hide that it was reached a second way,
         # which is exactly the ambiguity ``_claim`` exists to refuse.
-        _claim(root, module, contexts)
-        first_arrival = module.relative not in scanned
+        _claim(root, module, state.contexts)
+        first_arrival = module.relative not in state.scanned
         if not first_arrival and not _needs_rescan(
-            scanned_as_procedural=policies[module.relative],
+            scanned_as_procedural=state.policies[module.relative],
             required=module.procedural_macro,
-            scanned_with_macro_use=macro_scopes[module.relative],
+            scanned_with_macro_use=state.macro_scopes[module.relative],
             requires_macro_use=module.macro_use,
         ):
             continue
         required_procedural = module.procedural_macro or (
-            not first_arrival and policies[module.relative]
+            not first_arrival and state.policies[module.relative]
         )
         required_macro_use = module.macro_use or (
-            not first_arrival and macro_scopes[module.relative]
+            not first_arrival and state.macro_scopes[module.relative]
         )
         result = scan(
-            _read_source(root, module.relative),
+            read_source(module.relative),
             procedural_macro=required_procedural,
             vocabularies=vocabularies,
             inherited_macro_use=required_macro_use,
         )
-        scanned[module.relative] = result.items
-        policies[module.relative] = required_procedural
-        macro_scopes[module.relative] = required_macro_use
+        state.scanned[module.relative] = result.items
+        state.policies[module.relative] = required_procedural
+        state.macro_scopes[module.relative] = required_macro_use
         # Re-enqueue after an upgrade too: a child first reached through the
         # weaker arrival must still receive every policy the rescan needed.
         pending.extend(
@@ -152,7 +159,19 @@ def audit_tree(
             )
             for target in _module_targets(root, module, result.modules)
         )
-    return tuple(AuditedFile(path, scanned[path]) for path in sorted(scanned))
+    return tuple(
+        AuditedFile(path, state.scanned[path]) for path in sorted(state.scanned)
+    )
+
+
+@dc.dataclass(slots=True)
+class _WalkState:
+    """The files and policies the walk has recorded so far."""
+
+    scanned: dict[str, tuple[TrustItem, ...]] = dc.field(default_factory=dict)
+    contexts: dict[str, tuple[str, str]] = dc.field(default_factory=dict)
+    policies: dict[str, bool] = dc.field(default_factory=dict)
+    macro_scopes: dict[str, bool] = dc.field(default_factory=dict)
 
 
 def _needs_rescan(
@@ -196,15 +215,14 @@ def _driver_module(
     """
     spelling = _normalize(driver)
     _require_driver_file(root, spelling)
+    # The manifest is read even when the caller states the crate kind: its
+    # dependency-rename refusal does not depend on how literals are scanned.
+    detected = read_procedural_macro(root, driver)
     return Module(
         relative=physical_relative(root, spelling),
         owner=parent_directory(spelling),
         directory=parent_directory(spelling),
-        procedural_macro=(
-            is_procedural_macro(root, driver)
-            if procedural_macro is None
-            else procedural_macro
-        ),
+        procedural_macro=(detected if procedural_macro is None else procedural_macro),
     )
 
 

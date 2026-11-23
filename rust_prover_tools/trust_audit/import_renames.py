@@ -28,9 +28,10 @@ def is_import_rename(tokens: tuple[Token, ...], index: int) -> bool:
     cast such as ``$value as u64`` is an expression, not an import: the search
     stops at the statement or delimiter that surrounds it.
     """
-    if index + 1 >= len(tokens) or tokens[index + 1].text != "as":
-        return False
-    return _inside_import(tokens, index)
+    if index + 1 < len(tokens) and tokens[index + 1].text == "as":
+        return _inside_import(tokens, index)
+    rename = _as_after_repetition(tokens, index)
+    return rename is not None and _inside_import(tokens, rename)
 
 
 def is_import_destination(tokens: tuple[Token, ...], index: int) -> bool:
@@ -49,6 +50,30 @@ def is_import_destination(tokens: tuple[Token, ...], index: int) -> bool:
     if tokens[index - _IMPORT_ALIAS_SEGMENTS].kind is not Kind.IDENT:
         return False
     return _inside_import(tokens, index)
+
+
+def _as_after_repetition(tokens: tuple[Token, ...], index: int) -> int | None:
+    """Return the ``as`` after a repetition ending at the metavariable.
+
+    ``use std::{$($name)* as load};`` renames the repeated item.  The token
+    after the metavariable is the repetition's ``)``, so the ordinary
+    next-token test misses the rename; the operator and ``as`` follow it.
+    """
+    close = index + 1
+    if close >= len(tokens) or tokens[close].text != ")":
+        return None
+    opener = opening_paren(tokens, close)
+    if opener is None or not _opens_repetition(tokens, opener):
+        return None
+    following = close + 1
+    for offset in range(0, 4):
+        operator = following + offset
+        if operator >= len(tokens):
+            return None
+        if tokens[operator].text in {"*", "+", "?"}:
+            after = operator + 1
+            return after if after < len(tokens) and tokens[after].text == "as" else None
+    return None
 
 
 def _opens_repetition(tokens: tuple[Token, ...], index: int) -> bool:

@@ -10,12 +10,16 @@ from rust_prover_tools.unittests.trust_audit_tree_support import references
 
 def test_an_inline_module_body_names_no_file() -> None:
     """Report ``mod x { … }`` as no module reference: its code is already here."""
-    assert references("mod x { fn f() {} }") == []
+    assert references("mod x { fn f() {} }") == [], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_bare_module_declaration_names_a_file() -> None:
     """Report the name of ``mod x;`` for the caller to resolve."""
-    assert references("mod x;") == [("x", None, ())]
+    assert references("mod x;") == [("x", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_path_attribute_names_the_file_directly() -> None:
@@ -61,7 +65,9 @@ def test_a_macro_use_import_with_an_unknown_invocation_is_refused() -> None:
 
 def test_a_macro_use_import_without_an_unknown_invocation_is_read() -> None:
     """A ``macro_use`` import on its own is an ordinary module reference."""
-    assert references("#[macro_use]\nmod macros;") == [("macros", None, ())]
+    assert references("#[macro_use]\nmod macros;") == [("macros", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_macro_pattern_is_not_a_module_declaration() -> None:
@@ -71,7 +77,9 @@ def test_a_macro_pattern_is_not_a_module_declaration() -> None:
     crate compiles, so the declaration beside it is the only one reported.
     """
     source = "macro_rules! m { (mod sample;) => {} }\nmod real;"
-    assert references(source) == [("real", None, ())]
+    assert references(source) == [("real", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 @pytest.mark.parametrize(
@@ -83,8 +91,13 @@ def test_a_macro_pattern_in_any_delimiter_is_not_a_declaration(
     closing: str,
 ) -> None:
     """Skip the pattern however the ``macro_rules!`` body is bracketed."""
-    source = f"macro_rules! m {opening}(mod sample;) => {{}}{closing}\nmod real;"
-    assert references(source) == [("real", None, ())]
+    suffix = "" if opening == "{" else ";"
+    source = (
+        f"macro_rules! m {opening}(mod sample;) => {{}}{closing}{suffix}\nmod real;"
+    )
+    assert references(source) == [("real", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_module_named_by_a_macro_metavariable_is_refused() -> None:
@@ -102,7 +115,9 @@ def test_a_module_named_by_a_macro_metavariable_is_refused() -> None:
 def test_a_literal_module_declaration_in_an_expansion_is_reported() -> None:
     """Keep a declaration an expansion spells, attributed to its invocation."""
     source = "macro_rules! decl { () => { mod proofs; }; }\ndecl!();"
-    assert references(source) == [("proofs", None, ())]
+    assert references(source) == [("proofs", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_macro_alias_bound_to_two_definitions_is_refused() -> None:
@@ -137,7 +152,9 @@ def test_a_chained_macro_alias_compiles_its_module() -> None:
         ),
     )
 
-    assert references(source) == [("hidden", None, ())]
+    assert references(source) == [("hidden", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_module_forwarded_through_a_macro_argument_is_refused() -> None:
@@ -176,7 +193,7 @@ def test_a_stringified_module_is_not_forwarded() -> None:
         ),
     )
 
-    assert references(source) == []
+    assert references(source) == [], "the module reference list must match the source"
 
 
 def test_a_stringified_metavariable_module_is_not_refused() -> None:
@@ -190,7 +207,7 @@ def test_a_stringified_metavariable_module_is_not_refused() -> None:
         ),
     )
 
-    assert references(source) == []
+    assert references(source) == [], "the module reference list must match the source"
 
 
 def test_a_macro_name_that_is_also_an_alias_is_refused() -> None:
@@ -199,6 +216,7 @@ def test_a_macro_name_that_is_also_an_alias_is_refused() -> None:
         (
             "macro_rules! make { () => { mod child; }; }",
             "macro_rules! other { () => {}; }",
+            "pub(crate) use make;",
             "use crate::make as other;",
             "other!();",
         ),
@@ -252,7 +270,9 @@ def test_a_macro_invoked_through_an_alias_compiles_its_module() -> None:
         ),
     )
 
-    assert references(source) == [("hidden", None, ())]
+    assert references(source) == [("hidden", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_the_first_of_two_path_attributes_is_the_file_compiled() -> None:
@@ -337,13 +357,17 @@ def test_a_conditional_path_above_a_direct_path_is_refused() -> None:
 def test_a_cfg_attr_predicate_naming_path_is_not_a_path_attribute() -> None:
     """Read ``path`` in the predicate as a configuration name, not a target."""
     source = '#[cfg_attr(path = "audit", allow(dead_code))]\nmod x;'
-    assert references(source) == [("x", None, ())]
+    assert references(source) == [("x", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_declaration_after_an_inline_module_is_at_file_scope() -> None:
     """Leave the chain empty once the inline module's brace has closed."""
     source = "mod outer { mod x; }\nmod y;"
-    assert references(source) == [("x", None, ("outer",)), ("y", None, ())]
+    assert references(source) == [("x", None, ("outer",)), ("y", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_nested_cfg_attr_predicate_is_not_a_path_attribute() -> None:
@@ -355,7 +379,9 @@ def test_a_nested_cfg_attr_predicate_is_not_a_path_attribute() -> None:
     """
     source = '#[cfg_attr(unix, cfg_attr(path = "fast", allow(dead_code)))]\nmod child;'
 
-    assert references(source) == [("child", None, ())]
+    assert references(source) == [("child", None, ())], (
+        "the module reference list must match the source"
+    )
 
 
 def test_a_nested_cfg_attr_payload_can_still_select_a_path() -> None:
@@ -373,3 +399,28 @@ def test_an_array_bracket_before_a_path_attribute_keeps_the_value() -> None:
     source = 'type Block = [u8; 4];\n#[path = "selected.rs"]\nmod child;'
 
     assert references(source) == [("child", "selected.rs", ())]
+
+
+def test_a_stringified_inline_module_names_nothing() -> None:
+    """Skip an inline module and its body written inside ``stringify!``."""
+    source = "stringify!(mod ghost { mod inner; });\nmod real { mod leaf; }"
+
+    assert references(source) == [("leaf", None, ("real",))], (
+        "the module reference list must match the source"
+    )
+
+
+def test_a_dead_cfg_attr_path_keeps_the_default_lookup() -> None:
+    """A payload behind ``cfg_attr(any(), …)`` can never select a file."""
+    source = '#[cfg_attr(any(), path = "other.rs")]\nmod platform;'
+
+    assert references(source) == [("platform", None, ())], (
+        "the module reference list must match the source"
+    )
+
+
+def test_a_disabled_macro_invocation_compiles_no_module() -> None:
+    """Skip an invocation under ``#[cfg(any())]`` even if it emits a module."""
+    source = "macro_rules! emit { () => { mod hidden; }; }\n#[cfg(any())]\nemit!();"
+
+    assert references(source) == [], "the module reference list must match the source"

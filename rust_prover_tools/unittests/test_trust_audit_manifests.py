@@ -195,11 +195,33 @@ def test_an_unparseable_manifest_is_refused(tmp_path: Path) -> None:
 
 
 def test_the_flag_overrides_the_manifest(tmp_path: Path) -> None:
-    """An explicit flag decides the crate kind without looking up the manifest.
+    """An explicit flag decides literal scanning beside a readable manifest."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n',
+            "src/lib.rs": _LITERAL_SOURCE,
+        },
+    )
 
-    The manifest is a symlink outside the repository, so reading it at all is
-    refused.  Requiring that refusal without the flag proves the flag skips
-    the lookup rather than merely skipping TOML parsing.
+    forced = {
+        file.path: [item.item for item in file.items]
+        for file in audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=True)
+    }
+    suppressed = {
+        file.path: [item.item for item in file.items]
+        for file in audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=False)
+    }
+
+    assert forced == {"src/lib.rs": ["assume"]}
+    assert suppressed == {"src/lib.rs": []}
+
+
+def test_a_flag_does_not_skip_manifest_validation(tmp_path: Path) -> None:
+    """Keep manifest refusal active whatever the explicit crate-kind flag.
+
+    A flag corrects how literals are scanned; it cannot excuse a manifest whose
+    rename or location the audit cannot read.
     """
     repo = tmp_path / "repo"
     outside = tmp_path / "outside-Cargo.toml"
@@ -210,52 +232,38 @@ def test_the_flag_overrides_the_manifest(tmp_path: Path) -> None:
     write(repo, {"src/lib.rs": _LITERAL_SOURCE})
     symlink(repo / "Cargo.toml", outside)
 
-    with pytest.raises(TrustAuditError, match="resolves outside"):
-        audit_tree(repo, ["src/lib.rs"])
-
-    forced = {
-        file.path: [item.item for item in file.items]
-        for file in audit_tree(repo, ["src/lib.rs"], procedural_macro=True)
-    }
-    suppressed = {
-        file.path: [item.item for item in file.items]
-        for file in audit_tree(
-            repo,
-            ["src/lib.rs"],
-            procedural_macro=False,
-        )
-    }
-
-    assert forced == {"src/lib.rs": ["assume"]}
-    assert suppressed == {"src/lib.rs": []}
+    for flag in (True, False):
+        with pytest.raises(TrustAuditError, match="resolves outside"):
+            audit_tree(repo, ["src/lib.rs"], procedural_macro=flag)
 
 
-def test_the_flag_overrides_an_unreadable_manifest(tmp_path: Path) -> None:
-    """An explicit flag decides the crate kind without reading the manifest.
+def test_a_flag_does_not_skip_dependency_rename_validation(tmp_path: Path) -> None:
+    """Refuse a renamed trust dependency even when the crate kind is stated."""
+    write(
+        tmp_path,
+        {
+            "Cargo.toml": '[package]\nname = "p"\nversion = "0.1.0"\n\n'
+            "[dependencies]\n"
+            'proof = { package = "kani", version = "0.67.0" }\n',
+            "src/lib.rs": "fn f() { proof::assume(true); }",
+        },
+    )
 
-    The override is documented as the way to correct a manifest the audit
-    cannot read, so it must come before the manifest is opened.
-    """
+    for flag in (True, False):
+        with pytest.raises(TrustAuditError, match="renames the Cargo package"):
+            audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=flag)
+
+
+def test_an_unreadable_manifest_is_refused_even_with_a_flag(tmp_path: Path) -> None:
+    """Refuse an unreadable manifest rather than trusting the caller's flag."""
     write(
         tmp_path,
         {"Cargo.toml": "[package\nname = ", "src/lib.rs": _LITERAL_SOURCE},
     )
 
-    forced = {
-        file.path: [item.item for item in file.items]
-        for file in audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=True)
-    }
-    suppressed = {
-        file.path: [item.item for item in file.items]
-        for file in audit_tree(
-            tmp_path,
-            ["src/lib.rs"],
-            procedural_macro=False,
-        )
-    }
-
-    assert forced == {"src/lib.rs": ["assume"]}
-    assert suppressed == {"src/lib.rs": []}
+    for flag in (True, False):
+        with pytest.raises(TrustAuditError, match="cannot be read"):
+            audit_tree(tmp_path, ["src/lib.rs"], procedural_macro=flag)
 
 
 def test_false_overrides_a_proc_macro_manifest(tmp_path: Path) -> None:

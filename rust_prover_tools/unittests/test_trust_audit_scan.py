@@ -383,3 +383,11 @@ def test_an_inner_attribute_survives_whitespace_after_the_bang() -> None:
     words = [token.text for token in tokenize(source) if token.kind == "ident"]
     assert words == ["allow", "dead_code", "kani", "assume", "x"]
     assert items(source) == [("assume", 2)]
+
+
+def test_a_raw_keyword_is_a_path_segment_but_a_keyword_is_not() -> None:
+    """``r#return`` names an item; ``return`` cannot stand in a path."""
+    from rust_prover_tools.trust_audit.keywords import is_path_segment
+
+    assert is_path_segment(tokenize("r#return")[0])
+    assert not is_path_segment(tokenize("return")[0])

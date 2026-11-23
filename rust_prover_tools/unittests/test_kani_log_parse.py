@@ -353,3 +353,21 @@ def test_an_unconvertible_report_integer_is_refused() -> None:
         f"Complete - {'9' * 4301} successfully verified",
     )
     assert "not a count this parser can read" in refused(text)
+
+
+def test_a_demangled_check_identifier_may_contain_spaces() -> None:
+    """Read the owner of a generic or trait-qualified check as Kani prints it."""
+    text = log_text("verified").replace(
+        "Check 3: harnesses::verified.assertion.1",
+        "Check 3: <alloc::vec::Vec<T> as core::fmt::Debug>::fmt.assertion.1",
+    )
+    block = parse_text(text).blocks[0]
+    qualified = [
+        item
+        for item in block.properties
+        if item.identifier.startswith("<alloc::vec::Vec<T>")
+    ]
+
+    assert len(qualified) == 1
+    assert qualified[0].kind == "assertion"
+    assert qualified[0].owner == "<alloc::vec::Vec<T> as core::fmt::Debug>::fmt"

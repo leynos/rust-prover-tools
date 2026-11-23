@@ -28,9 +28,9 @@ def test_a_windows_path_attribute_derives_a_windows_owner(
     file's own ``mod child;`` searches ``src/parts/child.rs``.  A POSIX lookup
     would keep the backslash and search ``src/child.rs`` instead.
     """
-    from rust_prover_tools.trust_audit import module_paths
+    from rust_prover_tools.trust_audit import path_values
 
-    monkeypatch.setattr(module_paths, "_WINDOWS", True)
+    monkeypatch.setattr(path_values, "is_windows", lambda: True)
     write(
         tmp_path,
         {
@@ -363,4 +363,20 @@ def test_a_nul_in_a_path_attribute_is_refused(tmp_path: Path) -> None:
     )
 
     with pytest.raises(TrustAuditError, match="NUL"):
+        audit_tree(tmp_path, ["src/lib.rs"])
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["/outside/absolute.rs", "C:/drive.rs", "C:relative.rs"],
+    ids=["posix-absolute", "drive-absolute", "drive-relative"],
+)
+def test_a_rooted_path_attribute_is_refused(tmp_path: Path, value: str) -> None:
+    """Refuse a path value that names a file outside the declaring module."""
+    write(
+        tmp_path,
+        {"src/lib.rs": f'#[path = "{value}"]\nmod child;'},
+    )
+
+    with pytest.raises(TrustAuditError, match=r"absolute|drive-qualified"):
         audit_tree(tmp_path, ["src/lib.rs"])

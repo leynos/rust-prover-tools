@@ -32,6 +32,13 @@ additive: they read files and print a report, and they do not change the exit
 status of `kani exec` or `verus run`. A caller that already captures verifier
 output can pass that file to the matching `analyse-log` command.
 
+`verus run` qualifies the selected solver on every run, whether the selection
+comes from `--z3` or from `VERUS_Z3_PATH`. A caller that exports
+`VERUS_Z3_PATH` must point it at the solver installed by
+`prover-tools z3 install`, or at another solver whose banner reports the
+calibrated Z3 release; a different release is refused before the first proof
+file runs.
+
 A captured log is qualified against a pinned release when one is named or found.
 `kani analyse-log` accepts Kani 0.67.0, and `verus analyse-log` accepts the
 releases named by `verus analyse-log --help` and the corpus under

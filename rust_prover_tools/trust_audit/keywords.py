@@ -70,5 +70,11 @@ _NON_PATH_KEYWORDS: frozenset[str] = frozenset(
 
 
 def is_path_segment(token: Token) -> bool:
-    """Report whether ``token`` can continue a path as a segment."""
-    return token.kind is Kind.IDENT and token.text not in _NON_PATH_KEYWORDS
+    """Report whether ``token`` can continue a path as a segment.
+
+    A raw identifier is always a segment: ``r#return`` is the name
+    ``return``, not the keyword.  An unprefixed keyword is never one.
+    """
+    return token.kind is Kind.IDENT and (
+        token.raw or token.text not in _NON_PATH_KEYWORDS
+    )

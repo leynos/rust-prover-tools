@@ -311,3 +311,50 @@ def test_a_relative_pinned_install_dir_is_resolved_before_probing(
 
     assert qualified.executable == binary.resolve()
     assert seen == [(str(binary.resolve()), "--version")]
+
+
+def test_resolve_z3_uses_the_injected_lookup(tmp_path: Path) -> None:
+    """Resolve a command through a caller-supplied lookup, not the host PATH."""
+    located = tmp_path / "bin" / "z3"
+    located.parent.mkdir()
+    located.write_text("", encoding="utf-8")
+
+    resolved = resolve_z3(
+        "z3",
+        repo_root=tmp_path,
+        which=lambda name: str(located) if name == "z3" else None,
+    )
+
+    assert resolved == located.resolve()
+
+
+def test_the_solver_version_probe_is_bounded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Give the version probe a finite budget before a proof can start."""
+    install_dir = tmp_path / "z3"
+    install_dir.mkdir()
+    binary = install_dir / "z3"
+    binary.write_text("", encoding="utf-8")
+    seen: list[CommandSpec] = []
+
+    def observe(spec: CommandSpec) -> CommandResult:
+        """Record the probe request and return a calibrated banner."""
+        seen.append(spec)
+        return CommandResult(
+            stdout=f"{CALIBRATED_Z3_BANNER}\n",
+            stderr="",
+            exit_code=0,
+        )
+
+    monkeypatch.setattr(run_cli, "run_command", observe)
+
+    run_cli.probe_and_qualify_z3(
+        PINNED_Z3,
+        repo_root=tmp_path,
+        install_dir=install_dir,
+    )
+
+    assert seen[0].timeout_seconds is not None
+    assert seen[0].timeout_seconds > 0

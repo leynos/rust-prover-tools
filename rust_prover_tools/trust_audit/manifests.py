@@ -18,9 +18,10 @@ import typing as typ
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import pathlib
 
-__all__ = ("CARGO_MANIFEST", "is_procedural_macro", "read_cargo_manifest")
+__all__ = ("CARGO_MANIFEST", "read_cargo_manifest", "read_procedural_macro")
 
 #: The manifest that says whether a crate is a proc-macro crate.
 CARGO_MANIFEST: str = "Cargo.toml"
@@ -32,7 +33,12 @@ _TRUST_PACKAGES: frozenset[str] = frozenset({"kani", "vstd", "verus_builtin"})
 _DEFAULT_LIBRARY: str = "src/lib.rs"
 
 
-def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
+def read_procedural_macro(
+    root: pathlib.Path,
+    relative: str,
+    *,
+    read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]] | None = None,
+) -> bool:
     """Report whether the crate owning ``relative`` is a proc-macro crate.
 
     A manifest the audit cannot parse is refused: it says which crate kinds
@@ -43,12 +49,19 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
     it sits outside the manifest's directory; that declaration is searched for
     repository-wide before the answer falls back to false.
 
+    The repository-wide manifest search is I/O, so it lives here rather than
+    in the walker.  A caller that owns the read policy can supply
+    ``read_manifest``; the default reads strict UTF-8 TOML.
+
     Parameters
     ----------
     root : Path
         Repository root, which bounds the search.
     relative : str
         Repository-relative file whose owning crate is asked about.
+    read_manifest : Callable[[Path], dict[str, object]]
+        Reads and decodes one manifest, raising :class:`TrustAuditError` when
+        it cannot.
 
     Returns
     -------
@@ -60,6 +73,8 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
     TrustAuditError
         If the nearest manifest exists but cannot be read or parsed.
     """
+    if read_manifest is None:
+        read_manifest = _read_manifest
     resolved_root = root.resolve()
     leaf = (resolved_root / relative).resolve()
     # The driver's own spelling decides which crate owns it: its directory is
@@ -78,16 +93,33 @@ def is_procedural_macro(root: pathlib.Path, relative: str) -> bool:
                     f"{resolved_root}, so its crate kind is unknown"
                 )
                 raise TrustAuditError(msg)
-            _refuse_inherited_trust_rename(resolved_root, resolved)
-            if _declares_procedural_macro(resolved):
+            _refuse_inherited_trust_rename(
+                resolved_root,
+                resolved,
+                read_manifest=read_manifest,
+            )
+            if _declares_procedural_macro(resolved, read_manifest=read_manifest):
                 return True
-            return _manifest_naming_leaf(resolved_root, leaf)
+            return _manifest_naming_leaf(
+                resolved_root,
+                leaf,
+                read_manifest=read_manifest,
+            )
         if directory == resolved_root or resolved_root not in directory.parents:
-            return _manifest_naming_leaf(resolved_root, leaf)
+            return _manifest_naming_leaf(
+                resolved_root,
+                leaf,
+                read_manifest=read_manifest,
+            )
         directory = directory.parent
 
 
-def _manifest_naming_leaf(root: pathlib.Path, leaf: pathlib.Path) -> bool:
+def _manifest_naming_leaf(
+    root: pathlib.Path,
+    leaf: pathlib.Path,
+    *,
+    read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]],
+) -> bool:
     """Report whether any manifest in ``root`` declares ``leaf`` as its library.
 
     Cargo resolves ``[lib] path`` relative to its manifest, so a driver can sit
@@ -99,10 +131,19 @@ def _manifest_naming_leaf(root: pathlib.Path, leaf: pathlib.Path) -> bool:
         resolved = manifest.resolve()
         if root not in resolved.parents:
             continue
-        _refuse_inherited_trust_rename(root, resolved)
-        if not _declares_procedural_macro(resolved):
+        _refuse_inherited_trust_rename(
+            root,
+            resolved,
+            read_manifest=read_manifest,
+        )
+        if not _declares_procedural_macro(resolved, read_manifest=read_manifest):
             continue
-        if _manifest_covers(root, resolved, leaf):
+        if _manifest_covers(
+            root,
+            resolved,
+            leaf,
+            read_manifest=read_manifest,
+        ):
             return True
     return False
 
@@ -111,9 +152,11 @@ def _manifest_covers(
     root: pathlib.Path,
     manifest: pathlib.Path,
     leaf: pathlib.Path,
+    *,
+    read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]],
 ) -> bool:
     """Report whether ``manifest``'s ``[lib] path`` names ``leaf``."""
-    declared = _library_path(manifest)
+    declared = _library_path(manifest, read_manifest=read_manifest)
     if declared is None:
         return False
     target = (manifest.parent / declared).resolve()
@@ -146,7 +189,11 @@ def _read_manifest(manifest: pathlib.Path) -> dict[str, object]:
     return read_cargo_manifest(manifest, unknown="the crate kind is unknown")
 
 
-def _library_path(manifest: pathlib.Path) -> str | None:
+def _library_path(
+    manifest: pathlib.Path,
+    *,
+    read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]],
+) -> str | None:
     """Return a manifest's library path, defaulting to ``src/lib.rs``.
 
     Cargo defaults a library target to ``src/lib.rs`` when the manifest names
@@ -154,7 +201,7 @@ def _library_path(manifest: pathlib.Path) -> str | None:
     so returning ``None`` here would leave its default library file owned by no
     manifest, and the audit would scan its literals as ordinary text.
     """
-    document = _read_manifest(manifest)
+    document = read_manifest(manifest)
     _refuse_renamed_trust_package(manifest, document)
     library = document.get("lib")
     if not isinstance(library, dict):
@@ -168,7 +215,11 @@ def _library_path(manifest: pathlib.Path) -> str | None:
     return value
 
 
-def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
+def _declares_procedural_macro(
+    manifest: pathlib.Path,
+    *,
+    read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]],
+) -> bool:
     """Report whether one Cargo manifest declares a proc-macro library.
 
     Cargo accepts two declarations.  ``[lib] proc-macro = true`` is the
@@ -181,7 +232,7 @@ def _declares_procedural_macro(manifest: pathlib.Path) -> bool:
     ``proc-macro`` value or a non-string crate type is refused rather than
     guessed at.
     """
-    document = _read_manifest(manifest)
+    document = read_manifest(manifest)
     _refuse_renamed_trust_package(manifest, document)
     library = document.get("lib")
     if not isinstance(library, dict):
@@ -267,6 +318,8 @@ def _dependency_tables(document: dict[str, object]) -> list[object]:
 def _refuse_inherited_trust_rename(
     root: pathlib.Path,
     manifest: pathlib.Path,
+    *,
+    read_manifest: cabc.Callable[[pathlib.Path], dict[str, object]],
 ) -> None:
     """Refuse a workspace that renames a trust crate for its members.
 
@@ -278,7 +331,7 @@ def _refuse_inherited_trust_rename(
     while directory == root or root in directory.parents:
         candidate = directory / CARGO_MANIFEST
         if candidate.is_file():
-            document = _read_manifest(candidate.resolve())
+            document = read_manifest(candidate.resolve())
             workspace = document.get("workspace")
             if isinstance(workspace, dict):
                 _refuse_renamed_trust_package(candidate, document)

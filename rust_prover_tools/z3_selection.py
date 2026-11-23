@@ -24,6 +24,9 @@ from rust_prover_tools.binary_assets import Z3_VERSION
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.z3 import default_z3_install_dir
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 __all__ = (
     "CALIBRATED_Z3_BANNER",
     "EXPLICIT_SOURCE",
@@ -68,6 +71,7 @@ def resolve_z3(
     *,
     repo_root: Path,
     install_dir: Path | None = None,
+    which: cabc.Callable[[str], str | None] | None = None,
 ) -> Path:
     """Resolve a solver selection to an executable without running it.
 
@@ -80,6 +84,9 @@ def resolve_z3(
         Repository root used to find the pinned installation.
     install_dir : Path | None
         Directory holding the pinned ``z3``, overriding the repository default.
+    which : Callable[[str], str | None] | None
+        How to look up a bare command name.  Defaults to :func:`shutil.which`;
+        a caller that owns the environment policy can inject its own lookup.
 
     Returns
     -------
@@ -108,7 +115,8 @@ def resolve_z3(
     candidate = Path(selection)
     if _names_a_path(selection) and candidate.is_file():
         return candidate.resolve()
-    found = shutil.which(selection)
+    lookup = shutil.which if which is None else which
+    found = lookup(selection)
     if found is None:
         msg = f"the Z3 solver {selection!r} names no executable"
         raise ProverToolError(msg)

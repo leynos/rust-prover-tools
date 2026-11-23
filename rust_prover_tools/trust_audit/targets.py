@@ -36,6 +36,13 @@ _DEFAULT_LIBRARY: typ.Final[str] = "src/lib.rs"
 
 type _TargetKind = typ.Literal["lib", "bin", "test", "bench", "example"]
 
+#: The directory each non-binary target kind is discovered under.
+_KIND_DIRECTORIES: typ.Final[dict[_TargetKind, str]] = {
+    "test": "tests",
+    "bench": "benches",
+    "example": "examples",
+}
+
 
 def entry_points(
     root: pathlib.Path,
@@ -58,7 +65,7 @@ def entry_points(
     document = _read_manifest(root, manifest)
     if not _declares_package(document):
         return
-    yield from _auto_targets(crate_root, document)
+    yield from _auto_targets(root, crate_root, document)
     yield from _manifest_targets(crate_root, manifest, document)
 
 
@@ -82,11 +89,12 @@ def _conventional_roots(crate_root: pathlib.Path) -> cabc.Iterator[pathlib.Path]
 
 
 def _auto_targets(
+    root: pathlib.Path,
     crate_root: pathlib.Path,
     document: dict[str, object],
 ) -> cabc.Iterator[pathlib.Path]:
     """Yield the targets Cargo auto-discovers under one manifest."""
-    flags = _auto_discovery(document)
+    flags = _auto_discovery(document, root=root, crate_root=crate_root)
     if flags["lib"] and not _explicit_library_path(document):
         candidate = crate_root / _DEFAULT_LIBRARY
         if candidate.is_file():
@@ -112,10 +120,14 @@ def _directory_targets(directory: pathlib.Path) -> cabc.Iterator[pathlib.Path]:
     Every deeper file is a module, which the audit's module walk reaches when
     its declaration is followed.
     """
+    missing = (FileNotFoundError, NotADirectoryError)
     try:
         entries = sorted(directory.iterdir())
-    except OSError:
+    except missing:
         return
+    except OSError as error:
+        msg = f"{directory} cannot be listed for target discovery: {error}"
+        raise TrustAuditError(msg) from error
     for entry in entries:
         if entry.name.startswith("."):
             continue
@@ -146,7 +158,12 @@ def _explicit_library_path(document: dict[str, object]) -> bool:
     return isinstance(library, dict) and library.get("path") is not None
 
 
-def _auto_discovery(document: dict[str, object]) -> dict[str, bool]:
+def _auto_discovery(
+    document: dict[str, object],
+    *,
+    root: pathlib.Path,
+    crate_root: pathlib.Path,
+) -> dict[str, bool]:
     """Return whether Cargo auto-discovers each target kind.
 
     The five ``auto*`` keys disable one kind each.  A non-boolean value is
@@ -157,7 +174,7 @@ def _auto_discovery(document: dict[str, object]) -> dict[str, bool]:
     package = document.get("package")
     settings = package if isinstance(package, dict) else {}
     explicit = _declared_kinds(document)
-    legacy = _edition(package) == "2015"
+    legacy = _edition(package, root=root, crate_root=crate_root) == "2015"
     flags: dict[str, bool] = {}
     for flag, kind in (
         ("autolib", "lib"),
@@ -177,13 +194,58 @@ def _auto_discovery(document: dict[str, object]) -> dict[str, bool]:
     return flags
 
 
-def _edition(package: object) -> str:
-    """Return the package's edition, defaulting to Cargo's 2015 default."""
-    if isinstance(package, dict):
-        edition = package.get("edition")
-        if isinstance(edition, str):
-            return edition
-    return "2015"
+def _edition(
+    package: object,
+    *,
+    root: pathlib.Path,
+    crate_root: pathlib.Path,
+) -> str:
+    """Return the package's edition, resolving a workspace inheritance.
+
+    Cargo defaults an editionless package to 2015 and lets a member inherit
+    ``[workspace.package] edition``.  An inherited value that cannot be read is
+    refused: treating it as 2015 would wrongly disable auto-discovery.
+    """
+    if not isinstance(package, dict):
+        return "2015"
+    edition = package.get("edition")
+    if isinstance(edition, str):
+        return edition
+    if not (isinstance(edition, dict) and edition.get("workspace") is True):
+        return "2015"
+    workspace = _workspace_edition(root, crate_root)
+    if workspace is None:
+        msg = (
+            f"{crate_root / _CARGO_MANIFEST} inherits its edition from a "
+            "workspace manifest the audit cannot find"
+        )
+        raise TrustAuditError(msg)
+    return workspace
+
+
+def _workspace_edition(
+    root: pathlib.Path,
+    crate_root: pathlib.Path,
+) -> str | None:
+    """Return the nearest workspace's inherited edition, if it declares one."""
+    directory = crate_root
+    while directory == root or root in directory.parents:
+        manifest = directory / _CARGO_MANIFEST
+        if manifest.is_file():
+            document = read_cargo_manifest(
+                manifest.resolve(),
+                unknown="its inherited edition is unknown",
+            )
+            workspace = document.get("workspace")
+            if isinstance(workspace, dict):
+                package = workspace.get("package")
+                if isinstance(package, dict):
+                    edition = package.get("edition")
+                    return edition if isinstance(edition, str) else None
+        if directory == root:
+            return None
+        directory = directory.parent
+    return None
 
 
 def _declared_kinds(document: dict[str, object]) -> frozenset[str]:
@@ -271,7 +333,7 @@ def _named_candidates(
             ),
         )
     else:
-        directory = crate_root / f"{kind}s"
+        directory = crate_root / _KIND_DIRECTORIES[kind]
         candidates = [
             directory / f"{name}{_RUST_SUFFIX}",
             directory / name / "main.rs",

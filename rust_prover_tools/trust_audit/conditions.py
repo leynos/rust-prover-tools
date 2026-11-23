@@ -143,7 +143,18 @@ def conditional_path(
     start = payload_start(tokens, head_index + 1, close_index)
     if start is None:
         return False
+    if _predicate_is_false(tokens, head_index + 2, start - 1):
+        return False
     return _payload_selects_path(tokens, start, close_index)
+
+
+def _predicate_is_false(tokens: tuple[Token, ...], start: int, end: int) -> bool:
+    """Report whether a ``cfg_attr`` predicate is provably false.
+
+    Only the empty ``any()`` is recognised; every other predicate may be
+    enabled by some configuration, so a payload behind it may apply.
+    """
+    return tuple(token.text for token in tokens[start:end]) == ("any", "(", ")")
 
 
 def _payload_selects_path(tokens: tuple[Token, ...], start: int, end: int) -> bool:

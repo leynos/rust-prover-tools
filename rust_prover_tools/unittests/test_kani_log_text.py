@@ -280,6 +280,16 @@ _DESCRIPTION_BOUNDARIES = (
         'first"\n\t - Status: SUCCESS\n\nCheck 2: not-a-header\nlast',
         id="repeated-field-after-embedded-quote",
     ),
+    pytest.param(
+        '- Description: "first"\n\nCheck 9: sample.9\nlast"',
+        'first"\n\nCheck 9: sample.9\nlast',
+        id="check-header-without-status-field",
+    ),
+    pytest.param(
+        '- Description: "first"\nFailed Checks: sample.9\nlast"',
+        'first"\nFailed Checks: sample.9\nlast',
+        id="failure-explanation-without-detail",
+    ),
 )
 
 

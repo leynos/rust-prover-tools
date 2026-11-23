@@ -25,6 +25,7 @@ from rust_prover_tools.trust_audit.inline_modules import (
     names_module,
     path_attribute,
 )
+from rust_prover_tools.trust_audit.macro_aliases import macro_aliases
 from rust_prover_tools.trust_audit.macro_rules import MacroRules, macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
 from rust_prover_tools.trust_audit.module_arguments import (
@@ -34,8 +35,6 @@ from rust_prover_tools.trust_audit.module_arguments import (
 from rust_prover_tools.trust_audit.stringify import stringify_arguments
 from rust_prover_tools.trust_audit.structure import attribute_spans
 from rust_prover_tools.trust_audit.syntax import Kind, Token
-from rust_prover_tools.trust_audit.use_paths import statement_end, use_roots
-from rust_prover_tools.trust_audit.use_tree import begins_import, member_aliases
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -97,9 +96,14 @@ def module_references(
     refuse_imported_macros(tokens, rules, inherited=inherited_macro_use)
     stringified = stringify_arguments(tokens, defined=rules.heads)
     _refuse_metavariable_modules(tokens, rules.expansions, stringified)
-    aliases = _macro_aliases(tokens, rules.heads)
+    aliases = macro_aliases(
+        tokens,
+        rules.heads,
+        patterns=rules.patterns,
+        inert=stringified,
+    )
     refuse_forwarded_modules(tokens, rules, aliases, stringified)
-    inline = InlineModules(tokens, rules.patterns)
+    inline = InlineModules(tokens, rules.patterns | stringified)
     contexts = _invocation_contexts(
         tokens,
         rules,
@@ -166,93 +170,15 @@ def _invocation_contexts(
     the chain would never end and the module tree could not be reported.
     """
     walker = _ContextWalker(tokens, rules, inline, scope)
+    spans = dict(attribute_spans(tokens))
     for name in rules.heads:
         for site in _invocation_sites(rules, scope.aliases, name):
-            if site not in rules.definitions and site not in scope.stringified:
-                walker.enter(name, inline.enclosing(site))
+            if site in rules.definitions or site in scope.stringified:
+                continue
+            if inline.is_disabled(site) or declaration_disabled(tokens, spans, site):
+                continue
+            walker.enter(name, inline.enclosing(site))
     return walker.frozen()
-
-
-def _macro_aliases(
-    tokens: tuple[Token, ...],
-    heads: cabc.Container[str],
-) -> dict[str, str]:
-    """Return every local name the file binds to a macro it defines.
-
-    Rust expands ``use crate::make as build; build!();`` as the definition of
-    ``make``, so the invocation site is the same site under another spelling.
-    An alias can itself be renamed — ``use build as rebuild;`` — so discovery
-    repeats until a pass adds no name, and each alias records the defined macro
-    rather than the intermediate spelling.
-    """
-    renames = _all_macro_renames(tokens)
-    aliases: dict[str, str] = {}
-    while True:
-        fresh = _fresh_macro_aliases(renames, heads, aliases)
-        for alias, target in fresh.items():
-            if alias in heads and alias != target:
-                msg = (
-                    f"the local macro name {alias!r} is both a definition and "
-                    f"an alias for {target!r}, so the audit cannot tell which "
-                    "one a textual invocation expands"
-                )
-                raise TrustAuditError(msg)
-        if not fresh:
-            return aliases
-        aliases.update(fresh)
-
-
-def _fresh_macro_aliases(
-    renames: cabc.Iterable[tuple[str, str]],
-    heads: cabc.Container[str],
-    aliases: cabc.Mapping[str, str],
-) -> dict[str, str]:
-    """Return this pass's newly resolved aliases, refusing a conflict.
-
-    Two modules may bind one local name to different macros, and the per-file
-    scan cannot tell which definition an invocation sees, so that ambiguity is
-    refused rather than resolved arbitrarily.
-    """
-    fresh: dict[str, str] = {}
-    for item, alias in sorted(renames):
-        if item in heads:
-            target = item
-        elif item in aliases:
-            target = aliases[item]
-        else:
-            continue
-        known = aliases.get(alias, fresh.get(alias))
-        if known is not None and known != target:
-            msg = (
-                f"the local macro name {alias!r} is bound to both {known!r} "
-                f"and {target!r}, so the audit cannot tell which definition "
-                "an invocation expands"
-            )
-            raise TrustAuditError(msg)
-        if alias not in aliases:
-            fresh[alias] = target
-    return fresh
-
-
-def _all_macro_renames(tokens: tuple[Token, ...]) -> frozenset[tuple[str, str]]:
-    """Return every ``(item, alias)`` a ``use`` statement in the file renames.
-
-    A macro is renamed either as a member (``use crate::make as build;``) or as
-    the statement's root (``use build as rebuild;``), so both readings are
-    collected.
-    """
-    renames: set[tuple[str, str]] = set()
-    for index, token in enumerate(tokens):
-        if token.kind is not Kind.IDENT or not begins_import(tokens, index):
-            continue
-        end = statement_end(tokens, index + 1)
-        renames.update(
-            (root, alias)
-            for root, alias in use_roots(tokens, index + 1, end)
-            if alias is not None
-        )
-        renames.update(member_aliases(tokens, index + 1, end))
-    return frozenset(renames)
 
 
 def _invocation_sites(
@@ -338,7 +264,9 @@ def _invoked_macro(
     An invocation through a ``use`` alias is the definition's macro, so the
     local spelling is resolved before the name is looked up.
     """
-    if index not in rules.expansions or index + 2 >= len(tokens):
+    if index in rules.patterns or index not in rules.expansions:
+        return None
+    if index + 2 >= len(tokens):
         return None
     token = tokens[index]
     if token.kind is not Kind.IDENT or tokens[index + 1].text != "!":

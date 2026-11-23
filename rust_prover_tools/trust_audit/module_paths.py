@@ -18,21 +18,20 @@ existence.
 from __future__ import annotations
 
 import dataclasses as dc
-import os
 import pathlib
 import typing as typ
 
 from rust_prover_tools.trust_audit.errors import TrustAuditError
+from rust_prover_tools.trust_audit.path_values import (
+    portable,
+    refuse_rooted,
+    refuse_rooted_paths,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
     from rust_prover_tools.trust_audit.model import InlineModule, ModuleReference
-
-#: Whether the host reading a ``#[path]`` value treats ``\\`` as a separator.
-#: rustc resolves the value with the host's path rules, and on POSIX a
-#: backslash is an ordinary filename character.
-_WINDOWS = os.name == "nt"
 
 #: The suffix a Rust source file carries.
 RUST_SUFFIX: typ.Final[str] = ".rs"
@@ -156,6 +155,7 @@ def module_target(
         If the target resolves outside the root, to no file, or to more than
         one file.
     """
+    refuse_rooted_paths(reference)
     candidates = _module_candidates(module, reference)
     if any("\x00" in candidate for candidate in candidates):
         msg = (
@@ -266,7 +266,7 @@ def _module_candidates(
     """
     if reference.path is not None:
         base = pathlib.PurePosixPath(_path_base(module, reference))
-        return ((base / _portable(reference.path)).as_posix(),)
+        return ((base / portable(reference.path)).as_posix(),)
     directory = pathlib.PurePosixPath(_search_directory(module, reference))
     return tuple(
         (
@@ -276,15 +276,27 @@ def _module_candidates(
     )
 
 
-def _portable(value: str) -> str:
-    """Return a ``#[path]`` value in the separator form the host resolves.
+def _module_candidates(
+    module: Module,
+    reference: ModuleReference,
+) -> tuple[str, ...]:
+    """Return the paths one declaration may name.
 
-    rustc applies the host's path rules, so a Windows backslash separates
-    components there while a POSIX backslash is part of the filename.
-    Normalising once, before the owner and directory are derived, keeps a
-    child's search directory consistent with the file the lookup found.
+    A path attribute names one file.  A bare declaration is searched for
+    beneath the declaration's owner, which may be an inline module's directory;
+    the first candidate is the file and the second is the module directory's
+    own ``mod.rs``.
     """
-    return value.replace("\\", "/") if _WINDOWS else value
+    if reference.path is not None:
+        base = pathlib.PurePosixPath(_path_base(module, reference))
+        return ((base / portable(reference.path)).as_posix(),)
+    directory = pathlib.PurePosixPath(_search_directory(module, reference))
+    return tuple(
+        (
+            directory / template.format(name=reference.name, suffix=RUST_SUFFIX)
+        ).as_posix()
+        for template in _MODULE_FILE_CANDIDATES
+    )
 
 
 def _path_base(module: Module, reference: ModuleReference) -> str:
@@ -343,8 +355,9 @@ def _inline_directory(
     first = True
     for inline in enclosing:
         if inline.path is not None:
+            refuse_rooted(inline.path, f"inline module {inline.name!r}")
             base = pathlib.PurePosixPath(directory) if first else current
-            current = base / pathlib.PurePosixPath(inline.path)
+            current = base / pathlib.PurePosixPath(portable(inline.path))
         else:
             current /= inline.name
         first = False

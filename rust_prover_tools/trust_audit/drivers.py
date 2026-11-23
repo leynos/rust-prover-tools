@@ -132,10 +132,17 @@ def _crate_roots(
 ) -> tuple[pathlib.Path, ...]:
     """Return every crate directory under ``directory``, including itself."""
     manifests = set()
-    for manifest in directory.rglob(CARGO_MANIFEST):
-        resolved = manifest.parent.resolve()
-        _contained_relative(root, resolved, path)
-        manifests.add(resolved)
+
+    def refuse(error: OSError) -> None:
+        """Refuse the walk when a directory cannot be listed."""
+        msg = f"{directory} cannot be listed while discovering crates: {error}"
+        raise TrustAuditError(msg)
+
+    for current, _directories, files in directory.walk(on_error=refuse):
+        if CARGO_MANIFEST in files:
+            resolved = current.resolve()
+            _contained_relative(root, resolved, path)
+            manifests.add(resolved)
     return tuple(sorted(manifests | {directory}))
 
 

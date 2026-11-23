@@ -20,6 +20,7 @@ from rust_prover_tools.trust_audit.conditions import (
 from rust_prover_tools.trust_audit.errors import TrustAuditError
 from rust_prover_tools.trust_audit.macro_rules import macro_rules
 from rust_prover_tools.trust_audit.model import InlineModule
+from rust_prover_tools.trust_audit.stringify import stringify_arguments
 from rust_prover_tools.trust_audit.structure import (
     attribute_spans,
     matching,
@@ -56,7 +57,8 @@ def inline_module_names(tokens: tuple[Token, ...]) -> frozenset[str]:
     so the scan cannot say what its names bind to and does not claim to.
     """
     rules = macro_rules(tokens)
-    return InlineModules(tokens, rules.patterns).names
+    stringified = stringify_arguments(tokens, defined=rules.heads)
+    return InlineModules(tokens, rules.patterns | stringified).names
 
 
 def names_module(token: Token, head: tuple[Token, ...]) -> bool:

@@ -24,6 +24,7 @@ from rust_prover_tools.kani_log.syntax import (
     HARNESS_START,
     TOTAL,
     UNSUPPORTED_ENTRY,
+    UNWINDING_FAILED,
     VERIFICATION,
     VERIFICATION_TIME,
 )
@@ -113,24 +114,80 @@ def _field_closes_entry(reader: Reader, seen: cabc.Container[str]) -> bool:
 
 
 def _is_report_line(
-    line: str,
+    reader: Reader,
+    offset: int,
     seen: cabc.Container[str],
     *,
     repeated: bool = False,
 ) -> bool:
-    """Report whether ``line`` can follow a check entry's field list.
+    """Report whether the line at ``offset`` really follows a field list.
 
     A malformed ``Check`` header counts too, unless the field run before it
     begins with an already-read key: that run is description content printing a
     field-shaped line, and the malformed header after it is the continuation
-    the description is expected to hold.
+    the description is expected to hold.  A header that resembles a check,
+    failure explanation or verdict is only a boundary when the structure that
+    must follow it is there; otherwise it is description text.
     """
+    line = reader.peek_at(offset) or ""
+    if CHECK.match(line) is not None:
+        return _next_is_check_field(reader, offset + 1)
     if not repeated and _MALFORMED_CHECK.match(line) is not None:
         return True
     field = FIELD.match(line)
     if field is not None:
         return field["key"] not in seen
-    return any(pattern.match(line) is not None for pattern in _ENTRY_HEADS)
+    if FAILED_CHECK.match(line) is not None:
+        return _next_is_failure_detail(reader, offset + 1)
+    if (
+        VERIFICATION.match(line) is not None
+        or VERIFICATION_TIME.match(line) is not None
+    ):
+        return _next_ends_block(reader, offset + 1)
+    return line == UNWINDING_FAILED or any(
+        pattern.match(line) is not None for pattern in _ENTRY_HEADS
+    )
+
+
+def _next_nonblank(reader: Reader, offset: int) -> str | None:
+    """Return the next non-blank line at or after ``offset``."""
+    while (line := reader.peek_at(offset)) is not None:
+        if line.strip():
+            return line
+        offset += 1
+    return None
+
+
+def _next_is_check_field(reader: Reader, offset: int) -> bool:
+    """Report whether a real check's ``Status`` field follows its header."""
+    following = _next_nonblank(reader, offset)
+    if following is None:
+        return False
+    field = FIELD.match(following)
+    return field is not None and field["key"] == "Status"
+
+
+def _next_is_failure_detail(reader: Reader, offset: int) -> bool:
+    """Report whether a failure explanation is followed by its detail."""
+    following = _next_nonblank(reader, offset)
+    if following is None:
+        return False
+    return (
+        FAILED_LOCATION.match(following) is not None
+        or VERIFICATION.match(following) is not None
+    )
+
+
+def _next_ends_block(reader: Reader, offset: int) -> bool:
+    """Report whether a verdict or verification time ends a real block."""
+    following = _next_nonblank(reader, offset)
+    if following is None:
+        return True
+    return (
+        HARNESS_START.match(following) is not None
+        or following in {"Manual Harness Summary:", UNWINDING_FAILED}
+        or following.startswith("[Kani] tip:")
+    )
 
 
 def _blank_closes_entry(reader: Reader, seen: cabc.Container[str]) -> bool:
@@ -235,4 +292,4 @@ def _marker_closes_entry(
         return _starts_summary(reader, offset + 1)
     if following == "Manual Harness Summary:":
         return _starts_manual_summary(reader, offset + 1)
-    return _is_report_line(following, seen, repeated=repeated)
+    return _is_report_line(reader, offset, seen, repeated=repeated)
