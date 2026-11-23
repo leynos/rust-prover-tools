@@ -120,7 +120,9 @@ def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
     Every proof file is checked for existence before the first invocation
     starts, which keeps a mistyped path from being reported as a partial proof
     run. The loop stops at the first failing file so the prover's exit status
-    survives.
+    survives. A `z3_path` is exported as `VERUS_Z3_PATH` for every invocation,
+    which pins the solver the proof result depends on; resolving and
+    qualifying that solver is the caller's job.
     """
     proof_files = resolve_proof_files(options)
     resolved, lines = ensure_run_binary(options)
@@ -130,7 +132,12 @@ def run_verus(options: VerusRunOptions) -> tuple[str, ...]:
     )
     verify_proof_files(
         proof_files,
-        VerusRunSettings(resolved, toolchain, options.extra_args),
+        VerusRunSettings(
+            resolved,
+            toolchain,
+            options.extra_args,
+            z3_path=options.z3_path,
+        ),
     )
     return lines
 

@@ -57,6 +57,9 @@ cover/
 
 # Django stuff:
 *.log
+# Captured verifier transcripts are committed evidence, not build output.
+!tests/fixtures/kani_logs/**/*.log
+!tests/fixtures/verus_logs/**/*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

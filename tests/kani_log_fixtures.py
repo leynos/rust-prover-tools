@@ -1,0 +1,376 @@
+"""Build the per-harness facts the Kani decision suite enumerates.
+
+Exhaustive enumeration is only exhaustive if the generator is.  Rather than
+sample a few handwritten logs, this module names every decision-relevant class
+of per-harness fact - two facts belong to the same class when no reader of the
+analysis can tell them apart - and the suite takes the full cartesian product
+of those classes for one, two and three harnesses.
+
+Nothing here may be more generous than a real log.  A constructed block carries
+the same fields the extractor fills, including summary counts, failure
+explanations and the echoed solver command, so a fact set the parser could never
+produce is still refused rather than quietly accepted.
+"""
+
+from __future__ import annotations
+
+import dataclasses as dc
+import typing as typ
+
+from rust_prover_tools.kani_log import (
+    CONTROL,
+    SUPPORTED_KANI_VERSIONS,
+    FailedCheck,
+    Harness,
+    HarnessBlock,
+    KaniAnalysis,
+    KaniLog,
+    Manifest,
+    ManualSummary,
+    PropertyResult,
+    analyse_kani_log,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+__all__ = (
+    "ABSENT",
+    "AS_INTENDED",
+    "FAILURE",
+    "FOREIGN_FAILURE",
+    "FOREIGN_UNWIND_FAILURE",
+    "NOTHING",
+    "OTHERWISE",
+    "SUCCESS",
+    "TIMEOUT",
+    "UNATTRIBUTED_FAILURE",
+    "UNDETERMINED",
+    "UNEXPLAINED_FAILURE",
+    "UNSUPPORTED_ASSERTION",
+    "UNSUPPORTED_CHECK",
+    "UNWIND_FAILURE",
+    "HarnessFact",
+    "block_of",
+    "build",
+    "decision_for",
+    "manifest_of",
+)
+
+NOTHING = "NONE"
+
+SUCCESS = "SUCCESS"
+FAILURE = "FAILURE"
+TIMEOUT = "TIMEOUT"
+UNDETERMINED = "UNDETERMINED"
+UNWIND_FAILURE = "UNWIND_FAILURE"
+UNSUPPORTED_CHECK = "UNSUPPORTED_CHECK"
+UNSUPPORTED_ASSERTION = "UNSUPPORTED_ASSERTION"
+FOREIGN_FAILURE = "FOREIGN_FAILURE"
+FOREIGN_UNWIND_FAILURE = "FOREIGN_UNWIND_FAILURE"
+UNATTRIBUTED_FAILURE = "UNATTRIBUTED_FAILURE"
+UNEXPLAINED_FAILURE = "UNEXPLAINED_FAILURE"
+ABSENT = "ABSENT"
+
+SATISFIED = "SATISFIED"
+UNREACHABLE = "UNREACHABLE"
+UNSATISFIABLE = "UNSATISFIABLE"
+COVER_STATUSES = (NOTHING, SATISFIED, UNREACHABLE, UNSATISFIABLE)
+AS_INTENDED = "as-intended"
+OTHERWISE = "otherwise"
+
+UNSUPPORTED_WORDING = "TerminatorKind::InlineAsm is not currently supported by Kani."
+LIBRARY_CHECK = "core::fmt::Arguments::<'_>::from_str.assertion.1"
+LIBRARY_OWNER = LIBRARY_CHECK.rpartition(".")[0].rpartition(".")[0]
+# Kani's driver disables unwinding assertions with one flag and otherwise
+# relies on CBMC's default, so the echoed command differs by that flag alone.
+ENABLED_SOLVER = (
+    "[Kani] Running: `cbmc --object-bits 16 --unwind 2 "
+    "--no-self-loops-to-assumptions --sat-solver cadical`"
+)
+DISABLED_SOLVER = (
+    "[Kani] Running: `cbmc --object-bits 16 --no-unwinding-assertions "
+    "--sat-solver cadical`"
+)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class HarnessFact:
+    """One harness reduced to the facts a decision reads.
+
+    ``role`` is ``None`` for a harness the log reports but the manifest does not
+    declare, which the analysis calls a structural error.  ``should_panic`` and
+    ``note`` are separate because Kani's verdict note, not the manifest, is what
+    excuses a failed assertion.
+
+    ``expected`` names which observed failure class a control's log shows;
+    ``expected_failure`` is what the generated manifest declares for it.  They
+    are separate so a table row can declare a property the fixture's observed
+    check does not name, which is what the decision table's mismatch rows test.
+    """
+
+    name: str
+    role: str | None
+    status: str
+    cover: str = NOTHING
+    expected: str = AS_INTENDED
+    should_panic: bool = False
+    note: bool = False
+    unwinding_checks: bool = False
+    cover_description: str | None = None
+    expected_failure: str | None = None
+    #: A second owned check's status, for the interaction between a primary
+    #: failure and another check in the same block.
+    extra: str = NOTHING
+
+    @property
+    def witness(self) -> str:
+        """Name the cover this harness declares, if any."""
+        return self.cover_description or f"the witness of {self.name}"
+
+    @property
+    def verdict(self) -> str:
+        """The verdict Kani would print for this fact set.
+
+        A secondary failed check denies the block even when the primary class
+        is a success; the expected-panic note still excuses an assertion that
+        is part of the declared panic.
+        """
+        if self.extra == FAILURE and not self.panic_excused:
+            return "FAILED"
+        if self.status in {SUCCESS, UNDETERMINED} or self.panic_excused:
+            return "SUCCESSFUL"
+        return "FAILED"
+
+    @property
+    def panic_excused(self) -> bool:
+        """Whether Kani would excuse this failure as the panic it expected."""
+        if self.status != FAILURE:
+            return False
+        return self.should_panic and self.note
+
+
+def _foreign_checks(name: str) -> list[PropertyResult]:
+    """Build a block whose own check passes while a library check fails."""
+    return [
+        PropertyResult(
+            LIBRARY_CHECK,
+            "FAILURE",
+            "attempt to shift left with overflow",
+        ),
+        PropertyResult(
+            f"{name}.assertion.1",
+            "SUCCESS",
+            "This is a placeholder message; Kani doesn't support message "
+            "formatted at runtime",
+        ),
+    ]
+
+
+def _foreign_unwind_checks(name: str) -> list[PropertyResult]:
+    """Build a block whose own check passes while a library loop's bound fails."""
+    return [
+        PropertyResult(
+            f"{LIBRARY_OWNER}.unwind.0",
+            "FAILURE",
+            "unwinding assertion loop 0",
+        ),
+        PropertyResult(f"{name}.assertion.1", "SUCCESS", "the assertion holds"),
+    ]
+
+
+def _owned_checks(fact: HarnessFact) -> list[PropertyResult]:
+    """Build the single check a harness owns, when its class names one."""
+    descriptions = {
+        SUCCESS: ("assertion.1", "SUCCESS", "the assertion holds"),
+        FAILURE: ("assertion.1", "FAILURE", "the assertion fails"),
+        AS_INTENDED: ("assertion.1", "FAILURE", "the seeded fault fires"),
+        OTHERWISE: ("assertion.2", "FAILURE", "an unrelated check fails"),
+        UNDETERMINED: (
+            "assertion.1",
+            "UNDETERMINED",
+            "Kani could not decide this check",
+        ),
+        UNWIND_FAILURE: ("unwind.0", "FAILURE", "unwinding assertion loop 0"),
+        UNSUPPORTED_CHECK: (
+            "unsupported_construct.1",
+            "FAILURE",
+            UNSUPPORTED_WORDING,
+        ),
+        UNSUPPORTED_ASSERTION: ("assertion.1", "FAILURE", UNSUPPORTED_WORDING),
+        UNATTRIBUTED_FAILURE: (
+            "assertion.1",
+            "SUCCESS",
+            "the assertion holds",
+        ),
+        UNEXPLAINED_FAILURE: (
+            "assertion.1",
+            "SUCCESS",
+            "the assertion holds",
+        ),
+    }
+    check = descriptions.get(fact.status)
+    if check is None:
+        return []
+    return [PropertyResult(f"{fact.name}.{check[0]}", check[1], check[2])]
+
+
+def _checks(fact: HarnessFact) -> list[PropertyResult]:
+    """Build the checks this fact's block reports, in the order Kani lists them.
+
+    ``UNATTRIBUTED_FAILURE`` keeps a passing check the harness owns and adds a
+    failing one CBMC printed without an owner.  The owned check proves the
+    block's verdict did not come from it; the ownerless one is the failure the
+    block reported and no named routine accounts for.
+    """
+    if fact.status == FOREIGN_FAILURE:
+        checks = _foreign_checks(fact.name)
+    elif fact.status == FOREIGN_UNWIND_FAILURE:
+        checks = _foreign_unwind_checks(fact.name)
+    else:
+        checks = _owned_checks(fact)
+        if fact.status == UNATTRIBUTED_FAILURE:
+            checks.append(
+                PropertyResult("assertion.1", "FAILURE", "the assertion fails"),
+            )
+    if fact.extra != NOTHING:
+        checks.append(
+            PropertyResult(
+                f"{fact.name}.assertion.2",
+                fact.extra,
+                "a second owned check",
+            ),
+        )
+    if fact.cover != NOTHING:
+        checks.append(
+            PropertyResult(
+                f"{fact.name}.cover.1",
+                fact.cover,
+                fact.witness,
+            ),
+        )
+    return checks
+
+
+def _status_counts(
+    checks: tuple[PropertyResult, ...],
+) -> tuple[tuple[str, int], ...]:
+    """Build the parenthesised status counts a summary would print.
+
+    Kani counts non-cover checks only, so an unreachable cover does not appear
+    here.  The order is the one Kani prints: undetermined, then unreachable.
+    """
+    results = tuple(item for item in checks if not item.is_cover)
+    return tuple(
+        (word, count)
+        for word, status in (
+            ("undetermined", UNDETERMINED),
+            ("unreachable", UNREACHABLE),
+        )
+        if (count := sum(1 for item in results if item.status == status))
+    )
+
+
+def block_of(fact: HarnessFact) -> HarnessBlock | None:
+    """Build the harness block a log would report, or ``None`` when absent."""
+    if fact.status == ABSENT:
+        return None
+    checks = tuple(_checks(fact))
+    covers = tuple(item for item in checks if item.is_cover)
+    failed = tuple(item for item in checks if item.status == "FAILURE")
+    # Kani explains every failed check with the description it listed, so the
+    # explanations must match the failed count the summary reports.
+    failures = tuple(
+        FailedCheck(item.description, "src/harnesses.rs", 7) for item in failed
+    )
+    is_timeout = fact.status == TIMEOUT
+    return HarnessBlock(
+        name=fact.name,
+        properties=checks,
+        failures=failures,
+        failed_count=None if is_timeout else len(failed),
+        # CBMC's ``N of M failed`` counts properties, and a cover is not one;
+        # the parser reads the printed count, so the fixture must not add it.
+        total_count=None
+        if is_timeout
+        else sum(1 for item in checks if not item.is_cover),
+        other_counts=_status_counts(checks),
+        covered_satisfied=(
+            sum(1 for item in covers if item.status == SATISFIED) if covers else None
+        ),
+        covered_total=len(covers) or None,
+        covered_unreachable=sum(1 for item in covers if item.status == UNREACHABLE)
+        or None,
+        covered_undetermined=sum(1 for item in covers if item.status == UNDETERMINED)
+        or None,
+        verdict=fact.verdict,
+        panics_as_expected=fact.should_panic and fact.note,
+        solver_command=ENABLED_SOLVER if fact.unwinding_checks else DISABLED_SOLVER,
+        seen_verification_time=not is_timeout,
+        timed_out=is_timeout,
+        unwinding_reported=fact.status == UNWIND_FAILURE,
+        has_results=not is_timeout,
+    )
+
+
+def manifest_of(facts: cabc.Iterable[HarnessFact]) -> Manifest:
+    """Build the manifest that declares exactly the harnesses with a role."""
+    entries = []
+    for fact in facts:
+        if fact.role is None:
+            continue
+        covers = (fact.witness,) if fact.cover != NOTHING else ()
+        expected = fact.expected_failure or (
+            "assertion.1" if fact.expected == AS_INTENDED else "assertion.2"
+        )
+        entries.append(
+            Harness(
+                fact.name,
+                fact.role,
+                covers,
+                expected if fact.role == CONTROL else None,
+                fact.should_panic,
+            ),
+        )
+    return Manifest(tuple(entries))
+
+
+def build(
+    facts: cabc.Sequence[HarnessFact],
+    *,
+    log_format: str = "regular",
+    unsupported_constructs: tuple[str, ...] = (),
+) -> tuple[KaniLog, Manifest]:
+    """Build one log and its manifest from a sequence of harness facts."""
+    manifest = manifest_of(facts)
+    version = next(iter(SUPPORTED_KANI_VERSIONS))
+    if log_format != "regular":
+        return KaniLog(version, log_format, (), None, unsupported_constructs), manifest
+    blocks = tuple(
+        block for block in (block_of(fact) for fact in facts) if block is not None
+    )
+    summary = ManualSummary(
+        sum(1 for block in blocks if block.verdict == "SUCCESSFUL"),
+        sum(1 for block in blocks if block.verdict == "FAILED"),
+        len(blocks),
+        tuple(block.name for block in blocks if block.verdict == "FAILED"),
+    )
+    return KaniLog(
+        version, log_format, blocks, summary, unsupported_constructs
+    ), manifest
+
+
+def decision_for(
+    facts: cabc.Sequence[HarnessFact],
+    *,
+    log_format: str = "regular",
+    unsupported_constructs: tuple[str, ...] = (),
+) -> KaniAnalysis:
+    """Decide one constructed fact set with the same options :func:`build` takes."""
+    return analyse_kani_log(
+        *build(
+            facts,
+            log_format=log_format,
+            unsupported_constructs=unsupported_constructs,
+        ),
+    )

@@ -1,0 +1,188 @@
+{
+  "release": "0.2026.11.02.8bf68ee",
+  "z3": "Z3 version 4.16.0 - 64 bit",
+  "logs": {
+    "assertion": {
+      "outcome": "errors",
+      "run_mode": "full",
+      "passed": false,
+      "summary": {
+        "verified": 1,
+        "errors": 1,
+        "partial": false
+      },
+      "selection": null,
+      "failures": [
+        {
+          "message": "assertion failed",
+          "path": "assertion.rs",
+          "line": 11,
+          "column": 12
+        }
+      ]
+    },
+    "compiler_error": {
+      "outcome": "tool-error",
+      "run_mode": null,
+      "passed": false,
+      "summary": null,
+      "selection": null,
+      "failures": [
+        {
+          "message": "mismatched types",
+          "path": "compiler_error.rs",
+          "line": 9,
+          "column": 21
+        }
+      ]
+    },
+    "postcondition": {
+      "outcome": "errors",
+      "run_mode": "full",
+      "passed": false,
+      "summary": {
+        "verified": 1,
+        "errors": 1,
+        "partial": false
+      },
+      "selection": null,
+      "failures": [
+        {
+          "message": "postcondition not satisfied",
+          "path": "postcondition.rs",
+          "line": 8,
+          "column": 13
+        }
+      ]
+    },
+    "precondition": {
+      "outcome": "errors",
+      "run_mode": "full",
+      "passed": false,
+      "summary": {
+        "verified": 2,
+        "errors": 1,
+        "partial": false
+      },
+      "selection": null,
+      "failures": [
+        {
+          "message": "precondition not satisfied",
+          "path": "precondition.rs",
+          "line": 16,
+          "column": 5
+        }
+      ]
+    },
+    "selected_function": {
+      "outcome": "verified",
+      "run_mode": "partial",
+      "passed": true,
+      "summary": {
+        "verified": 1,
+        "errors": 0,
+        "partial": true
+      },
+      "selection": "root module (selected functions)",
+      "failures": []
+    },
+    "split_streams": {
+      "outcome": "errors",
+      "run_mode": "full",
+      "passed": false,
+      "summary": {
+        "verified": 1,
+        "errors": 1,
+        "partial": false
+      },
+      "selection": null,
+      "failures": [
+        {
+          "message": "postcondition not satisfied",
+          "path": "postcondition.rs",
+          "line": 8,
+          "column": 13
+        }
+      ]
+    },
+    "two_errors": {
+      "outcome": "errors",
+      "run_mode": "full",
+      "passed": false,
+      "summary": {
+        "verified": 1,
+        "errors": 2,
+        "partial": false
+      },
+      "selection": null,
+      "failures": [
+        {
+          "message": "postcondition not satisfied",
+          "path": "two_errors.rs",
+          "line": 8,
+          "column": 13
+        },
+        {
+          "message": "postcondition not satisfied",
+          "path": "two_errors.rs",
+          "line": 15,
+          "column": 13
+        }
+      ]
+    },
+    "unknown_function": {
+      "outcome": "tool-error",
+      "run_mode": null,
+      "passed": false,
+      "summary": null,
+      "selection": null,
+      "failures": [
+        {
+          "message": "could not find function absent specified by --verify-function",
+          "path": null,
+          "line": null,
+          "column": null
+        }
+      ]
+    },
+    "usage_error": {
+      "outcome": "tool-error",
+      "run_mode": null,
+      "passed": false,
+      "summary": null,
+      "selection": null,
+      "failures": [
+        {
+          "message": "`--verify-function` option requires `--verify-only-module` or `--verify-root`",
+          "path": null,
+          "line": null,
+          "column": null
+        }
+      ]
+    },
+    "verified": {
+      "outcome": "verified",
+      "run_mode": "full",
+      "passed": true,
+      "summary": {
+        "verified": 3,
+        "errors": 0,
+        "partial": false
+      },
+      "selection": null,
+      "failures": []
+    },
+    "verify_root": {
+      "outcome": "verified",
+      "run_mode": "partial",
+      "passed": true,
+      "summary": {
+        "verified": 3,
+        "errors": 0,
+        "partial": true
+      },
+      "selection": "root module",
+      "failures": []
+    }
+  }
+}

@@ -1,0 +1,11 @@
+Kani Rust Verifier 0.67.0 (cargo plugin)
+warning: Found the following unsupported constructs:
+             - TerminatorKind::InlineAsm (1)
+         
+         Verification will fail if one or more of these constructs is reachable.
+         See https://model-checking.github.io/kani/rust-feature-support.html for more details.
+
+Wrote list results to /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/kani-list.json
+warning: unused config key `unstable.embed-metadata` in `/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/.cargo/config.toml`
+   Compiling kani-corpus v0.1.0 (/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus)
+    Finished `dev` profile [unoptimized] target(s) in 0.25s

@@ -1,0 +1,12 @@
+error: precondition not satisfied
+  --> precondition.rs:16:5
+   |
+ 7 |     requires value < 1000,
+   |              ------------ failed precondition
+...
+16 |     doubled(value)
+   |     ^^^^^^^^^^^^^^
+
+verification results:: 2 verified, 1 errors
+error: aborting due to 1 previous error
+

@@ -1,0 +1,21 @@
+error: postcondition not satisfied
+  --> two_errors.rs:8:13
+   |
+ 8 |     ensures result == value + 1,
+   |             ^^^^^^^^^^^^^^^^^^^ failed this postcondition
+ 9 | {
+10 |     value + 2
+   |     --------- at the end of the function body
+
+error: postcondition not satisfied
+  --> two_errors.rs:15:13
+   |
+15 |     ensures result == value + 3,
+   |             ^^^^^^^^^^^^^^^^^^^ failed this postcondition
+16 | {
+17 |     value + 4
+   |     --------- at the end of the function body
+
+verification results:: 1 verified, 2 errors
+error: aborting due to 2 previous errors
+

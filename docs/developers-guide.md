@@ -110,7 +110,28 @@ variables, output printing, and exit-code mapping:
 - `rust_prover_tools.verus_run_cli` for `verus run`. It binds `--proof-file`
   as a repeatable tuple, keeps `VERUS_PROOF_FILE` and `INPUT_PROOF_FILE` as
   single-file environment bindings, and supplies `env_var_split` so a path
-  separator inside one value is not split into several proof files.
+  separator inside one value is not split into several proof files. It also
+  binds `--z3` and `VERUS_Z3_PATH`, probes and qualifies that executable with
+  `probe_and_qualify_z3`, refuses an extra argument that selects CVC5 beside a
+  Z3 selection, and forwards the qualified path to `run_verus` as
+  `VERUS_Z3_PATH`.
+- `rust_prover_tools.kani_log_cli` for `kani analyse-log`. It disables inherited
+  `INPUT_*` configuration and maps unreadable inputs to status `1` and a
+  completed non-passing analysis to status `2`.
+- `rust_prover_tools.verus_log_cli` for `verus analyse-log`. It applies the
+  same input-and-status mapping, resolves the log's release from
+  `--verus-release` or the consumer's `tools/verus/VERSION` pin and refuses one
+  the parser is not qualified against, parses `--expect-failure` into a
+  `FailureExpectation`, and renders either text or the schema-versioned JSON
+  object.
+- `rust_prover_tools.trust_audit_cli` for `audit trust`. It maps arguments,
+  resolves the repository root, selects the prover vocabularies named by
+  `--prover` (both by default), and renders either the item list or the
+  schema-versioned JSON object. Driver and target discovery belong to the
+  `trust_audit` package, so the adapter holds no Cargo rules. A refused source
+  or an unknown prover is status `1`; a completed audit is `0` however many
+  items it found, because the audit keeps no record of which requests were
+  justified.
 
 Feature modules should own workflow behaviour:
 
@@ -126,6 +147,38 @@ Feature modules should own workflow behaviour:
   checks.
 - `rust_prover_tools.verus.batch` for the ordered, fail-fast proof-file loop,
   its partial-failure reporting, and its bounded telemetry.
+- `rust_prover_tools.kani_log` for Kani transcript parsing and manifest-bound
+  decisions. `syntax`, `model`, `reader`, `reports` and `extract` own the
+  grammar and extraction; `manifest` validates the expected harness set;
+  `observation` reduces one block to the facts a decision reads; and `decide`
+  applies the outcome precedence.
+- `rust_prover_tools.verus_log` for Verus transcript parsing and decisions.
+  `syntax` owns the grammar and the releases it was qualified against, `model`
+  holds the parsed facts, `reader` scans a merged capture, `expectation` reads
+  a negative-control region, `decide` maps the facts to an outcome and run
+  mode, and `checks` holds a run to the counts, failure region and exit status
+  a qualification caller declared.
+- `rust_prover_tools.trust_audit` for the Rust trust audit. `vocabulary`
+  defines one frozen record per prover and selects the records a caller asks
+  for; `syntax` lexes Rust so trivia is never read as code; `structure` and
+  `conditions` locate brackets and read conditional attributes; `macro_rules`
+  collects definitions and invocation sites; `module_paths` resolves a
+  declaration to a file; `inline_modules` finds the enclosing inline chain and
+  the path attribute on a declaration; `use_tree`, `use_paths`,
+  `crate_bindings`, `use_bindings`, `manifests` and `modules` locate imports,
+  crate kinds and module declarations; `context` applies the rules; `matcher`
+  refuses code it cannot see and exposes `scan`; `tree` walks the crate from a
+  set of entry points; `drivers` expands command arguments into Cargo target
+  pathnames; `targets` applies Cargo's own target discovery and `auto*` flags;
+  and `manifests` reads each crate's kind with the one `read_cargo_manifest`
+  decoder both target discovery and proc-macro detection share. `module_paths`
+  probes the host paths a declaration names. `drivers`, `targets`, `manifests`,
+  `module_paths` and `tree` are the package's I/O edge; every other module is a
+  pure function of the text it is given.
+- `rust_prover_tools.z3_selection` for resolving a solver selection and
+  qualifying an observed version. Resolution reads the filesystem and `PATH`;
+  the `--version` probe lives in `verus_run_cli`, which also refuses an extra
+  argument that would override a selected Z3 with CVC5.
 - `rust_prover_tools.versions` for pure parsing and pin-file helpers.
 - `rust_prover_tools.binary_assets` for pinned asset manifests.
 - `rust_prover_tools.downloads` for digest pinning and the atomic verified
@@ -632,6 +685,69 @@ text. When at least one profile backend is pinned, the override reports a
 validation stage completes, adding the selection, variable and collision
 counts. A repository that selects no backend emits no such event.
 
+## Kani log analysis and corpus
+
+The Kani log grammar is read from real transcripts, not from Kani's
+documentation. Each supported release therefore has its own corpus under
+`tests/fixtures/kani_logs/<kani-version>/`, and every parser and decision fact
+is asserted against that corpus.
+
+- The logs are corpus evidence: recapture them, never hand-edit them.
+- Capture the complete standard output followed by the complete standard
+  error. Merging the streams can split a report block.
+- Add the version-named corpus directory before a release joins
+  `SUPPORTED_KANI_VERSIONS`, and delete it when the release leaves the set.
+- `expected.json` records the facts each log must yield and the decision it
+  must reach. `decision_table.json` holds the precedence table as data, and the
+  manifest files declare the harnesses the corpus run selected.
+- `crate/` holds the corpus crate sources, `Cargo.lock`, `harnesses.json` and
+  the captured `kani-list.json` so a maintainer can recapture the logs.
+  `kani-list.json` is an inventory only and cannot supply roles, covers,
+  expected failures or `should_panic`.
+- The README records the release, Rust toolchain, capture route, every
+  command and exit status, and the origin commit. It carries no digest
+  provenance: the transcripts themselves are the qualified evidence.
+
+A rendering rule that no captured log can settle is read from the pinned
+release's own driver source instead of guessed: how a description holding a
+newline is printed, how the echoed solver command is quoted, and which verdict
+can carry the expected-panic note. The corpus then keeps a log that exercises
+the rule, so the parser and the decision stay tied to evidence.
+
+`rust_prover_tools/unittests/test_kani_log_parse.py` loads every corpus
+directory whose name is in `SUPPORTED_KANI_VERSIONS`; a supported release
+without a directory fails that test. The decision tests read the same corpus,
+so a parser change and a decision change cannot drift apart while both remain
+green.
+
+The shared test helpers are split by concern so each module stays reviewable:
+
+- `tests/kani_log_corpus.py` reads the committed logs, `expected.json`, the
+  decision table and the manifests.
+- `tests/kani_log_fixtures.py` builds the log and manifest one synthetic fact
+  combination describes.
+- `tests/kani_log_combinations.py` enumerates the combinations the exhaustive
+  checks range over. A variant added there widens every property stated over it.
+- `tests/kani_log_properties.py` states the properties themselves.
+
+## Verus log analysis and corpus
+
+The Verus grammar is likewise read from captured transcripts. Each supported
+release has its own corpus under `tests/fixtures/verus_logs/<verus-release>/`,
+and the corpus directory must exist before the release joins
+`SUPPORTED_VERUS_VERSIONS`.
+
+- Recapture a transcript rather than hand-editing it, and keep the complete
+  output of one invocation.
+- `tests/verus_log_corpus.py` reads the committed logs, their expected facts
+  and the negative-control expectations the tests assert against.
+- The release named by `--verus-release`, or by the consumer's
+  `tools/verus/VERSION` pin, is checked against the supported set. When neither
+  names a release, analysis proceeds with an unnamed release rather than
+  guessing one.
+- A run that is expected to fail names a region (`path[:start[-end]]`) with
+  `--expect-failure`; exactly one located failure must land inside it.
+
 ## Kani snapshot installation and execution
 
 `rust_prover_tools.kani_snapshot.install` orchestrates one installation: stage
@@ -648,8 +764,10 @@ records, `completion` owns the per-identity completion watermark those records
 advance, `durability` owns the flushes that make state durable, and `cleanup`
 owns bounded removal of private, uniquely named state. `run` only revalidates
 and executes; it never installs. `kani_snapshot_cli` registers the public
-commands, and `cli_support` holds the repository-root and error-exit helpers
-shared with the legacy CLI. Keep lifecycle code out of the legacy
+commands, and `cli_support` holds the repository-root and error-exit helpers,
+plus `read_input_text` and `InputError`, the strict UTF-8 reader the
+log-analysis commands use so an unreadable or non-UTF-8 input becomes status
+`1` with a diagnostic naming the input. Keep lifecycle code out of the legacy
 `kani_release` modules.
 
 The dependency direction is CLI to orchestration to validated models and

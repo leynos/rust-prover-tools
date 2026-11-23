@@ -1,0 +1,222 @@
+{
+  "revision": "0.1",
+  "description": "The decision precedence table as data. Each row is one log shape and the decision every conforming implementation must reach; the corpus test reads this file, so a disagreement is a failure rather than a coincidence.",
+  "outcomes": [
+    "verified",
+    "counterexample",
+    "resource-exhausted",
+    "undetermined",
+    "unsupported",
+    "skipped",
+    "tool-error"
+  ],
+  "rows": [
+    {
+      "id": "single-claim-succeeds",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL"}
+      ],
+      "outcome": "verified",
+      "why": "One claim, reported, with nothing failing, is the success case."
+    },
+    {
+      "id": "claim-assertion-fails",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "counterexample",
+      "why": "A failed assertion is the strongest disproof and outranks everything below it."
+    },
+    {
+      "id": "foreign-check-failure-is-a-counterexample",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FOREIGN_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "counterexample",
+      "why": "Kani attributes a check to the function owning its source line, so an assertion in a routine the harness calls is reported inside the harness's block under that routine's name. The block printed FAILED, so the run disproved something the claim depends on; reading only the harness's own checks would call it verified."
+    },
+    {
+      "id": "failed-verdict-with-no-attributable-failure",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNEXPLAINED_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "counterexample",
+      "why": "Kani printed FAILED and reconciled a failure count, so a failure exists; none of the checks this decision can attribute carries it. Ownership explains whose failure it was, not whether the run succeeded, so the verdict decides it a counterexample rather than verified."
+    },
+    {
+      "id": "ownerless-check-failure-is-a-counterexample",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNATTRIBUTED_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "counterexample",
+      "why": "CBMC printed the failed assertion without naming an owner, so the block it appears in is the harness it was checked for. A failure the block reported denies the claim whether or not a routine is named beside it."
+    },
+    {
+      "id": "counterexample-outranks-timeout",
+      "harnesses": [
+        {"name": "h::a", "role": "claim", "status": "FAILURE", "verdict": "FAILED"},
+        {"name": "h::b", "role": "claim", "status": "TIMEOUT", "verdict": "FAILED"}
+      ],
+      "outcome": "counterexample",
+      "why": "A timeout elsewhere cannot soften a counterexample that was already found."
+    },
+    {
+      "id": "timeout-outranks-undetermined",
+      "harnesses": [
+        {"name": "h::a", "role": "claim", "status": "TIMEOUT", "verdict": "FAILED"},
+        {"name": "h::b", "role": "claim", "status": "UNDETERMINED", "verdict": "SUCCESSFUL"}
+      ],
+      "outcome": "resource-exhausted",
+      "why": "A timeout is a resource limit, which VO-11b ranks above an undecided check."
+    },
+    {
+      "id": "unwinding-failure-is-a-resource-limit",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNWIND_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "resource-exhausted",
+      "why": "An unwinding failure says the bound was too small, not that the property is false."
+    },
+    {
+      "id": "foreign-unwinding-failure-is-a-resource-limit",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FOREIGN_UNWIND_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "resource-exhausted",
+      "why": "The failing assertion was generated for a loop in a routine the harness called, not for the harness's own. Kani still reported a bound that was too small, and VO-11b ranks that as resource exhaustion wherever it appears; reading only the harness's own unwinding checks would let the block's FAILED verdict call it a counterexample."
+    },
+    {
+      "id": "undetermined-with-unsupported-construct",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNDETERMINED", "verdict": "SUCCESSFUL"}
+      ],
+      "unsupported_constructs": ["TerminatorKind::InlineAsm"],
+      "outcome": "unsupported",
+      "why": "Kani named a construct it cannot model, so the gap is the tool's, not the solver's."
+    },
+    {
+      "id": "undetermined-without-unsupported-construct",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNDETERMINED", "verdict": "SUCCESSFUL"}
+      ],
+      "outcome": "undetermined",
+      "why": "Nothing names a missing capability, so the solver simply did not decide."
+    },
+    {
+      "id": "unsupported-construct-check-fails",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "UNSUPPORTED_FAILURE", "verdict": "FAILED"}
+      ],
+      "outcome": "unsupported",
+      "why": "A failed unsupported_construct check is a capability gap, not a disproof."
+    },
+    {
+      "id": "claim-absent-from-the-log",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "ABSENT"}
+      ],
+      "outcome": "skipped",
+      "why": "DL-09: a manifest claim with no result in the log was skipped."
+    },
+    {
+      "id": "one-claim-absent-one-verified",
+      "harnesses": [
+        {"name": "h::a", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL"},
+        {"name": "h::b", "role": "claim", "status": "ABSENT"}
+      ],
+      "outcome": "skipped",
+      "why": "Any unreported claim makes the run incomplete, however well the reported one did."
+    },
+    {
+      "id": "control-rejected-as-intended-leaves-the-claim-verified",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL"},
+        {"name": "h::control", "role": "control", "status": "FAILURE", "verdict": "FAILED",
+         "expected_failure": "assertion.1"}
+      ],
+      "outcome": "verified",
+      "why": "A control that failed exactly the property it declares is the run working as designed."
+    },
+    {
+      "id": "control-accepted-blocks-through-its-status",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL"},
+        {"name": "h::control", "role": "control", "status": "SUCCESS", "verdict": "SUCCESSFUL",
+         "expected_failure": "assertion.1"}
+      ],
+      "outcome": "verified",
+      "why": "A control that verified means the seeded fault was not exercised. VO-11b ranks outcomes over claim harnesses only, so the run itself still reads verified; the control's `accepted` status is the evidence, and the gate blocks on `control-some-accepted`."
+    },
+    {
+      "id": "control-rejected-otherwise-leaves-the-claim-verified",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL"},
+        {"name": "h::control", "role": "control", "status": "FAILURE", "verdict": "FAILED",
+         "expected_failure": "assertion.2"}
+      ],
+      "outcome": "verified",
+      "why": "A mis-targeted control does not disprove the claim; the record reports it as rejected-otherwise and the gate blocks on that reason."
+    },
+    {
+      "id": "should-panic-claim-succeeds-with-its-note",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FAILURE", "verdict": "SUCCESSFUL",
+         "panics_as_expected": true, "should_panic": true}
+      ],
+      "outcome": "verified",
+      "why": "Kani's verdict note says the panic was the expected one, so its failed assertion is the claim."
+    },
+    {
+      "id": "should-panic-claim-with-an-unreachable-assertion",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FAILURE", "verdict": "SUCCESSFUL",
+         "panics_as_expected": true, "should_panic": true, "extra_status": "UNREACHABLE"}
+      ],
+      "outcome": "verified",
+      "why": "The certified panic explains the unreachable check after it; the claim is still the panic the manifest asked for."
+    },
+    {
+      "id": "control-only-manifest-is-skipped",
+      "harnesses": [
+        {"name": "h::k", "role": "control", "status": "FAILURE", "verdict": "FAILED",
+         "expected_failure": "assertion.1"}
+      ],
+      "outcome": "skipped",
+      "why": "A manifest of controls alone declares no claim, so the run has verified nothing and cannot pass."
+    },
+    {
+      "id": "should-panic-claim-without-its-note",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "FAILURE", "verdict": "FAILED",
+         "panics_as_expected": false, "should_panic": true}
+      ],
+      "outcome": "counterexample",
+      "why": "Without the note the harness failed for some other reason, which the manifest may not excuse."
+    },
+    {
+      "id": "unreachable-cover-is-not-verified",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL",
+         "cover_status": "UNREACHABLE", "covers": ["the witness"]}
+      ],
+      "outcome": "undetermined",
+      "why": "A harness that assumed its own precondition away proved nothing, so an unreachable witness must not read as verified."
+    },
+    {
+      "id": "non-regular-log",
+      "format": "inventory",
+      "harnesses": [],
+      "outcome": "tool-error",
+      "why": "kani list output carries no verdict, so it cannot be decided from."
+    },
+    {
+      "id": "log-reports-an-undeclared-harness",
+      "harnesses": [
+        {"name": "h::claim", "role": "claim", "status": "SUCCESS", "verdict": "SUCCESSFUL"},
+        {"name": "h::stranger", "role": null, "status": "SUCCESS", "verdict": "SUCCESSFUL"}
+      ],
+      "outcome": "tool-error",
+      "why": "VO-11b: a harness without a role is a structural error."
+    }
+  ]
+}

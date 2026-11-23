@@ -1,0 +1,110 @@
+Kani Rust Verifier 0.67.0 (cargo plugin)
+[Kani] Running: `CARGO_ENCODED_RUSTFLAGS="-Coverflow-checks=on-Zunstable-options-Ztrim-diagnostic-paths=no-Zhuman_readable_cgu_names-Zalways-encode-mir--cfg=kani-Zcrate-attr=feature(register_tool)-Zcrate-attr=register_tool(kanitool)--sysroot/home/leynos/.kani/kani-0.67.0-L/home/leynos/.kani/kani-0.67.0/lib--externkani--externnoprelude:std=/home/leynos/.kani/kani-0.67.0/lib/libstd.rlib-Dwarnings-Cpanic=abort-Csymbol-mangling-version=v0-Zpanic_abort_tests=yes-Zmir-enable-passes=-RemoveStorageMarkers--check-cfg=cfg(kani)-Clinker=echo--kani-compiler-Cllvm-args=--check-version=0.67.0" CARGO_TERM_PROGRESS_WHEN="never" RUSTC="/home/leynos/.kani/kani-0.67.0/bin/kani-compiler" RUSTC_BOOTSTRAP="1" /home/leynos/.kani/kani-0.67.0/toolchain/bin/cargo rustc --target x86_64-unknown-linux-gnu -Zhost-config -Ztarget-applies-to-host --config=host.rustflags=["--cfg=kani_host"] --target-dir /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani --message-format json-diagnostic-rendered-ansi -v -p path+file:///home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus#0.1.0 --lib -- "-Cllvm-args=--reachability=harnesses --log-level=info --assertion-reach-checks --harness harnesses::unsupported --exact"`
+warning: Found the following unsupported constructs:
+             - TerminatorKind::InlineAsm (1)
+         
+         Verification will fail if one or more of these constructs is reachable.
+         See https://model-checking.github.io/kani/rust-feature-support.html for more details.
+
+[Kani] Running: `goto-cc /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.symtab.out /home/leynos/.kani/kani-0.67.0/library/kani/kani_lib.c -o /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out`
+Finished goto-cc in 0.042152625s
+[Kani] Running: `goto-cc /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out --function _RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported -o /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out`
+Finished goto-cc in 0.021394476s
+[Kani] Running: `goto-instrument --add-library --no-malloc-may-fail /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out`
+Reading GOTO program from '/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out'
+Adding CPROVER library (x86_64)
+Writing GOTO program to '/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out'
+Finished goto-instrument in 0.022112696s
+[Kani] Running: `goto-instrument --generate-function-body-options assert-false-assume-false --generate-function-body .* --drop-unused-functions /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out`
+Reading GOTO program from '/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out'
+Function Pointer Removal
+Virtual function removal
+Cleaning inline assembler statements
+Removing unused functions
+Writing GOTO program to '/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out'
+Finished goto-instrument in 0.024920058s
+[Kani] Running: `goto-instrument --ensure-one-backedge-per-target /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out`
+Reading GOTO program from '/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out'
+Trying to force one backedge per target
+Writing GOTO program to '/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out'
+Finished goto-instrument in 0.021956895s
+Checking harness harnesses::unsupported...
+[Kani] Running: `cbmc --no-malloc-may-fail --no-undefined-shift-check --no-signed-overflow-check --nan-check --no-self-loops-to-assumptions --no-pointer-primitive-check --object-bits 16 --sat-solver cadical --slice-formula /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out --verbosity 9 --json-ui`
+CBMC 6.8.0 (cbmc-6.8.0)
+CBMC version 6.8.0 (cbmc-6.8.0) 64-bit x86_64 linux
+Reading GOTO program from file /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps/kani_corpus-fef33a3e7bee35fa__RNvNtCs633O74qA4T4_11kani_corpus9harnesses11unsupported.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+aborting path on assume(false) at file src/harnesses.rs line 74 column 9 function harnesses::unsupported thread 0
+Runtime Symex: 0.000261704s
+size of program expression: 18 steps
+slicing removed 9 assignments
+Generated 1 VCC(s), 1 remaining after simplification
+Runtime Postprocess Equation: 1.871e-05s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 3.4161e-05s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 9.68e-06s
+Solving with CaDiCaL 2.0.0
+1 variables, 0 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 5.6451e-05s
+Runtime decision procedure: 0.000121172s
+Finished run_cbmc in 0.02304746s
+
+RESULTS:
+Check 1: harnesses::unsupported.unsupported_construct.1
+	 - Status: FAILURE
+	 - Description: "TerminatorKind::InlineAsm is not currently supported by Kani. Please post your example at https://github.com/model-checking/kani/issues/2"
+	 - Location: src/harnesses.rs:74:9 in function harnesses::unsupported
+
+
+SUMMARY:
+ ** 1 of 1 failed
+Failed Checks: TerminatorKind::InlineAsm is not currently supported by Kani. Please post your example at https://github.com/model-checking/kani/issues/2
+ File: "src/harnesses.rs", line 74, in harnesses::unsupported
+
+VERIFICATION:- FAILED
+** WARNING: A Rust construct that is not currently supported by Kani was found to be reachable. Check the results for more details.
+Verification Time: 0.022772567s
+
+Manual Harness Summary:
+Verification failed for - harnesses::unsupported
+Complete - 0 successfully verified harnesses, 1 failures, 1 total.
+warning: unused config key `unstable.embed-metadata` in `/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/.cargo/config.toml`
+   Compiling kani-corpus v0.1.0 (/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus)
+     Running `/home/leynos/.local/bin/build-limits-rustc /home/leynos/.kani/kani-0.67.0/bin/kani-compiler --crate-name kani_corpus --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C embed-bitcode=no -Z codegen-backend=llvm --deny=unexpected_cfgs --check-cfg 'cfg(kani)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=1367a35fcc092fcf -C extra-filename=-fef33a3e7bee35fa --out-dir /home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps --target x86_64-unknown-linux-gnu -C linker=/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/scripts/native-clang-linker.sh -C strip=debuginfo -L dependency=/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/x86_64-unknown-linux-gnu/debug/deps -L dependency=/home/leynos/.lody/repos/github---leynos---combobulate/worktrees/9cc8f59f-14a7-4470-9239-a0dae798e739/tools/verifier-fixtures/kani-corpus/target/kani/debug/deps '-Cllvm-args=--reachability=harnesses --log-level=info --assertion-reach-checks --harness harnesses::unsupported --exact' -C overflow-checks=on -Z unstable-options -Z trim-diagnostic-paths=no -Z human_readable_cgu_names -Z always-encode-mir --cfg=kani -Z 'crate-attr=feature(register_tool)' -Z 'crate-attr=register_tool(kanitool)' --sysroot /home/leynos/.kani/kani-0.67.0 -L /home/leynos/.kani/kani-0.67.0/lib --extern kani --extern 'noprelude:std=/home/leynos/.kani/kani-0.67.0/lib/libstd.rlib' -D warnings -C panic=abort -C symbol-mangling-version=v0 -Z panic_abort_tests=yes -Z mir-enable-passes=-RemoveStorageMarkers '--check-cfg=cfg(kani)' -Clinker=echo --kani-compiler -Cllvm-args=--check-version=0.67.0`
+INFO kani_compiler::codegen_cprover_gotoc::compiler_interface Finished codegen reachability analysis in 0.000020281s
+INFO kani_compiler::codegen_cprover_gotoc::compiler_interface Finished codegen in 0.000066951s
+====== Reachability Analysis Result =======
+Total # items: 1
+Total # statements: 2
+Total # expressions: 0
+
+Reachable Items:
+  - function: 1
+
+Statements:
+  - Return: 1
+  - InlineAsm: 1
+
+Expressions:
+
+-------------------------------------------
+    Finished `dev` profile [unoptimized] target(s) in 0.24s
+generate function bodies: matched function '__CPROVER_cover' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_assignable' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_assert' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_object_upto' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_object_from' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_object_whole' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_was_freed' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_assume' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_is_freeable' begins with __CPROVER the generated body for this function may interfere with analysis
+generate function bodies: matched function '__CPROVER_freeable' begins with __CPROVER the generated body for this function may interfere with analysis
