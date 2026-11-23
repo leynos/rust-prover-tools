@@ -5,9 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS (implementation complete; draft PR #266 open; nine local
-review passes and three hosted assessments addressed; residual limits
-documented and explicitly scoped)
+Status: BLOCKED (implementation complete; PR #266 cannot merge until the
+`kani_log` parser collision with main's #264 is resolved)
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -560,6 +559,40 @@ Plain-language terms used in this plan:
   harness cannot size the attempt's memory; the sentinel keeps exhaustion
   distinguishable from a quiet report. Date/Author: 2026-11-21, implementation
   agent.
+
+## Blocker: main landed a competing Kani parser
+
+On 2026-11-23, `main` merged #264
+(`Adopt combobulate's Kani log parsing, outcome analysis and Verus run analysis`,
+closing #250), which added its own `rust_prover_tools/kani_log/` package:
+`syntax`, `model`, `reader`, `reports`, `extract` with `parse_kani_log`, and the
+`manifest`/`decide` layer. This branch adds a different
+`rust_prover_tools/kani_log/` package with an incremental reader and its own
+model. The two are an add/add conflict on five files.
+
+Issue #260 is explicit that this capability "should not introduce a competing
+Kani parser or outcome vocabulary". A merge therefore has to pick one parser,
+and that choice is architectural:
+
+1. **Adopt main's parser.** Keep `syntax`, `model`, `reader`, `reports`,
+   `extract`, and `manifest`/`decide` as landed. Reimplement the supervision
+   adapter's live facts and bounded incremental feeding over main's model, and
+   convert `parse_kani_log` to a streaming line source so the whole log is
+   never retained. This honours #250's landed semantics and #260's reuse rule,
+   at the cost of reworking `supervision/kani.py`, its corpus tests, and the
+   parser tests to main's field shapes and error strings.
+2. **Keep this branch's incremental parser and rewire main's entry point.** Make
+   `parse_kani_log` a wrapper over the incremental reader and map its result
+   onto main's model, preserving main's manifest/decide behaviour and its test
+   suite. This keeps the streaming design but requires main's ~200 parser,
+   extract, manifest, and decide tests to pass against a different engine.
+
+Either option is a multi-hour integration that invalidates the current review
+cycle. It is recorded here as the blocking decision rather than guessed at,
+because choosing which first-class parser the repository keeps is a scope and
+architecture decision for the repository owner. Until it is resolved the PR is
+`CONFLICTING`, GitHub creates no `pull_request` CI run, and equilibrium is
+unreachable.
 
 ## Outcomes & retrospective
 
