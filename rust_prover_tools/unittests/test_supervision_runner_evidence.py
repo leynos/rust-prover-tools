@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import typing as typ
-
 from rust_prover_tools.supervision import (
     Diagnostics,
     ExecutionStatus,
@@ -145,22 +143,11 @@ async def test_an_unavailable_sample_is_never_rendered_as_zero() -> None:
 
 
 def test_the_launcher_bounds_an_oversized_line_with_a_marker() -> None:
-    """A line cut at the launcher boundary is visibly cut."""
-    from cuprum import LineEvent
+    """A line cut at the stream boundary is visibly cut."""
+    from rust_prover_tools.supervision.stream_lines import BoundedLineSplitter
 
-    from rust_prover_tools.supervision import CuprumHarnessLauncher
+    splitter = BoundedLineSplitter(max_line_bytes=16)
 
-    clock = VirtualClock()
-    launcher = CuprumHarnessLauncher(
-        clock=clock.now,
-        monotonic=clock.monotonic,
-        max_line_bytes=16,
-    )
-    received: list[typ.Any] = []
-    hook = launcher._line_hook(received.append, 0.0)
+    (text,) = splitter.feed(b"x" * 100)
 
-    hook(LineEvent("stdout", 0.0, "x" * 100))
-
-    text = received[0].text
-    assert len(text.encode("utf-8")) <= 16
-    assert text.endswith("…[truncated]")
+    assert "truncated: line exceeded 16 bytes" in text

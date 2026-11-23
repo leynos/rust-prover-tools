@@ -34,27 +34,27 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import os
 import typing as typ
 
 import cuprum
 from cuprum import (
     BrokenPipePolicy,
-    ExecutionContext,
-    ProcessGroupPolicy,
-    Program,
-    ProgramCatalogue,
-    ProjectSettings,
     RunOutputOptions,
-    sh,
 )
 from cuprum.context import EnvMode
+from cuprum.sh.stdio import StdioTarget
 
 from rust_prover_tools.supervision.models import (
     LaunchResult,
-    OutputLine,
     StopReason,
 )
-from rust_prover_tools.supervision.sinks import bounded_text
+from rust_prover_tools.supervision.pipe_drain import (
+    DrainConfig,
+    PipeDrain,
+    command_for,
+    settle_drains,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -73,9 +73,6 @@ __all__ = (
     "PidSource",
     "RunningHarness",
 )
-
-#: Project name Cuprum records for this package's dynamically admitted runs.
-_PROJECT_NAME = "rust-prover-tools"
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -135,13 +132,31 @@ class _PidRecorder:
         """Create a recorder that has seen no event."""
         self.pid: int | None = None
         self.settled_exit_code: int | None = None
+        self._closing: list[int] = []
+
+    def own(self, *descriptors: int) -> None:
+        """Close the parent's copies of the child's pipe ends after the spawn.
+
+        The write ends must leave the parent once the child owns them, or the
+        read ends never observe EOF.
+        """
+        self._closing.extend(descriptors)
 
     def __call__(self, event: ExecEvent) -> None:
         """Record the pid and any status the run announced."""
-        if event.phase == "start" and event.pid is not None:
-            self.pid = event.pid
+        if event.phase == "start":
+            if event.pid is not None:
+                self.pid = event.pid
+            self.close_parent_ends()
         if event.phase in {"exit", "settled"} and event.exit_code is not None:
             self.settled_exit_code = event.exit_code
+
+    def close_parent_ends(self) -> None:
+        """Close every borrowed descriptor once, tolerating a repeated call."""
+        for descriptor in self._closing:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+        self._closing.clear()
 
 
 class RunningHarness:
@@ -325,61 +340,52 @@ class CuprumHarnessLauncher:
     ) -> LaunchResult:
         """Run one invocation on its own task, scoping the pid observer."""
         started = self._monotonic()
+        drains: list[PipeDrain] = []
         try:
-            command = build(spec)
-            program = Program(command.argv[0])
-            project = ProjectSettings(
-                name=_PROJECT_NAME,
-                programs=(program,),
-                documentation_locations=("docs/developers-guide.md",),
-                noise_rules=(),
-            )
-            catalogue = ProgramCatalogue(projects=(project,))
-            cmd = sh.make(program, catalogue=catalogue)(*command.argv[1:])
-            context = ExecutionContext(
-                env=command.env,
-                env_mode=command.env_mode,
-                cwd=command.cwd,
-                process_group=ProcessGroupPolicy.OWN_GROUP,
-            )
-            output = RunOutputOptions(
-                capture=False,
-                echo=False,
-                on_line=self._line_hook(on_line, started),
-                broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
-            )
+            cmd, context = command_for(build(spec))
+            output, drains = self._streams(recorder, on_line, started)
             with cuprum.observe(recorder):
                 result = await cmd.run(output=output, context=context)
+            await settle_drains(drains)
         except (OSError, cuprum.UnknownProgramError) as error:
             return LaunchResult(launch_error=f"{type(error).__name__}: {error}")
+        finally:
+            recorder.close_parent_ends()
+            for drain in drains:
+                drain.close()
         return _exit_status(result.exit_code)
 
-    def _line_hook(
+    def _streams(
         self,
+        recorder: _PidRecorder,
         on_line: cabc.Callable[[object], None],
         started: float,
-    ) -> cabc.Callable[[cuprum.LineEvent], None]:
-        """Return the Cuprum line hook that timestamps one line."""
-
-        def _observe(event: cuprum.LineEvent) -> None:
-            """Timestamp and forward one decoded child line."""
-            text = _bounded(event.text, self._max_line_bytes)
-            with contextlib.suppress(BrokenPipeError):
-                on_line(
-                    OutputLine(
-                        stream=event.stream,
-                        text=text,
-                        timestamp_utc=self._clock(),
-                        elapsed_seconds=max(0.0, self._monotonic() - started),
-                    )
-                )
-
-        return _observe
-
-
-def _bounded(text: str, limit: int) -> str:
-    """Return `text` cut to at most `limit` bytes with an explicit marker."""
-    return bounded_text(text, limit)
+    ) -> tuple[RunOutputOptions, list[PipeDrain]]:
+        """Create the child's pipes and the drains that own their read ends."""
+        out_read, out_write = os.pipe()
+        err_read, err_write = os.pipe()
+        recorder.own(out_write, err_write)
+        output = RunOutputOptions(
+            capture=False,
+            echo=False,
+            stdout=StdioTarget.fd(out_write),
+            stderr=StdioTarget.fd(err_write),
+            broken_pipe_policy=BrokenPipePolicy.BEST_EFFORT,
+        )
+        config = DrainConfig(
+            clock=self._clock,
+            monotonic=self._monotonic,
+            max_line_bytes=self._max_line_bytes,
+            on_line=on_line,
+            started=started,
+        )
+        drains = [
+            PipeDrain(out_read, "stdout", config),
+            PipeDrain(err_read, "stderr", config),
+        ]
+        for drain in drains:
+            drain.start()
+        return output, drains
 
 
 def _exit_status(code: int | None) -> LaunchResult:

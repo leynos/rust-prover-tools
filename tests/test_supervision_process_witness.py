@@ -231,3 +231,45 @@ def _passing(evidence: AttemptEvidence) -> HarnessClassification:
     if evidence.exit_code == 0:
         return HarnessClassification(status=ExecutionStatus.PASSED, detail="exit zero")
     return HarnessClassification(status=ExecutionStatus.FAILED)
+
+
+@pytest.mark.timeout(120)
+def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
+    """A real 8 MiB newline-free line cannot size the supervisor's buffer."""
+    import asyncio
+
+    line = tmp_path / "line.py"
+    line.write_text(
+        "import sys\n"
+        "sys.stdout.write('x' * (8 * 1024 * 1024))\n"
+        "sys.stdout.write('\\n')\n"
+        "sys.stdout.write('after\\n')\n",
+        encoding="utf-8",
+    )
+    forwarded: list[int] = []
+
+    def build(identity: object) -> LaunchCommand:
+        """Run the newline-free script through the real launcher."""
+        del identity
+        return LaunchCommand((sys.executable, "-I", str(line)), cwd=tmp_path)
+
+    def on_line(item: object) -> None:
+        """Record the forwarded line length."""
+        forwarded.append(len(typ.cast("typ.Any", item).text))
+
+    async def scenario() -> object:
+        """Start the child and wait for it on one loop."""
+        clock = SystemClock()
+        launcher = CuprumHarnessLauncher(
+            clock=clock.now,
+            monotonic=clock.monotonic,
+            max_line_bytes=8 * 1024,
+        )
+        running = launcher.start(spec(), build, on_line)
+        return await running.wait()
+
+    result = typ.cast("typ.Any", asyncio.run(scenario()))
+
+    assert result.exit_code == 0
+    assert forwarded, "the child produced no lines"
+    assert max(forwarded) <= 8 * 1024 + 64, "a line exceeded the configured bound"
