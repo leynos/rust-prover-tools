@@ -290,8 +290,9 @@ Plain-language terms used in this plan:
   prescribed `run_kani_harnesses` entry point. The deterministic suite passes
   with 2,479 tests and 6 skips, and the opt-in live Kani 0.67.0 fixture passes
   at head `e255561` in 627.95 s. The two remaining items are explicit
-  decisions, not claims: D24 records the Cuprum newline-free line gap as
-  upstream, and D25 records the tolerance overage and its authorization.
+  decisions, not claims: D24 records the original Cuprum newline-free line gap,
+  now superseded by D34's owned-pipe bound, and D25 records the tolerance
+  overage and its authorization.
 - [x] (2026-11-22 00:39Z) Ninth CodeRabbit pass: 24 findings. Fixed escaped
   single quotes, broad Unicode harness headers, LF-only archive splitting,
   formatter-only quote removal, bounded issue text, empty-source refusal,
@@ -467,14 +468,16 @@ Plain-language terms used in this plan:
   all three counters. An unreadable mountinfo falls back to the default mount,
   and unreadable files remain explicit absences. Date/Author: 2026-11-23,
   implementation agent.
-- D24. Decision: this library does not claim an end-to-end memory bound for
-  newline-free verifier output. Rationale: Cuprum 0.2.0b2 retains an
-  unterminated line in its own drain buffer before the line hook, and its
-  public options expose no chunk-level bound. A measured 8 MiB newline-free
-  line was held in full and delivered as one 8 MiB event. Every buffer this
-  library owns is bounded and no whole log is retained; closing the remainder
-  needs a Cuprum API change, so it is recorded as an accepted upstream gap
-  rather than described as met. Date/Author: 2026-11-23, implementation agent.
+- D24. **Superseded by D34.** Decision: this library does not claim an
+  end-to-end memory bound for newline-free verifier output. Rationale: Cuprum
+  0.2.0b2 retains an unterminated line in its own drain buffer before the line
+  hook, and its public options expose no chunk-level bound. A measured 8 MiB
+  newline-free line was held in full and delivered as one 8 MiB event. Every
+  buffer this library owns is bounded and no whole log is retained. D34 removes
+  the remaining gap on the supervision path by owning the child's pipes through
+  `StdioTarget.fd`; the line hook and its pre-hook buffer are no longer used,
+  and the real-process 8 MiB witness now proves the bound end to end.
+  Date/Author: 2026-11-23, implementation agent; superseded 2026-11-23.
 - D26. Decision: a selected test-target harness is revalidated against a fresh
   discovery of the same tree, not merely counted. Rationale: refusing only when
   several test targets exist still accepts a stale entry whose harness was
@@ -579,8 +582,10 @@ and this branch's supervision is layered on it: live facts come from the same
 grammar, the report is spooled to a bounded temporary file, and
 `parse_kani_log` is the single parser. The selector policy moved to
 `kani_cli_grammar`, which asserts that its supported releases equal the
-parser's. The deterministic gate passes with 3,212 tests and 6 skips, and the
-live Kani fixture passes at this candidate: 2 passed in 1,080.48 s.
+parser's. The deterministic gate passed with 3,212 tests and 6 skips at
+`32271b1`. The live Kani fixture passed on the working tree that became
+`4302139` (2 passed in 1,080.48 s); it does not cover the later
+bounded-retention commits.
 
 ## Blocker: main landed a competing Kani parser
 
@@ -678,7 +683,8 @@ All six milestones are implemented. The acceptance evidence is:
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
 at the published head passes with 3,212 tests and 6 skips. The opt-in live Kani
-0.67.0 fixture passes at this candidate: 2 passed in 1,080.48 s. After `main`
+0.67.0 fixture passed on the working tree that became `4302139` in 1,080.48 s;
+the later bounded-retention commits need their own live run. After `main`
 merged #264, this branch adopted that shared parser and deleted its own
 duplicate reader, so the parser's own corpus, structure, count, solver,
 decision, and mutant suites are its verification evidence. The supervision
