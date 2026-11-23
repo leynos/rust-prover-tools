@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import platform
 import subprocess
@@ -96,7 +98,17 @@ def test_z3_install_cli_reuses_a_marked_installation(tmp_path: Path) -> None:
     binary = install_dir / "z3"
     binary.write_bytes(b"z3-binary")
     binary.chmod(0o755)
-    (install_dir / ".z3-version").write_text(f"{Z3_VERSION}\n", encoding="utf-8")
+    (install_dir / ".z3-version").write_text(
+        json.dumps(
+            {
+                "sha256": hashlib.sha256(b"z3-binary").hexdigest(),
+                "version": Z3_VERSION,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     # The CLI honours the unprefixed overrides, so strip any inherited values
     # that would point the subprocess away from the temporary repository root.
     environment = sanitized_subprocess_env()

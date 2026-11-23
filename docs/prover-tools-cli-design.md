@@ -54,7 +54,13 @@ the same module.
 
 `rust_prover_tools.z3` installs the pinned Z3 solver used by Verus. It
 downloads the official release archive, extracts only the pinned `z3` binary,
-and records a version marker so later runs reuse the installation.
+and records a marker that binds the pinned version to the extracted binary's
+SHA-256; the digest is computed while the member is streamed to disk. Reuse
+rehashes the installed binary and accepts it only when the digest matches.
+Marker parsing is strict: the file must be a JSON object with exactly the
+`version` and `sha256` keys, both strings, the current version, and a
+64-character lowercase hexadecimal digest. Any other content, including a
+version-only marker from an earlier release, is a cache miss.
 
 `rust_prover_tools.binary_assets` is the manifest of pinned release artefacts:
 names, HTTPS URLs, SHA-256 digests, per-asset byte ceilings, archive members,
@@ -97,9 +103,13 @@ records `<tool>.install.start`, `<tool>.install.reuse`,
 together with the extraction, marker, setup, and verification boundaries
 (`z3.extract.complete`, `z3.marker.recorded`, `kani.extract.complete`,
 `kani.setup.complete`, `kani.verify.complete`, `verus.extract.start`, and
-`verus.extract.complete`). Snapshot commands report timed spans as correlated
-start and completion events. `kani.snapshot.install` closes with an `outcome` of
-`activated` or `reused` and a `cache` of `miss` or `hit`;
+`verus.extract.complete`). When a Z3 reuse is refused, `z3.install.cache_miss`
+records one reason from a closed set (`binary_missing`, `not_executable`,
+`marker_missing`, `marker_unusable`, or `digest_mismatch`) before the download
+starts, so a reinstall is diagnosable without reading source; it carries no
+digest, path, or marker text. Snapshot commands report timed spans as
+correlated start and completion events. `kani.snapshot.install` closes with an
+`outcome` of `activated` or `reused` and a `cache` of `miss` or `hit`;
 `kani.snapshot.check` closes with `outcome="valid"`; and `kani.snapshot.run`
 closes with an `outcome` of `success` or `failure` and the launcher's
 `exit_code`. The internal `kani.snapshot.stage`, `kani.snapshot.setup`,

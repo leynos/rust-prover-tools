@@ -500,8 +500,11 @@ The legacy Verus environment variables are still supported:
 Verus uses a Z3 solver that it does not ship in its own archive.
 `prover-tools z3 install` downloads the pinned official Z3 release for Linux
 x86_64, verifies its SHA-256 digest, extracts only `bin/z3`, and records the
-installed version beside the binary. A repeated run reuses a marked
-installation without another download.
+installed version and the extracted binary's SHA-256 in a marker beside the
+binary. Every run rehashes `z3` before reusing it, so a modified or replaced
+solver is reinstalled rather than trusted. A missing or invalid marker, and a
+marker written by an earlier release, also cause one reinstall. A reinstall
+uses the digest-verified archive already in the cache when it is present.
 
 <!-- tested-example: z3-install -->
 ```bash
@@ -538,8 +541,12 @@ exhaust disk space or hang a CI job:
 - opt-in structured events are available through Python logging at debug level
   for download start, completion, cache hits, verification, and bounded failure
   categories, and for each installer's start, reuse, extraction, setup,
-  verification, marker, and completion boundaries. The library installs no
-  handlers, so output is unchanged unless the application lowers the
+  verification, marker, and completion boundaries. A refused Z3 reuse also
+  reports `z3.install.cache_miss` with one bounded reason (`binary_missing`,
+  `not_executable`, `marker_missing`, `marker_unusable`, or `digest_mismatch`),
+  so the usual reinstall causes are visible. A first install and a reinstall
+  whose binary was deleted both report `binary_missing`. The library installs
+  no handlers, so output is unchanged unless the application lowers the
   `rust_prover_tools` logger level.
 
 ### GitHub Actions inputs
