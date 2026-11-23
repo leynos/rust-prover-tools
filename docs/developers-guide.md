@@ -599,12 +599,13 @@ waiting for the next scheduled mutation run.
 
 ## Kani corpus and lint exceptions
 
-The Kani parser corpus lives at `tests/fixtures/kani_logs/`. The repository's
-global `*.log` ignore would otherwise drop it, so `.gitignore` carries an
-explicit `!tests/fixtures/kani_logs/*.log` exception. A new capture must be
-added under that path, or the exception extended, before its test can rely on
-it. A capture that exists only in a working tree passes locally and fails a
-clean CI checkout.
+The Kani parser corpus lives under versioned directories such as
+`tests/fixtures/kani_logs/0.67.0/`. The repository's global `*.log` ignore
+would otherwise drop it, so `.gitignore` carries an explicit
+`!tests/fixtures/kani_logs/**/*.log` exception (and the matching one for
+`verus_logs`). A new capture must be added under a version directory, or the
+exception extended, before its test can rely on it. A capture that exists only
+in a working tree passes locally and fails a clean CI checkout.
 
 `pyproject.toml` relaxes two per-file lint rules for this capability, and both
 are narrower than they look:

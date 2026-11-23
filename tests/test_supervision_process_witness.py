@@ -272,4 +272,4 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert forwarded, "the child produced no lines"
-    assert max(forwarded) <= 8 * 1024 + 64, "a line exceeded the configured bound"
+    assert max(forwarded) <= 8 * 1024, "a line exceeded the configured bound"

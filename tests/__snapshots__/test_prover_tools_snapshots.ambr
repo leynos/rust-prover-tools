@@ -142,6 +142,8 @@
   │ --watchdog --no-watchdog   Stop a harness when host available memory falls   │
   │                            below the floor. [default: True]                  │
   │ --watchdog-mib INT         Available-memory floor in MiB. [default: 1024]    │
+  │ --max-log-mib INT          Largest verifier log retained for the final       │
+  │                            parse, in MiB. [default: 64]                      │
   │ --human PATH               Append the human job log here instead of standard │
   │                            output.                                           │
   │ --jsonl PATH               Append versioned JSONL evidence here.             │

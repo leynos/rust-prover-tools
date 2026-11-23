@@ -146,8 +146,8 @@ def test_the_launcher_bounds_an_oversized_line_with_a_marker() -> None:
     """A line cut at the stream boundary is visibly cut."""
     from rust_prover_tools.supervision.stream_lines import BoundedLineSplitter
 
-    splitter = BoundedLineSplitter(max_line_bytes=16)
+    splitter = BoundedLineSplitter(max_line_bytes=64)
 
-    (text,) = splitter.feed(b"x" * 100)
+    (text,) = splitter.feed(b"x" * 200)
 
-    assert "truncated: line exceeded 16 bytes" in text
+    assert "truncated: line exceeded 64 bytes" in text

@@ -928,7 +928,16 @@ async def _cancelled_attempt_scenario(tmp_path: Path) -> None:
 
     clock = VirtualClock()
     ready = asyncio.Event()
-    launcher = ScriptedLauncher(script=Script(block=True), ready=ready)
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(
+                ("stdout", "Checking harness harnesses::a..."),
+                ("stdout", "VERIFICATION:- SUCCESSFUL"),
+            ),
+            block=True,
+        ),
+        ready=ready,
+    )
     first, second = spec("harnesses::a"), spec("harnesses::b")
     jsonl = MemorySink()
     report_path = tmp_path / "report.json"
@@ -961,14 +970,17 @@ async def _cancelled_attempt_scenario(tmp_path: Path) -> None:
     assert [entry["status"] for entry in results] == ["interrupted", "not-run"]
     assert results[0]["stop_reason"] == "interrupted"
     assert results[0]["diagnostic"] is not None
+    accounting = typ.cast("dict[str, object]", document["accounting"])
+    assert accounting["missing"] == [second.qualified]
+    assert accounting["unexpected"] == []
 
 
-def test_a_monitor_fault_is_reported_as_interrupted() -> None:
+def test_a_monitor_fault_is_reported_as_interrupted(tmp_path: Path) -> None:
     """A fault the supervisor caused is recorded as its own stop."""
-    asyncio.run(_monitor_fault_scenario())
+    asyncio.run(_monitor_fault_scenario(tmp_path))
 
 
-async def _monitor_fault_scenario() -> None:
+async def _monitor_fault_scenario(tmp_path: Path) -> None:
     """Fail the probe and inspect the reported stop reason."""
     from rust_prover_tools.supervision.kani import KaniAdapter
 
@@ -981,10 +993,22 @@ async def _monitor_fault_scenario() -> None:
             msg = "probe failed"
             raise RuntimeError(msg)
 
+    from rust_prover_tools.supervision.config import DiagnosticSinks
+
     clock = VirtualClock()
     jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
     environment = _environment(
-        ScriptedLauncher(script=Script(block=True)),
+        ScriptedLauncher(
+            script=Script(
+                lines=(("stdout", "Checking harness harnesses::verified..."),),
+                block=True,
+            )
+        ),
         clock,
         probe=_FailingProbe(),
         sinks=Diagnostics(jsonl=jsonl),
@@ -992,14 +1016,18 @@ async def _monitor_fault_scenario() -> None:
     )
 
     with pytest.raises(RuntimeError, match="probe failed"):
-        await run_supervised(
-            (spec(),),
-            _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
-            environment,
-        )
+        await run_supervised((spec(),), config, environment)
 
     finish = next(
         record for record in jsonl.records if record["record"] == "harness-finish"
     )
     assert finish["status"] == "interrupted"
     assert finish["stop_reason"] == "interrupted"
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert results[0]["status"] == "interrupted"
+    assert results[0]["diagnostic"] is not None
+    accounting = typ.cast("dict[str, object]", document["accounting"])
+    assert accounting["missing"] == []
+    assert accounting["unexpected"] == []

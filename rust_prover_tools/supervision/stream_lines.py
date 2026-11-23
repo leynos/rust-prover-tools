@@ -41,6 +41,21 @@ class BoundedLineSplitter:
     max_line_bytes: int
     encoding: str = "utf-8"
     errors: str = "replace"
+
+    def __post_init__(self) -> None:
+        """Refuse a budget too small to carry the truncation marker."""
+        marker = self._marker()
+        if self.max_line_bytes < len(marker.encode("utf-8")):
+            msg = (
+                "max_line_bytes must be at least the truncation marker's "
+                f"length ({len(marker.encode('utf-8'))})"
+            )
+            raise ValueError(msg)
+
+    def _marker(self) -> str:
+        """Return the marker appended to an over-long line."""
+        return f"…[truncated: line exceeded {self.max_line_bytes} bytes]"
+
     _pending: bytearray = dc.field(default_factory=bytearray, init=False)
     _discarding: bool = dc.field(default=False, init=False)
     _pending_cr: bool = dc.field(default=False, init=False)
@@ -144,12 +159,22 @@ class BoundedLineSplitter:
         return text
 
     def _overflow(self) -> str:
-        """Return a truncated prefix and start discarding the rest of the line."""
-        prefix = bytes(self._pending[: self.max_line_bytes])
+        """Return a truncated prefix and start discarding the rest of the line.
+
+        The marker and any UTF-8 replacement characters count against the same
+        budget, so the encoded line the observer forwards never exceeds
+        `max_line_bytes`.
+        """
+        raw = bytes(self._pending)
         self._pending.clear()
         self._discarding = True
-        marker = f"…[truncated: line exceeded {self.max_line_bytes} bytes]"
-        return f"{self._decode(prefix)}{marker}"
+        marker = self._marker()
+        budget = max(0, self.max_line_bytes - len(marker.encode("utf-8")))
+        while True:
+            text = f"{self._decode(raw[:budget])}{marker}"
+            if len(text.encode("utf-8")) <= self.max_line_bytes or budget == 0:
+                return text
+            budget -= 1
 
     def _decode(self, data: bytes) -> str:
         """Decode one complete line, flushing any incomplete sequence.

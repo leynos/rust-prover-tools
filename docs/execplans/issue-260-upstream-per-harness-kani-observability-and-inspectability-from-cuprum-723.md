@@ -567,8 +567,8 @@ and this branch's supervision is layered on it: live facts come from the same
 grammar, the report is spooled to a bounded temporary file, and
 `parse_kani_log` is the single parser. The selector policy moved to
 `kani_cli_grammar`, which asserts that its supported releases equal the
-parser's. The deterministic gate passes with 3,198 tests and 6 skips, and the
-live Kani fixture passes in 1,229.44 s.
+parser's. The deterministic gate passes with 3,205 tests and 6 skips, and the
+live Kani fixture passes at this candidate: 2 passed in 1,080.48 s.
 
 ## Blocker: main landed a competing Kani parser
 
@@ -665,7 +665,7 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at the published head passes with 3,198 tests and 6 skips. The opt-in live Kani
+at the published head passes with 3,205 tests and 6 skips. The opt-in live Kani
 0.67.0 fixture passes at the merged candidate: 2 passed in 1,229.44 s under the
 shared compile-admission pool. The earlier claim that only tests and
 documentation changed after `6f772f3` was wrong: supervision and inventory code

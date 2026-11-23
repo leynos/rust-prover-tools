@@ -38,6 +38,7 @@ if typ.TYPE_CHECKING:
     import contextlib
 
 __all__ = (
+    "DEFAULT_MAX_LOG_MIB",
     "DEFAULT_WATCHDOG_MIB",
     "DestinationFlags",
     "PolicyFlags",
@@ -50,6 +51,8 @@ __all__ = (
 
 #: Default available-memory floor in MiB, from the source plan.
 DEFAULT_WATCHDOG_MIB: typ.Final[int] = 1024
+#: Default retained-log budget for the final parse, in MiB.
+DEFAULT_MAX_LOG_MIB: typ.Final[int] = 64
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -121,6 +124,8 @@ class PolicyFlags:
         Stop a harness when host available memory falls below the floor.
     watchdog_mib : int
         Available-memory floor in MiB.
+    max_log_mib : int
+        Largest verifier log retained for the final parse, in MiB.
     """
 
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
@@ -128,6 +133,7 @@ class PolicyFlags:
     heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     watchdog: typ.Annotated[bool, Parameter(negative="--no-watchdog")] = True
     watchdog_mib: int = DEFAULT_WATCHDOG_MIB
+    max_log_mib: int = DEFAULT_MAX_LOG_MIB
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -232,6 +238,7 @@ def supervision_policy(
         sample_interval_seconds=policy.sample_interval_seconds,
         heartbeat_interval_seconds=policy.heartbeat_seconds,
         watchdog_threshold_bytes=threshold,
+        max_log_bytes=policy.max_log_mib * 1024 * 1024,
         sinks=DiagnosticSinks(report_path=destinations.report),
     )
 

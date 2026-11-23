@@ -92,21 +92,21 @@ def verify_test_target_attribution(
                 "exactly: Kani 0.67.0 has no flag that selects one test target."
             )
             raise InventoryDiscoveryError(msg)
-        if harness.conditional:
-            msg = (
-                f"the inventory records {harness.identity!r} behind a cfg gate "
-                "in test target "
-                f"{harness.target!r}. A cfg-disabled harness can be absent "
-                "while a same-named generated harness elsewhere is selected, so "
-                "the entry cannot be attributed."
-            )
-            raise InventoryDiscoveryError(msg)
         actual = by_identity.get(harness.identity)
         if actual is None:
             msg = (
                 f"the inventory records {harness.identity!r} in test target "
                 f"{harness.target!r}, but the live tree declares no such "
                 "harness. Refusing to credit a stale inventory."
+            )
+            raise InventoryDiscoveryError(msg)
+        if harness.conditional or actual.conditional:
+            msg = (
+                f"the inventory records {harness.identity!r} behind a cfg gate "
+                "in test target "
+                f"{harness.target!r}. A cfg-disabled harness can be absent "
+                "while a same-named generated harness elsewhere is selected, so "
+                "the entry cannot be attributed."
             )
             raise InventoryDiscoveryError(msg)
         if actual.target_kind != "test" or actual.target != harness.target:

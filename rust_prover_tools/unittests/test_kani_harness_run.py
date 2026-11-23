@@ -433,3 +433,19 @@ def test_the_configured_line_limit_reaches_the_launcher() -> None:
 
     launcher = typ.cast("typ.Any", environment.launcher)
     assert launcher.max_line_bytes == 64
+
+
+def test_the_log_budget_reaches_the_policy() -> None:
+    """A non-default retained-log budget is part of the run policy."""
+    from rust_prover_tools.kani_harness_cli_options import (
+        DestinationFlags,
+        PolicyFlags,
+        supervision_policy,
+    )
+
+    config = supervision_policy(
+        PolicyFlags(max_log_mib=2),
+        DestinationFlags(),
+    )
+
+    assert config.max_log_bytes == 2 * 1024 * 1024

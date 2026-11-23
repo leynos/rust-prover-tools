@@ -25,7 +25,7 @@ from rust_prover_tools.kani_log import (
     VERIFICATION,
     KaniLog,
     KaniLogError,
-    parse_kani_log,
+    parse_kani_log_lines,
 )
 from rust_prover_tools.kani_log.syntax import NO_HARNESS_MATCH
 
@@ -40,6 +40,9 @@ __all__ = (
 
 #: Bytes of one log the observer spools for the parser by default.
 DEFAULT_MAX_LOG_BYTES: typ.Final[int] = 64 * 1024 * 1024
+
+#: Live selection and verdict records retained before the facts fail closed.
+MAX_LIVE_RECORDS: typ.Final[int] = 256
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -95,6 +98,9 @@ class KaniObserver:
         Why the shared parser refused the completed log, when it did.
     log_truncated : bool
         Whether the log exceeded `max_log_bytes`.
+    facts_truncated : bool
+        Whether the live record budget was exceeded. The attempt is then
+        classified as an error rather than reported against partial facts.
     """
 
     max_log_bytes: int = DEFAULT_MAX_LOG_BYTES
@@ -106,8 +112,10 @@ class KaniObserver:
     no_match_reason: str | None = None
     failure_reason: str | None = None
     log_truncated: bool = False
+    facts_truncated: bool = False
     _current: str | None = dc.field(default=None, init=False)
     _spool: typ.IO[str] | None = dc.field(default=None, init=False)
+    _path: Path | None = dc.field(default=None, init=False)
     _stack: contextlib.ExitStack | None = dc.field(default=None, init=False)
     _written: int = dc.field(default=0, init=False)
 
@@ -136,12 +144,12 @@ class KaniObserver:
             return
         if (match := HARNESS_START.match(text)) is not None:
             self._current = match["name"]
-            self.selection_records.append(match["name"])
+            self._record(self.selection_records, match["name"])
             self.last_progress = text
             return
         if (match := VERIFICATION.match(text)) is not None:
             if self._current is not None:
-                self.verdicts.append((self._current, match["verdict"]))
+                self._record(self.verdicts, (self._current, match["verdict"]))
             self.last_progress = text
             return
         if NO_HARNESS_MATCH.match(text) is not None:
@@ -153,6 +161,13 @@ class KaniObserver:
             return
         if text.strip() and not text.startswith(NOISE_PREFIXES):
             self.last_progress = text
+
+    def _record(self, records: list[typ.Any], value: object) -> None:
+        """Retain one live record, failing closed when the budget is spent."""
+        if len(records) >= MAX_LIVE_RECORDS:
+            self.facts_truncated = True
+            return
+        records.append(value)
 
     def _spool_line(self, text: str) -> None:
         """Write one line to the spool while it fits the configured budget."""
@@ -187,9 +202,8 @@ class KaniObserver:
                 f"the log exceeded the retained budget of {self.max_log_bytes} bytes"
             )
             return None
-        text = self._spooled_text()
         try:
-            return parse_kani_log(text)
+            return self._parse_spool()
         except KaniLogError as error:
             self.failure_reason = error.reason
             return None
@@ -201,21 +215,22 @@ class KaniObserver:
         directory = self._stack.enter_context(tempfile.TemporaryDirectory())
         # The stack owns the handle; `finish` or the overflow path closes it.
         # pylint: disable-next=consider-using-with
-        handle = (Path(directory) / "kani.log").open(
-            "w+", encoding="utf-8", errors="replace"
-        )
+        self._path = Path(directory) / "kani.log"
+        handle = self._path.open("w+", encoding="utf-8", errors="replace")
         self._spool = self._stack.enter_context(handle)
         return self._spool
 
-    def _spooled_text(self) -> str:
-        """Return the spooled log and release the spool."""
-        if self._spool is None:
-            return ""
+    def _parse_spool(self) -> KaniLog:
+        """Parse the spooled log one line at a time, then release the spool."""
+        if self._spool is None or self._path is None:
+            msg = "the log does not begin with a Kani banner"
+            raise KaniLogError(msg)
         self._spool.flush()
-        self._spool.seek(0)
-        text = self._spool.read()
-        self._close_spool()
-        return text
+        try:
+            with self._path.open("r", encoding="utf-8", errors="replace") as handle:
+                return parse_kani_log_lines(line.removesuffix("\n") for line in handle)
+        finally:
+            self._close_spool()
 
     def _close_spool(self) -> None:
         """Close the spool if one is open, tolerating a repeated call."""
@@ -223,3 +238,4 @@ class KaniObserver:
             self._stack.close()
             self._stack = None
             self._spool = None
+            self._path = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as dc
 import json
 import typing as typ
 from pathlib import Path
@@ -560,3 +561,28 @@ def test_a_conditional_test_harness_is_refused() -> None:
 
     with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
         verify_test_target_attribution((harness,), live, metadata)
+
+
+def test_a_freshly_conditional_test_harness_is_refused() -> None:
+    """A stale unconditional entry is refused when the live harness is gated."""
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        PackageInventory,
+        verify_test_target_attribution,
+    )
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
+
+    pinned = InventoryHarness(
+        package="beta",
+        target="integration",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    fresh = dc.replace(pinned, conditional=True)
+    live = HarnessInventory((PackageInventory("beta", (fresh,)),))
+    metadata = cargo_metadata(_WORKSPACE)
+
+    with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
+        verify_test_target_attribution((pinned,), live, metadata)

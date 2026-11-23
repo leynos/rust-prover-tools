@@ -33,7 +33,7 @@ __all__ = (
 
 
 async def run_supervised(
-    expected: cabc.Sequence[HarnessSpec],
+    specs: cabc.Sequence[HarnessSpec],
     config: SupervisionConfig,
     environment: RunEnvironment,
     *,
@@ -43,7 +43,7 @@ async def run_supervised(
 
     Parameters
     ----------
-    expected : cabc.Sequence[HarnessSpec]
+    specs : cabc.Sequence[HarnessSpec]
         Identities the run must execute, in selection order.
     config : SupervisionConfig
         Per-harness policy.
@@ -58,7 +58,7 @@ async def run_supervised(
         The typed report with one result per expected identity.
     """
     run = SupervisedRun(
-        expected=tuple(expected),
+        expected=tuple(specs),
         config=config,
         environment=environment,
         run_id=run_id if run_id is not None else new_run_id(),
@@ -67,7 +67,7 @@ async def run_supervised(
 
 
 def run_supervised_sync(
-    expected: cabc.Sequence[HarnessSpec],
+    specs: cabc.Sequence[HarnessSpec],
     config: SupervisionConfig,
     environment: RunEnvironment,
     *,
@@ -77,7 +77,7 @@ def run_supervised_sync(
 
     Parameters
     ----------
-    expected : cabc.Sequence[HarnessSpec]
+    specs : cabc.Sequence[HarnessSpec]
         Identities the run must execute, in selection order.
     config : SupervisionConfig
         Per-harness policy.
@@ -100,7 +100,7 @@ def run_supervised_sync(
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(run_supervised(expected, config, environment, run_id=run_id))
+        return asyncio.run(run_supervised(specs, config, environment, run_id=run_id))
     msg = (
         "run_supervised_sync cannot run inside an event loop; await "
         "run_supervised instead"

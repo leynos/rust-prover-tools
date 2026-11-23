@@ -42,6 +42,7 @@ from rust_prover_tools.kani_log import (
 from rust_prover_tools.kani_release import KANI_RELEASE_VERSION
 from rust_prover_tools.supervision.kani_observer import (
     DEFAULT_MAX_LOG_BYTES,
+    MAX_LIVE_RECORDS,
     KaniLiveFacts,
     KaniObserver,
 )
@@ -110,6 +111,13 @@ class KaniAdapter:
             return _classification(
                 ExecutionStatus.ERROR,
                 detail=f"launch failed: {evidence.launch_error}",
+                observed=observed,
+            )
+        if kani.facts_truncated:
+            return _classification(
+                ExecutionStatus.ERROR,
+                detail="the verifier produced more selection records than the "
+                f"supervisor retains ({MAX_LIVE_RECORDS})",
                 observed=observed,
             )
         if kani.banner_version is not None and kani.banner_version != self.version:

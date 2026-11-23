@@ -43,6 +43,7 @@ from rust_prover_tools.kani_log.decide import (
 )
 from rust_prover_tools.kani_log.extract import (
     parse_kani_log,
+    parse_kani_log_lines,
     unwinding_checks_enabled,
 )
 from rust_prover_tools.kani_log.manifest import (
@@ -107,6 +108,7 @@ __all__ = (
     "from_kani_log_error",
     "manifest_from_document",
     "parse_kani_log",
+    "parse_kani_log_lines",
     "parse_manifest",
     "unwinding_checks_enabled",
 )

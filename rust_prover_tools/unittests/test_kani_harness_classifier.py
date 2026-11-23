@@ -398,3 +398,59 @@ def test_a_log_within_the_budget_is_parsed() -> None:
 
     assert log is not None
     assert log.harnesses == (identity,)
+
+
+def test_the_live_fact_budget_fails_closed() -> None:
+    """Repeated selection records cannot grow the live facts without bound."""
+    from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
+
+    observer = KaniObserver()
+    for index in range(MAX_LIVE_RECORDS + 5):
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=f"Checking harness harnesses::h{index}...",
+                timestamp_utc=VirtualClock().now(),
+                elapsed_seconds=0.0,
+            )
+        )
+
+    assert observer.facts_truncated
+    assert len(observer.selection_records) == MAX_LIVE_RECORDS
+    evidence = _evidence("harnesses::h0", exit_code=1)
+    classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
+    assert classification.status is ExecutionStatus.ERROR
+    assert "selection records" in classification.detail
+
+
+def test_a_log_over_the_budget_records_no_further_facts() -> None:
+    """Records received after the spool limit do not grow the live facts."""
+    observer = KaniObserver(max_log_bytes=64)
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Kani Rust Verifier 0.67.0 (cargo plugin)",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="padding " * 20,
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+    assert observer.log_truncated
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Checking harness harnesses::late...",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+
+    assert observer.selection_records == ["harnesses::late"]
+    assert observer.finish(0) is None

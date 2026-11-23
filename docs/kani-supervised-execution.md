@@ -301,10 +301,16 @@ the next line or disappearing at end of stream.
 
 The bound is therefore end to end for everything the supervisor retains: a
 partial line, a forwarded line, a JSONL record, a stream tail, and a report are
-each bounded, and no whole proof log is retained.
-`test_a_newline_free_line_is_bounded_end_to_end` drives a real 8 MiB
-newline-free line through the production launcher and asserts that no forwarded
-line exceeds the configured bound. Cuprum's own line hook retains an
+each bounded. `test_a_newline_free_line_is_bounded_end_to_end` drives a real 8
+MiB newline-free line through the production launcher and asserts that no
+forwarded line exceeds the configured bound.
+
+The final parse uses the repository's single Kani parser. The observer spools
+the child's lines to a temporary file up to `max_log_bytes` (64 MiB by default,
+or `--max-log-mib` on the CLI) and then parses that file through
+`parse_kani_log_lines`, whose streaming line source retains only the small
+lookahead the parser needs. No whole log is held in memory; a log longer than
+the budget is reported as truncated evidence. Cuprum's own line hook retains an
 unterminated line before invoking the hook, which is why supervision does not
 use it; that remains true of Cuprum 0.2.0b2 and is recorded here as historical
 context, not as an active limitation of this route.
