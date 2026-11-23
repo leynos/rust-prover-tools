@@ -38,6 +38,7 @@ __all__ = (
     "INTERRUPTED_DETAIL",
     "NOT_RUN_DETAIL",
     "ReportInput",
+    "RunLedger",
     "assemble_report",
     "not_run_result",
     "result_for",
@@ -48,6 +49,20 @@ INTERRUPTED_DETAIL: typ.Final[str] = "a signal interrupted this harness"
 CANCELLED_DETAIL: typ.Final[str] = (
     "the run task was cancelled before this harness completed"
 )
+
+
+@dc.dataclass(slots=True)
+class RunLedger:
+    """The accumulating facts of one run."""
+
+    expected: tuple[HarnessSpec, ...]
+    results: list[HarnessResult] = dc.field(default_factory=list)
+    executed: list[str] = dc.field(default_factory=list)
+    interrupted: bool = False
+    interrupt_signal: int | None = None
+    finished_at: dt.datetime | None = None
+    diagnostic_error: Exception | None = None
+    active: HarnessResult | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

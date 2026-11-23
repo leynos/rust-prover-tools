@@ -230,10 +230,15 @@ def test_a_block_after_the_final_summary_is_refused() -> None:
 @pytest.mark.parametrize("name", sorted(LOGS))
 @settings(max_examples=15, deadline=None)
 @given(st.lists(st.integers(min_value=1, max_value=4), max_size=40))
-def test_chunked_feeding_matches_the_whole_text_parse(
+def test_line_grouping_does_not_change_the_facts(
     name: str, chunk_sizes: list[int]
 ) -> None:
-    """Feed boundaries cannot change the facts or the refusal."""
+    """Grouping whole lines cannot change the facts or the refusal.
+
+    Cuprum delivers complete decoded lines to the supervisor's hook, so line
+    grouping is not a distinct streaming boundary. This checks only that the
+    reader is insensitive to how a caller batches the lines it already has.
+    """
     lines = lines_of(name)
     reader = KaniLogReader()
     position = 0
@@ -302,25 +307,33 @@ _SAFE_CHATTER = st.sampled_from((
 ))
 
 
-@settings(max_examples=60, deadline=None)
+_REPORTED = sorted(
+    name
+    for name, entry in LOGS.items()
+    if "refused" not in entry
+    and any(line.startswith(HARNESS_START) for line in lines_of(name))
+)
+
+
+@pytest.mark.parametrize("name", _REPORTED)
+@settings(max_examples=30, deadline=None)
 @given(
     chatter=st.lists(_SAFE_CHATTER, min_size=0, max_size=6),
-    tail=st.lists(_SAFE_CHATTER, min_size=0, max_size=4),
     chunk_sizes=st.lists(st.integers(min_value=1, max_value=5), max_size=20),
 )
-def test_noise_and_chunking_preserve_an_independently_read_report(
+def test_generated_noise_preserves_an_independently_read_report(
+    name: str,
     chatter: list[str],
-    tail: list[str],
     chunk_sizes: list[int],
 ) -> None:
-    """Generated build noise and feed boundaries cannot change the facts.
+    """Generated build noise cannot change any capture's committed facts.
 
-    The oracle here reads the captured lines directly rather than through the
+    The oracle reads the captured lines directly rather than through the
     reader, so agreement is evidence about the reader instead of a tautology.
     """
-    lines = lines_of("verified")
+    lines = lines_of(name)
     before, report, after = _report_slice(lines)
-    noisy = [*before, *chatter, *tail, *report, *after]
+    noisy = [*before, *chatter, *report, *after]
 
     reader = KaniLogReader()
     position = 0
@@ -334,11 +347,11 @@ def test_noise_and_chunking_preserve_an_independently_read_report(
     whole = parse("\n".join(noisy))
 
     banner, names = _observed_facts(noisy)
-    assert banner == "0.67.0"
-    assert names == ("harnesses::verified",)
+    assert banner == LOGS[name]["banner"]
+    assert names == whole.harnesses
     assert fed == whole
-    assert whole.harnesses == names
     assert whole.banner_version == banner
+    assert_matches_expected(name, whole)
 
 
 def test_retention_bound_survives_chunked_noise() -> None:
@@ -362,3 +375,47 @@ def test_retention_bound_survives_chunked_noise() -> None:
 
         assert len(reader.retained_issues) == MAX_RETAINED_ISSUES + 1
         assert reader.facts.selection_records == ("harnesses::verified",)
+
+
+@settings(max_examples=40, deadline=None)
+@given(verified=st.integers(min_value=0, max_value=9))
+def test_a_generated_disagreeing_summary_is_refused(verified: int) -> None:
+    """Reconciliation must reject a summary that denies the parsed blocks.
+
+    A reader that skipped `reconcile_report` would accept every one of these
+    logs; the committed facts say the capture has one verified harness.
+    """
+    if verified == 1:
+        return
+    lines = [
+        line.replace(
+            "Complete - 1 successfully verified harnesses, 0 failures, 1 total.",
+            f"Complete - {verified} successfully verified harnesses, "
+            f"0 failures, {verified} total.",
+        )
+        for line in lines_of("verified")
+    ]
+
+    with pytest.raises(KaniLogError, match="manual summary"):
+        parse("\n".join(lines))
+
+
+def test_record_retention_is_bounded() -> None:
+    """A block cannot retain unbounded checks, so a whole-log buffer fails."""
+    from rust_prover_tools.kani_log.budget import MAX_RETAINED_RECORDS
+
+    reader = KaniLogReader()
+    reader.feed_line("stdout", "Kani Rust Verifier 0.67.0 (cargo plugin)")
+    reader.feed_line("stdout", "Checking harness harnesses::noisy...")
+    reader.feed_line("stdout", "RESULTS:")
+    for index in range(MAX_RETAINED_RECORDS + 25):
+        reader.feed_line("stdout", f"Check {index}: harnesses::noisy.assertion.{index}")
+        reader.feed_line("stdout", "\t - Status: SUCCESS")
+        reader.feed_line("stdout", "\t - Description: checked")
+        reader.feed_line("stdout", "\t - Location: src/lib.rs:1")
+    reader.feed_line("stdout", "SUMMARY:")
+
+    with pytest.raises(KaniLogError):
+        reader.finish(0)
+    issues = reader.retained_issues
+    assert any("retention is truncated" in issue.message for issue in issues)

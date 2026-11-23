@@ -13,6 +13,7 @@ import typing as typ
 from rust_prover_tools.supervision.models import (
     CgroupObservation,
     HarnessSpec,
+    LaunchResult,
     Measurement,
     ResourceSample,
     StopReason,
@@ -22,11 +23,16 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import datetime as dt
 
+    from rust_prover_tools.supervision.protocols import CgroupReader
+
 __all__ = (
     "AttemptEvidence",
+    "finish_cgroup",
+    "idle_seconds",
     "latest",
     "minimum",
     "peak",
+    "resolved_reason",
 )
 
 #: Reason reported when a summary has no sample to summarise.
@@ -155,3 +161,29 @@ def latest(values: cabc.Sequence[Measurement]) -> Measurement:
     if values:
         return values[0]
     return Measurement.unavailable(NO_SAMPLE)
+
+
+def resolved_reason(stop_reason: StopReason | None, result: LaunchResult) -> StopReason:
+    """Name why the supervisor stopped waiting for the child."""
+    if stop_reason is not None:
+        return stop_reason
+    if result.launch_error is not None:
+        return StopReason.LAUNCH_FAILED
+    return StopReason.EXITED
+
+
+def finish_cgroup(
+    reader: CgroupReader,
+    observation: CgroupObservation,
+) -> CgroupObservation:
+    """Read the finish-time cgroup values for an observation."""
+    if observation.path is None:
+        return observation
+    return dc.replace(observation, finish=reader.read(observation.path))
+
+
+def idle_seconds(last_output_elapsed: float | None, elapsed: float) -> float:
+    """Seconds since the last observed output, or since the start."""
+    if last_output_elapsed is None:
+        return elapsed
+    return max(0.0, elapsed - last_output_elapsed)

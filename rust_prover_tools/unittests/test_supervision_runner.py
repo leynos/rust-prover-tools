@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses as dc
+import datetime as dt
 import json
 import typing as typ
 
@@ -42,7 +43,6 @@ from rust_prover_tools.unittests.supervision_doubles import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    import datetime as dt
     from pathlib import Path
 
     from rust_prover_tools.supervision import (
@@ -723,7 +723,7 @@ async def test_a_monitor_failure_stops_and_joins_the_child() -> None:
 
 @_async_test
 async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
-    """Cancelling the run task finalizes evidence before re-raising."""
+    """A cancelled run reports the in-flight attempt, not work that never ran."""
     clock = VirtualClock()
     ready = asyncio.Event()
     launcher = ScriptedLauncher(script=Script(block=True), ready=ready)
@@ -733,6 +733,7 @@ async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
         launcher,
         clock,
         sinks=Diagnostics(jsonl=jsonl),
+        statuses={first.qualified: ExecutionStatus.INTERRUPTED},
     )
     task = asyncio.create_task(
         run_supervised(
@@ -747,12 +748,83 @@ async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
         await task
 
     assert StopReason.INTERRUPTED in launcher.stops
-    kinds = [record["record"] for record in jsonl.records]
-    assert "run-finish" in kinds
     finish = next(
         record for record in jsonl.records if record["record"] == "run-finish"
     )
     assert finish["interrupted"] is True
+    assert finish["complete"] is False
+    accounting = typ.cast("dict[str, object]", finish["accounting"])
+    assert accounting["missing"] == [second.qualified]
+    assert accounting["unexpected"] == []
+
+
+class _ReportingProbe:
+    """A probe that fails after recording one sample, and captures the report."""
+
+    def __init__(self) -> None:
+        """Create a probe with no failure yet."""
+        self.fail = False
+
+    def sample(
+        self,
+        spec: HarnessSpec,
+        *,
+        group_id: int | None,
+        started_at: dt.datetime,
+        started_monotonic: float,
+    ) -> ResourceSample:
+        """Fail once the test asks for it."""
+        del spec, group_id, started_at, started_monotonic
+        if self.fail:
+            msg = "probe failed"
+            raise RuntimeError(msg)
+        return ResourceSample(
+            timestamp_utc=dt.datetime(2026, 11, 21, 12, 0, tzinfo=dt.UTC),
+            elapsed_seconds=1.0,
+            package="p",
+            harness="harnesses::verified",
+            attempt=1,
+            group_rss=Measurement.available(1),
+            host_available=Measurement.available(2),
+            host_total=Measurement.available(3),
+        )
+
+
+@_async_test
+async def test_a_monitor_failure_still_finalizes_the_report() -> None:
+    """INV-FINALIZE applies to a fault, not only to an ordinary ending."""
+    clock = VirtualClock()
+    probe = _ReportingProbe()
+    jsonl = MemorySink()
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    environment = _environment(
+        launcher := ScriptedLauncher(script=Script(block=True)),
+        clock,
+        probe=probe,
+        sinks=Diagnostics(jsonl=jsonl),
+    )
+
+    async def run() -> None:
+        """Fail the probe after the run has started."""
+        probe.fail = True
+        with pytest.raises(RuntimeError, match="probe failed"):
+            await run_supervised(
+                (first, second),
+                _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+                environment,
+            )
+
+    await run()
+
+    kinds = [record["record"] for record in jsonl.records]
+    assert "run-finish" in kinds
+    assert StopReason.INTERRUPTED in launcher.stops
+    finish = next(
+        record for record in jsonl.records if record["record"] == "run-finish"
+    )
+    assert finish["complete"] is False
+    accounting = typ.cast("dict[str, object]", finish["accounting"])
+    assert accounting["missing"] == [second.qualified]
 
 
 class _ObservingAdapter:

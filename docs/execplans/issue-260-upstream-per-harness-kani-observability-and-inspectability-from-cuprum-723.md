@@ -477,6 +477,30 @@ Plain-language terms used in this plan:
   library owns is bounded and no whole log is retained; closing the remainder
   needs a Cuprum API change, so it is recorded as an accepted upstream gap
   rather than described as met. Date/Author: 2026-11-23, implementation agent.
+- D26. Decision: a selected test-target harness is revalidated against a fresh
+  discovery of the same tree, not merely counted. Rationale: refusing only when
+  several test targets exist still accepts a stale entry whose harness was
+  removed, renamed, or moved to the library, and `--tests` would let the
+  library copy be credited to the missing target. The live identity, target,
+  and target kind must all match, otherwise the run fails closed. Date/Author:
+  2026-11-23, implementation agent.
+- D27. Decision: a cancelled or faulted run preserves the in-flight attempt's
+  evidence and finalizes the report. Rationale: `INV-FINALIZE` applies to every
+  ending; reporting a started attempt as `not-run` hides its timing, stop
+  reason, and samples, and a monitor fault that escapes without a report loses
+  the evidence of every earlier harness. Date/Author: 2026-11-23,
+  implementation agent.
+- D28. Decision: version-1 accounting drift entries are validated as non-empty
+  identity strings. Rationale: an array check alone accepts `missing: [7]`,
+  which a consumer cannot join to any harness. Date/Author: 2026-11-23,
+  implementation agent.
+- D29. Decision: the parser property suite inserts generated build noise across
+  every accepted capture and compares with an independent reading of the lines.
+  Line grouping is documented as a reader sanity check, not a streaming
+  boundary, because Cuprum delivers complete lines. Retention is checked by
+  bounded issue and record budgets, and reconciliation by a generated
+  disagreeing-summary property; both were confirmed by mutation. Date/Author:
+  2026-11-23, implementation agent.
 - D25. Decision: the plan's file and code tolerances were exceeded and the
   overage is accepted. The implementation needed the full parser corpus, two
   route integrations, a new CLI surface, the schema reference, and the
@@ -576,14 +600,15 @@ All six milestones are implemented. The acceptance evidence is:
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
 migration guide, and roadmap carry the supervised route. The deterministic gate
-at head `6f772f3` passes with 2,479 tests and 6 skips, and the opt-in live Kani
-0.67.0 fixture passes at the same head: 2 passed in 678.97 s under the shared
-compile-admission pool. The parser property suite now checks generated build
-noise and feed groupings against an independent reading of the capture rather
-than against the same reader, and explicitly bounds retained parser state; a
-mutation that retained every issue failed two of those tests, and a mutation
-that skipped reconciliation failed five mutation tests. Those figures replaced
-the earlier 2,422-test and stale live-pass claims.
+at the published head passes with 2,507 tests and 6 skips. The opt-in live Kani
+0.67.0 fixture passes at product head `6f772f3`: 2 passed in 678.97 s under the
+shared compile-admission pool; after that commit only tests and documentation
+changed, so the exercised product code is identical. The parser property suite
+now checks generated build noise and feed groupings against an independent
+reading of the capture rather than against the same reader, and explicitly
+bounds retained parser state; a mutation that retained every issue failed two
+of those tests, and a mutation that skipped reconciliation failed five mutation
+tests. Those figures replaced the earlier 2,422-test and stale live-pass claims.
 
 The retrospective is complete. The capability shipped as one branch rather than
 the six separately mergeable milestones the plan allowed, because the parser,

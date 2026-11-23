@@ -355,69 +355,61 @@ def test_metadata_can_be_injected_for_tests() -> None:
     assert "alpha::harnesses::verified" in inventory.identities()
 
 
-def _metadata_with_test_targets(*names: str) -> tuple[object, ...]:
-    """Return metadata for one package declaring the given test targets."""
-    from rust_prover_tools.kani_inventory.discover import (
-        CargoPackage,
-        CargoTarget,
-    )
+def _live_beta() -> tuple[HarnessInventory, tuple[typ.Any, ...]]:
+    """Return the live inventory and metadata for the beta fixture package."""
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
 
-    return (
-        CargoPackage(
-            name="alpha",
-            manifest_path=_WORKSPACE / "alpha" / "Cargo.toml",
-            targets=tuple(
-                CargoTarget(
-                    name=name,
-                    kind="test",
-                    src_path=_WORKSPACE / "alpha" / "tests" / f"{name}.rs",
-                )
-                for name in names
-            ),
-        ),
+    metadata = cargo_metadata(_WORKSPACE)
+    inventory = discover_inventory(_WORKSPACE, ("beta",), metadata=metadata)
+    return inventory, metadata
+
+
+def _beta_integration() -> InventoryHarness:
+    """Return the beta integration-test harness the live tree declares."""
+    return next(
+        harness
+        for harness in _live_beta()[0].harnesses
+        if harness.identity == "beta::integration_proof"
     )
 
 
-def test_one_test_target_can_be_attributed() -> None:
-    """A single test target is the only possible source of its harnesses."""
+def test_a_live_test_target_is_attributed_exactly() -> None:
+    """The pinned entry matches the live target, so the run may proceed."""
     from rust_prover_tools.kani_inventory import verify_test_target_attribution
 
-    harness = InventoryHarness(
-        package="alpha",
+    live, metadata = _live_beta()
+
+    verify_test_target_attribution((_beta_integration(),), live, metadata)
+
+
+def test_a_pinned_test_harness_absent_from_the_live_tree_is_refused() -> None:
+    """A removed harness must not be credited to a stale inventory entry."""
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+
+    live, metadata = _live_beta()
+    stale = InventoryHarness(
+        package="beta",
         target="integration",
         target_kind="test",
-        harness="integration_proof",
+        harness="integration_proof_removed",
         source="tests/integration.rs",
         line=4,
     )
-    metadata = _metadata_with_test_targets("integration")
 
-    verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))
+    with pytest.raises(InventoryDiscoveryError, match="no such harness"):
+        verify_test_target_attribution((stale,), live, metadata)
 
 
-def test_two_test_targets_cannot_be_attributed() -> None:
-    """`--tests` builds every test target, so a harness cannot be pinned."""
-    from rust_prover_tools.kani_inventory import verify_test_target_attribution
-
-    harness = InventoryHarness(
-        package="alpha",
-        target="integration",
-        target_kind="test",
-        harness="integration_proof",
-        source="tests/integration.rs",
-        line=4,
+def test_a_pinned_test_harness_that_moved_to_the_library_is_refused() -> None:
+    """A test-target entry that now names a lib harness is a stale claim."""
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        PackageInventory,
+        verify_test_target_attribution,
     )
-    metadata = _metadata_with_test_targets("integration", "second")
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
 
-    with pytest.raises(InventoryDiscoveryError, match="cannot be attributed"):
-        verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))
-
-
-def test_a_lib_harness_needs_no_test_attribution() -> None:
-    """A lib or bin selector names its target, so no test check applies."""
-    from rust_prover_tools.kani_inventory import verify_test_target_attribution
-
-    harness = InventoryHarness(
+    moved = InventoryHarness(
         package="alpha",
         target="alpha",
         target_kind="lib",
@@ -425,36 +417,72 @@ def test_a_lib_harness_needs_no_test_attribution() -> None:
         source="src/harnesses.rs",
         line=5,
     )
-    metadata = _metadata_with_test_targets("integration", "second")
+    live = HarnessInventory((PackageInventory("alpha", (moved,)),))
+    metadata = cargo_metadata(_WORKSPACE)
+    stale = InventoryHarness(
+        package="alpha",
+        target="integration",
+        target_kind="test",
+        harness="harnesses::verified",
+        source="tests/integration.rs",
+        line=5,
+    )
 
-    verify_test_target_attribution((harness,), typ.cast("typ.Any", metadata))
+    with pytest.raises(InventoryDiscoveryError, match="cannot be attributed"):
+        verify_test_target_attribution((stale,), live, metadata)
 
 
-def test_the_fixture_inventory_is_exactly_what_the_suite_expects() -> None:
-    """Pin every package-qualified identity and its target mapping.
+def test_a_pinned_test_harness_with_a_renamed_target_is_refused() -> None:
+    """A target rename changes the attribution claim and is refused."""
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        PackageInventory,
+        verify_test_target_attribution,
+    )
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
 
-    The proof assessment noted that per-target assertions did not establish the
-    complete inventory. This records the whole set, including the binary
-    helper proof and the integration-test proof, so a discovery change that
-    silently drops or reattributes one is visible.
-    """
-    inventory = _inventory("alpha", "beta")
+    same_name = InventoryHarness(
+        package="beta",
+        target="renamed",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    live = HarnessInventory((PackageInventory("beta", (same_name,)),))
+    metadata = cargo_metadata(_WORKSPACE)
 
-    observed = {
-        (harness.identity, harness.target, harness.target_kind)
-        for harness in inventory.harnesses
-    }
+    with pytest.raises(InventoryDiscoveryError, match="cannot be attributed"):
+        verify_test_target_attribution((_beta_integration(),), live, metadata)
 
-    assert observed == {
-        ("alpha::harnesses::bounded", "alpha", "lib"),
-        ("alpha::harnesses::conditional_extra", "alpha", "lib"),
-        ("alpha::harnesses::failing", "alpha", "lib"),
-        ("alpha::harnesses::nested::proof", "alpha", "lib"),
-        ("alpha::harnesses::verified", "alpha", "lib"),
-        ("alpha::inline::inside", "alpha", "lib"),
-        ("alpha::path_proofs::via_path", "alpha", "lib"),
-        ("alpha::shared::proof", "alpha", "lib"),
-        ("beta::helper::in_helper", "beta", "bin"),
-        ("beta::in_main", "beta", "bin"),
-        ("beta::integration_proof", "integration", "test"),
-    }
+
+def test_a_pinned_target_absent_from_cargo_metadata_is_refused() -> None:
+    """An entry naming a target Cargo does not declare is refused."""
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        PackageInventory,
+        verify_test_target_attribution,
+    )
+    from rust_prover_tools.kani_inventory.discover import cargo_metadata
+
+    ghost = InventoryHarness(
+        package="beta",
+        target="ghost",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    live = HarnessInventory((PackageInventory("beta", (ghost,)),))
+    metadata = cargo_metadata(_WORKSPACE)
+    selected = InventoryHarness(
+        package="beta",
+        target="ghost",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+
+    with pytest.raises(InventoryDiscoveryError, match="does not"):
+        verify_test_target_attribution((selected,), live, metadata)

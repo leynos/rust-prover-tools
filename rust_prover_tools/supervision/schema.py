@@ -214,9 +214,17 @@ def _validate_accounting(accounting: object) -> None:
         subject="the report accounting",
     )
     for field in ("missing", "duplicate", "unexpected"):
-        if not isinstance(accounting[field], list):
+        entries = accounting[field]
+        if not isinstance(entries, list):
             msg = f"the report accounting {field} is not an array"
             raise EvidenceFormatError(msg)
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, str) or not entry:
+                msg = (
+                    f"the report accounting {field}[{index}] is not a "
+                    "non-empty identity string"
+                )
+                raise EvidenceFormatError(msg)
 
 
 def _validate_results(results: object) -> None:

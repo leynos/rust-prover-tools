@@ -23,9 +23,12 @@ import typing as typ
 
 from rust_prover_tools.supervision.attempt_state import (
     AttemptEvidence,
+    finish_cgroup,
+    idle_seconds,
     latest,
     minimum,
     peak,
+    resolved_reason,
 )
 from rust_prover_tools.supervision.events import (
     heartbeat_record,
@@ -124,6 +127,8 @@ class AttemptSupervisor:
     _next_sample: float = 0.0
     _next_heartbeat: float = 0.0
     _observer: LineObserver | None = None
+    _interrupted: tuple[AttemptEvidence, HarnessClassification] | None = None
+    _settled: LaunchResult | None = None
 
     async def run(self) -> tuple[AttemptEvidence, HarnessClassification]:
         """Run the attempt, returning its evidence and classification.
@@ -143,9 +148,39 @@ class AttemptSupervisor:
             "RunningHarness",
             self.launcher.start(self.spec, self.build, self._on_line),
         )
-        result = await self._drive(running, started_at, started_monotonic)
+        try:
+            result = await self._drive(running, started_at, started_monotonic)
+        except BaseException:
+            # The child has already been stopped and joined by `_drive`. Keep
+            # the evidence it produced so a cancelled or faulted run can report
+            # an interrupted attempt instead of pretending it never started.
+            evidence = self._evidence(
+                self._stopped_result, started_at, started_monotonic, cgroup_start
+            )
+            self._interrupted = (
+                evidence,
+                self.adapter.classify(evidence, self._observer),
+            )
+            raise
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
         return evidence, self.adapter.classify(evidence, self._observer)
+
+    @property
+    def interrupted(self) -> tuple[AttemptEvidence, HarnessClassification] | None:
+        """The evidence of an attempt a cancellation stopped, when one exists.
+
+        Returns
+        -------
+        tuple[AttemptEvidence, HarnessClassification] | None
+            The stopped attempt's evidence and its classification, or `None`
+            when the attempt did not end in cancellation.
+        """
+        return self._interrupted
+
+    @property
+    def _stopped_result(self) -> LaunchResult:
+        """The result the stopped child settled with."""
+        return self._settled or LaunchResult()
 
     async def _drive(
         self,
@@ -169,6 +204,7 @@ class AttemptSupervisor:
                 # below before the failure is surfaced.
                 failure = monitor.exception()
                 if failure is not None:
+                    self._stop_detail = "the supervisor monitor failed"
                     running.stop(StopReason.INTERRUPTED)
             result = await waiter
         finally:
@@ -176,8 +212,12 @@ class AttemptSupervisor:
             with contextlib.suppress(asyncio.CancelledError):
                 await monitor
             if not running.done and running.stop_reason is None:
+                self._stop_detail = (
+                    self._stop_detail or "the supervisor stopped the run"
+                )
                 running.stop(StopReason.INTERRUPTED)
             joined = await running.settle()
+            self._settled = joined
             waiter.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await waiter
@@ -297,7 +337,7 @@ class AttemptSupervisor:
                 heartbeat_record(
                     run_id=self.run_id,
                     sample=sample,
-                    idle_seconds=self._idle_seconds(elapsed),
+                    idle_seconds=idle_seconds(self._last_output_elapsed, elapsed),
                     last_progress=self._recognised_progress(),
                 )
             )
@@ -325,12 +365,6 @@ class AttemptSupervisor:
         """Return the adapter's last recognised progress line, if any."""
         return None if self._observer is None else self._observer.last_progress
 
-    def _idle_seconds(self, elapsed: float) -> float:
-        """Seconds since the last observed output, or since the start."""
-        if self._last_output_elapsed is None:
-            return elapsed
-        return max(0.0, elapsed - self._last_output_elapsed)
-
     def _evidence(
         self,
         result: LaunchResult,
@@ -343,7 +377,7 @@ class AttemptSupervisor:
         duration = max(0.0, self.clock.monotonic() - started_monotonic)
         return AttemptEvidence(
             spec=self.spec,
-            stop_reason=self._resolved_reason(result),
+            stop_reason=resolved_reason(self._stop_reason, result),
             exit_code=result.exit_code,
             signal_number=result.signal_number,
             launch_error=result.launch_error,
@@ -356,25 +390,7 @@ class AttemptSupervisor:
                 sample.host_available for sample in self._samples
             ]),
             host_total=latest([sample.host_total for sample in self._samples]),
-            cgroup=_finish_cgroup(self.cgroup, cgroup_start),
+            cgroup=finish_cgroup(self.cgroup, cgroup_start),
             last_output=self._last_output,
             stop_detail=self._stop_detail,
         )
-
-    def _resolved_reason(self, result: LaunchResult) -> StopReason:
-        """Name why the supervisor stopped waiting for the child."""
-        if self._stop_reason is not None:
-            return self._stop_reason
-        if result.launch_error is not None:
-            return StopReason.LAUNCH_FAILED
-        return StopReason.EXITED
-
-
-def _finish_cgroup(
-    reader: CgroupReader,
-    observation: CgroupObservation,
-) -> CgroupObservation:
-    """Read the finish-time cgroup values for an observation."""
-    if observation.path is None:
-        return observation
-    return dc.replace(observation, finish=reader.read(observation.path))

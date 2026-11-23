@@ -42,7 +42,9 @@ from rust_prover_tools.supervision.report import write_report
 from rust_prover_tools.supervision.run_finalize import (
     CANCELLED_DETAIL,
     INTERRUPTED_DETAIL,
+    NOT_RUN_DETAIL,
     ReportInput,
+    RunLedger,
     assemble_report,
     not_run_result,
     result_for,
@@ -81,19 +83,6 @@ def new_run_id() -> str:
 
 
 @dc.dataclass(slots=True)
-class _RunLedger:
-    """The accumulating facts of one run."""
-
-    expected: tuple[HarnessSpec, ...]
-    results: list[HarnessResult] = dc.field(default_factory=list)
-    executed: list[str] = dc.field(default_factory=list)
-    interrupted: bool = False
-    interrupt_signal: int | None = None
-    finished_at: dt.datetime | None = None
-    diagnostic_error: Exception | None = None
-
-
-@dc.dataclass(slots=True)
 class SupervisedRun:
     """Run one expected inventory and produce its report.
 
@@ -126,7 +115,7 @@ class SupervisedRun:
         started_at = self.environment.clock.now()
         if self.environment.interrupts is not None:
             self.environment.interrupts.bind(asyncio.get_running_loop())
-        ledger = _RunLedger(expected=self.expected)
+        ledger = RunLedger(expected=self.expected)
         self._emit_start(started_at, ledger)
         try:
             await self._run_all(ledger)
@@ -135,21 +124,39 @@ class SupervisedRun:
             # stopped and joined its group; account for the harnesses that
             # never completed, publish what evidence exists, then let the
             # cancellation continue.
-            self._account_unrecorded(ledger)
+            self._account_unrecorded(ledger, CANCELLED_DETAIL)
             ledger.interrupted = True
+            with contextlib.suppress(ProverToolError):
+                self._finalize(ledger, started_at)
+            raise
+        except Exception:
+            # A failure the run did not classify, such as a monitor fault.
+            # INV-FINALIZE still applies: publish what was observed, then let
+            # the failure continue so the caller sees the real cause.
+            self._account_unrecorded(ledger, NOT_RUN_DETAIL)
             with contextlib.suppress(ProverToolError):
                 self._finalize(ledger, started_at)
             raise
         return self._finalize(ledger, started_at)
 
-    def _account_unrecorded(self, ledger: _RunLedger) -> None:
-        """Record every identity without a result as cancelled work."""
-        recorded = len(ledger.results)
-        ledger.results.extend(
-            not_run_result(spec, CANCELLED_DETAIL) for spec in self.expected[recorded:]
-        )
+    def _account_unrecorded(self, ledger: RunLedger, detail: str) -> None:
+        """Record every identity without a result as uncompleted work.
 
-    def _emit_start(self, started_at: dt.datetime, ledger: _RunLedger) -> None:
+        The attempt that was in flight has already been stopped and joined by
+        the supervision layer. Its own evidence is recorded first, so a
+        cancelled or faulted run reports an interrupted attempt with its
+        timing and stop reason, and only work that never started is reported
+        as `not-run`.
+        """
+        recorded = len(ledger.results)
+        remaining = self.expected[recorded:]
+        if ledger.active is not None and remaining:
+            ledger.results.append(ledger.active)
+            ledger.executed.append(remaining[0].qualified)
+            remaining = remaining[1:]
+        ledger.results.extend(not_run_result(spec, detail) for spec in remaining)
+
+    def _emit_start(self, started_at: dt.datetime, ledger: RunLedger) -> None:
         """Write the run's opening evidence record, retaining a sink failure."""
         packages = tuple(dict.fromkeys(spec.package for spec in self.expected))
         try:
@@ -167,7 +174,7 @@ class SupervisedRun:
         except (OSError, ValueError) as error:
             ledger.diagnostic_error = error
 
-    async def _run_all(self, ledger: _RunLedger) -> None:
+    async def _run_all(self, ledger: RunLedger) -> None:
         """Run every expected identity, continuing past individual failures."""
         for spec in self.expected:
             if self._interrupted():
@@ -177,7 +184,7 @@ class SupervisedRun:
                 continue
             ledger.results.append(await self._run_one(spec, ledger))
 
-    async def _run_one(self, spec: HarnessSpec, ledger: _RunLedger) -> HarnessResult:
+    async def _run_one(self, spec: HarnessSpec, ledger: RunLedger) -> HarnessResult:
         """Run and record one harness invocation."""
         reference = None
         try:
@@ -190,7 +197,7 @@ class SupervisedRun:
             )
         except (OSError, ValueError) as error:
             ledger.diagnostic_error = error
-        evidence, classification = await self._supervise(spec)
+        evidence, classification = await self._supervise(spec, ledger)
         if evidence.stop_reason is not StopReason.LAUNCH_FAILED:
             if classification.observed is None:
                 ledger.executed.append(spec.qualified)
@@ -213,7 +220,7 @@ class SupervisedRun:
         return result
 
     async def _supervise(
-        self, spec: HarnessSpec
+        self, spec: HarnessSpec, ledger: RunLedger
     ) -> tuple[AttemptEvidence, HarnessClassification]:
         """Run one attempt to completion, however it ends."""
         supervisor = AttemptSupervisor(
@@ -230,7 +237,17 @@ class SupervisedRun:
             sleeper=self.environment.sleeper,
             interrupts=self.environment.interrupts,
         )
-        return await supervisor.run()
+        try:
+            return await supervisor.run()
+        except BaseException:
+            # The supervision layer stopped and joined the child before
+            # re-raising. Keep the evidence of the attempt that was in flight
+            # so the finalized report describes an interrupted attempt rather
+            # than work that never started.
+            if supervisor.interrupted is not None:
+                evidence, classification = supervisor.interrupted
+                ledger.active = result_for(evidence, classification, None)
+            raise
 
     def _interrupted(self) -> bool:
         """Whether a signal has asked the run to stop."""
@@ -246,7 +263,7 @@ class SupervisedRun:
             else self.environment.interrupts.signum
         )
 
-    def _finalize(self, ledger: _RunLedger, started_at: dt.datetime) -> RunReport:
+    def _finalize(self, ledger: RunLedger, started_at: dt.datetime) -> RunReport:
         """Build, emit, and optionally write the run's final report."""
         signum = self._signum()
         if signum is not None:

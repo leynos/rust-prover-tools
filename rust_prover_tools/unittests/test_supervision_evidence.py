@@ -712,3 +712,15 @@ def test_a_string_exit_code_is_refused() -> None:
 def test_the_shipped_report_still_validates() -> None:
     """The stricter reader accepts what the producer writes."""
     validate_report_document(report_document(_report()))
+
+
+@pytest.mark.parametrize("field", ["missing", "duplicate", "unexpected"])
+@pytest.mark.parametrize("entry", [7, "", None, ["p::x"]])
+def test_a_non_string_accounting_entry_is_refused(field: str, entry: object) -> None:
+    """Every drift entry is a package-qualified identity string."""
+    document = report_document(_report())
+    accounting = typ.cast("dict[str, object]", document["accounting"])
+    accounting[field] = [entry]
+
+    with pytest.raises(EvidenceFormatError, match=field):
+        validate_report_document(document)

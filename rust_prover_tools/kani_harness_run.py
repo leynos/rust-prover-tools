@@ -274,7 +274,12 @@ def _verify_test_targets(
     if not any(harness.target_kind == "test" for harness in selected):
         return
     packages = tuple(metadata) if metadata is not None else cargo_metadata(root)
-    verify_test_target_attribution(selected, packages)
+    live = discover_inventory(
+        root,
+        tuple(dict.fromkeys(harness.package for harness in selected)),
+        metadata=packages,
+    )
+    verify_test_target_attribution(selected, live, packages)
 
 
 def execute_harnesses(
