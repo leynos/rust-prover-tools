@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from rust_prover_tools.kani_cli_grammar import KANI_067
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
     InventoryDiscoveryError,
@@ -16,7 +17,6 @@ from rust_prover_tools.kani_inventory import (
     select_harnesses,
     selections,
 )
-from rust_prover_tools.kani_log import KANI_067
 
 
 def _harness(

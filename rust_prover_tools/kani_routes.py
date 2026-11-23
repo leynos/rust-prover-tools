@@ -15,8 +15,8 @@ import os
 import typing as typ
 from pathlib import Path
 
+from rust_prover_tools.kani_cli_grammar import KaniGrammar, grammar_for
 from rust_prover_tools.kani_inventory import InventoryHarness, compose_arguments
-from rust_prover_tools.kani_log import KaniGrammar, grammar_for
 from rust_prover_tools.kani_qualification import qualify_kani_installation
 from rust_prover_tools.kani_release import (
     KANI_RELEASE_VERSION,

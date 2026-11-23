@@ -8,6 +8,7 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+from rust_prover_tools.kani_cli_grammar import UnsupportedKaniGrammarError
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessDependencies,
     KaniHarnessPreparation,
@@ -36,9 +37,7 @@ from rust_prover_tools.kani_inventory import (
 from rust_prover_tools.kani_log import (
     KaniLog,
     KaniLogError,
-    KaniLogReader,
-    UnsupportedKaniGrammarError,
-    parse,
+    parse_kani_log,
 )
 from rust_prover_tools.kani_routes import KaniRoute, LegacyRoute, SnapshotRoute
 from rust_prover_tools.supervision import (
@@ -77,7 +76,6 @@ __all__ = [
     "KaniHarnessRunOptions",
     "KaniLog",
     "KaniLogError",
-    "KaniLogReader",
     "KaniRoute",
     "LegacyRoute",
     "Measurement",
@@ -95,7 +93,7 @@ __all__ = [
     "hello",
     "inventory_document",
     "load_inventory",
-    "parse",
+    "parse_kani_log",
     "prepare_harnesses",
     "render_table",
     "restrict_inventory",

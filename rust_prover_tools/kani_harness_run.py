@@ -317,7 +317,7 @@ def execute_harnesses(
             preparation,
             dependencies,
             opened,
-            max_line_bytes=config.max_line_bytes,
+            limits=(config.max_line_bytes, config.max_log_bytes),
         )
         report = run_supervised_sync(
             tuple(harness.to_spec() for harness in preparation.selected),
@@ -363,14 +363,14 @@ def _environment(
     dependencies: KaniHarnessDependencies,
     diagnostics: Diagnostics,
     *,
-    max_line_bytes: int,
+    limits: tuple[int, int],
 ) -> RunEnvironment:
     """Build the supervision environment around the prepared route."""
     clock = dependencies.clock or SystemClock()
     launcher = dependencies.launcher or CuprumHarnessLauncher(
         clock=clock.now,
         monotonic=clock.monotonic,
-        max_line_bytes=max_line_bytes,
+        max_line_bytes=limits[0],
     )
 
     def build(spec: HarnessSpec) -> LaunchCommand:
@@ -384,7 +384,10 @@ def _environment(
         cgroup=dependencies.cgroup or CgroupV2Reader(),
         diagnostics=diagnostics,
         build=build,
-        adapter=KaniAdapter(version=preparation.prepared.grammar.version),
+        adapter=KaniAdapter(
+            version=preparation.prepared.grammar.version,
+            max_log_bytes=limits[1],
+        ),
         sleeper=dependencies.sleeper or AsyncSleeper(),
         interrupts=dependencies.interrupts,
     )

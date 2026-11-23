@@ -14,6 +14,7 @@ from pathlib import Path
 
 from cyclopts import Parameter
 
+from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.verus import (
@@ -23,6 +24,17 @@ from rust_prover_tools.verus import (
     VerusRunOptions,
     run_verus,
 )
+from rust_prover_tools.z3_selection import (
+    EXPLICIT_SOURCE,
+    PINNED_SOURCE,
+    PINNED_Z3,
+    Z3Selection,
+    qualify_z3,
+    resolve_z3,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
 
 
 def _single_env_token(
@@ -39,6 +51,98 @@ def _single_env_token(
     """
     del delimiter
     return [value]
+
+
+def probe_and_qualify_z3(
+    selection: str,
+    *,
+    repo_root: Path,
+    install_dir: Path | None = None,
+) -> Z3Selection:
+    """Resolve a solver selection and hold its reported version to the pin.
+
+    This is the only step in a proof run that executes the solver before Verus
+    does: ``<solver> --version`` is what proves the executable is the release
+    this package pins, and running it needs a process. Everything else about a
+    selection is pure.
+
+    Parameters
+    ----------
+    selection : str
+        ``pinned``, an executable path, or a command name on `PATH`.
+    repo_root : Path
+        Repository root used to find the pinned installation.
+    install_dir : Path | None
+        Directory holding the pinned ``z3``, overriding the repository default.
+
+    Returns
+    -------
+    Z3Selection
+        The qualified solver, ready to bind through `VERUS_Z3_PATH`.
+
+    Raises
+    ------
+    ProverToolError
+        If the selection names no executable, the executable cannot be run, or
+        it reports a release other than the calibrated one.
+    """
+    executable = resolve_z3(selection, repo_root=repo_root, install_dir=install_dir)
+    try:
+        probe = run_command(
+            CommandSpec(
+                (str(executable), "--version"),
+                timeout_seconds=_SOLVER_PROBE_TIMEOUT_SECONDS,
+            ),
+        )
+    except OSError as error:
+        # A file that exists but is not executable passes resolution; the
+        # failure only surfaces when the process is launched.  It is a solver
+        # selection problem, so it leaves as the same diagnostic every other
+        # unusable selection does.
+        msg = f"{executable} could not be run: {error}"
+        raise ProverToolError(msg) from error
+    return qualify_z3(
+        executable,
+        exit_code=probe.exit_code,
+        reported=probe.stdout,
+        source=PINNED_SOURCE if selection == PINNED_Z3 else EXPLICIT_SOURCE,
+    )
+
+
+#: Verus's extended ``-V`` key that selects the CVC5 solver.
+_CVC5_OVERRIDE = "cvc5"
+#: How long a solver may take to answer ``--version`` before the run is refused.
+_SOLVER_PROBE_TIMEOUT_SECONDS: typ.Final[float] = 30.0
+#: The length of the ``-V`` flag before an attached value.
+_SHORT_OPTION_LENGTH = 2
+
+
+def _refuse_solver_override(z3: str | None, extra_args: cabc.Sequence[str]) -> None:
+    """Refuse extra arguments that override a selected Z3 solver.
+
+    Verus reads ``-V cvc5`` (or ``-Vcvc5``) as a request for CVC5 and then
+    ignores ``VERUS_Z3_PATH`` for solver execution.  Reporting the qualified
+    Z3 while the proof actually runs on CVC5 would describe a run that never
+    happened, so the combination is refused before the solver is probed.
+    """
+    if z3 is None:
+        return
+    for index, argument in enumerate(extra_args):
+        selection: str | None = None
+        if argument == "-V" and index + 1 < len(extra_args):
+            selection = extra_args[index + 1]
+        elif argument.startswith("-V") and len(argument) > _SHORT_OPTION_LENGTH:
+            selection = argument[_SHORT_OPTION_LENGTH:]
+        if (
+            selection is not None
+            and selection.split("=", 1)[0].strip() == _CVC5_OVERRIDE
+        ):
+            msg = (
+                "--z3 selects Z3, but the extra argument "
+                f"{argument!r} selects the cvc5 solver, so Verus would ignore "
+                "VERUS_Z3_PATH"
+            )
+            raise ProverToolError(msg)
 
 
 # CLI parameter binding needs one explicit parameter per flag/env-var mapping.
@@ -82,6 +186,10 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
         bool,
         Parameter(negative="--no-install-missing"),
     ] = True,
+    z3: typ.Annotated[
+        str | None,
+        Parameter(env_var="VERUS_Z3_PATH"),
+    ] = None,
     extra_arg: typ.Annotated[
         list[str] | None,
         Parameter(allow_repeating=True, env_var="INPUT_EXTRA_ARG"),
@@ -111,6 +219,11 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
         Whether to install the required Rust toolchain with `rustup`.
     install_missing : bool
         Whether to install the default Verus binary when missing.
+    z3 : str | None
+        Solver to bind: `pinned` for the release this package installs, or an
+        executable path or command name. It is also read from
+        `VERUS_Z3_PATH`, the variable `prover-tools z3 install` asks callers to
+        export, so an exported selection is checked rather than trusted.
     extra_arg : list[str] | None
         Extra Verus arguments appended after each proof file.
 
@@ -123,13 +236,20 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
     -----
     Verus accepts one input filename per invocation, so each proof file runs
     as its own verifier invocation. See `run_verus` for ordering, partial
-    result reporting, and first-failure behaviour.
+    result reporting, and first-failure behaviour. A selected solver is
+    probed and qualified here, at the command boundary, and named on standard
+    output before the first proof file runs.
     """
     try:
+        root = (repo_root or Path.cwd()).resolve()
+        _refuse_solver_override(z3, extra_arg or ())
+        solver = None if z3 is None else probe_and_qualify_z3(z3, repo_root=root)
+        if solver is not None:
+            print_lines((f"Solver ({solver.source}): {solver.executable}",))
         lines = run_verus(
             VerusRunOptions(
                 paths=VerusPaths(
-                    repo_root=(repo_root or Path.cwd()).resolve(),
+                    repo_root=root,
                     version_file=version_file,
                     checksum_file=checksum_file,
                 ),
@@ -140,6 +260,7 @@ def verus_run(  # ruff: ignore[too-many-arguments] - one parameter per CLI bindi
                 should_ensure_toolchain=ensure_toolchain,
                 should_install_missing=install_missing,
                 extra_args=tuple(extra_arg or ()),
+                z3_path=None if solver is None else solver.executable,
             ),
         )
     except ProverToolError as exc:

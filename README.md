@@ -187,6 +187,9 @@ ______________________________________________________________________
   variable.
 - [0.2.0 migration guide](docs/rust-prover-tools-v0-2-0-migration-guide.md) —
   upgrading `kani exec` callers to overridable Cargo profile backends.
+- [0.3.0 migration guide](docs/rust-prover-tools-v0-3-0-migration-guide.md) —
+  the additive `kani analyse-log`, `verus analyse-log` and `audit trust`
+  commands.
 - [CLI design](docs/prover-tools-cli-design.md) — architecture, command
   construction, and test strategy.
 - [Developers' guide](docs/developers-guide.md) — adding prover workflows and

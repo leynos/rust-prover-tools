@@ -1,0 +1,9 @@
+error: assertion failed
+  --> assertion.rs:11:12
+   |
+11 |     assert(result < 10);
+   |            ^^^^^^^^^^^ assertion failed
+
+verification results:: 1 verified, 1 errors
+error: aborting due to 1 previous error
+

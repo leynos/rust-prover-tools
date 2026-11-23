@@ -1,24 +1,14 @@
 """Hold the parsed value types a Kani log produces.
 
-:mod:`rust_prover_tools.kani_log.reader` walks the text and builds these; the
-classification adapter and the tests read them. They live apart from the walk
-so a value type names no regular expression and a test can construct facts
-without a log.
+:mod:`rust_prover_tools.kani_log.extract` walks the text and builds these; the
+decision function and the tests read them.  They live apart from the walk for
+two reasons: the walker is the only part that needs the grammar, and a value
+type that names no regular expression is easier to construct in a test than one
+that shares a module with a line cursor.
 
-:class:`HarnessBlock` is deliberately mutable. It is filled field by field as
-one block is read, and the counts are only reconcilable once the whole block
-has been seen; the frozen types beside it are the finished facts.
-
-The value types are derived from Combobulate's ``docs_validation.kani_log``
-package at commit ``9dd6e3c`` and are used under the ISC licence recorded in
-``ATTRIBUTION.md`` beside this module.
-
-Examples
---------
->>> HarnessBlock(name="h::x", verdict="SUCCESSFUL").succeeded
-True
->>> KaniLog("0.67.0", "regular", (), None, (), 0).harnesses
-()
+:class:`HarnessBlock` is frozen at the public boundary.  The mutable
+accumulation happens in a private builder inside the reader; the finished block
+is a tuple-only value the caller can compare and hash.
 """
 
 from __future__ import annotations
@@ -29,72 +19,64 @@ import typing as typ
 if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_log.syntax import FailedCheck, PropertyResult
 
-__all__ = (
-    "HarnessBlock",
-    "KaniLog",
-    "KaniLogFacts",
-    "ManualSummary",
-)
+__all__ = ("HarnessBlock", "KaniLog", "ManualSummary")
 
 
-@dc.dataclass(slots=True)
+@dc.dataclass(frozen=True, slots=True)
 class HarnessBlock:
     """Everything one ``Checking harness`` block reported.
 
     Attributes
     ----------
     name : str
-        Harness name Kani selected.
-    properties : list[PropertyResult]
-        Checks listed under ``RESULTS:``.
-    failures : list[FailedCheck]
-        Failure explanations listed under ``SUMMARY:``.
+        Harness name as Kani printed it.
+    properties : tuple[PropertyResult, ...]
+        Every check Kani listed for this block.
+    failures : tuple[FailedCheck, ...]
+        Failed-check explanations, each with its source location.
     failed_count : int | None
-        Count from the ``N of M failed`` line, when printed.
+        Failure count from ``SUMMARY:``; ``None`` for a timed-out block.
     total_count : int | None
-        Total from the same line, when printed.
-    other_count : int
-        Count of the first ``(N undetermined)`` or similar result pair.
-    other_kind : str | None
-        Word Kani used for the first ``other_count``.
-    other_counts : tuple[tuple[int, str], ...]
-        Every ``(count, kind)`` pair in the summary, in log order.
+        Check count from ``SUMMARY:``; ``None`` for a timed-out block.
+    other_counts : tuple[tuple[str, int], ...]
+        Counts Kani printed in parentheses after the failure count, one pair
+        per status, such as ``(("undetermined", 3),)``; empty when the block
+        printed none.
     covered_satisfied : int | None
-        Satisfied cover count, when a cover count was printed.
+        Satisfied cover count, when the block declared covers.
     covered_total : int | None
-        Total cover count, when a cover count was printed.
+        Total cover count, when the block declared covers.
     covered_unreachable : int | None
-        Unreachable cover count, when Kani printed one.
-    covered_other_counts : tuple[tuple[int, str], ...]
-        Every other cover-result pair, in log order.
+        Unreachable cover count, when Kani reported one.
+    covered_undetermined : int | None
+        Undetermined cover count, when Kani reported one.
     verdict : str | None
         ``SUCCESSFUL`` or ``FAILED`` from ``VERIFICATION:``.
     panics_as_expected : bool
-        Whether the verdict carried Kani's expected-panic note.
+        Whether Kani excused the failure because a panic was expected.
     solver_command : str | None
-        Echoed CBMC command, when the log carried one.
+        Echoed ``cbmc`` command line, when the block printed one.
     seen_verification_time : bool
-        Whether the block ended with its ``Verification Time`` line.
+        Whether the block ended with its ``Verification Time:`` line.
     timed_out : bool
-        Whether CBMC reported its own timeout.
+        Whether CBMC reported a timeout.
     unwinding_reported : bool
-        Whether Kani reported unwinding failures.
+        Whether Kani reported an unwinding failure note.
     has_results : bool
-        Whether the block printed a ``RESULTS:`` section.
+        Whether the block carried a ``RESULTS:`` section.
+
     """
 
     name: str
-    properties: list[PropertyResult] = dc.field(default_factory=list)
-    failures: list[FailedCheck] = dc.field(default_factory=list)
+    properties: tuple[PropertyResult, ...] = ()
+    failures: tuple[FailedCheck, ...] = ()
     failed_count: int | None = None
     total_count: int | None = None
-    other_count: int = 0
-    other_kind: str | None = None
-    other_counts: tuple[tuple[int, str], ...] = ()
+    other_counts: tuple[tuple[str, int], ...] = ()
     covered_satisfied: int | None = None
     covered_total: int | None = None
     covered_unreachable: int | None = None
-    covered_other_counts: tuple[tuple[int, str], ...] = ()
+    covered_undetermined: int | None = None
     verdict: str | None = None
     panics_as_expected: bool = False
     solver_command: str | None = None
@@ -108,8 +90,7 @@ class HarnessBlock:
         """Report whether Kani declared this block successful.
 
         ``SUCCESSFUL (encountered one or more panics as expected)`` is still a
-        success for the harness, which is what a ``#[kani::should_panic]``
-        claim relies on, so the note does not change the verdict.
+        success for the harness, so the note does not change the verdict.
         """
         return self.verdict == "SUCCESSFUL"
 
@@ -120,11 +101,23 @@ class HarnessBlock:
 
     @property
     def covers(self) -> tuple[PropertyResult, ...]:
-        """The declared success witnesses."""
+        """The declared cover properties."""
         return tuple(item for item in self.properties if item.is_cover)
 
     def owned(self, harness: str) -> tuple[PropertyResult, ...]:
-        """Return the checks whose identifier belongs to ``harness``."""
+        """Return the checks whose identifier belongs to ``harness``.
+
+        Parameters
+        ----------
+        harness : str
+            Harness name whose checks should be selected.
+
+        Returns
+        -------
+        tuple[PropertyResult, ...]
+            Checks attributed to the named harness, in log order.
+
+        """
         return tuple(item for item in self.properties if item.owner == harness)
 
 
@@ -135,13 +128,15 @@ class ManualSummary:
     Attributes
     ----------
     verified : int
-        Number of successfully verified harnesses.
+        Harnesses whose verdict was ``SUCCESSFUL``.
     failures : int
-        Number of failed harnesses.
+        Harnesses whose verdict was ``FAILED``; it counts harnesses, not
+        failed checks.
     total : int
-        Total harnesses in the run.
+        Harnesses the run reported.
     failed : tuple[str, ...]
-        Names listed beneath ``Verification failed for``.
+        Names of the failed harnesses, in the order Kani listed them.
+
     """
 
     verified: int
@@ -152,23 +147,26 @@ class ManualSummary:
 
 @dc.dataclass(frozen=True, slots=True)
 class KaniLog:
-    """The facts one complete log states, without interpretation.
+    """The facts one log states, without interpretation.
+
+    ``format`` is ``regular`` for a verification run and ``inventory`` for
+    ``kani list`` output, which carries no harness verdicts.  A log that is
+    neither cannot be analysed, and :func:`parse_kani_log` refuses it.
 
     Attributes
     ----------
     banner_version : str
-        Release named by the banner.
+        Kani release the log's banner named.
     format : str
-        ``regular`` for a verification run or ``inventory`` for ``kani list``
-        output, which carries no harness verdicts.
+        ``regular`` for a verification run, ``inventory`` for ``kani list``.
     blocks : tuple[HarnessBlock, ...]
-        Harness blocks in log order.
+        One block per harness Kani ran, in log order; empty for an inventory.
     manual : ManualSummary | None
-        Final manual summary, absent for an inventory run.
+        The run's closing counts, or ``None`` for an inventory, which has no
+        manual summary.
     unsupported_constructs : tuple[str, ...]
-        Constructs Kani named in its pre-flight warning.
-    exit_code : int | None
-        Raw child status supplied to `finish`, when one was available.
+        Constructs Kani named as unsupported before verification began.
+
     """
 
     banner_version: str
@@ -176,61 +174,8 @@ class KaniLog:
     blocks: tuple[HarnessBlock, ...]
     manual: ManualSummary | None
     unsupported_constructs: tuple[str, ...]
-    exit_code: int | None = None
 
     @property
     def harnesses(self) -> tuple[str, ...]:
         """Name every harness that produced a verification block, in log order."""
         return tuple(block.name for block in self.blocks)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class KaniLogFacts:
-    """Facts a live reader can report before, or instead of, a complete log.
-
-    The supervision layer needs to associate the last available evidence with a
-    harness even when the log was cut short, so these facts never raise for an
-    incomplete log. ``truncated`` and the error tuples say what is missing.
-
-    Attributes
-    ----------
-    banner_version : str | None
-        Release named by the banner, when one was seen.
-    format : str | None
-        ``regular`` or ``inventory`` once the log has said which it is.
-    selection_records : tuple[str, ...]
-        Harness names from ``Checking harness`` lines, in arrival order.
-    verdicts : tuple[tuple[str, str], ...]
-        ``(harness, verdict)`` pairs from ``VERIFICATION:`` lines.
-    contradictions : tuple[str, ...]
-        Block counts that disagree with the checks the block listed.
-    summary_errors : tuple[str, ...]
-        Manual-summary counts or failure names that disagree with the blocks.
-    truncation_reason : str | None
-        Why the log is incomplete, when it is.
-    unsupported_constructs : tuple[str, ...]
-        Constructs Kani named in its pre-flight warning.
-    completed : bool
-        Whether a manual summary or an inventory marker completed the log.
-    exit_code : int | None
-        Raw child status, when `finish` has been called.
-    last_progress : str | None
-        Last structurally recognised report line, bounded by the caller.
-    """
-
-    banner_version: str | None
-    format: str | None
-    selection_records: tuple[str, ...]
-    verdicts: tuple[tuple[str, str], ...]
-    contradictions: tuple[str, ...]
-    summary_errors: tuple[str, ...]
-    truncation_reason: str | None
-    unsupported_constructs: tuple[str, ...]
-    completed: bool
-    exit_code: int | None
-    last_progress: str | None
-
-    @property
-    def truncated(self) -> bool:
-        """Report whether the log ended before its report completed."""
-        return self.truncation_reason is not None

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "harnesses": [
+    {
+      "name": "verification::target_facts",
+      "role": "claim",
+      "covers": [
+        "the supported target has a reachable 64-bit width"
+      ]
+    }
+  ]
+}

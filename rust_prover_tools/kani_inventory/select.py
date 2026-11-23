@@ -27,7 +27,7 @@ from rust_prover_tools.kani_inventory.models import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from rust_prover_tools.kani_log import ForbiddenOption, KaniGrammar
+    from rust_prover_tools.kani_cli_grammar import ForbiddenOption, KaniGrammar
 
 __all__ = (
     "Selection",

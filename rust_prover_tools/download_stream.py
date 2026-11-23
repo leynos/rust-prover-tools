@@ -6,6 +6,13 @@ rejects an oversized `Content-Length` before the destination opens, counts
 streamed bytes so a response without a length header cannot fill the disk, and
 rejects a body shorter than its declared length.
 
+One monotonic deadline covers the request that opens a hop, the header parse
+and every body read. Each read re-arms the socket with the time that is left,
+and a read that fails at or after the deadline, including the end of stream a
+shut-down socket produces, is reported as the deadline rather than as a
+transport fault. A body written to disk is not itself supervised: local file
+I/O can still block past the deadline.
+
 The connection and redirect policy stays in
 `rust_prover_tools.download_transport`; this module owns nothing about how the
 response was obtained.
@@ -52,12 +59,29 @@ class HTTPResponseLike(typ.Protocol):
         """Read up to `amt` response bytes."""
         ...
 
+    def isclosed(self) -> bool:
+        """Report whether the response has released its socket."""
+        ...
+
 
 class _TimeoutSocket(typ.Protocol):
     """The socket operation needed to bound a response read."""
 
     def settimeout(self, value: float) -> None:
         """Apply `value` seconds as the socket's timeout."""
+        ...
+
+
+class _DeadlineSocket(_TimeoutSocket, typ.Protocol):
+    """A timeout socket that can also be released at the deadline.
+
+    `settimeout` arms one blocking call, while `shutdown` releases a call that
+    is already blocked. A shut-down socket reads as end of stream, which is why
+    a late EOF is classified as the deadline too.
+    """
+
+    def shutdown(self, how: int) -> None:
+        """Shut the socket down, waking any call blocked on it."""
         ...
 
 
@@ -85,9 +109,21 @@ class _DeadlineResponse:
         """Forward a header lookup to the wrapped response."""
         return self.response.getheader(name, default)
 
+    def isclosed(self) -> bool:
+        """Forward the finished check to the wrapped response."""
+        return self.response.isclosed()
+
     def read(self, amt: int | None = None) -> bytes:
-        """Read body bytes, bounding the wait by the remaining deadline."""
-        if self.sock is not None:
+        """Read body bytes, bounding the wait by the remaining deadline.
+
+        A finished response is not re-armed. `http.client` closes the
+        response's file when the declared length is exhausted, and for a
+        `Connection: close` response that also closes the socket the transport
+        captured, so arming it again would raise `OSError` on the read that
+        just wants to observe EOF. A finished response cannot block, so there
+        is nothing left to bound.
+        """
+        if self.sock is not None and not self.response.isclosed():
             remaining = self.deadline - monotonic()
             if remaining > 0:
                 # The connection's original timeout may outlast the deadline.
@@ -205,13 +241,20 @@ def _copy_body(
             _raise_deadline(limits, written)
         try:
             chunk = response.read(READ_CHUNK_SIZE)
-        except TimeoutError as exc:
-            # The response bounds each read by the remaining time, so a timeout
-            # at the deadline is the deadline expiring, not a transport fault.
+        except (OSError, http.client.HTTPException) as exc:
+            # The watchdog shuts the socket down at the deadline, so the
+            # resulting `TimeoutError` or reset is the deadline expiring, not a
+            # transport fault. Before the deadline it is the server's failure.
             if monotonic() < limits.deadline:
                 raise
             _raise_deadline(limits, written, cause=exc)
         if not chunk:
+            # A socket shut down at the deadline reads as EOF, so the deadline
+            # is checked again before a short body is accepted as complete. A
+            # chunk from a call that began before the deadline is kept and
+            # written: the failure is reported before the next read, and the
+            # caller discards the partial file.
+            _require_time_left(limits, written)
             return written
         written += len(chunk)
         if written > limits.max_bytes:
@@ -233,6 +276,12 @@ def _copy_body(
             _log_failure(_LOGGER, "store_error", written=written)
             msg = f"failed to store {limits.name}: {exc}"
             raise ProverToolError(msg) from exc
+
+
+def _require_time_left(limits: _StreamLimits, written: int) -> None:
+    """Raise the deadline failure once the transfer has no time left."""
+    if monotonic() >= limits.deadline:
+        _raise_deadline(limits, written)
 
 
 def _raise_deadline(

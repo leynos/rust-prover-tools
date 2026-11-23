@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_cli_grammar import KANI_067
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessDependencies,
     KaniHarnessRun,
@@ -24,7 +25,6 @@ from rust_prover_tools.kani_inventory import (
     PackageInventory,
     compose_arguments,
 )
-from rust_prover_tools.kani_log import KANI_067
 from rust_prover_tools.kani_routes import PreparedRoute
 from rust_prover_tools.supervision import (
     Diagnostics,
@@ -44,7 +44,9 @@ from rust_prover_tools.unittests.supervision_doubles import (
     VirtualSleeper,
 )
 
-_CORPUS = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kani_logs"
+_CORPUS = (
+    Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kani_logs" / "0.67.0"
+)
 
 
 def _harness(pretty: str) -> InventoryHarness:
@@ -426,7 +428,7 @@ def test_the_configured_line_limit_reaches_the_launcher() -> None:
         preparation,
         KaniHarnessDependencies(),
         Diagnostics(jsonl=MemorySink()),
-        max_line_bytes=64,
+        limits=(64, 1024),
     )
 
     launcher = typ.cast("typ.Any", environment.launcher)

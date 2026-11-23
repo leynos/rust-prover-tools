@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import typing as typ
+from pathlib import Path
 
 import pytest
 
+import rust_prover_tools.verus.run as verus_run_module
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.unittests.verus_support import (
     make_executable,
@@ -21,9 +23,10 @@ from rust_prover_tools.verus import (
 
 if typ.TYPE_CHECKING:
     import pathlib
-    from pathlib import Path
 
     from cmd_mox import CmdMox, Invocation
+
+    from rust_prover_tools.verus.batch import VerusRunSettings
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
@@ -346,3 +349,77 @@ def test_run_verus_rejects_missing_proof_file(tmp_path: Path) -> None:
                 proof_files=(missing_proof,),
             ),
         )
+
+
+def test_run_verus_binds_the_selected_solver_for_the_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selected solver reaches ``VerusRunSettings`` unchanged."""
+    proof_file = tmp_path / "proof.rs"
+    proof_file.write_text("proof", encoding="utf-8")
+    solver = tmp_path / "z3"
+    captured: list[VerusRunSettings] = []
+    monkeypatch.setattr(
+        verus_run_module,
+        "ensure_run_binary",
+        lambda options: (Path("/usr/bin/verus"), ()),
+    )
+    monkeypatch.setattr(
+        verus_run_module,
+        "ensure_verus_toolchain",
+        lambda binary, *, should_install: "nightly-test",
+    )
+    monkeypatch.setattr(
+        verus_run_module,
+        "verify_proof_files",
+        lambda files, settings: captured.append(settings),
+    )
+
+    run_verus(
+        VerusRunOptions(
+            paths=VerusPaths(repo_root=tmp_path),
+            proof_files=(proof_file,),
+            z3_path=solver,
+        ),
+    )
+
+    assert captured[0].z3_path == solver, (
+        "The command boundary must pass the selected solver to the batch"
+    )
+
+
+def test_run_verus_leaves_the_solver_unset_when_none_is_selected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No selection leaves ``VERUS_Z3_PATH`` untouched for each invocation."""
+    proof_file = tmp_path / "proof.rs"
+    proof_file.write_text("proof", encoding="utf-8")
+    captured: list[VerusRunSettings] = []
+    monkeypatch.setattr(
+        verus_run_module,
+        "ensure_run_binary",
+        lambda options: (Path("/usr/bin/verus"), ()),
+    )
+    monkeypatch.setattr(
+        verus_run_module,
+        "ensure_verus_toolchain",
+        lambda binary, *, should_install: "nightly-test",
+    )
+    monkeypatch.setattr(
+        verus_run_module,
+        "verify_proof_files",
+        lambda files, settings: captured.append(settings),
+    )
+
+    run_verus(
+        VerusRunOptions(
+            paths=VerusPaths(repo_root=tmp_path),
+            proof_files=(proof_file,),
+        ),
+    )
+
+    assert captured[0].z3_path is None, (
+        "An unselected solver must not bind the verifier's environment"
+    )

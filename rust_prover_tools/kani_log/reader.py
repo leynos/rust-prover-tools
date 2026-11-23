@@ -1,400 +1,355 @@
-"""Walk one Kani log line by line with the grammar in ``syntax``.
+"""Walk one Kani log line by line with the grammar from :mod:`.syntax`.
 
-The reader records a ``KaniLogError`` reason wherever a line is not one the
-grammar accounts for, so facts stay available when a proof is stopped
-mid-report while `finish` still fails closed. The state machine derives from
-Combobulate's reader at commit ``9dd6e3c`` under the ISC licence.
-
-Examples
---------
->>> reader = KaniLogReader()
->>> reader.feed_line("stdout", "Kani Rust Verifier 0.67.0 (cargo plugin)")
->>> reader.facts.banner_version
-'0.67.0'
+This is the cursor half of the extractor: it consumes one report construct at a
+time and raises :class:`KaniLogError` wherever the next line is not one the
+grammar accounts for.  The report readers live in :mod:`.reports` and the
+block-level reconciliation in :mod:`.reconcile`; splitting them keeps each
+module within the repository's size limit while leaving this one as the part a
+new Kani release is compared against.
 """
 
 from __future__ import annotations
 
+import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.kani_log.blocks import BlockCursor, Issue
-from rust_prover_tools.kani_log.budget import (
-    MAX_RETAINED_RECORDS,
-    IssueBudget,
-    RecordBudget,
-    retention_issue,
-)
-from rust_prover_tools.kani_log.issues import second_banner_issue, structural_issue
-from rust_prover_tools.kani_log.model import (
-    HarnessBlock,
-    KaniLog,
-    KaniLogFacts,
-    ManualSummary,
-)
-from rust_prover_tools.kani_log.registry import grammar_for
-from rust_prover_tools.kani_log.state import (
-    ReaderSnapshot,
-    State,
-    done_line,
-    incomplete_issue,
-)
-from rust_prover_tools.kani_log.summary import reconcile_report
+from rust_prover_tools.kani_log import reconcile, reports
+from rust_prover_tools.kani_log.model import HarnessBlock, ManualSummary
 from rust_prover_tools.kani_log.syntax import (
     BANNER,
     CBMC_FAILED,
-    CHECK,
-    COMPLETE,
-    COVER,
-    FAILED_CHECK,
-    FAILED_FOR,
-    FIELD,
     HARNESS_START,
-    LIST_WRITTEN,
+    NOISE_PREFIXES,
     SOLVER_COMMAND,
     TIMED_OUT,
-    TOTAL,
-    UNSUPPORTED_ENTRY,
-    UNSUPPORTED_PRELUDE,
     UNSUPPORTED_REACHABLE,
     UNWINDING_FAILED,
     VERIFICATION,
     VERIFICATION_TIME,
+    FailedCheck,
     KaniLogError,
-    LineStreamName,
-    is_noise,
+    PropertyResult,
 )
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+    import re
 
-__all__ = ("KaniLogReader",)
+__all__ = ("Reader",)
 
 
-class KaniLogReader:
-    """An incremental reader for one Kani 0.67.0 log.
+@dc.dataclass(slots=True)
+class _BlockBuilder:
+    """Accumulate one harness block before it becomes a frozen record."""
 
-    Feed decoded lines, then call `finish`. `facts` never raises for an
-    incomplete log, so a supervisor can attribute a stopped harness's evidence.
-    """
+    name: str
+    properties: list[PropertyResult] = dc.field(default_factory=list)
+    check_ids: set[str] = dc.field(default_factory=set)
+    failures: list[FailedCheck] = dc.field(default_factory=list)
+    # Built on the first explanation and reused for the rest: the results
+    # section is complete by then, and rebuilding it per explanation would
+    # rescan every property once per failure.
+    failed_descriptions: tuple[str, ...] | None = None
+    failed_count: int | None = None
+    total_count: int | None = None
+    other_counts: dict[str, int] = dc.field(default_factory=dict)
+    covered_satisfied: int | None = None
+    covered_total: int | None = None
+    covered_unreachable: int | None = None
+    covered_undetermined: int | None = None
+    verdict: str | None = None
+    panics_as_expected: bool = False
+    solver_command: str | None = None
+    seen_verification_time: bool = False
+    timed_out: bool = False
+    unwinding_reported: bool = False
+    has_results: bool = False
+    saw_summary: bool = False
 
-    def __init__(self) -> None:
-        """Start before the banner with no accumulated report."""
-        self._state = State.BEFORE_BANNER
-        self._line_number = 0
-        self._banner: str | None = None
-        self._blocks: list[HarnessBlock] = []
-        self._blocks_exhausted = False
-        self._manual_exhausted = False
-        self._unsupported_exhausted = False
-        self._cursor = BlockCursor(RecordBudget())
-        self._manual: ManualSummary | None = None
-        self._manual_failed: list[str] = []
-        self._unsupported: list[str] = []
-        self._is_list = False
-        self._budget = IssueBudget()
-        self._last_progress: str | None = None
-        self._exit_code: int | None = None
-        self._handlers: dict[State, cabc.Callable[[str], None]] = {
-            State.BETWEEN: self._between_line,
-            State.BLOCK: self._block_line,
-            State.RESULTS: self._results_line,
-            State.SUMMARY: self._summary_line,
-            State.MANUAL: self._manual_line,
-            State.UNSUPPORTED: self._unsupported_line,
-            State.DONE: self._done_line,
-        }
+    @property
+    def checks(self) -> tuple[PropertyResult, ...]:
+        """The accumulated checks that are not covers."""
+        return tuple(item for item in self.properties if not item.is_cover)
 
-    def feed_line(self, stream: LineStreamName, text: str) -> None:
-        """Consume one decoded output line.
+    @property
+    def covers(self) -> tuple[PropertyResult, ...]:
+        """The accumulated cover properties."""
+        return tuple(item for item in self.properties if item.is_cover)
 
-        A standard-error line before the banner is Cargo preamble, not a
-        malformed log, because Cuprum interleaves the streams. An unregistered
-        banner raises `UnsupportedKaniGrammarError` immediately.
+    def build(self) -> HarnessBlock:
+        """Freeze the accumulated fields into their public record."""
+        return HarnessBlock(
+            name=self.name,
+            properties=tuple(self.properties),
+            failures=tuple(self.failures),
+            failed_count=self.failed_count,
+            total_count=self.total_count,
+            other_counts=tuple(self.other_counts.items()),
+            covered_satisfied=self.covered_satisfied,
+            covered_total=self.covered_total,
+            covered_unreachable=self.covered_unreachable,
+            covered_undetermined=self.covered_undetermined,
+            verdict=self.verdict,
+            panics_as_expected=self.panics_as_expected,
+            solver_command=self.solver_command,
+            seen_verification_time=self.seen_verification_time,
+            timed_out=self.timed_out,
+            unwinding_reported=self.unwinding_reported,
+            has_results=self.has_results,
+        )
+
+
+class Reader:
+    """Walk the log once, keeping the cursor position for error messages."""
+
+    def __init__(self, lines: list[str]) -> None:
+        """Start at the first line of a log already split into lines."""
+        self._lines = lines
+        self._index = 0
+
+    @property
+    def exhausted(self) -> bool:
+        """Report whether every line has been consumed."""
+        return self._index >= len(self._lines)
+
+    def where(self) -> str:
+        """Describe the current position as a one-based line number."""
+        return f"line {self._index + 1}"
+
+    def peek(self) -> str:
+        """Return the current line without consuming it.
+
+        Returns
+        -------
+        str
+            The line at the cursor.
+
+        Raises
+        ------
+        IndexError
+            If the cursor is exhausted.  Callers that may sit at the end check
+            `exhausted` first; `peek_at` is the EOF-safe lookahead.
+
         """
-        self._line_number += 1
-        if self._state is State.BEFORE_BANNER:
-            self._banner_line(stream, text)
-            return
-        if self._cursor.awaiting_failure and self._cursor.try_failure_location(text):
-            return
-        self._handlers[self._state](text)
+        return self._lines[self._index]
 
-    def finish(self, exit_code: int) -> KaniLog:
-        """Complete the log and return its reconciled facts.
+    def peek_at(self, offset: int) -> str | None:
+        """Return the line ``offset`` lines ahead, or ``None`` past the end.
+
+        A description holding a newline can print a blank line as content, so
+        deciding whether a blank line closes an entry needs the next line that
+        is not blank.  The lookahead never moves the cursor.
+
+        Parameters
+        ----------
+        offset : int
+            How many lines past the current one to read.  It must not be
+            negative: a negative offset would address the lines already read.
+
+        Returns
+        -------
+        str | None
+            The line at that offset, or ``None`` when the log ends first.
+        """
+        position = self._index + offset
+        if position >= len(self._lines):
+            return None
+        return self._lines[position]
+
+    def take(self) -> str:
+        """Consume and return the current line, or refuse a truncated log.
+
+        Returns
+        -------
+        str
+            The consumed line.
 
         Raises
         ------
         KaniLogError
-            The first structural, contradiction, summary, or truncation reason.
+            If the cursor is already past the end of the log.
+
         """
-        self._exit_code = exit_code
-        if self._banner is None:
-            self._budget.record((
-                structural_issue("the log does not begin with a Kani banner"),
-            ))
-            raise KaniLogError(self._budget.issues[0].message)
-        if self._state not in {State.BLOCK, State.RESULTS, State.SUMMARY}:
-            self._close_block()
-        self._finish_incomplete()
-        if self._budget.issues:
-            raise KaniLogError(self._budget.issues[0].message)
-        self._budget.record(
-            reconcile_report(
-                self._blocks,
-                self._manual,
-                is_inventory=self._is_list,
-            )
-        )
-        if self._budget.issues:
-            raise KaniLogError(self._budget.issues[0].message)
-        return KaniLog(
-            self._banner,
-            "inventory" if self._is_list else "regular",
-            tuple(self._blocks),
-            self._manual,
-            tuple(self._unsupported),
-            exit_code,
-        )
+        if self.exhausted:
+            msg = f"{self.where()}: the log ends where more output was required"
+            raise KaniLogError(msg)
+        line = self._lines[self._index]
+        self._index += 1
+        return line
 
-    @property
-    def retained_issues(self) -> tuple[Issue, ...]:
-        """The recorded refusals, bounded by `MAX_RETAINED_ISSUES`."""
-        return self._budget.issues
-
-    @property
-    def facts(self) -> KaniLogFacts:
-        """The facts available so far, without raising for truncation."""
-        return ReaderSnapshot(
-            state=self._state,
-            banner=self._banner,
-            blocks=tuple(self._blocks),
-            manual=self._manual,
-            unsupported=tuple(self._unsupported),
-            is_list=self._is_list,
-            issues=self._budget.issues,
-            last_progress=self._last_progress,
-            exit_code=self._exit_code,
-        ).facts()
-
-    def _banner_line(self, stream: LineStreamName, text: str) -> None:
-        """Consume the opening banner, or tolerate standard-error preamble."""
-        match = BANNER.match(text)
-        if match is not None:
-            grammar_for(match["version"])
-            self._banner = match["version"]
-            self._state = State.BETWEEN
-            self._last_progress = text
-            return
-        if stream == "stderr" or not text.strip():
-            return
-        self._budget.record((
-            structural_issue("the log does not begin with a Kani banner"),
-        ))
-        self._state = State.DONE
-
-    def _between_line(self, text: str) -> None:
-        """Consume a line outside any harness block."""
-        if text == "Manual Harness Summary:":
-            self._begin_manual()
-        elif text == UNSUPPORTED_PRELUDE:
-            self._state = State.UNSUPPORTED
-        elif text.startswith(LIST_WRITTEN):
-            self._is_list = True
-            self._last_progress = text
-        elif (match := HARNESS_START.match(text)) is not None:
-            self._begin_block(match["name"])
-        elif BANNER.match(text) is not None:
-            self._budget.record((second_banner_issue(self._line_number),))
-
-    def _block_line(self, text: str) -> None:
-        """Consume a line inside a harness block."""
-        if self._block_section(text) or self._block_verdict(text):
-            return
-        if self._block_marker(text):
-            return
-        if (match := HARNESS_START.match(text)) is not None:
-            self._close_block()
-            self._begin_block(match["name"])
-            return
-        if BANNER.match(text) is not None:
-            self._budget.record((second_banner_issue(self._line_number),))
-            return
-        if self._cursor.needs_summary:
-            # The solver's transcript sits between the header and the report.
-            return
-        self._budget.record((
-            structural_issue(
-                f"line {self._line_number}: unrecognised line in the block for "
-                f"{self._cursor.block.name!r}: {text!r}"
-            ),
-        ))
-
-    def _block_section(self, text: str) -> bool:
-        """Handle a block's section delimiters and its closing time line."""
-        if text == "RESULTS:":
-            self._cursor.block.has_results = True
-            self._state = State.RESULTS
-            self._last_progress = text
-            return True
-        if text == "SUMMARY:":
-            self._state = State.SUMMARY
-            self._last_progress = text
-            return True
-        if VERIFICATION_TIME.match(text):
-            self._cursor.block.seen_verification_time = True
-            self._close_block()
-            self._state = State.BETWEEN
-            self._last_progress = text
-            return True
-        if text == "Manual Harness Summary:":
-            self._close_block()
-            self._begin_manual()
-            return True
-        return False
-
-    def _block_verdict(self, text: str) -> bool:
-        """Record one ``VERIFICATION:`` verdict, refusing a second."""
-        match = VERIFICATION.match(text)
+    def banner(self) -> tuple[str, str] | None:
+        """Consume the version banner if the log opens with one."""
+        if self.exhausted:
+            return None
+        match = BANNER.match(self._lines[0])
         if match is None:
+            return None
+        self.take()
+        return match["version"], match["kind"]
+
+    def results(self, builder: _BlockBuilder) -> None:
+        """Consume the ``RESULTS:`` section into ``builder``."""
+        reports.results(self, builder)
+
+    def summary(self, builder: _BlockBuilder) -> None:
+        """Consume the ``SUMMARY:`` section into ``builder``."""
+        reports.summary(self, builder)
+
+    def verification(
+        self,
+        builder: _BlockBuilder,
+        match: re.Match[str],
+    ) -> None:
+        """Record one already-matched ``VERIFICATION:`` line on ``builder``."""
+        reports.verification(self, builder, match)
+
+    def manual(self) -> ManualSummary:
+        """Consume the ``Manual Harness Summary`` that ends a complete run."""
+        return reports.manual(self)
+
+    def unsupported_constructs(self) -> list[str]:
+        """Consume Kani's pre-flight list of constructs it cannot model."""
+        return reports.unsupported_constructs(self)
+
+    def block(self, match: re.Match[str]) -> HarnessBlock:
+        """Consume one ``Checking harness`` block through its verification time.
+
+        Parameters
+        ----------
+        match : re.Match[str]
+            The already-matched harness header.
+
+        Returns
+        -------
+        HarnessBlock
+            The completed block.
+
+        Raises
+        ------
+        KaniLogError
+            If the block is truncated or contains an unrecognised report line.
+
+        """
+        builder = _BlockBuilder(name=match["name"])
+        self.take()
+        while not self.exhausted:
+            line = self.peek()
+            verdict = VERIFICATION.match(line)
+            if line == "RESULTS:":
+                self.take()
+                self.results(builder)
+            elif line == "SUMMARY:":
+                self.take()
+                self.summary(builder)
+            elif verdict is not None:
+                self.verification(builder, verdict)
+            elif (ended := self._end_block(builder, line)) is not None:
+                return ended
+            elif self._note_marker(builder, line):
+                continue
+            elif _is_solver_transcript(builder):
+                # The solver's own transcript sits between the harness header
+                # and the report.  Its wording belongs to CBMC, not to Kani, so
+                # it is skipped by position rather than by matching every line.
+                self.take()
+            else:
+                msg = (
+                    f"{self.where()}: unrecognised line in the block for "
+                    f"{builder.name!r}: {line!r}"
+                )
+                raise KaniLogError(msg)
+        msg = f"the log is truncated inside the block for {builder.name!r}"
+        raise KaniLogError(msg)
+
+    def _end_block(
+        self,
+        builder: _BlockBuilder,
+        line: str,
+    ) -> HarnessBlock | None:
+        """Finish the block if ``line`` ends it or begins the next one.
+
+        A second harness header ends the current block without being consumed:
+        the outer loop reads it as the next block.  Only a timed-out block can
+        end that way, because every block that ran has a verification time.
+        """
+        if VERIFICATION_TIME.match(line) is not None:
+            self.take()
+            builder.seen_verification_time = True
+        elif line != "Manual Harness Summary:" and HARNESS_START.match(line) is None:
+            return None
+        reconcile.require_complete(builder)
+        return builder.build()
+
+    def _note_marker(self, builder: _BlockBuilder, line: str) -> bool:
+        """Record a one-line block marker in ``builder`` and consume it.
+
+        Returns
+        -------
+        bool
+            Whether ``line`` was one of the markers this method knows.
+
+        Raises
+        ------
+        KaniLogError
+            If the line is a second Kani banner.  The solver transcript is
+            skipped by position, so a banner inside a block would otherwise
+            disappear without a trace.
+        """
+        if BANNER.match(line) is not None:
+            msg = (
+                f"{self.where()}: a second Kani banner, so the log holds "
+                "two invocations"
+            )
+            raise KaniLogError(msg)
+        if line == UNWINDING_FAILED:
+            builder.unwinding_reported = True
+        elif line.startswith(TIMED_OUT):
+            builder.timed_out = True
+        elif line.startswith(SOLVER_COMMAND):
+            _record_solver_command(builder, line)
+        elif line in {CBMC_FAILED, UNSUPPORTED_REACHABLE} or _is_noise(line):
+            # Build and driver chatter carries no fact the analysis reads.
+            pass
+        else:
             return False
-        self._budget.record(self._cursor.add_verdict(match["verdict"], match["note"]))
-        self._last_progress = text
+        self.take()
         return True
 
-    def _block_marker(self, text: str) -> bool:
-        """Handle a block marker or build chatter."""
-        block = self._cursor.block
-        if text == UNWINDING_FAILED:
-            block.unwinding_reported = True
-            return True
-        if text.startswith(TIMED_OUT):
-            block.timed_out = True
-            return True
-        if text.startswith(SOLVER_COMMAND):
-            block.solver_command = text
-            return True
-        return text in {CBMC_FAILED, UNSUPPORTED_REACHABLE} or is_noise(text)
 
-    def _results_line(self, text: str) -> None:
-        """Consume one line of the ``RESULTS:`` section."""
-        if (match := CHECK.match(text)) is not None:
-            self._budget.record(self._cursor.flush_check())
-            self._cursor.begin_check(match["identifier"])
-            self._last_progress = text
-            return
-        if (field := FIELD.match(text)) is not None:
-            refusal = self._cursor.add_check_field(field["key"], field["value"])
-            if refusal is not None:
-                self._budget.record((
-                    structural_issue(f"line {self._line_number}: {refusal}: {text!r}"),
-                ))
-            return
-        if not text.strip():
-            return
-        self._budget.record(self._cursor.flush_check())
-        self._state = State.BLOCK
-        self._block_line(text)
+def _record_solver_command(builder: _BlockBuilder, line: str) -> None:
+    """Record one solver echo, refusing a second that disagrees.
 
-    def _summary_line(self, text: str) -> None:
-        """Consume one line of the ``SUMMARY:`` section."""
-        if (total := TOTAL.match(text)) is not None:
-            self._budget.record(self._cursor.add_total(total))
-            self._last_progress = text
-        elif (cover := COVER.match(text)) is not None:
-            self._budget.record(self._cursor.add_cover(cover))
-            self._last_progress = text
-        elif (message := FAILED_CHECK.match(text)) is not None:
-            self._cursor.add_failure(message["message"])
-            self._last_progress = text
-        elif VERIFICATION.match(text) or text == UNSUPPORTED_REACHABLE:
-            self._state = State.BLOCK
-            self._block_line(text)
-        elif text.strip():
-            self._budget.record((
-                structural_issue(
-                    f"line {self._line_number}: unrecognised summary line for "
-                    f"{self._cursor.block.name!r}: {text!r}"
-                ),
-            ))
+    The run mode reads the echoed command to learn whether the unwinding
+    assertions were generated, and one block is one solver invocation.  Two
+    different echoes cannot both describe it, so keeping whichever came last
+    would let the reported profile depend on line order.  A repeated identical
+    echo adds no fact and is accepted.
 
-    def _manual_line(self, text: str) -> None:
-        """Consume one line of the final manual harness summary."""
-        if (failure := FAILED_FOR.match(text)) is not None:
-            if len(self._manual_failed) < MAX_RETAINED_RECORDS:
-                self._manual_failed.append(failure["name"])
-            elif not self._manual_exhausted:
-                self._manual_exhausted = True
-                self._budget.record((retention_issue("manual failure name"),))
-            self._last_progress = text
-            return
-        if (complete := COMPLETE.match(text)) is not None:
-            self._manual = ManualSummary(
-                int(complete["verified"]),
-                int(complete["failures"]),
-                int(complete["total"]),
-                tuple(self._manual_failed),
-            )
-            self._state = State.DONE
-            self._last_progress = text
-            return
-        if text.strip():
-            self._budget.record((
-                structural_issue(
-                    f"line {self._line_number}: unrecognised manual summary "
-                    f"line: {text!r}"
-                ),
-            ))
+    Raises
+    ------
+    KaniLogError
+        If the block already echoed a different command.
 
-    def _unsupported_line(self, text: str) -> None:
-        """Consume one entry of the pre-flight unsupported-construct list."""
-        if (entry := UNSUPPORTED_ENTRY.match(text)) is not None:
-            if len(self._unsupported) < MAX_RETAINED_RECORDS:
-                self._unsupported.append(entry["name"])
-            elif not self._unsupported_exhausted:
-                self._unsupported_exhausted = True
-                self._budget.record((retention_issue("unsupported construct"),))
-            return
-        if text.strip():
-            self._state = State.BETWEEN
-            self._between_line(text)
+    """
+    if builder.solver_command is None:
+        builder.solver_command = line
+        return
+    if builder.solver_command != line:
+        msg = (
+            f"the block for {builder.name!r} echoes two different solver "
+            f"commands: {builder.solver_command!r} and {line!r}"
+        )
+        raise KaniLogError(msg)
 
-    def _done_line(self, text: str) -> None:
-        """Ignore chatter after the summary, but refuse a second report."""
-        done_line(text, self._line_number, self._budget.record)
 
-    def _begin_block(self, name: str) -> None:
-        """Start a new harness block at ``name``."""
-        self._cursor.start(name)
-        if len(self._blocks) < MAX_RETAINED_RECORDS:
-            self._blocks.append(self._cursor.block)
-        elif not self._blocks_exhausted:
-            self._blocks_exhausted = True
-            self._budget.record((retention_issue("harness block"),))
-        self._state = State.BLOCK
-        self._last_progress = f"Checking harness {name}..."
+def _is_solver_transcript(builder: _BlockBuilder) -> bool:
+    """Report whether the block has not yet reached its own report."""
+    if builder.verdict is not None:
+        return False
+    if builder.has_results:
+        return False
+    return builder.failed_count is None
 
-    def _begin_manual(self) -> None:
-        """Start the final manual harness summary."""
-        self._manual_failed = []
-        self._manual_exhausted = False
-        self._state = State.MANUAL
-        self._last_progress = "Manual Harness Summary:"
 
-    def _close_block(self) -> None:
-        """Reconcile the current block and detach it."""
-        if not self._cursor.started:
-            return
-        self._budget.record(self._cursor.finish())
-        self._cursor.start("")
-
-    def _finish_incomplete(self) -> None:
-        """Record why the report did not reach its final summary."""
-        if self._state is State.UNSUPPORTED:
-            self._state = State.BETWEEN
-        issue = incomplete_issue(self._state, self._cursor.block.name)
-        if issue is not None:
-            self._budget.record((issue,))
-
-    def _progress(self, text: str) -> None:
-        """Remember the last structurally recognised report line."""
-        self._last_progress = text
+def _is_noise(line: str) -> bool:
+    """Report whether a line is build or driver chatter, not report content."""
+    return not line.strip() or line.startswith(NOISE_PREFIXES)

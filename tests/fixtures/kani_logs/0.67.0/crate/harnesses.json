@@ -1,0 +1,90 @@
+{
+  "description": "Expected labels are test intentions; the parser must derive results from the captured logs and full inventory.",
+  "runs": [
+    {
+      "id": "verified",
+      "expected_outcome": "verified",
+      "arguments": ["--harness", "harnesses::verified", "--exact", "--verbose"],
+      "expected_exit": 0
+    },
+    {
+      "id": "counterexample",
+      "expected_outcome": "counterexample",
+      "arguments": ["--harness", "harnesses::counterexample", "--exact", "--verbose"],
+      "expected_exit": 1
+    },
+    {
+      "id": "unsatisfied_cover",
+      "expected_outcome": "some-unsatisfied",
+      "arguments": ["--harness", "harnesses::unsatisfied_cover", "--exact", "--verbose"],
+      "expected_exit": 0
+    },
+    {
+      "id": "multiplication_timeout",
+      "expected_outcome": "resource-exhausted",
+      "arguments": ["--harness", "harnesses::multiplication_timeout", "--exact", "--verbose", "-Z", "unstable-options", "--harness-timeout", "5s"],
+      "expected_exit": 1
+    },
+    {
+      "id": "insufficient_unwind",
+      "expected_outcome": "counterexample",
+      "arguments": ["--harness", "harnesses::insufficient_unwind", "--exact", "--verbose"],
+      "expected_exit": 1
+    },
+    {
+      "id": "vacuous_assumption",
+      "expected_outcome": "some-unsatisfied",
+      "arguments": ["--harness", "harnesses::vacuous_assumption", "--exact", "--verbose"],
+      "expected_exit": 0
+    },
+    {
+      "id": "unsupported",
+      "expected_outcome": "unsupported",
+      "arguments": ["--harness", "harnesses::unsupported", "--exact", "--verbose"],
+      "expected_exit": 1
+    },
+    {
+      "id": "expected_panic",
+      "expected_outcome": "verified",
+      "arguments": ["--harness", "harnesses::expected_panic", "--exact", "--verbose"],
+      "expected_exit": 0
+    },
+    {
+      "id": "seeded_wrapping_mutant",
+      "expected_outcome": "counterexample",
+      "arguments": ["--harness", "harnesses::seeded_wrapping_mutant", "--exact", "--verbose"],
+      "expected_exit": 1
+    },
+    {
+      "id": "selected_harness",
+      "expected_outcome": "skipped",
+      "arguments": ["--harness", "harnesses::verified", "--exact", "--verbose"],
+      "expected_exit": 0
+    },
+    {
+      "id": "fail_fast",
+      "expected_outcome": "counterexample-and-skipped",
+      "arguments": ["--harness", "harnesses::counterexample", "--harness", "harnesses::verified", "--harness", "harnesses::seeded_wrapping_mutant", "--exact", "--fail-fast", "--verbose"],
+      "expected_exit": 1
+    },
+    {
+      "id": "truncated",
+      "expected_outcome": "tool-error",
+      "arguments": ["--harness", "harnesses::multiplication_timeout", "--exact", "--verbose"],
+      "external_timeout": true,
+      "expected_exit": 124
+    },
+    {
+      "id": "list",
+      "expected_outcome": "inventory",
+      "arguments": ["list", "--format", "json"],
+      "expected_exit": 0
+    },
+    {
+      "id": "default_unwind",
+      "expected_outcome": "counterexample-and-verified",
+      "arguments": ["--harness", "harnesses::verified", "--harness", "harnesses::seeded_wrapping_mutant", "--exact", "--verbose", "--default-unwind", "2"],
+      "expected_exit": 1
+    }
+  ]
+}

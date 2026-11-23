@@ -32,9 +32,11 @@ process exit codes. Commands with a wide parameter table live in a dedicated
 adapter module so the application module stays readable:
 `rust_prover_tools.kani_exec_cli` for legacy Kani execution,
 `rust_prover_tools.kani_snapshot_cli` for `kani snapshot install`,
-`kani snapshot check` and `kani run`, and `rust_prover_tools.verus_run_cli` for
-`verus run`. An adapter module owns its Cyclopts and environment-variable
-binding, output printing, and exit-code mapping.
+`kani snapshot check` and `kani run`, `rust_prover_tools.verus_run_cli` for
+`verus run`, `rust_prover_tools.kani_log_cli` for `kani analyse-log`, and
+`rust_prover_tools.verus_log_cli` for `verus analyse-log`. An adapter module
+owns its Cyclopts and environment-variable binding, output printing, and
+exit-code mapping.
 
 `rust_prover_tools.commands` is the only module that invokes external
 programmes. It builds Cuprum `CommandSpec` values and returns a small
@@ -54,7 +56,17 @@ the same module.
 
 `rust_prover_tools.z3` installs the pinned Z3 solver used by Verus. It
 downloads the official release archive, extracts only the pinned `z3` binary,
-and records a version marker so later runs reuse the installation.
+and records a marker that binds the pinned version to the extracted binary's
+SHA-256; the digest is computed while the member is streamed to disk. Reuse
+rehashes the installed binary and accepts it only when the digest matches.
+Marker parsing is strict: the file must be a JSON object with exactly the
+`version` and `sha256` keys, both strings, the current version, and a
+64-character lowercase hexadecimal digest. Any other content, including a
+version-only marker from an earlier release, is a cache miss.
+`rust_prover_tools.z3_selection` resolves a solver selection to one executable
+and qualifies an observed version against the pin; it launches nothing, so the
+`--version` probe stays at the CLI boundary described under
+[solver selection](#solver-selection-for-verus-runs).
 
 `rust_prover_tools.binary_assets` is the manifest of pinned release artefacts:
 names, HTTPS URLs, SHA-256 digests, per-asset byte ceilings, archive members,
@@ -68,17 +80,41 @@ in `rust_prover_tools.download_url`. Connection and redirect policy lives in
 `rust_prover_tools.download_transport`, which accepts only HTTPS and follows a
 bounded number of re-validated redirects. Body limits live in
 `rust_prover_tools.download_stream`, which rejects an oversized
-`Content-Length` before reading, counts streamed bytes, and enforces one
-monotonic transfer deadline. A body shorter than its declared `Content-Length`
-is raised as a transient transport failure rather than a plain error: a
-truncated stream can end without a read error, and a retry may deliver the
-whole body. Digest, policy and local storage failures stay outside the retry
-path. A pending file is removed on any failure and renamed to the final path
-only after the digest matches. The transport connects directly over HTTPS and
-deliberately does not read proxy environment variables such as `HTTPS_PROXY`.
-`download_pinned` exposes no transport hook, so a proxy-only environment has no
-supported route through this library; a caller that needs a proxy cannot be
-served by the current API.
+`Content-Length` before reading, counts streamed bytes, and re-arms the socket
+for each body read. `rust_prover_tools.download_deadline` owns the one shared
+monotonic transfer budget and the socket watchdog that enforces it.
+
+The deadline is a transport-wide boundary, not a stream-only rule. The
+transport connects explicitly, refuses a hop whose budget the connect phase
+spent, and re-arms the socket with the time the connect phase and the TLS
+handshake left before the request is sent. It arms the watchdog with the
+captured socket before the send, and the watchdog stays armed through the
+header parse and the body, so a blocked send, a stalled header parse and a
+stalled body read all fail at the deadline instead of waiting out a socket
+timeout. A hop stops its watchdog before closing its connection, so a finished
+hop cannot act on a later one.
+
+Failures at or after the deadline are reported as the base deadline error,
+while earlier ones keep their retry classification: an early transport failure
+stays a transient `transport_error`, and a body shorter than its declared
+`Content-Length` stays a transient `incomplete_body`, because a truncated
+stream can end without a read error and a retry may deliver the whole body.
+That includes an EOF at or after the deadline, since a socket the watchdog shut
+down reads as end of stream. Digest, policy and local storage failures stay
+outside the retry path. A pending file is removed on any failure and renamed to
+the final path only after the digest matches. The transport connects directly
+over HTTPS and deliberately does not read proxy environment variables such as
+`HTTPS_PROXY`. `download_pinned` exposes no transport hook, so a proxy-only
+environment has no supported route through this library; a caller that needs a
+proxy cannot be served by the current API.
+
+The deadline is not a hard wall-clock bound. DNS resolution has no socket
+timeout, the standard library applies one connect budget to every resolved
+address in turn and the initial TLS handshake reuses it, and local file I/O
+while the body is written is not supervised. Digest verification, publication
+and retries have their own bounds rather than sharing the transfer's. The
+sections of `docs/developers-guide.md` and `docs/users-guide.md` that describe
+the download deadline own the detailed account of these limits.
 
 `rust_prover_tools.observability` defines the opt-in event helper. The
 downloader records `download.start`, `download.complete`, `download.cache_hit`,
@@ -97,9 +133,13 @@ records `<tool>.install.start`, `<tool>.install.reuse`,
 together with the extraction, marker, setup, and verification boundaries
 (`z3.extract.complete`, `z3.marker.recorded`, `kani.extract.complete`,
 `kani.setup.complete`, `kani.verify.complete`, `verus.extract.start`, and
-`verus.extract.complete`). Snapshot commands report timed spans as correlated
-start and completion events. `kani.snapshot.install` closes with an `outcome` of
-`activated` or `reused` and a `cache` of `miss` or `hit`;
+`verus.extract.complete`). When a Z3 reuse is refused, `z3.install.cache_miss`
+records one reason from a closed set (`binary_missing`, `not_executable`,
+`marker_missing`, `marker_unusable`, or `digest_mismatch`) before the download
+starts, so a reinstall is diagnosable without reading source; it carries no
+digest, path, or marker text. Snapshot commands report timed spans as
+correlated start and completion events. `kani.snapshot.install` closes with an
+`outcome` of `activated` or `reused` and a `cache` of `miss` or `hit`;
 `kani.snapshot.check` closes with `outcome="valid"`; and `kani.snapshot.run`
 closes with an `outcome` of `success` or `failure` and the launcher's
 `exit_code`. The internal `kani.snapshot.stage`, `kani.snapshot.setup`,
@@ -587,3 +627,508 @@ The CLI contract tests inject the composition root, so they cover route
 exclusivity, selection conflicts, drift, interruption, exit mapping, and a
 closed standard output without a live prover. Help output is snapshotted. An
 opt-in live fixture test exercises the real 0.67.0 driver.
+
+## Log analysis and trust audit adoption
+
+The Kani log parser, Kani outcome analysis, Rust trust audit and Verus run
+analysis are adopted from combobulate commit
+`9dd6e3c24306ee947ca3bf3bc76339cd67509f1d`. This is a later port into this
+repository, not an upstreaming in combobulate's pull request; combobulate keeps
+its own copy. If that copy changes before a port starts, re-pin the commit and
+record the new commit in each corpus README.
+
+The ticket names the components and requires a neutral result summary. The
+choices below are plan decisions: they meet the ticket without widening it.
+
+### Ticket requirements and plan decisions
+
+The ticket requires four components --- the Kani log parser, the Kani outcome
+decision, the Rust trust audit and Verus run analysis --- adopted from the
+named commit and working against the provers the shared installer installs,
+with no digest coupling. It excludes the evidence gate, approval, admission
+levels, the exception register, schema-bound records, provenance and structural
+digests.
+
+The plan decided the rest: that each component is a separate analysis command
+rather than an inline change to a runner; that outcomes use neutral names; that
+each corpus is version-indexed under `tests/fixtures/`; that the trust
+vocabulary is prover-defined and selectable; that the Verus parser is a new
+design rather than a port; that a `kani list`-driven manifest is deferred
+behind a user-written manifest; and that both analysis commands use the 0/1/2
+status contract. Each decision is recorded in the section that implements it.
+Each keeps the work inside the ticket's scope rather than widening it; none is
+a ticket requirement disguised as a preference.
+
+### Separate analysis commands
+
+`kani exec`, `kani run` and `verus run` keep their live-stream, fail-fast,
+memory-bound and exit-status contracts. None of them returns a complete
+transcript: `kani run` retains only the last 64 KiB of each stream, `exec_kani`
+returns the child status alone, and `run_verus` does not return the proof
+output. Changing those commands to capture and analyse output inline would
+change contracts callers already rely on.
+
+Analysis therefore reads a log the caller captured by redirection, through
+separate commands:
+
+- `kani analyse-log` with `--log`, `--manifest`, a repeatable `--harness`,
+  `--require-full-profile` and `--format text|json`.
+- `verus analyse-log` with `--log`, `--expect-failure`, `--require-full`,
+  `--verus-release`, `--repo-root` and `--format text|json`.
+
+A separate command defines its own input, output and status semantics without
+touching how a verifier runs.
+
+The new code uses one package per feature, following the existing convention:
+`rust_prover_tools/kani_log/`, `rust_prover_tools/verus_log/`, and
+`rust_prover_tools/trust_audit/`. Combobulate keeps the equivalent code under
+`scripts/docs_validation/`.
+
+### Neutral vocabulary
+
+Combobulate's outcome names follow its evidence-gate reason codes, and its
+`bounds` field is always `partial`. This package publishes a neutral `StrEnum`
+instead and keeps the proved precedence unchanged: `counterexample`,
+`resource-exhausted`, `unsupported`, `undetermined`, `skipped`, `verified`. The
+constant `bounds` field is dropped, and `passed` is derived from the outcome,
+covers and controls. Combobulate's VO-11a identifiers and evidence-gate wording
+are removed from docstrings and messages.
+
+The run mode reads Kani's one disabling flag, `--no-unwinding-assertions`,
+rather than the presence of an unwinding bound. The pinned driver emits that
+flag when the checks are off and otherwise relies on CBMC's default, so the
+echoed solver command decides the setting and a missing bound proves nothing. A
+block that echoed no command, or one whose command cannot be split into
+arguments, stays `focused`: the log does not show which flags were passed.
+
+A wrapped argument is only recoverable when it ends the echo. Kani escapes
+nothing inside the quotes, so `"a b" --flag` is both the rendering of two
+arguments and the rendering of one argument holding `a b" --flag`; no fact in
+the text decides which. The parser therefore returns no arguments for that
+shape, and the block stays `focused`, rather than reading the quote as a
+boundary the value might not contain. A wrapped argument that ends the echo,
+such as the last path in a command, stays unambiguous.
+
+A `recursion` check is Kani's other bound check, and it is classified with
+`unwind`: its failure says the recursion limit was too small, not that the
+property is false. Both kinds are excluded from the substantive failures that
+deny a claim and included in the failures that report resource exhaustion. A
+failed `unsupported_construct` check owned by a called routine is unsupported
+too: the harness's verdict rests on that routine, so reading only the harness's
+own checks would report the claim verified beside a construct nobody modelled.
+The crate-wide pre-flight warning is read through the same expected-panic
+exemption as the outcome: an unreachable check beside a certified panic is
+explained, so the warning alone does not make such a claim unsupported.
+
+A manifest that declares no claim cannot pass. Controls are guards rather than
+claims, and `all()` over an empty claim set would otherwise read as success; a
+control-only manifest therefore decides `skipped`, and `passed` remains false.
+
+Kani's renderer rewrites a cover CBMC reported as `FAILURE` into `SATISFIED`
+before printing it, and a listed cover is not one of the checks whose count is
+reconciled. A cover carrying any status outside `SATISFIED`, `UNSATISFIABLE`,
+`UNREACHABLE` and `UNDETERMINED` is therefore refused: accepting it would admit
+a report the pinned release cannot produce.
+
+The expected-panic exemption covers only the checks Kani counts as a panic. The
+driver prints `(encountered one or more panics as expected)` only when the
+harness declared `should_panic` and every failed property has class
+`assertion`, and that same condition makes it print a successful verdict. A
+failure of any other kind beside the note is therefore an independent failure,
+not part of the panic, and a verdict that is not `SUCCESSFUL` while carrying
+the note is a report the release cannot produce and is refused. The parser
+reads the note and the verdict from the same line, so the two cannot drift
+apart.
+
+Kani escapes nothing inside a description or an echoed command. A description
+holding a newline is printed over several lines, with the opening quote ending
+the `Description:` line and the closing quote ending the last continuation
+line; the parser joins those lines, and reads a failure explanation by the
+description of the failed check it repeats, because the results section has
+already said how many lines it occupies. A blank line inside a description is
+content too, so it closes the entry only when the next line that is not blank
+is a report construct. Closing at the blank line would cut a description at an
+embedded quote and leave its continuation to be refused as an unrecognized
+line. A report marker can also be description text, so `RESULTS:` closes the
+entry only when a `Check N:` entry follows, `SUMMARY:` only when its `** …`
+counts or verdict follow, and `Manual Harness Summary:` only when a
+failed-harness line or the `Complete` counts follow. A description may also
+spell a field-shaped line such as `Location:`, so a field closes the entry only
+when the field run is followed by another field, a report construct or a fresh
+check entry rather than by more description text.  A report marker reached
+after a field is validated by the same rule as one reached directly. An echoed
+`cbmc` command is split at Kani's own boundaries rather than as shell text: the
+driver wraps an argument in double quotes exactly when it holds a space, and an
+apostrophe is an ordinary character, so shell splitting would let one
+apostrophe hide a flag. The expected-panic note and the description rule are
+both read from the pinned release's source rather than inferred from a sample.
+
+A second banner means the capture holds two invocations. The parser refuses it
+rather than returning the first run's facts, because those facts say nothing
+about whatever the second run reported. The manual summary normally counts
+every block, but `--fail-fast` stops at the first failure and passes only that
+result to the driver's final-summary routine; a summary with no successes whose
+total is exactly the failed set is therefore accepted, and every other
+disagreement is still refused.
+
+A claim declared `should_panic` is verified only when Kani printed the
+expected-panic note; a successful block without it is undetermined. The note is
+also refused when no check failed, because the driver prints it only after
+excusing a failed property and a block with nothing to excuse is a report the
+release cannot produce. Kani's unwinding-failure note is reconciled the same
+way: a completed block that carries it must list a failed check of an unwinding
+kind, because the note states that such a failure exists. A timed-out block
+keeps its own path, which refuses every completed-result field beside it.
+
+The trust audit replaces combobulate's ADR-0009 with prover-defined
+vocabularies: one frozen record per prover, selected by context, with no
+manifest or digest binding. Each `Vocabulary` names the prover, its words, the
+crate roots that qualify a path, and whether a `verus!` body or attribute gives
+its words meaning. The matcher takes the records it is given rather than naming
+a prover itself, so `--prover` narrows an audit and a later user-supplied
+vocabulary can be passed in the same shape without changing the matcher.
+
+### Trust audit command
+
+`prover-tools audit trust` takes the entry points to walk and the repository
+root that bounds them, and reports `path:line:column: word` for every trusted
+item it found:
+
+- `PATHS` are files or crate directories. A file is a crate root, usually a
+  `lib.rs` or `main.rs`; a directory expands to the Cargo targets of every
+  crate beneath it, following Cargo's own discovery rules: `src/lib.rs`,
+  `src/main.rs`, the `*.rs` files and `*/main.rs` entries directly under
+  `src/bin`, `tests/`, `benches/` and `examples/`, and every target the
+  manifest names explicitly. A file deeper in one of those directories is a
+  module of a target, so the module walk reaches it rather than the directory
+  listing. The manifest's `auto*` flags are honoured, and a target with no
+  file, or a directory with no target, is refused. A relative path is read as
+  repository-relative so the answer does not depend on the working directory;
+  an absolute path must already sit beneath the root. An outside spelling that
+  reaches an in-root file only through a symbolic link is refused, because its
+  children would resolve from the outside directory while the compiler uses the
+  spelling's.
+- `--repo-root` (alias `--root`) anchors every reported location and bounds the
+  walk. Defaults to the working directory.
+- `--prover PROVER` applies one prover's vocabulary, named `kani` or `verus`.
+  It may be repeated; without it both vocabularies are applied, which is the
+  fail-closed direction for an audit.
+- `--procedural-macro` / `--no-procedural-macro` states whether string
+  literals are code. By default the walk reads `[lib] proc-macro = true` from
+  the nearest `Cargo.toml` above each driver with `tomllib`, because a crate
+  that expands literals turns them into code the lexer never sees. Either flag
+  overrides the manifest, so a caller can correct a crate kind the audit cannot
+  read without editing the manifest. A manifest that exists but cannot be
+  parsed is refused rather than guessed at, as is one that renames `kani`,
+  `vstd` or `verus_builtin` as a Cargo dependency: that rename binds the crate
+  with no import the per-file scan can follow. A driver a manifest names through
+  `[lib] path` takes that manifest's crate kind even when the file sits
+  outside the manifest's directory.
+- `--format text|json` chooses the readable report or the schema-versioned
+  object. Both forms name the selected provers, because the selection changes
+  what the report can contain.
+
+The status reports whether the audit _completed_: `0` when every source was
+audited and `1` when a source was missing, unreadable or outside the root, or a
+prover name is not one the audit knows. A non-empty report is not a failure,
+because the audit keeps no record of which requests were justified — the
+evidence gate that would compare items against such a record is excluded
+machinery. A command that failed on every legitimate `assume` would be a gate
+this repository cannot satisfy.
+
+The audit follows `mod` declarations rather than sweeping a directory. A file no
+`mod` names is not compiled, so scanning it would report dead code as though
+it were part of the proof; conversely every compiled file must be read, so a
+declaration that resolves to no file, or to both `x.rs` and `x/mod.rs`, is
+refused rather than skipped: rustc rejects the ambiguous pair instead of giving
+either precedence. `#[path]` targets, inline modules and the mod-rs directory
+rules are all honoured, and a target outside the root is refused for what it is
+before its existence is asked about. Every file directly under `tests/` is a
+crate root in its own right, so an integration test's declarations resolve
+beside it rather than in a directory named after it. A `mod` written as a
+`macro_rules!` pattern is a template for source the macro is given, not source
+the crate compiles, so it names no file. A declaration an expansion emits does
+name a file: rustc resolves it from the invocation's module directory, not from
+the definition's, so the walk attributes the declaration to every invocation it
+can see and appends the expansion's own inline modules to that chain. A macro
+invoked from another macro's expansion is followed through the outer
+invocation, and a recursive definition is refused because its chain would never
+end. An invocation through a `use` alias
+(`use crate::make as build; build!();`) expands the definition's macro, so the
+alias is resolved before the expansion's declarations are attributed; a rename
+of that alias resolves through the chain to the same definition. A module
+declaration passed into an argument-forwarding macro is refused, because the
+expansion may place it inside an inline module and the scan does not substitute
+the arguments. A macro name defined more than once is refused: Rust lets a
+later definition shadow an earlier one, and the scan cannot tell which one an
+invocation expands. A child module that inherits a `#[macro_use]` import and
+invokes a macro it does not define is refused for the same reason. A name that
+is both a definition and a `use` alias is refused for the same reason, because
+Rust resolves a bare invocation by textual scope first and the per-file scan
+does not model that scope's end. An invocation in another file is outside the
+per-file scan, which the user guide states. A declaration whose name a
+metavariable supplies is refused, because only the invocation's arguments
+decide that name and the scan never evaluates them; an expansion that invokes a
+macro through a metavariable, reaches a trust item through one such as
+`$p::assume` or `kani::$f`, binds an import's item or local name
+(`use std::$name as load;`, the grouped `use std::{$name as load};`, or
+`use std::include as $name;`), glob-imports through one (`use $p::*;`), or
+opens a group through one (`use $p::{assume as a};`), is refused for the same
+reason: the arguments decide which name or names the expansion binds. A
+repetition-wrapped metavariable is inspected through every enclosing
+repetition, so `$($p)+::assume` and `kani::$($($f),+);+` are refused rather
+than read as ordinary repetitions. A target reached through a symbolic link is
+reported as the physical file, so a cyclic `#[path]` terminates, while the
+children of that module resolve from the pathname the compiler loaded rather
+than the link's target. A file reached with two owners, or two declaring
+directories, that name different directories is refused, because a file-scope
+`#[path]` would resolve its children beneath one or the other. When a plain
+crate and a proc-macro crate both reach one file, the stronger literal-reading
+policy wins and the file and its children are rescanned. A `#[path]` that a
+`cfg_attr` can select is refused: the configuration decides which file
+compiles, so no single answer would be true. A `#[path]` whose value is not a
+literal is refused for the same reason: the expansion's arguments decide the
+file, and reading it as no override would scan the default file in place of the
+one the crate compiles. A nested `cfg_attr` is read through its own payload, so
+a predicate that merely spells `path = …` is not mistaken for an applied path
+attribute; an unrelated attribute's arguments are skipped, so
+`doc = stringify!(verifier::external_body)` is documentation rather than an
+applied Verus attribute.
+
+The vocabulary is the full set both current releases document, not the subset
+the ticket names. Under-reporting is a soundness failure in an audit, so
+`external_trait_specification`, `exec_allows_no_decreases_clause` and
+`assume_termination` are included with the words the ticket lists;
+over-reporting only asks a reviewer to read one more line. `assume_termination`
+is currently unneeded according to the reference, but the note does not remove
+it from the inventory. The same direction covers a path with two or more
+qualifier segments: `exports::k::assume(..)` may reach Kani through an alias a
+module re-exports in another file, and the per-file scan cannot see that
+binding, so the word is reported rather than passed.
+
+A renamed member is reported under the item it names, at the position it is
+used. A bare call is the ordinary case; `self::`, `crate::` and `super::` name
+the same binding, because each reaches a `use` in the current module, the crate
+root or a parent. A further rename of the local name — `use self::a as b;` after
+`use kani::assume as a;` — is followed to the original item for the same
+reason: the binding is the same request for trust under another spelling. The
+seed is every member a plain import binds, including each leaf of a grouped
+import, so `use kani::{assume, any_where}; use self::assume as a;` reaches
+`assume` rather than only the last leaf. A renamed import binds only its new
+name, so `use kani::assume as a;` does not seed `assume`. A qualified path is
+resolved through a crate alias first:
+`use kani as k; use self::k::assume as a;` binds `assume`, and repeated
+`super::` segments are skipped before the alias. A module alias may itself be
+renamed again (`use m as n; use n as q;`), and discovery repeats to a fixed
+point so a call through the later name still reaches the module. A crate alias
+re-exported by a module the file declares is followed (`use m::k as kk;`),
+while a name imported from the crate root with `use crate::k;` is treated as a
+possible alias because the declaration is outside the file; a deeper path such
+as `use crate::prelude::k as kk;` is treated the same way, since the module
+holding the item is equally outside the file. A use qualified by a module the
+same file declares is reported too, because the import that binds it is visible
+there; a wildcard re-export of a trust root (`mod m { pub use kani::*; }`)
+similarly makes `m::assume(..)` report, since the glob's bindings cannot be
+enumerated. A local wildcard import (`use crate::*;`, a deeper
+`use crate::prelude::*;`, or a nested `use crate::{prelude::{k, *}};`) is
+refused instead: one of the names it binds may be a crate alias, and the
+per-file scan cannot see the module that exports it. Every member of a nested
+crate-root group is read, including its renames
+(`use crate::prelude::{k as kk, j};`). A member re-exported by a module the
+file declares is followed (`use m::a as b;` after the module binds `a`). A
+member imported from a module the file declares but does not read
+(`use exports::k;`) is treated as a possible crate alias, for the same reason
+as a deeper crate-root import, and a wildcard there is refused. A trust-root
+glob supplies members under their own names, so
+`use kani::*; use self::assume as a;` binds `a` to `assume`. A module declared
+elsewhere is not shown, so its names are left alone. A turbofish call such as
+`a::<u32, _>(..)` calls the renamed item rather than taking a path through it.
+A local alias for the `verus!` macro is the same macro, so its body opens a
+Verus region.
+
+### Verus outcome vocabulary
+
+The Verus parser is a new design, not a port. Combobulate has no Verus log
+parser --- its evidence code notes that no adapter exists --- so the grammar is
+derived only from the captured corpus under `tests/fixtures/verus_logs/`. That
+is why two releases are captured: the parser is qualified against output a real
+release printed, and the corpus records the one wording difference between them.
+
+Verus prints one `verification results:: N verified, M errors` summary to
+standard output and each diagnostic to standard error, so a capture may merge
+the streams in either order. The parser scans the merged text once and keeps no
+positional assumption: the summary is a fact wherever it appears, and a
+diagnostic's span is the `-->` line printed beneath it. A summary or selection
+note that lands between the diagnostic and its span is stepped over, because
+the two streams interleave; the search stops at the next diagnostic, so a span
+is never borrowed from a failure further down the log.
+
+Three outcomes replace Kani's seven, because Verus reports less: `verified`,
+`errors` and `tool-error`. There is no counterexample, resource-exhaustion or
+unsupported category to recover, since a failing function is simply one error
+among the summary's count. A log with no summary is a `tool-error` whatever
+else it contains: a compiler error, a rejected option and a killed process are
+indistinguishable from the outside.
+
+The run mode is `full` or `partial`, read from the parenthesized marker Verus
+appends to the summary when the run selected part of the crate with a
+`--verify-*` flag. A `tool-error` reports no run mode, because nothing was
+verified either way.
+
+Unlike the Kani parser, the Verus reader tolerates lines its grammar does not
+name. Verus delegates to rustc, whose diagnostic vocabulary this package cannot
+pin, so unknown chatter is skipped. What is refused is a log that contradicts
+itself: two summaries, or a clean summary beside a diagnostic the summary would
+have had to count. The number of diagnostics is deliberately not checked
+against the error count, because `--multiple-errors` can report several
+failures for one function.
+
+rustc's closing `error: aborting due to N previous errors` trailer is evidence
+even though it is not a failure. It is kept out of the failure collection, so a
+valid negative control still counts only its primary diagnostic, but a clean
+summary beside one is refused: the capture kept the count and lost the
+diagnostic. Without that check, a transcript holding only the summary and the
+trailer would be reported as verified.
+
+`--expect-failure` declares a negative control: a `path`, `path:line` or
+`path:start-end` region that the run's only failure must land in. The check
+reads the complete failure collection rather than the located subset, so an
+unlocated diagnostic beside the seeded fault also fails the control. It also
+requires the summary to count exactly one failing function, and requires that
+summary to exist at all. The two facts can disagree: a capture can lose a
+diagnostic, and a run can break in two functions while reporting one of them. A
+control passes only when both say the same thing; a matching compiler
+diagnostic with no summary behind it is not a verification control. The range
+exists because Verus reports a postcondition failure at the contract line above
+the body, not at the line a seeded mutation touched.
+
+Path comparison ignores spellings that cannot change the file: a `.` component,
+an empty component, and a trailing separator. The host that captured the log
+decides the separator rule: on Windows either separator names the same file,
+while on POSIX a backslash is an ordinary filename character, so `a\b.rs` is a
+different file from `a/b.rs`. A `..` component is kept exactly as written. It
+is resolved against the directory before it, and through a symbolic link
+`linked/../mutant.rs` names a different file from `mutant.rs`; collapsing it
+would let one diagnostic satisfy an expectation for a file the run never read,
+and two spellings that both keep it compare equal. Nothing is resolved against
+the filesystem, because the log and the expectation may describe a machine that
+is gone.
+
+### Verus release qualification
+
+The grammar is qualified against named releases, and a transcript does not
+state which release printed it. `verus analyse-log` therefore takes the release
+from `--verus-release`, or from the consumer's `tools/verus/VERSION` pin when
+the flag is absent. A release outside `SUPPORTED_VERUS_VERSIONS` is refused
+before the log is read, with status `1`, because reading it anyway would report
+facts from a grammar the release was never captured against. A pin that exists
+but is empty is refused for the same reason: its presence says a release was
+meant to be recorded.
+
+When neither the flag nor a pin supplies a release, the log is analysed with
+the release unnamed. Analysing a transcript needs no Verus installation, and
+requiring a pin would make the command unusable in the case it exists for: a
+log copied to a machine that has never installed Verus. The two forms that do
+name a release report it in both the text and the JSON output, so a reader can
+tell "checked against this release" from "checked against none".
+
+Two releases have corpora today: `0.2026.09.06.8dea4a2`, the release the
+repository README teaches a consumer to pin, and `0.2026.11.02.8bf68ee`, the
+newest capture. Their transcripts agree except for the driver's option-error
+spelling, which the grammar accepts in both forms; the older form is
+capitalized and was previously skipped as chatter, hiding the only diagnostic a
+refused invocation prints.
+
+### Qualification checks
+
+A seeded-mutant or wiring-probe run is _meant_ to fail, so an outcome of
+`errors` cannot be its pass criterion. `check_verus_log` answers the narrower
+question a qualification run asks: did the run report the counts, the failure
+and the exit status it was expected to? It takes a `LogExpectations` value with
+optional verified and error counts, an optional `FailureExpectation`, and an
+optional exit status, and returns a frozen `LogVerdict` carrying one sentence
+per disagreement. An undeclared fact is not checked, so a caller states only
+what it knows.
+
+The exit-status check exists because the two facts must tell the same story:
+Verus exits non-zero exactly when its summary reports errors. A clean summary
+captured beside a non-zero status lost something, and a failing summary beside
+status zero is a run nobody saw fail. That check replaces combobulate's private
+`_reports_summary` and `_fails_at_mutant` helpers with one reusable record; the
+project-specific declaration-region discovery those helpers used is not ported.
+
+### Solver selection for Verus runs
+
+Verus runs whichever Z3 `VERUS_Z3_PATH` names, so two runs that differ only in
+the solver can disagree. `prover-tools verus run --z3` resolves a selection to
+one executable and holds it to the pinned release by running
+`<solver> --version` and comparing the banner with
+`Z3 version <Z3_VERSION> - 64 bit`. Resolution lives in
+`rust_prover_tools/z3_selection.py` and reads the filesystem and `PATH`; the
+probe belongs to the command boundary, `rust_prover_tools/verus_run_cli.py`,
+because it needs a process, and that boundary refuses an extra argument that
+would select CVC5 beside a Z3 selection. The qualified path is carried on
+`VerusRunOptions` and `VerusRunSettings` and exported as `VERUS_Z3_PATH` for
+every invocation. Omitting the selection leaves the child environment
+untouched, which keeps the previous behaviour for callers who manage the
+variable themselves.
+
+### Exit statuses
+
+Both analysis commands share one status contract:
+
+- `0` when the analysis passes and any full-profile requirement holds.
+- `1` for unreadable or invalid input, including a Verus release the parser is
+  not qualified against, following the ordinary error convention.
+- `2` when the analysis completes with a non-passing result.
+
+A structurally invalid log is a completed analysis with outcome `tool-error`
+and status `2`. CI can therefore distinguish bad input from a proof run that
+did not do what it should without parsing output.
+
+### Corpus location
+
+Each qualified release keeps its own real-output corpus:
+`tests/fixtures/kani_logs/<kani-version>/` and
+`tests/fixtures/verus_logs/<verus-release>/`. A flat corpus that is overwritten
+on recapture was rejected because it keeps no evidence for a still-supported
+release. A release joins `SUPPORTED_KANI_VERSIONS` or
+`SUPPORTED_VERUS_VERSIONS` only in the same change that adds its corpus, and
+its directory is deleted when the release leaves the set. The corpora stay
+outside the wheel, following the compiler-floor precedent.
+
+### Deferred `kani list` manifest
+
+The ticket suggests a `kani --list`-driven manifest but does not require one.
+The `kani-0.67.0` source registers `cargo kani list --format json`, not
+`--list`. The command writes `kani-list.json` to the working directory and
+prints only an announcement to the log. The JSON groups harness names by source
+file. It cannot express claim or control roles, expected failures, covers or
+`should_panic`. The captured combobulate `kani-list.json` names match its
+harness manifest exactly.
+
+The options considered were:
+
+1. Generate complete manifests from `kani-list.json`.
+2. Generate a skeleton manifest that marks every harness as a `claim` with no
+   covers, and require the user to edit roles and expectations.
+3. Add a consistency check that compares a user-written manifest with a
+   supplied `kani-list.json` and reports undeclared or unknown harnesses.
+4. Require a user-written manifest now, keep the parser's recognition of
+   inventory logs, commit `kani-list.json` as a fixture, and record options 2
+   and 3 as follow-up candidates.
+
+Option 4 is chosen. Option 1 cannot supply roles or expectations, and options 2
+and 3 are useful but are not needed to meet the ticket. The committed
+`kani-list.json` keeps the evidence for a later skeleton generator or
+consistency check.
+
+### Excluded machinery
+
+The port transfers the pure parsers, decisions, checks and scanner only. It
+does not port the evidence gate, approval, admission levels, the exception
+register, schema-bound records (`spec/proof-evidence.schema.json`, `items_of`,
+`covered_by`), `kani_log/shell.py`, `trust_audit_check.py`,
+`probe_provenance.py`, `verifier_probe_support.py`, `provenance.json` hashes,
+`audit_bound_tree`, `trust_audit/manifest.py`, or the Git tracked-manifest
+listing.

@@ -7,6 +7,7 @@ import pathlib
 import typing as typ
 
 import pytest
+from cuprum.context import EnvMode
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -75,6 +76,46 @@ def test_failure_message_quotes_unsafe_paths(tmp_path: pathlib.Path) -> None:
     assert "\nspoof.rs" not in message, (
         "A newline in a path must not inject a new diagnostic line"
     )
+
+
+@pytest.mark.parametrize("use_solver", [True, False], ids=["selected", "unselected"])
+def test_solver_binding_reaches_every_invocation(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    use_solver: bool,
+) -> None:
+    """A selected solver is bound for every proof; no selection touches nothing."""
+    solver = tmp_path / "z3"
+    solver.write_text("", encoding="utf-8")
+    specs: list[CommandSpec] = []
+
+    def fake_run_command(spec: CommandSpec) -> CommandResult:
+        """Record the invocation and report success."""
+        specs.append(spec)
+        return CommandResult(stdout="", stderr="", exit_code=0)
+
+    monkeypatch.setattr(verus_batch_module, "run_command", fake_run_command)
+    settings = (
+        VerusRunSettings(
+            pathlib.Path("/bin/verus"),
+            "toolchain",
+            z3_path=solver,
+        )
+        if use_solver
+        else VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain")
+    )
+    expected_env = {"VERUS_Z3_PATH": str(solver)} if use_solver else None
+
+    verify_proof_files(
+        (pathlib.Path("first.rs"), pathlib.Path("second.rs")),
+        settings,
+    )
+
+    assert [(spec.argv[1], spec.env, spec.env_mode) for spec in specs] == [
+        ("first.rs", expected_env, EnvMode.OVERLAY),
+        ("second.rs", expected_env, EnvMode.OVERLAY),
+    ], "every proof path must run under the same solver policy"
 
 
 def test_verify_proof_files_emits_bounded_events(
@@ -338,3 +379,20 @@ def test_verify_proof_files_runs_an_ordered_prefix(
         verify_proof_files(proof_files, _proof_settings())
 
     _assert_failed_batch(proof_files, failing_index, exc_info, invocations)
+
+
+def test_a_positional_fourth_argument_remains_the_clock() -> None:
+    """Keep ``clock`` where existing positional callers put it.
+
+    ``z3_path`` was added later and is keyword-only, so a four-argument call
+    cannot bind a clock to the solver variable.
+    """
+
+    def tick() -> float:
+        """Return one deterministic timestamp."""
+        return 42.0
+
+    settings = VerusRunSettings(pathlib.Path("/bin/verus"), "toolchain", (), tick)
+
+    assert settings.clock is tick
+    assert settings.z3_path is None

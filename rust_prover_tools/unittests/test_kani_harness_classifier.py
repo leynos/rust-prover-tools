@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from rust_prover_tools.kani_log import UnsupportedKaniGrammarError
+from rust_prover_tools.kani_cli_grammar import UnsupportedKaniGrammarError
 from rust_prover_tools.supervision import (
     CgroupObservation,
     ExecutionStatus,
@@ -21,7 +21,9 @@ from rust_prover_tools.supervision.attempt_state import AttemptEvidence
 from rust_prover_tools.supervision.kani import KaniAdapter, KaniObserver
 from rust_prover_tools.unittests.supervision_doubles import VirtualClock
 
-_CORPUS = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kani_logs"
+_CORPUS = (
+    Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kani_logs" / "0.67.0"
+)
 
 
 def _log(name: str, pretty: str) -> list[str]:
@@ -353,3 +355,46 @@ def test_kanis_own_no_match_diagnostic_is_a_selection_diagnosis() -> None:
 
     assert classification.status is ExecutionStatus.NO_MATCH
     assert "no harnesses matched" in classification.detail
+
+
+def test_a_log_over_the_retained_budget_is_truncated_evidence() -> None:
+    """A log beyond the budget is reported, not retained without bound."""
+    observer = KaniObserver(max_log_bytes=64)
+    for text in (
+        "Kani Rust Verifier 0.67.0 (cargo plugin)",
+        "Checking harness harnesses::verified...",
+        "VERIFICATION:- SUCCESSFUL",
+        "padding " * 40,
+    ):
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=text,
+                timestamp_utc=VirtualClock().now(),
+                elapsed_seconds=0.0,
+            )
+        )
+
+    assert observer.log_truncated
+    assert observer.finish(0) is None
+    assert "retained budget" in (observer.failure_reason or "")
+
+
+def test_a_log_within_the_budget_is_parsed() -> None:
+    """A log inside the budget reaches the shared parser unchanged."""
+    identity = "harnesses::verified"
+    observer = KaniObserver()
+    for text in _log("verified", identity):
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=text,
+                timestamp_utc=VirtualClock().now(),
+                elapsed_seconds=0.0,
+            )
+        )
+
+    log = observer.finish(0)
+
+    assert log is not None
+    assert log.harnesses == (identity,)

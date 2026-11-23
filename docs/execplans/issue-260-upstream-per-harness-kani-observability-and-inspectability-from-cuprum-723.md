@@ -5,8 +5,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: BLOCKED (implementation complete; PR #266 cannot merge until the
-`kani_log` parser collision with main's #264 is resolved)
+Status: IN PROGRESS (main's #264 parser adopted; this branch's supervision
+layered on it; deterministic gates green)
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -562,7 +562,7 @@ Plain-language terms used in this plan:
 
 ## Blocker: main landed a competing Kani parser
 
-On 2026-11-23, `main` merged #264
+**Resolved** by adopting main's parser. On 2026-11-23, `main` merged #264
 (`Adopt combobulate's Kani log parsing, outcome analysis and Verus run analysis`,
 closing #250), which added its own `rust_prover_tools/kani_log/` package:
 `syntax`, `model`, `reader`, `reports`, `extract` with `parse_kani_log`, and the

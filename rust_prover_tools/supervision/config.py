@@ -156,6 +156,9 @@ class SupervisionConfig:
     max_line_bytes : int
         Bound for one diagnostic record, so a pathological line cannot size
         the run's memory.
+    max_log_bytes : int
+        Bound for the log a Kani adapter retains for its final parse. A longer
+        log is reported as truncated evidence.
     tail_bytes : int
         Bound for the retained tail of each stream.
     sinks : DiagnosticSinks
@@ -167,6 +170,7 @@ class SupervisionConfig:
     heartbeat_interval_seconds: float = DEFAULT_HEARTBEAT_SECONDS
     watchdog_threshold_bytes: int | None = DEFAULT_WATCHDOG_THRESHOLD_BYTES
     max_line_bytes: int = DEFAULT_MAX_LINE_BYTES
+    max_log_bytes: int = 64 * 1024 * 1024
     tail_bytes: int = 64 * 1024
     sinks: DiagnosticSinks = dc.field(default_factory=DiagnosticSinks)
 
@@ -187,6 +191,9 @@ class SupervisionConfig:
             raise ValueError(msg)
         if self.max_line_bytes < MIN_LINE_BYTES:
             msg = f"max_line_bytes must be at least {MIN_LINE_BYTES}"
+            raise ValueError(msg)
+        if self.max_log_bytes < MIN_LINE_BYTES:
+            msg = f"max_log_bytes must be at least {MIN_LINE_BYTES}"
             raise ValueError(msg)
         if self.tail_bytes <= 0:
             msg = "tail_bytes must be positive"
