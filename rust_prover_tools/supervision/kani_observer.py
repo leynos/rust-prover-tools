@@ -27,7 +27,7 @@ from rust_prover_tools.kani_log import (
     KaniLogError,
     parse_kani_log_lines,
 )
-from rust_prover_tools.kani_log.syntax import NO_HARNESS_MATCH
+from rust_prover_tools.kani_log.syntax import FIELD, NO_HARNESS_MATCH
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.models import OutputLine
@@ -43,6 +43,21 @@ DEFAULT_MAX_LOG_BYTES: typ.Final[int] = 64 * 1024 * 1024
 
 #: Live selection and verdict records retained before the facts fail closed.
 MAX_LIVE_RECORDS: typ.Final[int] = 256
+
+#: Shortest value that can carry both opening and closing quotes.
+_QUOTED_PAIR = 2
+
+
+def _opens_quotation(value: str) -> bool:
+    """Whether a description value begins a quotation it does not also close."""
+    if not value.startswith('"'):
+        return False
+    return not (len(value) >= _QUOTED_PAIR and value.endswith('"'))
+
+
+def _is_notable(text: str) -> bool:
+    """Whether a non-report line is worth remembering as progress."""
+    return bool(text.strip()) and not text.startswith(NOISE_PREFIXES)
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -114,6 +129,7 @@ class KaniObserver:
     log_truncated: bool = False
     facts_truncated: bool = False
     _current: str | None = dc.field(default=None, init=False)
+    _in_description: bool = dc.field(default=False, init=False)
     _spool: typ.IO[str] | None = dc.field(default=None, init=False)
     _path: Path | None = dc.field(default=None, init=False)
     _stack: contextlib.ExitStack | None = dc.field(default=None, init=False)
@@ -138,29 +154,68 @@ class KaniObserver:
         self._spool_line(text)
 
     def _observe_facts(self, text: str) -> None:
-        """Update the live facts from one line."""
-        if (match := BANNER.match(text)) is not None:
-            self.banner_version = match["version"]
+        """Update the live facts from one line.
+
+        Kani prints check descriptions without escaping newlines, so a
+        description can contain a line that looks like a banner, a selection
+        or a verdict. The scanner tracks a description frame and ignores its
+        content, and it keeps the first banner so a later one cannot replace
+        the release that opened the log.
+        """
+        if self._in_description:
+            self._description_line(text)
             return
+        if self._opens_description(text):
+            return
+        if self._is_progress(text):
+            self.last_progress = text
+
+    def _is_progress(self, text: str) -> bool:
+        """Whether a line says anything about the attempt's progress."""
+        return self._report_fact(text) or _is_notable(text)
+
+    def _report_fact(self, text: str) -> bool:
+        """Record one report line, returning whether it carried structure."""
+        if (match := BANNER.match(text)) is not None:
+            if self.banner_version is None:
+                self.banner_version = match["version"]
+            return True
         if (match := HARNESS_START.match(text)) is not None:
             self._current = match["name"]
             self._record(self.selection_records, match["name"])
-            self.last_progress = text
-            return
+            return True
         if (match := VERIFICATION.match(text)) is not None:
             if self._current is not None:
                 self._record(self.verdicts, (self._current, match["verdict"]))
-            self.last_progress = text
-            return
+            return True
         if NO_HARNESS_MATCH.match(text) is not None:
             self.no_match_reason = text
-            return
+            return True
         if COMPLETE.match(text) is not None or text.startswith(LIST_WRITTEN):
             self.completed = True
-            self.last_progress = text
-            return
-        if text.strip() and not text.startswith(NOISE_PREFIXES):
-            self.last_progress = text
+            return True
+        return False
+
+    def _opens_description(self, text: str) -> bool:
+        """Track a quoted description frame and ignore its content.
+
+        A multi-line description opens on a field line whose value begins a
+        quotation that the same line does not close. Its content is printed
+        verbatim, so anything inside it is not a report fact.
+        """
+        field = FIELD.match(text)
+        if field is None or field["key"] != "Description":
+            return False
+        value = field["value"]
+        if not _opens_quotation(value):
+            return False
+        self._in_description = True
+        return True
+
+    def _description_line(self, text: str) -> None:
+        """Leave a description frame at the first line that closes it."""
+        if len(text) >= _QUOTED_PAIR and text.endswith('"'):
+            self._in_description = False
 
     def _record[T](self, records: list[T], value: T) -> None:
         """Retain one live record, failing closed when the budget is spent."""

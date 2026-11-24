@@ -17,9 +17,7 @@ exist.
 from __future__ import annotations
 
 import dataclasses as dc
-import os
 import typing as typ
-from pathlib import Path
 
 from rust_prover_tools.kani_inventory.items import (
     InlineModItem,
@@ -34,6 +32,7 @@ from rust_prover_tools.kani_inventory.models import InventoryDiscoveryError
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
 __all__ = ("SourceProof", "collect_proofs")
 
@@ -127,8 +126,10 @@ def collect_proofs(
     # Keep the crate root's lexical path for module lookup: resolving a
     # symlinked root would move `mod child;` beside the link target instead of
     # beside the link, as `_walk_file` resolves only for reading and cycles.
-    root = root_file if root_file.is_absolute() else (Path.cwd() / root_file)
-    lexical_root = Path(os.path.normpath(root))
+    # `absolute()` keeps `..` rather than normalising it: with a directory
+    # symlink, `/repo/alias/../lib.rs` designates `/repo/nested/lib.rs`, and
+    # collapsing it to `/repo/lib.rs` would inventory the wrong crate.
+    lexical_root = root_file if root_file.is_absolute() else root_file.absolute()
     _walk_file(
         walk,
         _Module(

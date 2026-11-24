@@ -30,6 +30,7 @@ termination.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses as dc
 import typing as typ
 
@@ -131,11 +132,14 @@ class KaniAdapter:
                 )
             log = kani.finish(evidence.exit_code or 0)
             if log is not None:
+                # The parse is authoritative for selection and verdicts, so a
+                # live verdict cannot survive a different parsed outcome.
                 observed = dc.replace(
                     observed,
                     identities=tuple(
                         f"{evidence.spec.package}::{block.name}" for block in log.blocks
                     ),
+                    verdict=ProofVerdict.UNKNOWN,
                 )
             if log is None and kani.facts_truncated:
                 return classification(
@@ -149,7 +153,11 @@ class KaniAdapter:
                 return selection
             return classify_log(evidence, log, observed, kani.failure_reason)
         finally:
-            kani.close()
+            # A cleanup failure must not replace an active cancellation or
+            # monitor failure; the spool's own errors still surface through
+            # the parse above.
+            with contextlib.suppress(OSError, ValueError):
+                kani.close()
 
 
 def _verifier_ran(observer: KaniObserver) -> bool:
@@ -242,11 +250,12 @@ def _no_selection_status(
     if log is None and not _verifier_ran(observer):
         # Nothing parsed and nothing live, so the selection is unknown. The
         # raw termination is the only evidence, and inventing a selection
-        # diagnosis would name a cause the output never showed.
-        if evidence.exit_code == 0 and evidence.signal_number is None:
+        # diagnosis would name a cause the output never showed. Without a
+        # code or a signal there is no termination evidence at all.
+        if evidence.signal_number is None and evidence.exit_code in {None, 0}:
             return classification(
                 ExecutionStatus.ERROR,
-                detail="child exited 0 with no verifier output",
+                detail=_missing_termination_detail(evidence),
                 observed=observed,
             )
         return classification(
@@ -259,6 +268,13 @@ def _no_selection_status(
         detail=f"Kani selected no harness; requested {evidence.spec.harness}",
         observed=observed,
     )
+
+
+def _missing_termination_detail(evidence: AttemptEvidence) -> str:
+    """Describe a child whose status and signal are both unknown."""
+    if evidence.exit_code is None:
+        return "the child reported neither an exit status nor a signal"
+    return "child exited 0 with no verifier output"
 
 
 def _no_output_detail(evidence: AttemptEvidence) -> str:

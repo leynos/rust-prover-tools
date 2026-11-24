@@ -523,7 +523,7 @@ def test_a_selection_shaped_description_line_is_not_a_selection() -> None:
                 elapsed_seconds=0.0,
             )
         )
-    assert "fake" in observer.facts.selection_records
+    assert "fake" not in observer.facts.selection_records
     adapter = KaniAdapter()
 
     classification = adapter.classify(_evidence("harnesses::verified"), observer)
@@ -616,16 +616,16 @@ def _observed_log(log: list[str]) -> KaniObserver:
     return observer
 
 
-def test_live_fact_overflow_does_not_fail_a_parsable_report() -> None:
-    """Description noise that exhausts the live cap is not a run failure.
+def test_description_noise_cannot_exhaust_the_live_facts() -> None:
+    """Description content is excluded, so it cannot spend the record budget.
 
-    The parsed log is authoritative: enough selection-shaped description lines
-    to overflow the live budget still leave one valid block, which passes.
+    A description quoting more selection-shaped lines than the budget holds
+    leaves the live facts intact, and the parsed report still passes.
     """
     from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
 
     observer = _observed_log(_log_with_selection_noise(MAX_LIVE_RECORDS + 10))
-    assert observer.facts_truncated
+    assert not observer.facts_truncated
     adapter = KaniAdapter()
 
     classification = adapter.classify(_evidence("harnesses::verified"), observer)
@@ -635,10 +635,34 @@ def test_live_fact_overflow_does_not_fail_a_parsable_report() -> None:
 
 
 def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
-    """A dropped live record makes the retained verdict unattributable."""
+    """A dropped live record makes the retained verdict unattributable.
+
+    The observer's budget is filled directly, because description content can
+    no longer spend it; the guarded property is that a truncated fact set
+    yields no attributed verdict on a stop.
+    """
     from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
 
-    observer = _observed_log(_log_with_selection_noise(MAX_LIVE_RECORDS + 10))
+    observer = KaniObserver()
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Checking harness harnesses::verified...",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="VERIFICATION:- SUCCESSFUL",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+    for index in range(MAX_LIVE_RECORDS):
+        observer._record(observer.selection_records, f"harnesses::filler{index}")
+    assert observer.facts_truncated
     evidence = _evidence(
         "harnesses::verified",
         stop=StopReason.TIMEOUT,
@@ -732,3 +756,83 @@ def test_a_spool_failure_is_not_replaced_by_cleanup(
 
     with pytest.raises(OSError, match="flushed"):
         observer.finish(0)
+
+
+def test_a_description_verdict_does_not_become_a_live_verdict() -> None:
+    """A quoted verdict line is description content, not a result.
+
+    The attempt is interrupted before its genuine verdict, so a live verdict
+    recorded from the description would be the only one and would publish
+    `PASSED` for a proof the verifier never reported.
+    """
+    log = _log("verified", "harnesses::other")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        "VERIFICATION:- SUCCESSFUL",
+        'last"',
+    ]
+    verdict = next(
+        index for index, line in enumerate(log) if line.startswith("VERIFICATION:-")
+    )
+    observer = _observed_log(log[:verdict])
+    evidence = _evidence(
+        "harnesses::other",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_description_banner_does_not_replace_the_opening_release() -> None:
+    """Only the log's opening banner names the release."""
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        "Kani Rust Verifier 0.68.0 (cargo plugin)",
+        'last"',
+    ]
+    observer = _observed_log(log)
+    assert observer.banner_version == "0.67.0"
+
+    classification = KaniAdapter().classify(_evidence("harnesses::verified"), observer)
+
+    assert classification.status is ExecutionStatus.PASSED
+
+
+def test_a_parsed_mismatch_does_not_keep_a_live_verdict() -> None:
+    """The parse is authoritative for the verdict as well as the identities.
+
+    A description can contain a selection-shaped line and a verdict for the
+    requested name while the verifier actually ran another harness. The
+    parsed log names only `other`, so the mismatch must report no attributed
+    verdict.
+    """
+    log = _log("verified", "harnesses::other")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        "Checking harness harnesses::requested...",
+        "VERIFICATION:- SUCCESSFUL",
+        'last"',
+    ]
+    observer = _observed_log(log)
+
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::requested", exit_code=1), observer
+    )
+
+    assert classification.status is ExecutionStatus.NO_MATCH
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+    assert classification.observed == ("alpha::harnesses::other",)
