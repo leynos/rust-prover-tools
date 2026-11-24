@@ -109,6 +109,24 @@ def test_a_blank_run_past_the_window_is_a_lookahead_refusal() -> None:
         parse_kani_log_lines(iter(_framed_report(MAX_WINDOW_LINES + 10)))
 
 
+def test_an_oversized_line_in_description_lookahead_is_refused() -> None:
+    """The line budget binds the lines lookahead itself walks past.
+
+    A description ending in a quote is closed only by the next non-blank line,
+    so deciding that pulls every blank line between them. One oversized
+    whitespace-only line there is read by lookahead itself, and the same line
+    budget must refuse it rather than retain it as description content.
+    """
+    from rust_prover_tools.kani_log.lines import MAX_LINE_CHARS
+
+    lines = list(_framed_report(2))
+    blank = next(index for index, line in enumerate(lines) if line == "")
+    lines[blank] = " " * (MAX_LINE_CHARS + 1)
+
+    with pytest.raises(KaniLogError, match="line budget"):
+        parse_kani_log_lines(iter(lines))
+
+
 def test_the_window_is_bounded_for_streaming_input() -> None:
     """A streaming source refuses an index beyond its configured window."""
     source = StreamingLines(iter(f"line {index}" for index in range(100)), max_window=8)

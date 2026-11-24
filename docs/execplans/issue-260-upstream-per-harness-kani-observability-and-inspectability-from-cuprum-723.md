@@ -371,9 +371,19 @@ Plain-language terms used in this plan:
   skips.
 
 - [x] (2026-11-24 04:25Z) Live fixture rerun after the parser line bound:
-  2 passed in 875.93 s at `c54ea45`. That run covers the line-budget change,
-  the metadata keying and the preparation tests; commits after it are this
-  record alone.
+  2 passed in 875.93 s at `c54ea45`. That run covers the line-budget check in
+  `lines.py`, the metadata keying, the preparation tests and the plan record.
+  Later commits rename the budget constant and correct its reported line
+  position (`f916206`) and add regression tests; none changes the parser's
+  accepted input or a classification, so the live result still describes this
+  code path. The live fixture exercises library harnesses only.
+
+- [x] (2026-11-24 06:10Z) Tenth follow-up round. Added the requested
+  regression that drives an oversized whitespace-only line through description
+  lookahead: the blank run between `middle"` and the next non-blank line is
+  walked by lookahead itself, and the line budget refuses it. Corrected the
+  live-run note to name the later commits precisely. `make all` passes with
+  3,232 tests and 6 skips.
 
 ## Surprises & discoveries
 
