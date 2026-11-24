@@ -856,3 +856,23 @@ def test_a_cgroup_field_with_a_bad_value_is_refused(
                 "cgroup": cgroup,
             })
         )
+
+
+def test_an_output_stream_of_the_wrong_shape_is_refused() -> None:
+    """A list or object in `stream` is a schema error, not a TypeError."""
+    for stream in ([], {}):
+        record = _valid_record("output")
+        record["stream"] = stream
+
+        with pytest.raises(EvidenceFormatError, match="stream"):
+            decode_jsonl(json.dumps(record))
+
+
+def test_a_harness_finish_record_without_a_finish_time_is_accepted() -> None:
+    """The producer emits a null timestamp for a harness that never ran."""
+    record = _valid_record("harness-finish")
+    record["timestamp"] = None
+
+    (decoded,) = decode_jsonl(json.dumps(record))
+
+    assert decoded["timestamp"] is None

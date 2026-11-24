@@ -242,9 +242,15 @@ class KaniObserver:
         self._close_spool()
 
     def _close_spool(self) -> None:
-        """Close the spool if one is open, tolerating a repeated call."""
-        if self._stack is not None:
-            self._stack.close()
-            self._stack = None
-            self._spool = None
-            self._path = None
+        """Close the spool if one is open, tolerating a repeated call.
+
+        The fields are cleared even when closing raises, so a cleanup failure
+        cannot leave the observer holding a half-closed spool; the cleanup
+        error itself propagates to the caller that observed it.
+        """
+        if self._stack is None:
+            return
+        stack, self._stack = self._stack, None
+        self._spool = None
+        self._path = None
+        stack.close()

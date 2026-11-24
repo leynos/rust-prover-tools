@@ -75,7 +75,13 @@ def validate_record_values(
                 require_str(document[field], subject=f"{subject}.{field}")
         return
     require_str(document["run_id"], subject=f"{subject}.run_id")
-    require_str(document["timestamp"], subject=f"{subject}.timestamp")
+    # A harness-finish record for a harness that never ran has no finish time,
+    # which is the one record kind whose producer can emit a null timestamp.
+    require_str(
+        document["timestamp"],
+        subject=f"{subject}.timestamp",
+        optional=kind == "harness-finish",
+    )
     if kind == "run-start":
         _validate_run_start(document, subject=subject)
     elif kind == "run-finish":
@@ -109,7 +115,7 @@ def _validate_stream_record(
     require_seconds(document["elapsed_seconds"], subject=f"{subject}.elapsed_seconds")
     if kind == "output":
         stream = document["stream"]
-        if stream not in _STREAMS:
+        if not isinstance(stream, str) or stream not in _STREAMS:
             msg = f"{subject}.stream is not a documented value: {stream!r}"
             raise EvidenceFormatError(msg)
         require_str(document["text"], subject=f"{subject}.text", optional=True)
@@ -189,7 +195,7 @@ def _validate_stream_record(
     require_seconds(document["elapsed_seconds"], subject=f"{subject}.elapsed_seconds")
     if kind == "output":
         stream = document["stream"]
-        if stream not in _STREAMS:
+        if not isinstance(stream, str) or stream not in _STREAMS:
             msg = f"{subject}.stream is not a documented value: {stream!r}"
             raise EvidenceFormatError(msg)
         require_str(document["text"], subject=f"{subject}.text", optional=True)
