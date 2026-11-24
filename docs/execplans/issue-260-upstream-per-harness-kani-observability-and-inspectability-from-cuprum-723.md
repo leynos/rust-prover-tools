@@ -592,6 +592,16 @@ Plain-language terms used in this plan:
   bounded lookahead window; block records and joined descriptions are capped
   and exhaustion is a structural refusal. The CLI exposes the spool budget as
   `--max-log-mib`. Date/Author: 2026-11-23, implementation agent.
+- D39. Decision: the Coding Plan's shared `feed_line(stream, text)` and
+  `finish(exit_code)` parser interface is replaced by
+  `parse_kani_log_lines(lines)` over a bounded line source, with live facts
+  accumulated separately by `KaniObserver`. Rationale: `main` merged #264 with
+  a whole-text `parse_kani_log`, and issue #260 forbids a competing parser, so
+  the branch adopted that engine and made whole-text parsing a wrapper over the
+  line-driven one. The replacement keeps the requirement the interface existed
+  to serve, a shared version-registered parser with bounded retention, and the
+  consumer-visible behaviour is unchanged: one grammar, one model, and one
+  refusal vocabulary. Date/Author: 2026-11-24, implementation agent.
 - D25. Decision: the plan's file and code tolerances were exceeded and the
   overage is accepted. The implementation needed the full parser corpus, two
   route integrations, a new CLI surface, the schema reference, and the
