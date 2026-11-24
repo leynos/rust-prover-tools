@@ -138,7 +138,11 @@ async def _harness_finish_failure_scenario(tmp_path: Path) -> None:
 
     document = json.loads(report_path.read_text(encoding="utf-8"))
     validate_report_document(document)
-    assert len(document["results"]) == 1
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert len(results) == 1
+    # The published report must keep the completed result, not a not-run slot.
+    assert results[0]["harness"] == spec().harness
+    assert results[0]["status"] == "passed"
 
 
 class _FixedPid:
@@ -696,3 +700,48 @@ class _FailOnRunFinish:
 
     def flush(self) -> None:
         """Do nothing; writes already flush or fail synchronously."""
+
+
+@_async_test
+async def test_a_custom_sink_failure_does_not_replace_a_cancellation() -> None:
+    """Any secondary publication failure keeps the original exception.
+
+    The sink protocol does not restrict implementations to OSError, so a
+    runtime failure while the cancellation unwinds must be suppressed too.
+    """
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(script=Script(block=True), ready=ready)
+    environment = _environment(
+        launcher,
+        VirtualClock(),
+        sinks=Diagnostics(jsonl=_FailsOnRunFinishWith(RuntimeError("sink broke"))),
+    )
+    task = asyncio.create_task(
+        run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
+    )
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+class _FailsOnRunFinishWith:
+    """A JSONL sink that raises a chosen exception on the closing record."""
+
+    def __init__(self, error: BaseException) -> None:
+        """Remember the failure to raise."""
+        self._error = error
+
+    @property
+    def offset(self) -> int:
+        """Report no bytes, because this sink stores nothing."""
+        return 0
+
+    def write(self, record: dict[str, object]) -> None:
+        """Raise on the closing record."""
+        if record.get("record") == "run-finish":
+            raise self._error
+
+    def flush(self) -> None:
+        """Do nothing; writes fail synchronously."""

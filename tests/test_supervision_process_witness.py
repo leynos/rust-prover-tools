@@ -271,7 +271,7 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
     result = typ.cast("typ.Any", asyncio.run(scenario()))
 
     assert result.exit_code == 0
-    assert forwarded, "the child produced no lines"
+    assert len(forwarded) == 2, f"unexpected forwarded lines: {len(forwarded)}"
     assert max(len(line.encode("utf-8")) for line in forwarded) <= 8 * 1024
     # The clipped line must still arrive, marked, and the line after it must
     # follow: forwarding only `after` would also satisfy a length-only check.

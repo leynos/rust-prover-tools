@@ -59,10 +59,11 @@ def test_a_failing_callback_still_releases_the_descriptor() -> None:
     rather than raising it into the test. The drain's own contract is what
     matters: the descriptor is closed and settlement is signalled.
     """
+    delivered: list[str] = []
 
     def refuse(item: object) -> None:
-        """Fail the way a full spool write does."""
-        del item
+        """Record the delivery, then fail as a full spool write does."""
+        delivered.append(typ.cast("typ.Any", item).text)
         msg = "the spool is full"
         raise OSError(msg)
 
@@ -77,6 +78,8 @@ def test_a_failing_callback_still_releases_the_descriptor() -> None:
 
     drain = asyncio.run(scenario())
 
+    assert delivered == ["trailing text"]
+    assert isinstance(drain.failure, OSError)
     assert drain.finished.is_set()
     with pytest.raises(OSError, match="Bad file descriptor"):
         os.fstat(descriptor)
@@ -93,12 +96,11 @@ def test_a_callback_failure_mid_chunk_is_relayed_once() -> None:
     delivered: list[str] = []
 
     def refuse_second(item: object) -> None:
-        """Forward the first line and fail on the second."""
-        text = typ.cast("typ.Any", item).text
-        if delivered:
+        """Record each attempted delivery, failing on the second."""
+        delivered.append(typ.cast("typ.Any", item).text)
+        if len(delivered) > 1:
             msg = "the spool is full"
             raise OSError(msg)
-        delivered.append(text)
 
     read_fd, write_fd = os.pipe()
     os.write(write_fd, b"first\nsecond\nthird\n")
@@ -121,7 +123,7 @@ def test_a_callback_failure_mid_chunk_is_relayed_once() -> None:
 
     drain = asyncio.run(scenario())
 
-    assert delivered == ["first"]
+    assert delivered == ["first", "second"]
     assert drain.failure is not None
     assert [type(error) for error in failures] == [OSError]
     with pytest.raises(OSError, match="Bad file descriptor"):

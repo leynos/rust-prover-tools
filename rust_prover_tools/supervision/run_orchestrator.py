@@ -25,7 +25,6 @@ import dataclasses as dc
 import typing as typ
 import uuid
 
-from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.supervision.attempt import AttemptSupervisor
 from rust_prover_tools.supervision.events import (
     RunStart,
@@ -126,7 +125,7 @@ class SupervisedRun:
             ledger.interrupted = True
             # Publication failures must not replace the cancellation that is
             # already unwinding this run.
-            with contextlib.suppress(ProverToolError, OSError, ValueError):
+            with contextlib.suppress(Exception):
                 self._finalize(ledger, started_at)
             raise
         except Exception:
@@ -135,7 +134,7 @@ class SupervisedRun:
             # the failure continue so the caller sees the real cause.
             self._account_unrecorded(ledger, NOT_RUN_DETAIL)
             # Likewise, keep the original monitor or runner failure visible.
-            with contextlib.suppress(ProverToolError, OSError, ValueError):
+            with contextlib.suppress(Exception):
                 self._finalize(ledger, started_at)
             raise
         return self._finalize(ledger, started_at)
