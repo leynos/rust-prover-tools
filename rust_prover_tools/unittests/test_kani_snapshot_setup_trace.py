@@ -104,6 +104,25 @@ def test_a_trace_without_the_packaged_setup_is_refused() -> None:
         require_prebuilt_setup(_fixture("setup_no_launcher.txt"))
 
 
+def test_an_unparsable_execve_record_is_refused() -> None:
+    """A truncated execve record is evidence of a broken capture, not noise."""
+    trace = _LAUNCHER + '901  execve("/bin/foo", ["foo"], 0x7ffd2c1a4b30'
+
+    with pytest.raises(SetupTraceError, match="unparsable"):
+        require_prebuilt_setup(trace)
+
+
+def test_rustc_reading_source_from_stdin_is_refused() -> None:
+    """`rustc -` compiles standard input without naming a source file."""
+    trace = (
+        _LAUNCHER
+        + '901  execve("/toolchain/bin/rustc", ["rustc", "-"], 0x7ffd2c1a4b30) = 0\n'
+    )
+
+    with pytest.raises(SetupTraceError, match="rustc"):
+        require_prebuilt_setup(trace)
+
+
 def test_an_empty_trace_is_refused() -> None:
     """An strace log without an execve record proves nothing."""
     with pytest.raises(SetupTraceError, match="no execve"):

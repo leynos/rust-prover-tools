@@ -182,6 +182,9 @@ def _record(line: str) -> ExecRecord | None:
     """Return the record one trace line states, or `None` for a non-execve line."""
     match = _EXECVE.match(line)
     if match is None:
+        if "execve(" in line:
+            msg = f"setup trace has an unparsable execve record: {line[:200]!r}"
+            raise SetupTraceError(msg)
         return None
     return ExecRecord(
         executable=_unescape(match.group("path")),
@@ -207,7 +210,11 @@ def _is_named_forbidden(name: str) -> bool:
 
 
 def _is_code_generation(name: str, arguments: tuple[str, ...]) -> bool:
-    """Say whether a `rustc` invocation compiles rather than probes."""
+    """Say whether a `rustc` invocation compiles rather than probes.
+
+    A lone `-` makes rustc read source from standard input, which compiles
+    without naming a file.
+    """
     return name == "rustc" and _rustc_generates_code(arguments)
 
 
@@ -219,9 +226,15 @@ def _is_build_script(name: str, arguments: tuple[str, ...]) -> bool:
 
 
 def _rustc_generates_code(arguments: tuple[str, ...]) -> bool:
-    """Say whether a `rustc` invocation compiles rather than probes."""
+    """Say whether a `rustc` invocation compiles rather than probes.
+
+    A lone `-` makes rustc read source from standard input, which compiles
+    without naming a file.
+    """
     return any(
-        argument.endswith(".rs") or argument.startswith(_RUSTC_CODEGEN)
+        argument == "-"
+        or argument.endswith(".rs")
+        or argument.startswith(_RUSTC_CODEGEN)
         for argument in arguments
     )
 

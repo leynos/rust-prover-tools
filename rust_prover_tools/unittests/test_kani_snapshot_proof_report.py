@@ -86,7 +86,7 @@ def test_the_positive_transcript_reports_the_exact_named_harnesses() -> None:
     report = parse_proof_report(_fixture("positive.txt"))
 
     assert report.outcomes == (
-        HarnessOutcome("bounded_push_and_drop_are_exact", verified=True),
+        HarnessOutcome("bounded_push_contents_are_exact", verified=True),
         HarnessOutcome("raii_release_runs_once", verified=True),
     )
     assert (report.verified_count, report.failed_count, report.total_count) == (2, 0, 2)
@@ -97,7 +97,7 @@ def test_the_threaded_positive_transcript_is_accepted() -> None:
     report = parse_proof_report(_fixture("threaded_positive.txt"))
 
     assert report.verified_names == {
-        "bounded_push_and_drop_are_exact",
+        "bounded_push_contents_are_exact",
         "raii_release_runs_once",
     }
 
@@ -165,7 +165,7 @@ def test_require_named_harnesses_refuses_a_missing_harness() -> None:
     with pytest.raises(ProofTranscriptError, match="did not verify"):
         require_named_harnesses(
             _fixture("positive.txt"),
-            verified=("bounded_push_and_drop_are_exact", "absent_harness"),
+            verified=("bounded_push_contents_are_exact", "absent_harness"),
             failed=(),
         )
 
@@ -175,7 +175,7 @@ def test_require_named_harnesses_refuses_an_extra_harness() -> None:
     with pytest.raises(ProofTranscriptError, match="unexpected"):
         require_named_harnesses(
             _fixture("positive.txt"),
-            verified=("bounded_push_and_drop_are_exact",),
+            verified=("bounded_push_contents_are_exact",),
             failed=(),
         )
 
@@ -245,3 +245,10 @@ def test_a_dropped_harness_is_refused(verified: set[str]) -> None:
 
     with pytest.raises(ProofTranscriptError, match="did not verify"):
         require_named_harnesses(transcript, verified=expectation, failed=())
+
+
+def test_the_false_transcript_names_the_deliberately_false_check() -> None:
+    """The negative control must fail for its own assertion, not another one."""
+    transcript = _fixture("false_assertion.txt")
+
+    assert "Failed Checks: deliberately false" in transcript

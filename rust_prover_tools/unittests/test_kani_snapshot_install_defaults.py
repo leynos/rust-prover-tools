@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import typing as typ
 
+import pytest
+
 from rust_prover_tools import commands
+from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot import install_defaults
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
@@ -22,7 +25,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    import pytest
     from cuprum.context import UnsetType
 
 
@@ -94,3 +96,41 @@ def test_setup_removes_an_inherited_tar_options(
     install_defaults.run_local_bundle_setup(_runtime(tmp_path), tmp_path / "b.tar.gz")
 
     assert "TAR_OPTIONS" in _homes(seen[-1])
+
+
+def test_the_launcher_receives_only_the_remaining_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow configuration command shortens the launcher's timeout."""
+    seen = _record_commands(monkeypatch)
+    ticks = iter([100.0, 104.0])
+    monkeypatch.setattr(install_defaults.time, "monotonic", lambda: next(ticks))
+
+    install_defaults.run_local_bundle_setup(
+        _runtime(tmp_path), tmp_path / "bundle.tar.gz", timeout_seconds=10.0
+    )
+
+    assert seen[0].timeout_seconds == pytest.approx(10.0), (
+        "the first command gets the full budget"
+    )
+    assert seen[1].timeout_seconds == pytest.approx(6.0), (
+        "the launcher gets only what remains"
+    )
+
+
+def test_an_expired_setup_budget_refuses_to_start_the_launcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The budget is checked before the launcher starts, not only during it."""
+    seen = _record_commands(monkeypatch)
+    ticks = iter([100.0, 111.0])
+    monkeypatch.setattr(install_defaults.time, "monotonic", lambda: next(ticks))
+
+    with pytest.raises(ProverToolError, match="budget"):
+        install_defaults.run_local_bundle_setup(
+            _runtime(tmp_path), tmp_path / "bundle.tar.gz", timeout_seconds=10.0
+        )
+
+    assert len(seen) == 1, "the launcher must not start after the budget expires"

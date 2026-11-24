@@ -1202,12 +1202,23 @@ proof crate to their attributes. Nothing compiles them during `make test`.
 
 | Crate                | Harness                            | Expected result    | What it proves                                |
 | -------------------- | ---------------------------------- | ------------------ | --------------------------------------------- |
-| `bounded_collection` | `bounded_push_and_drop_are_exact`  | verifies           | bounded collection growth and contents        |
+| `bounded_collection` | `bounded_push_contents_are_exact`  | verifies           | bounded collection growth and contents        |
 | `bounded_collection` | `raii_release_runs_once`           | verifies           | ownership-driven cleanup runs exactly once    |
 | `false_assertion`    | `deliberately_false_assertion`     | fails verification | a real assertion failure, not a build failure |
 | `compiler_floor`     | `bounded_adjacent_pairs_are_exact` | verifies           | the 1.94 `array_windows` floor                |
 
 *Caption: the named harness inventory for the consumer smoke.*
+
+Each positive harness runs in its own invocation, because one transcript
+carries one manual summary and the smoke validates that exact harness. The
+false harness must also print `Failed Checks: deliberately false`, so another
+failed property cannot satisfy the control. The floor transcript uses the
+strict named-set validator as well as the compiler-floor check, and the Rust
+1.93 control is required by the target and its compiler version is verified to
+be below 1.94. The bounded push harness declares `#[kani::unwind(4)]` for its
+three iterations; the remaining fixtures use concrete inputs and no loops. The
+smoke also runs the pinned launcher's own `--version` and requires the version
+the manifest records; that is the upstream bundle smoke.
 
 The captured transcripts under `tests/fixtures/kani_snapshot/transcripts/`
 cover the positive set, the false assertion, a zero-harness run, a compile

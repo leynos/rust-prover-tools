@@ -196,8 +196,9 @@ Prerequisites:
 - `gh` on `PATH`, authenticated enough to verify a public attestation.
 - Network access for `gh attestation verify` and the pinned Rust toolchain
   download.
-- `strace` for the descendant-process evidence. Without it, the setup-trace
-  test is skipped and the gap is recorded.
+- `strace` for the descendant-process evidence. Without it the install runs
+  untraced and the setup-trace test skips; record that gap rather than claiming
+  the check ran.
 - A Rust 1.93 compiler for the below-floor control. Resolve it explicitly:
 
 ```sh
@@ -220,15 +221,21 @@ publishes and is never part of `make all`.
 The verification requires:
 
 - A cold `snapshot install` that names the pin's tag and the observed compiler.
+- The pinned launcher's own `--version` naming the manifest's backend version
+  (the upstream bundle smoke).
 - An effective compiler at or above Rust 1.94, parsed from the install's
   `rustc:` report.
 - `snapshot check` accepting the generation.
-- The named positive harnesses `bounded_push_and_drop_are_exact` and
-  `raii_release_runs_once` verifying.
-- `deliberately_false_assertion` failing verification, not compilation.
-- `bounded_adjacent_pairs_are_exact` verifying under the pinned compiler.
-- The Rust 1.93 control failing with `error[E0658]` for `array_windows`.
-- A warm repeat reusing the active generation.
+- Each named positive harness verifying in its own transcript:
+  `bounded_push_contents_are_exact` and `raii_release_runs_once`.
+- `deliberately_false_assertion` failing verification, not compilation, and
+  naming `Failed Checks: deliberately false`.
+- `bounded_adjacent_pairs_are_exact` verifying under the pinned compiler, with
+  the exact named set and summary.
+- The required Rust 1.93 control reporting a version below 1.94 and failing
+  with `error[E0658]` for `array_windows`.
+- A warm repeat reusing the same generation, proven by comparing the reported
+  generation path and by a trace with no `cargo-kani setup`.
 - A corrupted backend payload refused, with no generation published.
 - A pin naming another tag refused before setup.
 - A setup trace with no source compilation: no `cargo`, no code-generating

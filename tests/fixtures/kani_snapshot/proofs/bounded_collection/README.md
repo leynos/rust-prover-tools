@@ -1,7 +1,7 @@
 # Kani snapshot smoke: bounded collection and cleanup
 
 This fixture crate holds the named positive harnesses the consumer smoke
-requires. `bounded_push_and_drop_are_exact` grows a small `Vec` under a fixed
+requires. `bounded_push_contents_are_exact` grows a small `Vec` under a fixed
 bound and proves its contents. `raii_release_runs_once` proves that an owner
 with a `Drop` implementation runs its cleanup exactly once at scope exit. Both
 are deliberately small so the proof finishes quickly under CBMC.

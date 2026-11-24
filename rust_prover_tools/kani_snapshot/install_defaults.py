@@ -86,6 +86,7 @@ def run_local_bundle_setup(
     # update attempt fails after the toolchain has been installed. Disabling it
     # with the same private homes is version-agnostic and keeps setup
     # deterministic; an inherited setting could otherwise re-enable it.
+    started = time.monotonic()
     run_checked(
         CommandSpec(
             _DISABLE_SELF_UPDATE,
@@ -93,6 +94,8 @@ def run_local_bundle_setup(
             timeout_seconds=timeout_seconds,
         )
     )
+    # The launcher shares the installation budget, so a slow configuration
+    # command cannot extend setup past the deadline the caller set.
     run_checked(
         CommandSpec(
             (
@@ -102,9 +105,20 @@ def run_local_bundle_setup(
                 str(bundle),
             ),
             env=env,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_remaining_budget(timeout_seconds, started),
         )
     )
+
+
+def _remaining_budget(timeout_seconds: float | None, started: float) -> float | None:
+    """Return the seconds left of the setup budget, refusing an expired one."""
+    if timeout_seconds is None:
+        return None
+    remaining = timeout_seconds - (time.monotonic() - started)
+    if remaining <= 0:
+        msg = "snapshot setup exceeded the installation budget"
+        raise ProverToolError(msg)
+    return remaining
 
 
 def probe_generation(

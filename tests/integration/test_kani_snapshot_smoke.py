@@ -9,27 +9,28 @@ a compiler-floor harness that only Rust 1.94 accepts, the Rust 1.93 control,
 a warm-cache repeat, and a corrupted payload and changed identity refused
 before execution.
 
-It is skipped unless `KANI_SNAPSHOT_SMOKE` is set, because it downloads a
-pinned toolchain, runs setup and executes real proofs. `make
-kani-snapshot-verify` supplies the environment; ordinary `make test` never
-reaches it.
+The public `kani run` command executes the standalone `kani` launcher from the
+repository root, so each proof root holds the fixture source file the launcher
+compiles. Fixtures live in `tests/integration/conftest.py`; the remaining
+plumbing lives in `tests/kani_snapshot_smoke_support.py`.
 
-The non-assertion plumbing lives in `tests/kani_snapshot_smoke_support.py`.
+It is skipped unless `KANI_SNAPSHOT_SMOKE` is set. `make kani-snapshot-verify`
+supplies the environment; ordinary `make test` never reaches it.
 """
 
 from __future__ import annotations
 
+import dataclasses as dc
 import os
 import shutil
-import subprocess
 import typing as typ
 from pathlib import Path
 
 import pytest
 
-from rust_prover_tools.kani_snapshot.models import SnapshotPin
 from rust_prover_tools.kani_snapshot.producer.compiler_floor import (
     COMPILER_FLOOR,
+    parse_rustc_version,
     require_compiler_floor,
     require_floor_harness_verified,
     require_unstable_feature_rejected,
@@ -45,16 +46,25 @@ from tests.kani_snapshot_smoke_support import (
     FIXTURES,
     FLOOR_HARNESS,
     POSITIVE_HARNESSES,
+    Consumer,
     SmokeContext,
-    assets_dir,
-    build_consumer_root,
-    manifest_document,
-    pin_for,
-    prover_tools_command,
+    build_root,
+    generation_from_output,
+    install_command,
+    proof,
+    read_trace,
     report,
     require_environment,
+    require_no_setup,
     run,
+    run_command,
+    traced_run,
 )
+
+if typ.TYPE_CHECKING:
+    import subprocess
+
+    from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 pytestmark = [
     pytest.mark.skipif(
@@ -64,85 +74,11 @@ pytestmark = [
     pytest.mark.timeout(1800),
 ]
 
-#: The release files every produced asset directory must carry.
-_REQUIRED_ASSETS: typ.Final[tuple[str, ...]] = (
-    "manifest.json",
-    "manifest.sigstore.jsonl",
-    "SHA256SUMS",
-    "inventory.json",
-)
-
-type Installed = subprocess.CompletedProcess[str]
-
-
-def _install_command(prover_tools: list[str], root: Path, assets: Path) -> list[str]:
-    """Return the public install command for one consumer root."""
-    return [
-        *prover_tools,
-        "kani",
-        "snapshot",
-        "install",
-        "--repo-root",
-        str(root),
-        "--asset-dir",
-        str(assets),
-    ]
-
-
-@pytest.fixture(scope="module")
-def assets() -> Path:
-    """Return the release directory and require its complete file set."""
-    directory = assets_dir()
-    missing = sorted(
-        name for name in _REQUIRED_ASSETS if not (directory / name).is_file()
-    )
-    assert not missing, f"the release directory lacks {missing}"
-    return directory
-
-
-@pytest.fixture(scope="module")
-def manifest(assets: Path) -> dict[str, object]:
-    """Return the produced manifest."""
-    return manifest_document(assets)
-
-
-@pytest.fixture(scope="module")
-def pin(assets: Path, manifest: dict[str, object]) -> SnapshotPin:
-    """Return the reviewed pin that names exactly these manifest bytes."""
-    return pin_for(assets, manifest)
-
-
-@pytest.fixture(scope="module")
-def prover_tools() -> list[str]:
-    """Return the command vector that runs the installed console script."""
-    return prover_tools_command()
-
-
-@pytest.fixture(scope="module")
-def consumer_root(tmp_path_factory: pytest.TempPathFactory, pin: SnapshotPin) -> Path:
-    """Build a consumer repository holding the fixtures and the reviewed pin."""
-    root = tmp_path_factory.mktemp("consumer")
-    return build_consumer_root(root, pin)
-
-
-@pytest.fixture(scope="module")
-def installed(consumer_root: Path, prover_tools: list[str], assets: Path) -> Installed:
-    """Install the produced snapshot through the public command, cold.
-
-    Setup is traced when `strace` is available, so the descendant-process
-    policy is discharged from the same run rather than a separate one.
-    """
-    strace = os.environ.get("KANI_SNAPSHOT_SMOKE_STRACE") or "strace"
-    command = _install_command(prover_tools, consumer_root, assets)
-    trace = consumer_root / "setup.trace"
-    return run(
-        [strace, "-f", "-e", "trace=execve", "-o", str(trace), *command],
-        SmokeContext(cwd=consumer_root),
-    )
+type Completed = subprocess.CompletedProcess[str]
 
 
 def test_the_install_reports_the_pinned_identity(
-    installed: Installed, manifest: dict[str, object]
+    installed: Completed, manifest: dict[str, object]
 ) -> None:
     """The cold install names the pin's tag and the observed compiler."""
     assert typ.cast("str", manifest["tag"]) in installed.stdout
@@ -151,15 +87,16 @@ def test_the_install_reports_the_pinned_identity(
 
 
 def test_clean_setup_compiles_no_tool_source(
-    consumer_root: Path, installed: Installed
+    consumer: Consumer, installed: Completed
 ) -> None:
     """The setup trace shows prebuilt installation and no source build."""
-    trace = consumer_root / "setup.trace"
-    assert trace.is_file(), f"the cold install wrote no trace:\n{installed.stderr}"
-    require_prebuilt_setup(trace.read_text(encoding="utf-8"))
+    trace = consumer.roots["bounded_collection"] / "setup.trace"
+    if not trace.is_file():
+        pytest.skip("strace is unavailable, so descendant execution is unobserved")
+    require_prebuilt_setup(read_trace(trace))
 
 
-def test_the_effective_compiler_reaches_the_floor(installed: Installed) -> None:
+def test_the_effective_compiler_reaches_the_floor(installed: Completed) -> None:
     """The compiler setup selected is at or above the supported floor."""
     line = next(
         (
@@ -176,9 +113,10 @@ def test_the_effective_compiler_reaches_the_floor(installed: Installed) -> None:
 
 
 def test_the_check_command_accepts_the_generation(
-    consumer_root: Path, prover_tools: list[str], installed: Installed
+    consumer: Consumer, prover_tools: list[str], installed: Completed
 ) -> None:
     """`snapshot check` validates the installed bytes and the compiler."""
+    root = consumer.roots["bounded_collection"]
     completed = run(
         [
             *prover_tools,
@@ -186,58 +124,55 @@ def test_the_check_command_accepts_the_generation(
             "snapshot",
             "check",
             "--repo-root",
-            str(consumer_root),
+            str(root),
+            "--cache-dir",
+            str(consumer.cache),
         ],
-        SmokeContext(cwd=consumer_root),
+        SmokeContext(cwd=root),
     )
 
     assert "checked at" in completed.stdout
 
 
-def _proof(
-    consumer_root: Path, prover_tools: list[str], crate: str, harness: str
-) -> Installed:
-    """Run one harness through the public `kani run` command."""
-    return run(
-        [
-            *prover_tools,
-            "kani",
-            "run",
-            "--repo-root",
-            str(consumer_root),
-            "--snapshot-pin",
-            str(consumer_root / "tools" / "kani" / "snapshot.toml"),
-            "--",
-            "--harness",
-            harness,
-        ],
-        SmokeContext(cwd=consumer_root / crate, check=False),
+def test_the_upstream_launcher_reports_the_pinned_identity(
+    consumer: Consumer, prover_tools: list[str], manifest: dict[str, object]
+) -> None:
+    """The bundle's own launcher reports the version the manifest records.
+
+    This is the upstream bundle smoke: the pinned launcher executes and names
+    the version the produced manifest declares, before any proof runs.
+    """
+    root = consumer.roots["bounded_collection"]
+    backend = typ.cast("dict[str, object]", manifest["backend"])
+    completed = run(
+        run_command(prover_tools, root, consumer.cache, ("--version",)),
+        SmokeContext(cwd=root),
     )
+
+    assert typ.cast("str", backend["version"]) in completed.stdout
 
 
 def test_the_named_positive_harnesses_verify(
-    consumer_root: Path, prover_tools: list[str], installed: Installed
+    consumer: Consumer, prover_tools: list[str], installed: Completed
 ) -> None:
-    """Every positive harness verifies, and the report names exactly them."""
-    transcript = ""
+    """Each positive harness verifies in its own run and transcript."""
     for harness in POSITIVE_HARNESSES:
-        completed = _proof(consumer_root, prover_tools, "bounded_collection", harness)
-        transcript += completed.stdout + completed.stderr
+        completed = proof(consumer, prover_tools, "bounded_collection", harness)
+        transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, transcript[-4000:]
-    report_of = require_named_harnesses(
-        transcript, verified=POSITIVE_HARNESSES, failed=()
-    )
-    report(f"verified {sorted(report_of.verified_names)}")
+        require_named_harnesses(transcript, verified=(harness,), failed=())
+        report(f"verified {harness}")
 
 
 def test_the_false_assertion_fails_verification(
-    consumer_root: Path, prover_tools: list[str], installed: Installed
+    consumer: Consumer, prover_tools: list[str], installed: Completed
 ) -> None:
-    """The negative fixture fails its proof, which is a non-zero exit."""
-    completed = _proof(consumer_root, prover_tools, "false_assertion", FALSE_HARNESS)
+    """The negative fixture fails its proof for the intended reason."""
+    completed = proof(consumer, prover_tools, "false_assertion", FALSE_HARNESS)
     transcript = completed.stdout + completed.stderr
 
     assert completed.returncode != 0, "a deliberately false assertion must fail"
+    assert "Failed Checks: deliberately false" in transcript, transcript[-4000:]
     report_of = require_named_harnesses(
         transcript, verified=(), failed=(FALSE_HARNESS,)
     )
@@ -245,26 +180,28 @@ def test_the_false_assertion_fails_verification(
 
 
 def test_the_floor_harness_verifies_on_the_pinned_compiler(
-    consumer_root: Path, prover_tools: list[str], installed: Installed
+    consumer: Consumer, prover_tools: list[str], installed: Completed
 ) -> None:
     """The 1.94-only API compiles and proves under the snapshot's compiler."""
-    completed = _proof(consumer_root, prover_tools, "compiler_floor", FLOOR_HARNESS)
+    completed = proof(consumer, prover_tools, "compiler_floor", FLOOR_HARNESS)
     transcript = completed.stdout + completed.stderr
 
     assert completed.returncode == 0, transcript[-4000:]
+    require_named_harnesses(transcript, verified=(FLOOR_HARNESS,), failed=())
     require_floor_harness_verified(transcript)
     report(f"floor harness verified: {FLOOR_HARNESS}")
 
 
 def test_the_below_floor_compiler_rejects_the_floor_api(tmp_path: Path) -> None:
-    """The Rust 1.93 control fails because the API is unavailable.
-
-    The control is run only when its compiler is supplied, because installing
-    one is not this milestone's job. Its absence is a recorded gap, not a pass.
-    """
+    """The required Rust 1.93 control fails because the API is unavailable."""
     rustc = os.environ.get("KANI_SNAPSHOT_SMOKE_RUSTC_1_93")
-    if not rustc:
-        pytest.skip("KANI_SNAPSHOT_SMOKE_RUSTC_1_93 is unset")
+    assert rustc, "KANI_SNAPSHOT_SMOKE_RUSTC_1_93 must name the 1.93 compiler"
+    version = run(
+        [rustc, "--version"], SmokeContext(cwd=tmp_path, timeout=120)
+    ).stdout.strip()
+    assert parse_rustc_version(version) < COMPILER_FLOOR, (
+        f"the control compiler {version!r} is not below the floor"
+    )
     completed = run(
         [
             rustc,
@@ -284,15 +221,26 @@ def test_the_below_floor_compiler_rejects_the_floor_api(tmp_path: Path) -> None:
 
 
 def test_a_warm_repeat_reuses_the_generation(
-    consumer_root: Path, prover_tools: list[str], assets: Path, installed: Installed
+    consumer: Consumer,
+    prover_tools: list[str],
+    assets: Path,
+    installed: Completed,
 ) -> None:
-    """Repeating the install reuses the active generation without setup."""
-    completed = run(
-        _install_command(prover_tools, consumer_root, assets),
-        SmokeContext(cwd=consumer_root),
+    """Repeating the install reuses the generation and runs no setup."""
+    root = consumer.roots["bounded_collection"]
+    trace = root / "warm.trace"
+    completed = traced_run(
+        install_command(prover_tools, root, assets, consumer.cache), root, trace
     )
 
-    assert "installed at" in completed.stdout
+    assert completed.returncode == 0, completed.stderr[-4000:]
+    first = generation_from_output(installed.stdout)
+    repeat = generation_from_output(completed.stdout)
+    assert first is not None, "the cold install named no generation"
+    assert repeat == first, (
+        f"the warm repeat did not reuse the generation: {first!r} vs {repeat!r}"
+    )
+    require_no_setup(trace)
 
 
 def test_a_corrupted_payload_is_refused_before_execution(
@@ -301,11 +249,7 @@ def test_a_corrupted_payload_is_refused_before_execution(
     assets: Path,
     pin: SnapshotPin,
 ) -> None:
-    """A changed payload byte stops the install, and no generation appears.
-
-    The receiver is a fresh root with its own cache, so the healthy generation
-    the earlier tests installed cannot answer for the corrupted copy.
-    """
+    """A changed payload byte stops the install before setup, with no generation."""
     root = tmp_path_factory.mktemp("corrupt")
     shutil.copytree(assets, root / "assets")
     backend = max(
@@ -314,17 +258,20 @@ def test_a_corrupted_payload_is_refused_before_execution(
     damaged = bytearray(backend.read_bytes())
     damaged[-1] ^= 0xFF
     backend.write_bytes(bytes(damaged))
-    consumer = build_consumer_root(root / "consumer", pin)
+    consumer_root = build_root(root / "consumer", pin, "bounded_collection")
+    trace = root / "corrupt.trace"
 
-    completed = run(
-        _install_command(prover_tools, consumer, root / "assets"),
-        SmokeContext(cwd=consumer, check=False),
+    completed = traced_run(
+        install_command(prover_tools, consumer_root, root / "assets", root / "cache"),
+        consumer_root,
+        trace,
     )
 
     output = (completed.stdout + completed.stderr).lower()
     assert completed.returncode != 0, "a corrupted payload must be refused"
     assert "checksum" in output or "digest" in output, output
-    assert not list(consumer.glob(".kani-snapshots/*/generations/*")), (
+    require_no_setup(trace)
+    assert not list(consumer_root.glob(".kani-snapshots/*/generations/*")), (
         "a refused install must not publish a generation"
     )
 
@@ -335,26 +282,23 @@ def test_a_changed_identity_is_refused_before_setup(
     assets: Path,
     pin: SnapshotPin,
 ) -> None:
-    """A pin naming another tag cannot install this manifest."""
+    """A pin naming another revision cannot install this manifest."""
+    stem, _, revision = pin.tag.rpartition("-r")
+    changed = dc.replace(pin, tag=f"{stem}-r{int(revision) + 1}")
+    assert changed.tag != pin.tag, "the changed identity must differ from the pin"
     root = tmp_path_factory.mktemp("identity")
-    changed = SnapshotPin(
-        schema_version=pin.schema_version,
-        repository=pin.repository,
-        tag=pin.tag.replace("-r1", "-r2"),
-        upstream_commit=pin.upstream_commit,
-        builder_commit=pin.builder_commit,
-        target=pin.target,
-        manifest_sha256=pin.manifest_sha256,
-    )
-    consumer = build_consumer_root(root / "consumer", changed)
+    consumer_root = build_root(root / "consumer", changed, "bounded_collection")
+    trace = root / "identity.trace"
 
-    completed = run(
-        _install_command(prover_tools, consumer, assets),
-        SmokeContext(cwd=consumer, check=False),
+    completed = traced_run(
+        install_command(prover_tools, consumer_root, assets, root / "cache"),
+        consumer_root,
+        trace,
     )
 
-    assert completed.returncode != 0, "a pin naming another tag must be refused"
+    assert completed.returncode != 0, "a pin naming another revision must be refused"
     assert "tag" in (completed.stdout + completed.stderr).lower()
+    require_no_setup(trace)
 
 
 def test_the_console_script_runs_from_a_fresh_environment(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@
 # ---
 # name: test_the_rendered_report_is_stable
   '''
-  verified: bounded_push_and_drop_are_exact, raii_release_runs_once
+  verified: bounded_push_contents_are_exact, raii_release_runs_once
   failed: -
   counts: 2 verified, 0 failed, 2 total
   '''

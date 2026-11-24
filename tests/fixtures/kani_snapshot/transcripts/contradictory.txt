@@ -1,5 +1,5 @@
 Kani Rust Verifier 0.68.0 (standalone)
-Checking harness bounded_push_and_drop_are_exact...
+Checking harness bounded_push_contents_are_exact...
 
 SUMMARY:
  ** 0 of 12 failed
