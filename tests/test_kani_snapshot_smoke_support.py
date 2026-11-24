@@ -11,7 +11,7 @@ import typing as typ
 
 import pytest
 
-from tests import kani_snapshot_smoke_support
+from tests import kani_snapshot_smoke_commands, kani_snapshot_smoke_support
 from tests.kani_snapshot_smoke_commands import require_strace, strace_prefix
 from tests.kani_snapshot_smoke_support import generation_from_output, read_trace
 
@@ -72,8 +72,19 @@ def test_the_strace_prefix_requests_complete_arguments(tmp_path: Path) -> None:
     assert prefix[-1] == str(trace)
 
 
-def test_require_strace_returns_the_tool_path() -> None:
-    """The helper returns the resolved strace path when it is installed."""
-    path = require_strace()
+def test_require_strace_returns_the_resolved_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The helper returns whatever discovery resolves, without needing strace.
 
-    assert path.endswith("strace")
+    The real prerequisite belongs to the opt-in smoke, which reaches this
+    helper through `traced_run`; an ordinary `make test` must not depend on the
+    tool being installed.
+    """
+    monkeypatch.setattr(
+        kani_snapshot_smoke_commands.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}",
+    )
+
+    assert require_strace() == "/usr/bin/strace"
