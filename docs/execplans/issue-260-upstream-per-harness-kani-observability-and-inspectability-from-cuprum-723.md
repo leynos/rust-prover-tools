@@ -163,6 +163,18 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 19:40Z) Sixth assessment round, from the first incremental
+  formal review (13 findings). Live facts now exclude description content and
+  keep the first banner; a parsed selection mismatch clears any live verdict; a
+  silent child with no exit code or signal is an evidence error; a cleanup
+  failure cannot replace an active cancellation or monitor failure. A relayed
+  drain failure cancels the run, each read descriptor has one owner, and any
+  secondary publication failure during unwinding is suppressed. The running
+  handle moved to `supervision/launch_running.py`, and the three named
+  regressions were strengthened. `make all` passes with 3,288 tests and 6
+  skips; two timing-sensitive snapshot tests failed once under parallel load
+  and passed alone and on the rerun.
+
 - [x] (2026-11-24 18:20Z) Fifth assessment round. A pipeline callback that
   raises while forwarding a line now records its first failure, closes the
   drain and reports it; the launcher re-raises it after the child and both
