@@ -315,7 +315,10 @@ Plain-language terms used in this plan:
   unconditionally. D24 is marked superseded by D34, and the earlier live pass
   is attributed to the tree that became `4302139`. At `d48b7ff`, `make all`,
   `make markdownlint`, and `make nixie` pass with 3,216 tests and 6 skips, and
-  the opt-in live Kani 0.67.0 fixture passes: 2 passed in 1,319.53 s.
+  the opt-in live Kani 0.67.0 fixture passes: 2 passed in 1,319.53 s. The
+  parser's record budgets gained their own boundary tests in `14ef218`, where
+  `make all` passes with 3,220 tests and 6 skips; the live result still applies
+  because that commit changes tests only.
 
 ## Surprises & discoveries
 
@@ -594,10 +597,10 @@ and this branch's supervision is layered on it: live facts come from the same
 grammar, the report is spooled to a bounded temporary file, and
 `parse_kani_log` is the single parser. The selector policy moved to
 `kani_cli_grammar`, which asserts that its supported releases equal the
-parser's. At `d48b7ff` the deterministic gate passes with 3,216 tests and 6
-skips, and the live Kani fixture passes: 2 passed in 1,319.53 s. The earlier
-1,080.48-second pass ran on the working tree that became `4302139` and does not
-cover the later bounded-retention commits.
+parser's. At `14ef218` the deterministic gate passes with 3,220 tests and 6
+skips, and the live Kani fixture passes at `d48b7ff`, whose code it shares: 2
+passed in 1,319.53 s. The earlier 1,080.48-second pass ran on the working tree
+that became `4302139` and does not cover the later bounded-retention commits.
 
 ## Blocker: main landed a competing Kani parser
 
@@ -693,15 +696,16 @@ All six milestones are implemented. The acceptance evidence is:
 
 `EP-M6` is complete: `docs/kani-supervised-execution.md` is the schema and
 adapter reference, and the users', developers', and CLI design guides, README,
-migration guide, and roadmap carry the supervised route. At `d48b7ff` the
-deterministic gate passes with 3,216 tests and 6 skips, and the opt-in live
-Kani 0.67.0 fixture passes in 1,319.53 s. After `main` merged #264, this branch
-adopted that shared parser and deleted its own duplicate reader, so the
-parser's own corpus, structure, count, solver, decision, and mutant suites are
-its verification evidence. The supervision suite adds the streaming-source
-equivalence and retention tests, the encoded line bound, the observer's fact
-and spool budgets, and the real-process 8 MiB newline-free witness. Those
-figures replaced the earlier 2,422-test and stale live-pass claims.
+migration guide, and roadmap carry the supervised route. At `14ef218` the
+deterministic gate passes with 3,220 tests and 6 skips, and the opt-in live
+Kani 0.67.0 fixture passes on the identical production code in 1,319.53 s. After
+`main` merged #264, this branch adopted that shared parser and deleted its own
+duplicate reader, so the parser's own corpus, structure, count, solver,
+decision, and mutant suites are its verification evidence. The supervision
+suite adds the streaming-source equivalence and retention tests, the encoded
+line bound, the observer's fact and spool budgets, and the real-process 8 MiB
+newline-free witness. Those figures replaced the earlier 2,422-test and stale
+live-pass claims.
 
 The retrospective is complete. The capability shipped as one branch rather than
 the six separately mergeable milestones the plan allowed, because the parser,
