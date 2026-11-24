@@ -398,6 +398,12 @@ Plain-language terms used in this plan:
   and preparation change on the branch, so the earlier per-commit caveats no
   longer apply.
 
+- [x] (2026-11-24 08:40Z) Twelfth follow-up round. The oversized-line
+  regression now replaces the *second* blank line of the lookahead run, so the
+  refusal can only come from `_blank_closes_entry`'s walk with `peek_at` rather
+  than the cursor's own read, and the assertion pins the reported line number.
+  `make all` passes with 3,233 tests and 6 skips.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
