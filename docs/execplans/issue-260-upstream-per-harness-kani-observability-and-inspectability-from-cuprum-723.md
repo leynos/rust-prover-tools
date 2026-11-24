@@ -385,6 +385,14 @@ Plain-language terms used in this plan:
   live-run note to name the later commits precisely. `make all` passes with
   3,232 tests and 6 skips.
 
+- [x] (2026-11-24 06:30Z) Eleventh follow-up round. The streaming source now
+  also bounds aggregate retention: the window bounds the line count, the line
+  budget bounds one line, and `MAX_BUFFERED_CHARS` (8 Mi characters) bounds the
+  product. `test_aggregate_lookahead_memory_is_bounded` refuses the line that
+  would exceed it. The description-lookahead regression and the live-run note
+  requested in the same round are in `bcef074`. `make all` passes with 3,233
+  tests and 6 skips.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at

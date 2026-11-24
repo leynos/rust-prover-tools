@@ -25,6 +25,12 @@ MAX_WINDOW_LINES: typ.Final[int] = 4_096
 #: own limit still fits on one line, and small enough that several lines of
 #: lookahead cannot size the caller's memory.
 MAX_LINE_CHARS: typ.Final[int] = 4 * 1024 * 1024
+#: Largest number of characters the streaming source retains at once.
+#: The window bounds how many lines are held and the line budget bounds one
+#: line; this bounds their product, so lookahead that inspects many long lines
+#: cannot size the caller's memory. Larger than one description budget, so a
+#: description at its own limit still parses.
+MAX_BUFFERED_CHARS: typ.Final[int] = 8 * 1024 * 1024
 
 
 class LineSource(typ.Protocol):
@@ -72,6 +78,7 @@ class StreamingLines:
         *,
         max_window: int = MAX_WINDOW_LINES,
         max_line_chars: int = MAX_LINE_CHARS,
+        max_buffered_chars: int = MAX_BUFFERED_CHARS,
     ) -> None:
         """Wrap `lines` without reading more than one line ahead of the cursor."""
         self._lines = iter(lines)
@@ -80,6 +87,8 @@ class StreamingLines:
         self._eof = False
         self._max_window = max_window
         self._max_line_chars = max_line_chars
+        self._max_buffered_chars = max_buffered_chars
+        self._buffered_chars = 0
 
     def at(self, index: int) -> str | None:
         """Return the line at `index`, pulling from the iterator as needed."""
@@ -100,6 +109,7 @@ class StreamingLines:
             else:
                 position = self._base + len(self._buffer)
                 self._buffer.append(self._bounded(line, position))
+                self._buffered_chars += len(line)
         offset = index - self._base
         if offset >= len(self._buffer):
             return None
@@ -114,13 +124,19 @@ class StreamingLines:
         supervised route buffers each line at the launcher, and this check is
         the parser's own guarantee for every other caller.
         """
-        if len(line) <= self._max_line_chars:
-            return line
-        msg = (
-            f"line {position + 1} is longer than the "
-            f"{self._max_line_chars}-character line budget"
-        )
-        raise KaniLogError(msg)
+        if len(line) > self._max_line_chars:
+            msg = (
+                f"line {position + 1} is longer than the "
+                f"{self._max_line_chars}-character line budget"
+            )
+            raise KaniLogError(msg)
+        if self._buffered_chars + len(line) > self._max_buffered_chars:
+            msg = (
+                "the log's lookahead needs more than the "
+                f"{self._max_buffered_chars}-character retention budget"
+            )
+            raise KaniLogError(msg)
+        return line
 
     @property
     def buffered(self) -> int:
@@ -130,5 +146,5 @@ class StreamingLines:
     def release(self, index: int) -> None:
         """Drop every line before `index`."""
         while self._base < index and self._buffer:
-            self._buffer.popleft()
+            self._buffered_chars -= len(self._buffer.popleft())
             self._base += 1

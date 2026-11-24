@@ -134,3 +134,24 @@ def test_the_window_is_bounded_for_streaming_input() -> None:
     with pytest.raises(KaniLogError, match="lookahead"):
         source.at(20)
     assert source.buffered == 0
+
+
+def test_aggregate_lookahead_memory_is_bounded() -> None:
+    """Many long lines cannot accumulate past the retention budget.
+
+    The window bounds the count and the line budget bounds one line; without
+    an aggregate bound, 4,096 lines at the line limit would retain about
+    16 GiB. The source refuses while reading the line that would exceed the
+    aggregate, before the description budget or the frame decision applies.
+    """
+    from rust_prover_tools.kani_log.lines import (
+        MAX_BUFFERED_CHARS,
+        MAX_LINE_CHARS,
+    )
+
+    line = " " * MAX_LINE_CHARS
+    lines = [line] * (MAX_BUFFERED_CHARS // MAX_LINE_CHARS + 1)
+    source = StreamingLines(iter(lines))
+
+    with pytest.raises(KaniLogError, match="retention budget"):
+        source.at(len(lines) - 1)
