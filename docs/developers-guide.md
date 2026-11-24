@@ -1241,6 +1241,28 @@ module. It is skipped unless `KANI_SNAPSHOT_SMOKE` is set, and
 
 *Caption: environment the consumer smoke requires.*
 
+The validator modules are internal, but each has a contract a future change
+must keep:
+
+- `rust_prover_tools.kani_snapshot.producer.proof_transcript` owns the raw
+  Kani forms: harness starts, per-harness verdicts, the manual summary and the
+  no-harness diagnostic. It raises `ProofTranscriptError`, `ProofCompileError`
+  or `ProofSolverError`; it performs no policy beyond those shapes.
+- `proof_report` owns the policy: `parse_proof_report`,
+  `require_named_harnesses` (exact names, including module-qualified
+  crate-relative names) and `require_no_failed_unwinding` (a `FAILURE` property
+  whose description names unwinding; a successful description is accepted). A
+  summary is mandatory and its counts and named failures must agree with the
+  verdicts.
+- `trace_fragments` owns strace's unfinished/resumed reassembly under either
+  PID prefix and raises `FragmentError`; `setup_trace` maps that to
+  `SetupTraceError`, so callers see one trace error type. The policy lives in
+  `setup_trace`: bounded input, no forbidden build action, and a packaged
+  `cargo-kani setup` record.
+- `toolchain_model.canonical_component_names` and `components_digest` are the
+  single definition of the component-record digest. The producer measurement
+  and the consumer check both call them; do not compare the raw file again.
+
 The smoke installs through the public commands in a throwaway consumer
 repository, proves the named harnesses, repeats the install from the warm cache
 and shows a corrupted payload and a changed identity refused. `strace` is a
