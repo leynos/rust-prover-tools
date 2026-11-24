@@ -24,7 +24,7 @@ MAX_WINDOW_LINES: typ.Final[int] = 4_096
 #: Larger than the check-description budget, so a description exactly at its
 #: own limit still fits on one line, and small enough that several lines of
 #: lookahead cannot size the caller's memory.
-MAX_LINE_BYTES: typ.Final[int] = 4 * 1024 * 1024
+MAX_LINE_CHARS: typ.Final[int] = 4 * 1024 * 1024
 
 
 class LineSource(typ.Protocol):
@@ -71,7 +71,7 @@ class StreamingLines:
         lines: cabc.Iterable[str],
         *,
         max_window: int = MAX_WINDOW_LINES,
-        max_line_bytes: int = MAX_LINE_BYTES,
+        max_line_chars: int = MAX_LINE_CHARS,
     ) -> None:
         """Wrap `lines` without reading more than one line ahead of the cursor."""
         self._lines = iter(lines)
@@ -79,7 +79,7 @@ class StreamingLines:
         self._base = 0
         self._eof = False
         self._max_window = max_window
-        self._max_line_bytes = max_line_bytes
+        self._max_line_chars = max_line_chars
 
     def at(self, index: int) -> str | None:
         """Return the line at `index`, pulling from the iterator as needed."""
@@ -98,13 +98,14 @@ class StreamingLines:
             except StopIteration:
                 self._eof = True
             else:
-                self._buffer.append(self._bounded(line, index))
+                position = self._base + len(self._buffer)
+                self._buffer.append(self._bounded(line, position))
         offset = index - self._base
         if offset >= len(self._buffer):
             return None
         return self._buffer[offset]
 
-    def _bounded(self, line: str, index: int) -> str:
+    def _bounded(self, line: str, position: int) -> str:
         """Refuse a line larger than this source retains.
 
         The window bounds how many lines are held, not how large one may be.
@@ -113,11 +114,11 @@ class StreamingLines:
         supervised route buffers each line at the launcher, and this check is
         the parser's own guarantee for every other caller.
         """
-        if len(line) <= self._max_line_bytes:
+        if len(line) <= self._max_line_chars:
             return line
         msg = (
-            f"line {index + 1} is longer than the "
-            f"{self._max_line_bytes}-character line budget"
+            f"line {position + 1} is longer than the "
+            f"{self._max_line_chars}-character line budget"
         )
         raise KaniLogError(msg)
 

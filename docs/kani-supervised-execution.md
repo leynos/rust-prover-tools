@@ -333,7 +333,7 @@ The final parse uses the repository's single Kani parser. The observer spools
 the child's lines to a temporary file up to `max_log_bytes` (64 MiB by default,
 or `--max-log-mib` on the CLI) and then parses that file through
 `parse_kani_log_lines`, whose streaming line source retains only the small
-lookahead the parser needs and refuses a single line beyond `MAX_LINE_BYTES` (4
+lookahead the parser needs and refuses a single line beyond `MAX_LINE_CHARS` (4
 MiB). No whole log is held in memory; a log longer than the budget is reported
 as truncated evidence. Cuprum's own line hook retains an unterminated line
 before invoking the hook, which is why supervision does not use it; that

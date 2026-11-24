@@ -162,9 +162,9 @@ def test_a_single_line_past_the_line_budget_is_refused() -> None:
     be, so a caller streaming untrusted output cannot hand the parser a line
     that description lookahead keeps several of.
     """
-    from rust_prover_tools.kani_log.lines import MAX_LINE_BYTES
+    from rust_prover_tools.kani_log.lines import MAX_LINE_CHARS
 
-    oversized = " " * (MAX_LINE_BYTES + 1)
+    oversized = " " * (MAX_LINE_CHARS + 1)
 
     with pytest.raises(KaniLogError, match="line budget"):
         parse_kani_log_lines(iter((_BANNER, oversized)))
@@ -172,10 +172,10 @@ def test_a_single_line_past_the_line_budget_is_refused() -> None:
 
 def test_a_whitespace_line_at_the_line_budget_is_accepted() -> None:
     """A line exactly at the source's budget is still read."""
-    from rust_prover_tools.kani_log.lines import MAX_LINE_BYTES
+    from rust_prover_tools.kani_log.lines import MAX_LINE_CHARS
 
     lines = list(_passing_block("h0"))
-    lines.insert(1, " " * MAX_LINE_BYTES)
+    lines.insert(1, " " * MAX_LINE_CHARS)
     text = [*lines, "Manual Harness Summary:"]
     text.append("Complete - 1 successfully verified harnesses, 0 failures, 1 total.")
 

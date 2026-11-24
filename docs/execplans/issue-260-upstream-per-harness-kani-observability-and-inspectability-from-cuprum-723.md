@@ -362,7 +362,7 @@ Plain-language terms used in this plan:
   directory. `make all` passes with 3,227 tests and 6 skips.
 
 - [x] (2026-11-24 04:00Z) Ninth follow-up round. `StreamingLines` now refuses a
-  single line beyond `MAX_LINE_BYTES` (4 MiB), so the parser's window bounds
+  single line beyond `MAX_LINE_CHARS` (4 MiB), so the parser's window bounds
   the size of what it holds and not only the count; the supervised launcher's
   own line bound is unchanged. Boundary tests cover one character past the
   budget and an exactly-at-budget whitespace line. The parser risk and D14 now
