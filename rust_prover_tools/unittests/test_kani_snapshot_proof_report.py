@@ -190,6 +190,33 @@ def test_require_named_harnesses_refuses_the_wrong_status() -> None:
         )
 
 
+def test_qualified_names_match_on_their_final_component() -> None:
+    """Kani prints a harness inside a module with its module path."""
+    transcript = _transcript(("simple_lib::kani_tests::test_sum",), ())
+
+    report = require_named_harnesses(
+        transcript, verified=("test_sum",), failed=(), qualified=True
+    )
+
+    assert report.verified_names == {"simple_lib::kani_tests::test_sum"}
+
+
+def test_qualified_matching_keeps_the_exact_set() -> None:
+    """A qualified run still refuses an extra or missing harness."""
+    transcript = _transcript(
+        (
+            "simple_lib::kani_tests::test_sum",
+            "simple_lib::pair::kani_tests::test_one_plus_two",
+        ),
+        (),
+    )
+
+    with pytest.raises(ProofTranscriptError, match="unexpected"):
+        require_named_harnesses(
+            transcript, verified=("test_sum",), failed=(), qualified=True
+        )
+
+
 def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:
     """The rendered multivariant output is pinned by a Syrupy snapshot."""
     assert render_proof_report(parse_proof_report(_fixture("positive.txt"))) == snapshot

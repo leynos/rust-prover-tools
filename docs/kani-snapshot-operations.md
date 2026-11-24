@@ -224,8 +224,8 @@ The verification requires:
 - The pinned launcher's own `--version` naming the manifest's backend version.
 - `cargo kani` running upstream's TestBundle crates under the generation's own
   environment: `simple-lib`, `build-rs-works` and `simple-kissat`, reproduced
-  verbatim, so the library, build-script and external-Kissat-solver routes are
-  all exercised.
+  from the pinned upstream sources, so the library, build-script and
+  external-Kissat-solver routes are all exercised.
 - An effective compiler at or above Rust 1.94, parsed from the install's
   `rustc:` report.
 - `snapshot check` accepting the generation.

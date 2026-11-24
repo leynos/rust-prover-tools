@@ -263,7 +263,11 @@ def test_the_upstream_bundle_fixtures_verify(
         completed = _snapshot_cargo(consumer, crate, trace)
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, f"{crate}: {transcript[-4000:]}"
-        require_named_harnesses(transcript, verified=harnesses, failed=())
+        # Kani prints a harness inside a module with its module path, so the
+        # comparison ignores the printed prefix but still requires the exact set.
+        require_named_harnesses(
+            transcript, verified=harnesses, failed=(), qualified=True
+        )
         report(f"upstream bundle smoke verified {crate}: {', '.join(harnesses)}")
 
 

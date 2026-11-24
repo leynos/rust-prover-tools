@@ -227,6 +227,7 @@ def require_named_harnesses(
     *,
     verified: cabc.Iterable[str],
     failed: cabc.Iterable[str],
+    qualified: bool = False,
 ) -> ProofReport:
     """Require the exact expected harness sets and their expected statuses.
 
@@ -238,6 +239,11 @@ def require_named_harnesses(
         Harnesses that must have verified.
     failed : collections.abc.Iterable of str
         Harnesses that must have failed verification.
+    qualified : bool
+        Compare on each harness's final `::` component. Kani prints a harness
+        inside a module with its module path, so a fixture's `test_sum` appears
+        as `simple_lib::kani_tests::test_sum`. The set must still match exactly;
+        only the printed prefix is ignored.
 
     Returns
     -------
@@ -253,19 +259,28 @@ def require_named_harnesses(
     report = parse_proof_report(transcript)
     expected_verified = frozenset(verified)
     expected_failed = frozenset(failed)
+    actual_verified = _matching(report.verified_names, qualified=qualified)
+    actual_failed = _matching(report.failed_names, qualified=qualified)
     _require_status(
-        expected_verified - report.verified_names,
-        report.failed_names,
+        expected_verified - actual_verified,
+        actual_failed,
         expected="verify",
     )
-    _require_unexpected(report.verified_names - expected_verified, "verified")
+    _require_unexpected(actual_verified - expected_verified, "verified")
     _require_status(
-        expected_failed - report.failed_names,
-        report.verified_names,
+        expected_failed - actual_failed,
+        actual_verified,
         expected="fail",
     )
-    _require_unexpected(report.failed_names - expected_failed, "failed")
+    _require_unexpected(actual_failed - expected_failed, "failed")
     return report
+
+
+def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
+    """Return the names to compare, dropping a module path when asked."""
+    if not qualified:
+        return names
+    return frozenset(name.rsplit("::", 1)[-1] for name in names)
 
 
 def _require_status(
