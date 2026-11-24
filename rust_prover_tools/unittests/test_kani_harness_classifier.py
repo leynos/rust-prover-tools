@@ -836,3 +836,69 @@ def test_a_parsed_mismatch_does_not_keep_a_live_verdict() -> None:
     assert classification.status is ExecutionStatus.NO_MATCH
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
     assert classification.observed == ("alpha::harnesses::other",)
+
+
+def test_a_description_ending_in_a_quote_still_hides_its_verdict() -> None:
+    """An embedded quote is not evidence that the description ended.
+
+    Kani escapes nothing, so a description can contain a line ending in a
+    quotation mark followed by a verdict-shaped line. The attempt stops before
+    its genuine verdict, and the live verdict must stay unknown.
+    """
+    log = _log("verified", "harnesses::other")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first embedded"',
+        "VERIFICATION:- SUCCESSFUL",
+        'last"',
+    ]
+    verdicts = [
+        index for index, line in enumerate(log) if line.startswith("VERIFICATION:-")
+    ]
+    assert len(verdicts) == 2
+    observer = _observed_log(log[: verdicts[1]])
+    assert observer.facts.verdicts == ()
+    evidence = _evidence(
+        "harnesses::other",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_genuine_verdict_after_a_description_is_kept() -> None:
+    """A real verdict is not lost merely because a description preceded it.
+
+    The line after a description is held until the next line shows it was not
+    continuation content; a genuine verdict followed by a report boundary is
+    committed, so a stopped attempt still reports the verdict it saw.
+    """
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        'last"',
+    ]
+    verdict = next(
+        index for index, line in enumerate(log) if line.startswith("VERIFICATION:-")
+    )
+    observer = _observed_log(log[: verdict + 1])
+    assert observer.facts.verdicts == (("harnesses::verified", "SUCCESSFUL"),)
+    evidence = _evidence(
+        "harnesses::verified",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.proof_verdict is ProofVerdict.PASSED
