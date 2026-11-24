@@ -163,6 +163,10 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 14:55Z) Live fixture rerun at `498c4ae` after the third
+  assessment round's repairs: 2 passed in 1,046.84 s. Production code is
+  unchanged since `75a4427`; the only later commit is this record.
+
 - [x] (2026-11-24 14:20Z) Third assessment round. A parsable report is parsed
   before live-fact overflow can fail it, and a truncated live record makes the
   retained verdict unknown. The observer clears its spool fields before
