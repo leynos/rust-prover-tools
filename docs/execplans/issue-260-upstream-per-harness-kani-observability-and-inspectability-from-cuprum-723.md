@@ -348,6 +348,17 @@ Plain-language terms used in this plan:
   outcome, and `docs/kani-supervised-execution.md` records the measurement.
   `make all` passes with 3,225 tests and 6 skips.
 
+- [x] (2026-11-24 03:30Z) Eighth follow-up round. The target metadata index is
+  keyed by package, kind and name, so a same-named library cannot answer for a
+  test target's `required-features`; the new parametrized case covers both
+  metadata orders and fails on the previous index. The parser risk and EP-M1
+  now describe the delivered `parse_kani_log_lines` engine instead of the
+  replaced `feed_line`/`finish` reader, and the attribution section no longer
+  claims a sole test target is the only possible source. The three Kani 0.67.0
+  collision captures are committed under `tests/fixtures/kani_collision/` as
+  the evidence for that section rather than cited from an unversioned scratch
+  directory. `make all` passes with 3,227 tests and 6 skips.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
@@ -1015,16 +1026,16 @@ documentation milestone.
 ### `EP-M1` Shared Kani 0.67.0 grammar and incremental reader
 
 Create `rust_prover_tools/kani_log/` with `syntax.py`, `model.py`, `reader.py`,
-`extract.py`, `registry.py`, `__init__.py`, and `ATTRIBUTION.md`. Port the
-Combobulate grammar, model, and reader logic with ISC attribution. The reader
-is an incremental state machine exposing `feed_line(stream, text)`,
-`finish(exit_code)`, and a `facts` snapshot containing selection records,
-verdicts, contradictions, summary errors, and truncation.
-`parse(text, exit_code=0)` feeds the lines and calls `finish`. `registry.py`
-registers exactly 0.67.0 with its grammar, output arguments
-(`--output-format=regular`), forbidden selector and output spellings, and the
-pretty-name derivation rule (the module path relative to the crate root plus
-the function name).
+`extract.py`, `__init__.py`, and `ATTRIBUTION.md`. Port the Combobulate
+grammar, model, and reader logic with ISC attribution. As delivered, the
+package follows `main`'s #264 parser: `parse_kani_log` parses whole text and
+`parse_kani_log_lines` drives the same engine from a bounded line source, so
+the log is never retained whole. The selector policy moved to
+`rust_prover_tools/kani_cli_grammar.py`, which registers exactly 0.67.0 with
+its output arguments (`--output-format=regular`), forbidden selector and output
+spellings, and the pretty-name derivation rule (the module path relative to the
+crate root plus the function name). The originally planned `registry.py` and
+`feed_line`/`finish` reader were replaced rather than implemented twice.
 
 Copy the fifteen-log corpus from Combobulate commit `9dd6e3c` into
 `tests/fixtures/kani_logs/`, with `expected.json` and an adapted

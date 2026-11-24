@@ -691,6 +691,51 @@ def test_a_test_target_with_required_features_is_refused() -> None:
         verify_test_target_attribution((_beta_integration(),), live, gated)
 
 
+@pytest.mark.parametrize("same_name_first", [True, False])
+def test_a_same_named_library_does_not_answer_for_the_test_target(
+    *, same_name_first: bool
+) -> None:
+    """The feature guard reads the test target, whatever metadata order holds.
+
+    Cargo permits a library and a test target with one name. Indexing targets
+    by name alone would let the library answer for the test target and hide
+    its ``required-features``, so both metadata orders are exercised.
+    """
+    from rust_prover_tools.kani_inventory import verify_test_target_attribution
+    from rust_prover_tools.kani_inventory.discover import (
+        CargoPackage,
+        CargoTarget,
+    )
+
+    live, metadata = _live_beta()
+    test = CargoTarget(
+        name="integration",
+        kind="test",
+        src_path=_WORKSPACE / "beta" / "tests" / "integration.rs",
+        required_features=("gated",),
+    )
+    library = CargoTarget(
+        name="integration",
+        kind="lib",
+        src_path=_WORKSPACE / "beta" / "src" / "lib.rs",
+    )
+    ordered = (test, library) if same_name_first else (library, test)
+    packages = tuple(
+        CargoPackage(
+            name=package.name,
+            manifest_path=package.manifest_path,
+            targets=tuple(target for target in package.targets if target.kind != "test")
+            + ordered
+            if package.name == "beta"
+            else package.targets,
+        )
+        for package in metadata
+    )
+
+    with pytest.raises(InventoryDiscoveryError, match="requires features"):
+        verify_test_target_attribution((_beta_integration(),), live, packages)
+
+
 def test_the_fixture_inventory_is_exactly_what_the_suite_expects() -> None:
     """Pin every package-qualified identity and its target mapping.
 

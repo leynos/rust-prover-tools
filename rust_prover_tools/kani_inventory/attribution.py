@@ -81,9 +81,13 @@ def verify_test_target_attribution(
     """
     by_identity = {harness.identity: harness for harness in live.harnesses}
     declared = test_targets(packages)
+    # Key by kind as well as name: Cargo permits a library and a test target
+    # with one name, and indexing by name alone would let whichever came last
+    # in metadata answer for the other's `required-features`.
     metadata = {
-        package.name: {target.name: target for target in package.targets}
+        (package.name, target.kind, target.name): target
         for package in packages
+        for target in package.targets
     }
     for harness in selected:
         if harness.target_kind != "test":
@@ -99,7 +103,7 @@ def verify_test_target_attribution(
         _verify_live_identity(harness, by_identity.get(harness.identity))
         _verify_live_target(
             harness,
-            metadata.get(harness.package, {}).get(harness.target),
+            metadata.get((harness.package, "test", harness.target)),
             declared.get(harness.package, ()),
         )
 

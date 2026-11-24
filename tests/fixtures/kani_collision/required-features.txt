@@ -1,0 +1,8 @@
+Kani Rust Verifier 0.67.0 (cargo plugin)
+   Compiling collision v0.1.0 (/home/leynos/.cache/rpt-kani-collision)
+[build-limits] collision: waiting for a compile slot (343 ahead, 45s)
+[build-limits] collision: waiting for a compile slot (43 ahead, 90s)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8m 08s
+error: target `integration` in package `collision` requires the features: `gated`
+Consider enabling them by passing, e.g., `--features="gated"`
+error: Failed to execute cargo (exit status: 101). Found 0 compilation errors.

@@ -193,17 +193,18 @@ and Cargo may skip the target: a pinned harness the verifier never builds
 cannot be attributed to the run, even though the result would be an error
 rather than a false pass.
 
-The refusal above rests on measured Kani 0.67.0 behaviour, not on inference. In
-a fixture package whose integration test declared `required-features`,
-`cargo kani --tests` aborted with "target `integration` in package … requires
-the features" and produced no verification record at all. With the same
-`required-features` removed and the test copy disabled by `cfg`, the library
-copy of the identical pretty name was the only record, and it passed; Kani
-never reported the absent test copy. With both copies compiled, Kani printed
-two records for the one name and reported one success and one failure; the
-supervisor's live selection facts then hold two identities, which classify as
-`multiple-match` rather than crediting either, and the shared parser refuses
-the finished log as a harness reported twice.
+The refusal above rests on measured Kani 0.67.0 behaviour, not on inference.
+The three captures are committed under `tests/fixtures/kani_collision/` and are
+not parsed by any gate. In a fixture package whose integration test declared
+`required-features`, `cargo kani --tests` aborted with "target `integration` in
+package … requires the features" and produced no verification record at all.
+With the same `required-features` removed and the test copy disabled by `cfg`,
+the library copy of the identical pretty name was the only record, and it
+passed; Kani never reported the absent test copy. With both copies compiled,
+Kani printed two records for the one name and reported one success and one
+failure; the supervisor's live selection facts then hold two identities, which
+classify as `multiple-match` rather than crediting either, and the shared
+parser refuses the finished log as a harness reported twice.
 
 Kani 0.67.0 has no flag that selects one integration-test target. Its `--tests`
 option enables verification of test crates _and_ leaves the library and every
@@ -211,10 +212,14 @@ binary eligible, so a harness name alone does not say which test target
 produced a record. Supervision therefore refuses a selected test-target harness
 when its package declares more than one integration-test target: the same
 pretty name could belong to another target and be credited to the pinned one.
-With exactly one test target that target is the only possible source, and a
-same-named library or binary harness would appear as a second selection record
-and be classified `multiple-match`. Lib and bin selectors name their target
-(`--lib`, `--bin <name>`) and need no such check.
+With exactly one test target, a declared harness that no other target also
+declares is attributed to it: discovery already refuses a package whose pretty
+name appears in more than one target. A same-named harness in another package
+does not silently stand in for it either. Measured with Kani 0.67.0, two
+compiled copies of one pretty name produce two selection records, which
+supervision classifies `multiple-match`, and the shared parser refuses the
+finished log. Lib and bin selectors name their target (`--lib`, `--bin <name>`)
+and need no such check.
 
 Selection refuses a bare name that matches more than one package, a name the
 inventory does not declare, and a duplicate request. A package-qualified

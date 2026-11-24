@@ -1,0 +1,103 @@
+Kani Rust Verifier 0.67.0 (cargo plugin)
+[build-limits] collision: waiting for a compile slot (304 ahead, 45s)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+[build-limits] collision: waiting for a compile slot (317 ahead, 45s)
+[build-limits] collision: waiting for a compile slot (23 ahead, 90s)
+   Compiling collision v0.1.0 (/home/leynos/.cache/rpt-kani-collision)
+[build-limits] integration: waiting for a compile slot (244 ahead, 45s)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 27s
+Checking harness collision_proof...
+CBMC 6.8.0 (cbmc-6.8.0)
+CBMC version 6.8.0 (cbmc-6.8.0) 64-bit x86_64 linux
+Reading GOTO program from file /home/leynos/.cache/rpt-kani-collision/target/kani/x86_64-unknown-linux-gnu/debug/deps/collision-2857ec714b4ea14c__RNvCsd9pjR2q5s2s_9collision15collision_proof.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+Runtime Symex: 0.00883758s
+size of program expression: 96 steps
+slicing removed 58 assignments
+Generated 4 VCC(s), 2 remaining after simplification
+Runtime Postprocess Equation: 0.000105652s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000146812s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 0.000353115s
+Solving with CaDiCaL 2.0.0
+1 variables, 0 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000807211s
+Runtime decision procedure: 0.00113561s
+
+RESULTS:
+Check 1: collision_proof.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to add with overflow"
+	 - Location: src/lib.rs:5:13 in function collision_proof
+
+Check 2: collision_proof.assertion.2
+	 - Status: SUCCESS
+	 - Description: "assertion failed: 1 + 1 == 2"
+	 - Location: src/lib.rs:5:5 in function collision_proof
+
+
+SUMMARY:
+ ** 0 of 2 failed
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.28653s
+
+Checking harness collision_proof...
+CBMC 6.8.0 (cbmc-6.8.0)
+CBMC version 6.8.0 (cbmc-6.8.0) 64-bit x86_64 linux
+Reading GOTO program from file /home/leynos/.cache/rpt-kani-collision/target/kani/x86_64-unknown-linux-gnu/debug/deps/integration-37a9ff549abc0764__RNvCs4F5uXzlVDZI_11integration15collision_proof.out
+Generating GOTO Program
+Adding CPROVER library (x86_64)
+Removal of function pointers and virtual functions
+Generic Property Instrumentation
+Running with 16 object bits, 48 offset bits (user-specified)
+Starting Bounded Model Checking
+Runtime Symex: 0.00277188s
+size of program expression: 125 steps
+slicing removed 72 assignments
+Generated 4 VCC(s), 3 remaining after simplification
+Runtime Postprocess Equation: 0.000173542s
+Passing problem to propositional reduction
+converting SSA
+Runtime Convert SSA: 0.000165173s
+Running propositional reduction
+Post-processing
+Runtime Post-process: 0.000627999s
+Solving with CaDiCaL 2.0.0
+1 variables, 0 clauses
+SAT checker: instance is SATISFIABLE
+Runtime Solver: 0.000824512s
+Runtime decision procedure: 0.00113459s
+
+RESULTS:
+Check 1: collision_proof.assertion.1
+	 - Status: SUCCESS
+	 - Description: "attempt to add with overflow"
+	 - Location: tests/integration.rs:5:13 in function collision_proof
+
+Check 2: collision_proof.assertion.2
+	 - Status: FAILURE
+	 - Description: ""the test-target copy is a seeded failure""
+	 - Location: tests/integration.rs:5:5 in function collision_proof
+
+
+SUMMARY:
+ ** 1 of 2 failed
+Failed Checks: "the test-target copy is a seeded failure"
+ File: "tests/integration.rs", line 5, in collision_proof
+
+VERIFICATION:- FAILED
+Verification Time: 0.17793517s
+
+Manual Harness Summary:
+Verification failed for - collision_proof
+Complete - 1 successfully verified harnesses, 1 failures, 2 total.
