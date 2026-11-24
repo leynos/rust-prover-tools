@@ -187,9 +187,10 @@ only entries in scope.
       for complete argument strings and still refuses an elided one, and
       regressions use real captured output. Upstream's TestBundle crates
       `simple-lib`, `build-rs-works` and `simple-kissat` are reproduced from the
-      pinned upstream sources and run through `cargo kani` under the generation's environment, replacing
-      the two local substitutes. The runbook states that `strace` is required,
-      and D7 records 63 files and 2,989 net Python/Rust lines.
+      pinned upstream sources and run through `cargo kani` under the
+      generation's environment, replacing the two local substitutes. The
+      runbook states that `strace` is required, and D7 records 63 files and
+      2,989 net Python/Rust lines.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
 - [ ] Re-run the consumer smoke against a corrected hosted release from trusted
