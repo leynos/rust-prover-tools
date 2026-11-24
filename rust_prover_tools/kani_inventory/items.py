@@ -19,6 +19,7 @@ from rust_prover_tools.kani_inventory.attribute_values import (
     PROOF_ATTRIBUTES,
     attribute_name,
     cfg_attr_facts,
+    inner_gates,
     normalise,
     path_value,
 )
@@ -133,6 +134,10 @@ class _AttributeFacts:
             self.conditional = True
         if name == "cfg_attr":
             self._record_cfg_attr(masked, original)
+
+    def record_inner(self, masked: str) -> None:
+        """Record an inner attribute's gating effect on its enclosing module."""
+        self.inner_conditional = self.inner_conditional or inner_gates(masked)
 
     def _record_cfg_attr(self, masked: str, original: str) -> None:
         """Record the proof, condition, and path facts inside ``cfg_attr``."""
@@ -299,9 +304,7 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         end = _matching(masked, bracket, "[", "]")
         content = masked[bracket + 1 : end - 1]
         if inner:
-            inner_name, _ = attribute_name(content)
-            if inner_name == "cfg" and normalise(content) != "cfg(kani)":
-                facts.inner_conditional = True
+            facts.record_inner(content)
         else:
             facts.record(
                 source.original[bracket + 1 : end - 1],

@@ -10,6 +10,7 @@ from rust_prover_tools.kani_inventory import (
     InventoryDiscoveryError,
     collect_proofs,
 )
+from rust_prover_tools.kani_inventory.attribute_values import cfg_attr_facts
 from rust_prover_tools.kani_inventory.masking import mask_source
 
 _WORKSPACE = (
@@ -724,3 +725,108 @@ def test_an_absolute_kani_attribute_is_a_proof(tmp_path: Path) -> None:
     assert [proof.pretty_name for proof in collect_proofs(root, tmp_path)] == [
         "absolute"
     ]
+
+
+def test_a_lint_only_cfg_attr_does_not_make_a_proof_conditional() -> None:
+    """Only attributes that can gate the item make it conditional.
+
+    `cfg_attr(feature = "strict", allow(dead_code))` applies a lint attribute
+    when the feature holds; it never removes the proof, so the harness stays
+    unconditional.
+    """
+    attribute = 'cfg_attr(feature = "strict", allow(dead_code))'
+    facts = cfg_attr_facts(attribute, attribute)
+
+    assert facts is not None
+    assert facts[1] is False
+
+
+def test_a_cfg_attr_wrapping_a_proof_stays_conditional() -> None:
+    """A proof nested under a feature predicate can be absent."""
+    attribute = 'cfg_attr(feature = "proofs", kani::proof)'
+    facts = cfg_attr_facts(attribute, attribute)
+
+    assert facts is not None
+    assert facts[1] is True
+    assert facts[0] == ["kani::proof"]
+
+
+def test_a_kani_cfg_attr_wrapping_a_feature_cfg_stays_conditional() -> None:
+    """Under Kani the outer predicate holds, so the nested cfg gates the item."""
+    attribute = 'cfg_attr(kani, cfg(feature = "proofs"))'
+    facts = cfg_attr_facts(attribute, attribute)
+
+    assert facts is not None
+    assert facts[1] is True
+
+
+def _scan(tmp_path: Path, body: str) -> list[tuple[str, bool]]:
+    """Return `(pretty name, conditional)` for one synthetic crate root."""
+    root = tmp_path / "src"
+    root.mkdir()
+    crate = root / "lib.rs"
+    crate.write_text(body, encoding="utf-8")
+    return [
+        (proof.pretty_name, proof.conditional)
+        for proof in collect_proofs(crate, tmp_path)
+    ]
+
+
+def test_an_inner_cfg_attr_gate_reaches_the_nested_proof(tmp_path: Path) -> None:
+    """An inner cfg_attr that gates the module gates its proofs too."""
+    body = '#![cfg_attr(kani, cfg(feature = "proofs"))]\n#[kani::proof]\nfn h() {}\n'
+
+    assert _scan(tmp_path, body) == [("h", True)]
+
+
+def test_a_lint_only_inner_cfg_attr_leaves_proofs_unconditional(
+    tmp_path: Path,
+) -> None:
+    """An inner lint-only wrapper does not gate the module."""
+    body = (
+        '#![cfg_attr(feature = "strict", allow(dead_code))]\n'
+        "#[kani::proof]\n"
+        "fn h() {}\n"
+    )
+
+    assert _scan(tmp_path, body) == [("h", False)]
+
+
+def test_xid_identifiers_are_discovered(tmp_path: Path) -> None:
+    """Rust accepts XID names that alphabetic categories alone miss."""
+    body = "#[kani::proof]\nfn ℘() {}\n#[kani::proof]\nfn a·b() {}\n"
+
+    assert _scan(tmp_path, body) == [("℘", False), ("a·b", False)]
+
+
+def test_a_symlinked_crate_root_keeps_its_lexical_module_directory(
+    tmp_path: Path,
+) -> None:
+    """`mod child;` beside the link wins over one beside its target.
+
+    Resolving the crate root before deriving child paths would move module
+    lookup to the target's directory; `_walk_file` resolves only for reading
+    and cycle detection.
+    """
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "lib.rs").write_text(
+        "mod child;\n#[kani::proof]\nfn in_root() {}\n",
+        encoding="utf-8",
+    )
+    (shared / "child.rs").write_text(
+        "#[kani::proof]\nfn target_child() {}\n",
+        encoding="utf-8",
+    )
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "child.rs").write_text(
+        "#[kani::proof]\nfn lexical_child() {}\n",
+        encoding="utf-8",
+    )
+    link = source / "lib.rs"
+    link.symlink_to(shared / "lib.rs")
+
+    found = [proof.pretty_name for proof in collect_proofs(link, tmp_path)]
+
+    assert found == ["child::lexical_child", "in_root"]

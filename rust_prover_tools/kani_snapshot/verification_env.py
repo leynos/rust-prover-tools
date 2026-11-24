@@ -124,8 +124,13 @@ def frozen_proof_environment(
         Raised when the repository's Cargo configuration or the inherited
         compiler selection cannot be proved safe.
     """
-    frozen = {name: value for name, value in base.items() if isinstance(value, str)}
-    for name, value in proof_environment(runtime, base, cwd=cwd).items():
+    # One snapshot feeds both the copy and the validation, so a value cannot
+    # be copied from a different read than the one that was checked.
+    inherited = dict(base)
+    frozen = {
+        name: value for name, value in inherited.items() if isinstance(value, str)
+    }
+    for name, value in proof_environment(runtime, inherited, cwd=cwd).items():
         if isinstance(value, str):
             frozen[name] = value
         else:

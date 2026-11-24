@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -11,13 +13,12 @@ from rust_prover_tools.cli import app
 from rust_prover_tools.kani_harness_cli_options import (
     DestinationFlags,
     PolicyFlags,
+    _require_stdout_free,
     supervision_policy,
 )
 from tests.kani_harness_cli_support import inventory_file
 
 if typ.TYPE_CHECKING:
-    from pathlib import Path
-
     from rust_prover_tools.kani_harness_run import (
         KaniHarnessPreparation,
         KaniHarnessRunOptions,
@@ -118,3 +119,42 @@ def test_stdout_is_checked_even_when_human_has_a_path(
                     jsonl=path,
                 ),
             )
+
+
+class _PipedStdout:
+    """A stand-in for `sys.stdout` whose fileno is a real pipe."""
+
+    def __init__(self, descriptor: int) -> None:
+        """Remember the write end of the pipe."""
+        self._descriptor = descriptor
+
+    def fileno(self) -> int:
+        """Return the pipe's write end."""
+        return self._descriptor
+
+    def write(self, text: str) -> int:
+        """Accept text without buffering it."""
+        del text
+        return 0
+
+    def flush(self) -> None:
+        """Nothing is buffered."""
+
+
+def test_a_jsonl_alias_of_a_piped_stdout_is_refused() -> None:
+    """A pipe has a device and inode, and a descriptor alias names it.
+
+    `/dev/stdout` is `/proc/self/fd/1`, so a path naming the pipe's own
+    descriptor has the same identity a piped standard output reports. The
+    guard must compare that identity rather than requiring a regular file.
+    """
+    read_fd, write_fd = os.pipe()
+    original = sys.stdout
+    try:
+        sys.stdout = typ.cast("typ.Any", _PipedStdout(write_fd))
+        with pytest.raises(ValueError, match="standard output already names"):
+            _require_stdout_free(Path(f"/proc/self/fd/{write_fd}"), "--jsonl")
+    finally:
+        sys.stdout = original
+        os.close(read_fd)
+        os.close(write_fd)

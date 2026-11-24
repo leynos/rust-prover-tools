@@ -211,10 +211,19 @@ def identifier(masked: str, position: int) -> Identifier | None:
 
 
 def _identifier_start(char: str) -> bool:
-    """Whether `char` can start a Rust identifier."""
-    return char == "_" or char.isalpha()
+    """Whether `char` can start a Rust identifier.
+
+    Rust uses the Unicode XID_Start class plus ``_``. Python's
+    ``str.isidentifier`` applies the same XID classes, so it accepts the
+    mathematical alphanumerics and other XID names that ``isalpha`` misses.
+    """
+    return char.isidentifier()
 
 
 def _identifier_continue(char: str) -> bool:
-    """Whether `char` can continue a Rust identifier."""
-    return char == "_" or char.isalnum() or unicodedata.category(char).startswith("M")
+    """Whether `char` can continue a Rust identifier.
+
+    Prepending a letter tests the character against XID_Continue, which
+    includes combining marks and the interpunct Rust permits (``a·b``).
+    """
+    return ("a" + char).isidentifier()

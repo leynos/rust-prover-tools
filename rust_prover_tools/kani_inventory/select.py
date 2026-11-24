@@ -169,15 +169,37 @@ def _match_option(
 ) -> ForbiddenOption | None:
     """Return the forbidden option an argument spells, if any."""
     for option in grammar.forbidden_options:
-        if argument == option.long:
+        if argument == option.long or argument.startswith(option.long + "="):
             return option
-        if argument.startswith(option.long + "="):
+    if not argument.startswith("-") or argument.startswith("--"):
+        return None
+    return _match_short_cluster(argument, grammar)
+
+
+def _match_short_cluster(
+    argument: str,
+    grammar: KaniGrammar,
+) -> ForbiddenOption | None:
+    """Scan a short-option cluster for a forbidden option.
+
+    ``-vpbeta`` spells ``-v`` then ``-p beta``, so one character is examined
+    at a time. A flag anywhere in the cluster is that flag. A value-taking
+    option ends the scan: the rest is its value, which may name a forbidden
+    option it does not spell, as ``-Fpackage`` does for ``-p``. A caller value
+    option such as ``-F`` therefore ends the scan without a refusal.
+    """
+    by_short = {
+        option.short: option
+        for option in grammar.forbidden_options
+        if option.short is not None
+    }
+    for char in argument[1:]:
+        spelling = f"-{char}"
+        option = by_short.get(spelling)
+        if option is not None:
             return option
-        if option.short is not None:
-            if argument == option.short:
-                return option
-            if argument.startswith(option.short) and len(argument) > len(option.short):
-                return option
+        if spelling in grammar.value_shorts:
+            return None
     return None
 
 

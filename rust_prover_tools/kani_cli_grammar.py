@@ -103,12 +103,18 @@ class KaniGrammar:
         Arguments the library adds to force the output the grammar reads.
     forbidden_options : tuple[ForbiddenOption, ...]
         Selector and output spellings a caller may not supply.
+    value_shorts : tuple[str, ...]
+        Short options a caller may pass that take their value in the same
+        token. A short-option cluster is scanned for forbidden options, and
+        the scan must stop where such an option begins so its value text is
+        not read as more options.
     """
 
     version: str
     grammar_revision: str
     output_arguments: tuple[str, ...]
     forbidden_options: tuple[ForbiddenOption, ...]
+    value_shorts: tuple[str, ...] = ()
 
 
 def pretty_name(module_path: cabc.Sequence[str], function: str) -> str:
@@ -147,7 +153,7 @@ KANI_067: typ.Final[KaniGrammar] = KaniGrammar(
         ForbiddenOption("--bins", None, takes_value=False, category="selector"),
         ForbiddenOption("--bin", None, takes_value=True, category="selector"),
         ForbiddenOption("--workspace", None, takes_value=False, category="selector"),
-        ForbiddenOption("--jobs", "-j", takes_value=False, category="selector"),
+        ForbiddenOption("--jobs", "-j", takes_value=True, category="selector"),
         ForbiddenOption(
             "--output-format",
             None,
@@ -162,6 +168,9 @@ KANI_067: typ.Final[KaniGrammar] = KaniGrammar(
         ),
         ForbiddenOption("--quiet", "-q", takes_value=False, category="output"),
     ),
+    # Caller-facing value options: `-Ffeature` is a feature, not `-F` plus an
+    # embedded `-f`, and `-Zunstable-options` is one unstable flag.
+    value_shorts=("-F", "-Z", "-C", "-A", "-L", "-o"),
 )
 
 _GRAMMARS: typ.Final[dict[str, KaniGrammar]] = {KANI_067.version: KANI_067}

@@ -260,3 +260,30 @@ def test_a_binary_target_composes_its_name() -> None:
             "--jobs=1",
         )[:9]
     )
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [("-vpbeta",), ("-qv",), ("-j4",)],
+)
+def test_a_forbidden_short_option_inside_a_cluster_is_refused(
+    argument: tuple[str, ...],
+) -> None:
+    """A cluster spells every option in it, not only its first."""
+    assert conflicting_options(argument, KANI_067) == argument
+
+    with pytest.raises(SelectionError, match="override"):
+        compose_arguments(_harness("harnesses::a"), KANI_067, argument)
+
+
+@pytest.mark.parametrize(
+    "argument",
+    [("-Ffeature",), ("-Zunstable-options",)],
+)
+def test_a_value_option_in_a_cluster_keeps_its_value(argument: tuple[str, ...]) -> None:
+    """Value text is not rescanned as options."""
+    assert not conflicting_options(argument, KANI_067)
+
+    assert compose_arguments(_harness("harnesses::a"), KANI_067, argument)[-1:] == (
+        argument[0],
+    )

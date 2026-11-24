@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import dataclasses as dc
 import os
-import stat
 import sys
 import typing as typ
 from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
@@ -295,8 +294,9 @@ def _require_stdout_free(path: Path | None, option: str) -> None:
         target = path.stat()
     except (AttributeError, OSError, ValueError):  # fmt: skip
         return
-    if not stat.S_ISREG(stream.st_mode):
-        return
+    # The device-and-inode comparison covers a pipe as well as a regular
+    # file: `--jsonl /dev/stdout` on a pipeline aliases the very stream the
+    # human log and final table are written to.
     if (stream.st_dev, stream.st_ino) == (target.st_dev, target.st_ino):
         msg = f"standard output already names the {option} destination: {path}"
         raise ValueError(msg)

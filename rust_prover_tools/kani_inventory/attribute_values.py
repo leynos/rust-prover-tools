@@ -19,6 +19,7 @@ __all__ = (
     "PROOF_ATTRIBUTES",
     "attribute_name",
     "cfg_attr_facts",
+    "inner_gates",
     "normalise",
     "path_value",
 )
@@ -232,6 +233,22 @@ def _unicode_escape(text: str, start: int) -> tuple[str, int] | None:
     return chr(value), close + 1
 
 
+def inner_gates(masked: str) -> bool:
+    """Whether an inner attribute can gate its enclosing module.
+
+    An inner attribute applies to the module. ``cfg`` gates it directly;
+    ``cfg_attr`` gates it only when one of its nested attributes can remove or
+    gate the module, so a lint-only wrapper stays harmless.
+    """
+    name, _ = attribute_name(masked)
+    if name == "cfg":
+        return normalise(masked) != "cfg(kani)"
+    if name == "cfg_attr":
+        nested = cfg_attr_facts(masked, masked)
+        return nested is not None and nested[1]
+    return False
+
+
 def cfg_attr_facts(
     masked: str,
     original: str,
@@ -276,9 +293,16 @@ def _fold_cfg_facts(
     predicate: str,
     pairs: list[tuple[str, str]],
 ) -> tuple[list[str], bool, str | None] | None:
-    """Combine nested attribute facts under one predicate."""
+    """Combine nested attribute facts under one predicate.
+
+    The predicate gates the nested attributes, not the item, unless one of
+    those attributes can itself remove or gate the item. A ``cfg_attr`` that
+    wraps only a lint attribute such as ``allow(dead_code)`` therefore leaves
+    the proof unconditional; one that wraps ``cfg(...)`` or a proof attribute
+    makes it conditional.
+    """
     proofs: list[str] = []
-    conditional = predicate != "kani"
+    gating = False
     path: str | None = None
     for masked_part, original_part in pairs:
         nested = _nested_cfg_attr_facts(masked_part, original_part)
@@ -293,7 +317,12 @@ def _fold_cfg_facts(
                 raise InventoryDiscoveryError(msg)
             path = nested[2]
         proofs.extend(nested[0])
-        conditional = conditional or nested[1]
+        gating = gating or nested[1]
+    # A nested cfg gates the item whenever the outer predicate holds, which
+    # `kani` does during a verification. A proof attribute is gated by the
+    # outer predicate instead, so only a non-kani predicate makes it
+    # conditional.
+    conditional = gating or (bool(proofs) and predicate != "kani")
     return proofs, conditional, path
 
 
