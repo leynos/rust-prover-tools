@@ -80,3 +80,49 @@ def test_a_failing_callback_still_releases_the_descriptor() -> None:
     assert drain.finished.is_set()
     with pytest.raises(OSError, match="Bad file descriptor"):
         os.fstat(descriptor)
+
+
+def test_a_callback_failure_mid_chunk_is_relayed_once() -> None:
+    """A failing callback stops forwarding and reports one failure.
+
+    Several complete lines arrive in one chunk; the second fails. The first is
+    forwarded, the rest are not, the failure is recorded, and the descriptor
+    is released so settlement cannot wait for the grace period.
+    """
+    failures: list[BaseException] = []
+    delivered: list[str] = []
+
+    def refuse_second(item: object) -> None:
+        """Forward the first line and fail on the second."""
+        text = typ.cast("typ.Any", item).text
+        if delivered:
+            msg = "the spool is full"
+            raise OSError(msg)
+        delivered.append(text)
+
+    read_fd, write_fd = os.pipe()
+    os.write(write_fd, b"first\nsecond\nthird\n")
+    os.close(write_fd)
+    config = DrainConfig(
+        clock=_Clock().now,
+        monotonic=_Clock().monotonic,
+        max_line_bytes=1024,
+        on_line=refuse_second,
+        started=0.0,
+        on_failure=failures.append,
+    )
+
+    async def scenario() -> PipeDrain:
+        """Read the chunk and wait for the drain to settle."""
+        drain = PipeDrain(read_fd, "stdout", config)
+        drain.start()
+        await asyncio.wait_for(drain.finished.wait(), timeout=1)
+        return drain
+
+    drain = asyncio.run(scenario())
+
+    assert delivered == ["first"]
+    assert drain.failure is not None
+    assert [type(error) for error in failures] == [OSError]
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(read_fd)

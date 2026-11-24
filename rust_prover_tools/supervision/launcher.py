@@ -287,9 +287,19 @@ class CuprumHarnessLauncher:
         """Run one invocation on its own task, scoping the pid observer."""
         started = self._monotonic()
         drains: list[PipeDrain] = []
+        # A drain callback failing is the supervisor's failure, not the event
+        # loop's: record the first one so it can be raised after the child is
+        # joined rather than letting the loop log it while the run continues.
+        failures: list[BaseException] = []
+
+        def relay(error: BaseException) -> None:
+            """Record the first callback failure."""
+            if not failures:
+                failures.append(error)
+
         try:
             cmd, context = command_for(build(spec))
-            output, drains = self._streams(recorder, on_line, started)
+            output, drains = self._streams(recorder, on_line, started, relay)
             with cuprum.observe(recorder):
                 result = await cmd.run(output=output, context=context)
             await settle_drains(drains)
@@ -299,6 +309,8 @@ class CuprumHarnessLauncher:
             recorder.close_parent_ends()
             for drain in drains:
                 drain.close()
+        if failures:
+            raise failures[0]
         return _exit_status(result.exit_code)
 
     def _streams(
@@ -306,6 +318,7 @@ class CuprumHarnessLauncher:
         recorder: PidRecorder,
         on_line: cabc.Callable[[object], None],
         started: float,
+        on_failure: cabc.Callable[[BaseException], None],
     ) -> tuple[RunOutputOptions, list[PipeDrain]]:
         """Create the child's pipes and the drains that own their read ends."""
         readable: list[int] = []
@@ -338,6 +351,7 @@ class CuprumHarnessLauncher:
             max_line_bytes=self._max_line_bytes,
             on_line=on_line,
             started=started,
+            on_failure=on_failure,
         )
         drains: list[PipeDrain] = []
         try:

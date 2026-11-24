@@ -59,6 +59,7 @@ class DrainConfig:
     max_line_bytes: int
     on_line: cabc.Callable[[object], None]
     started: float
+    on_failure: cabc.Callable[[BaseException], None] | None = None
 
 
 class PipeDrain:
@@ -76,6 +77,8 @@ class PipeDrain:
         self._config = config
         self._splitter = BoundedLineSplitter(max_line_bytes=config.max_line_bytes)
         self._closed = False
+        #: First callback failure this drain hit, if any.
+        self.failure: BaseException | None = None
         self.finished = asyncio.Event()
         os.set_blocking(descriptor, False)
 
@@ -95,12 +98,18 @@ class PipeDrain:
             self.close()
             return
         for text in self._splitter.feed(chunk):
-            self._emit(text)
+            if not self._forward(text):
+                return
 
-    def _emit(self, text: str) -> None:
-        """Timestamp and forward one line, tolerating a closed job log."""
+    def _emit(self, text: str) -> bool:
+        """Timestamp and forward one line, relaying a callback failure.
+
+        A closed job log is tolerated. Any other failure would otherwise reach
+        the event loop's exception handler while the run carried on, so the
+        first one is recorded, the drain is closed, and the owner is told.
+        """
         config = self._config
-        with contextlib.suppress(BrokenPipeError):
+        try:
             config.on_line(
                 OutputLine(
                     stream=self._stream,
@@ -109,6 +118,21 @@ class PipeDrain:
                     elapsed_seconds=max(0.0, config.monotonic() - config.started),
                 )
             )
+        except BrokenPipeError:
+            return True
+        except Exception as error:  # ruff: ignore[blind-except] - relayed
+            self.failure = error if self.failure is None else self.failure
+            self.close()
+            if config.on_failure is not None:
+                config.on_failure(self.failure)
+            return False
+        return True
+
+    def _forward(self, text: str) -> bool:
+        """Forward one line unless the callback already failed."""
+        if self.failure is not None:
+            return False
+        return self._emit(text)
 
     def close(self) -> None:
         """Stop reading and forward any retained trailing line.
@@ -125,7 +149,8 @@ class PipeDrain:
             asyncio.get_running_loop().remove_reader(self._descriptor)
         try:
             for text in self._splitter.finish():
-                self._emit(text)
+                if not self._forward(text):
+                    break
         finally:
             with contextlib.suppress(OSError):
                 os.close(self._descriptor)
