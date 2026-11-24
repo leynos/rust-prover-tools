@@ -12,18 +12,20 @@ import typing as typ
 
 import pytest
 
+from tests.kani_snapshot_smoke_commands import (
+    install_command,
+    require_strace,
+    strace_prefix,
+)
 from tests.kani_snapshot_smoke_support import (
     CRATES,
     Consumer,
     SmokeContext,
-    _strace_prefix,
     assets_dir,
     build_root,
-    install_command,
     manifest_document,
     pin_for,
     prover_tools_command,
-    require_strace,
     run,
 )
 
@@ -92,6 +94,6 @@ def installed(
     command = install_command(prover_tools, root, assets, consumer.cache)
     strace = require_strace()
     return run(
-        [*_strace_prefix(strace, root / "setup.trace"), *command],
+        [*strace_prefix(strace, root / "setup.trace"), *command],
         SmokeContext(cwd=root),
     )

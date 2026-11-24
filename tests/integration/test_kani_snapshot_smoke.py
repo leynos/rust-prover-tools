@@ -41,6 +41,13 @@ from rust_prover_tools.kani_snapshot.producer.proof_report import (
 from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     require_prebuilt_setup,
 )
+from tests.kani_snapshot_smoke_commands import (
+    install_command,
+    proof,
+    require_no_setup,
+    run_command,
+    traced_run,
+)
 from tests.kani_snapshot_smoke_support import (
     FALSE_HARNESS,
     FIXTURES,
@@ -51,16 +58,11 @@ from tests.kani_snapshot_smoke_support import (
     SmokeContext,
     build_root,
     generation_from_output,
-    install_command,
-    proof,
     read_trace,
     report,
     require_environment,
-    require_no_setup,
     run,
-    run_command,
     snapshot_environment,
-    traced_run,
 )
 
 if typ.TYPE_CHECKING:
