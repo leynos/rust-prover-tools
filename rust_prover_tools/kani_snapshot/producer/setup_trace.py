@@ -21,6 +21,9 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
 __all__ = (
     "MAX_EXEC_RECORDS",
     "MAX_TRACE_BYTES",
@@ -41,12 +44,15 @@ _EXECVE: typ.Final[re.Pattern[str]] = re.compile(
     r'execve\("(?P<path>(?:[^"\\]|\\.)*)",\s*\[(?P<argv>.*)\],\s*'
     # strace writes the environment as a pointer, optionally annotated with its
     # variable count, or as the whole variable list under `-v`.
-    r"(?:0x[0-9a-f]+(?:\s*/\*\s*[0-9]+\s+vars?\s*\*/)?|\[[^\]]*\]|[0-9]+)\)"
+    r"(?:0x[0-9a-f]+(?:\s*/\*\s*[0-9]+\s+vars?\s*\*/)?|\[[^\]]*\]|[0-9]+)?\s*\)"
 )
 _ARGUMENT: typ.Final[re.Pattern[str]] = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _ELIDED: typ.Final[re.Pattern[str]] = re.compile(r'"\s*\.\.\.')
 #: strace writes a standalone `...` when it omits trailing argument entries.
 _OMITTED: typ.Final[re.Pattern[str]] = re.compile(r"(?:^|[,\[])\s*\.\.\.\s*(?:,|$|\])")
+
+#: Compiler backend children that also generate code.
+_COMPILER_BACKENDS: typ.Final[frozenset[str]] = frozenset({"cc1", "cc1plus"})
 
 #: Compilers, linkers and build drivers that must never run during setup.
 _BUILD_TOOLS: typ.Final[frozenset[str]] = frozenset({
@@ -174,7 +180,7 @@ def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:
     """
     _require_bounded_trace(trace)
     records: list[ExecRecord] = []
-    for line in trace.splitlines():
+    for line in _joined(trace.splitlines()):
         record = _record(line)
         if record is not None:
             records.append(record)
@@ -182,6 +188,44 @@ def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:
             msg = f"setup trace exceeds the {MAX_EXEC_RECORDS}-record ceiling"
             raise SetupTraceError(msg)
     return tuple(records)
+
+
+_UNFINISHED: typ.Final[re.Pattern[str]] = re.compile(
+    r"^(?P<pid>[0-9]+)\s+(?P<body>.*)<unfinished \.\.\.>$"
+)
+_RESUMED: typ.Final[re.Pattern[str]] = re.compile(
+    r"^(?P<pid>[0-9]+)\s+<\.\.\. \w+ resumed>(?P<body>.*)$"
+)
+
+
+def _joined(lines: cabc.Iterable[str]) -> list[str]:
+    """Join strace's unfinished/resumed fragments, keyed by process id.
+
+    Concurrent descendants can make strace split one call across two lines.
+    A fragment with no matching resume is refused, so a truncated trace is
+    never mistaken for a complete one.
+    """
+    pending: dict[str, str] = {}
+    joined: list[str] = []
+    for line in lines:
+        unfinished = _UNFINISHED.match(line)
+        if unfinished is not None:
+            pending[unfinished.group("pid")] = unfinished.group("body")
+            continue
+        resumed = _RESUMED.match(line)
+        if resumed is not None:
+            pid = resumed.group("pid")
+            if pid not in pending:
+                msg = f"setup trace resumes an unknown process {pid!r}: {line[:200]!r}"
+                raise SetupTraceError(msg)
+            tail = resumed.group("body").lstrip("> ")
+            joined.append(f"{pid} {pending.pop(pid)}{tail}")
+            continue
+        joined.append(line)
+    if pending:
+        msg = f"setup trace has unfinished records: {sorted(pending)}"
+        raise SetupTraceError(msg)
+    return joined
 
 
 def _require_bounded_trace(trace: str) -> None:
@@ -221,15 +265,30 @@ def _forbidden(record: ExecRecord) -> str | None:
 
 
 def _is_named_forbidden(name: str) -> bool:
-    """Say whether the executable is itself a forbidden tool."""
-    return name in {"cargo", "rustdoc"} or name in _BUILD_TOOLS
+    """Say whether the executable is itself a forbidden tool.
+
+    GCC also installs versioned (`gcc-14`) and target-prefixed
+    (`x86_64-linux-gnu-gcc`) names, and its backend child is `cc1`/`cc1plus`.
+    The family is recognised by its last dash-separated field so those spellings
+    cannot slip past an exact-name check.
+    """
+    if name in {"cargo", "rustdoc"}:
+        return True
+    if name in _BUILD_TOOLS:
+        return True
+    if name in _COMPILER_BACKENDS:
+        return True
+    return any(
+        part in _BUILD_TOOLS or part in _COMPILER_BACKENDS for part in name.split("-")
+    )
 
 
 def _is_code_generation(name: str, arguments: tuple[str, ...]) -> bool:
     """Say whether a `rustc` invocation compiles rather than probes.
 
-    A lone `-` makes rustc read source from standard input, which compiles
-    without naming a file.
+    A lone `-` makes rustc read source from standard input, and `@file` makes
+    it read a whole argument vector from a file. Both can compile without
+    naming a source file in the trace.
     """
     return name == "rustc" and _rustc_generates_code(arguments)
 
@@ -244,11 +303,13 @@ def _is_build_script(name: str, arguments: tuple[str, ...]) -> bool:
 def _rustc_generates_code(arguments: tuple[str, ...]) -> bool:
     """Say whether a `rustc` invocation compiles rather than probes.
 
-    A lone `-` makes rustc read source from standard input, which compiles
-    without naming a file.
+    A lone `-` makes rustc read source from standard input, and `@file` makes
+    it read a whole argument vector from a file. Both can compile without
+    naming a source file in the trace.
     """
     return any(
         argument == "-"
+        or argument.startswith("@")
         or argument.endswith(".rs")
         or argument.startswith(_RUSTC_CODEGEN)
         for argument in arguments

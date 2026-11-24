@@ -43,6 +43,7 @@ __all__ = (
     "parse_proof_report",
     "render_proof_report",
     "require_named_harnesses",
+    "require_no_failed_unwinding",
 )
 
 #: Largest transcript accepted. The CLI retains a bounded tail per stream, so a
@@ -167,6 +168,9 @@ def parse_proof_report(transcript: str) -> ProofReport:
     """
     text = _bounded(transcript)
     _diagnose(text)
+    if has_no_harness_message(text):
+        msg = "proof transcript reports that no proof harnesses were found"
+        raise ProofTranscriptError(msg)
     outcomes = _outcomes(text)
     summary = summary_counts(text)
     _require_summary_agrees(summary, outcomes)
@@ -310,6 +314,46 @@ def _require_unexpected(extra: frozenset[str], status: str) -> None:
     name = min(extra)
     msg = f"transcript {status} unexpected harness {name!r}"
     raise ProofTranscriptError(msg)
+
+
+#: A Kani property's status line and the description that follows it.
+_STATUS: typ.Final[re.Pattern[str]] = re.compile(
+    r"^\s*- Status: (?P<status>SUCCESS|FAILURE)$", re.MULTILINE
+)
+_DESCRIPTION: typ.Final[re.Pattern[str]] = re.compile(
+    r'^\s*- Description: "(?P<text>[^"]*)"$', re.MULTILINE
+)
+
+
+def require_no_failed_unwinding(transcript: str) -> None:
+    """Refuse a transcript that reports a failed unwinding check.
+
+    Kani prints every property's description in regular output, including a
+    successful unwinding check, so the description alone is not evidence. Only
+    a `FAILURE` status on a property whose description names unwinding is
+    refused; failing the harness at all is already covered by the verdict
+    check.
+    """
+    statuses = list(_STATUS.finditer(transcript))
+    for index, status in enumerate(statuses):
+        end = (
+            statuses[index + 1].start()
+            if index + 1 < len(statuses)
+            else len(transcript)
+        )
+        body = transcript[status.end() : end]
+        description = _DESCRIPTION.search(body)
+        if _is_failed_unwinding(status.group("status"), description):
+            text = description.group("text") if description is not None else ""
+            msg = f"proof transcript reports a failed unwinding check: {text!r}"
+            raise ProofTranscriptError(msg)
+
+
+def _is_failed_unwinding(status: str, description: re.Match[str] | None) -> bool:
+    """Say whether a property line is a failed unwinding check."""
+    if status != "FAILURE" or description is None:
+        return False
+    return "unwind" in description.group("text").lower()
 
 
 def render_proof_report(report: ProofReport) -> str:

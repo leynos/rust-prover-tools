@@ -25,6 +25,7 @@ from rust_prover_tools.kani_snapshot.producer.proof_report import (
     parse_proof_report,
     render_proof_report,
     require_named_harnesses,
+    require_no_failed_unwinding,
 )
 
 if typ.TYPE_CHECKING:
@@ -221,6 +222,39 @@ def test_default_mode_compares_the_exact_reported_name() -> None:
         require_named_harnesses(
             transcript, verified=("bounded_push_contents_are_exact",), failed=()
         )
+
+
+def test_a_no_harness_diagnostic_is_refused_beside_successful_sections() -> None:
+    """Stale successful output cannot hide a later zero-harness result."""
+    transcript = _fixture("positive.txt") + _fixture("zero_harnesses.txt")
+
+    with pytest.raises(ProofTranscriptError, match="no proof harnesses"):
+        parse_proof_report(transcript)
+
+
+def test_a_successful_unwinding_description_is_accepted() -> None:
+    """Regular output prints every description, including a passing one."""
+    transcript = _fixture("positive.txt").replace(
+        " ** 0 of 12 failed",
+        '\t - Status: SUCCESS\n\t - Description: "unwinding assertion"\n'
+        " ** 0 of 12 failed",
+        1,
+    )
+
+    require_no_failed_unwinding(transcript)
+
+
+def test_a_failed_unwinding_check_is_refused() -> None:
+    """A failed unwinding check is not a proof result."""
+    transcript = _fixture("positive.txt").replace(
+        " ** 0 of 12 failed",
+        '\t - Status: FAILURE\n\t - Description: "unwinding assertion"\n'
+        " ** 0 of 12 failed",
+        1,
+    )
+
+    with pytest.raises(ProofTranscriptError, match="unwinding"):
+        require_no_failed_unwinding(transcript)
 
 
 def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:

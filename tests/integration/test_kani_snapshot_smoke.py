@@ -37,6 +37,7 @@ from rust_prover_tools.kani_snapshot.producer.compiler_floor import (
 )
 from rust_prover_tools.kani_snapshot.producer.proof_report import (
     require_named_harnesses,
+    require_no_failed_unwinding,
 )
 from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     require_prebuilt_setup,
@@ -138,7 +139,10 @@ def test_the_check_command_accepts_the_generation(
 
 
 def test_the_upstream_launcher_reports_the_pinned_identity(
-    consumer: Consumer, prover_tools: list[str], manifest: dict[str, object]
+    consumer: Consumer,
+    prover_tools: list[str],
+    manifest: dict[str, object],
+    installed: Completed,
 ) -> None:
     """The bundle's own launcher reports the version the manifest records.
 
@@ -164,9 +168,7 @@ def test_the_named_positive_harnesses_verify(
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, transcript[-4000:]
         require_named_harnesses(transcript, verified=(harness,), failed=())
-        assert "unwinding assertion" not in transcript.lower(), (
-            f"{harness} reported an unwinding assertion failure"
-        )
+        require_no_failed_unwinding(transcript)
         report(f"verified {harness}")
 
 
@@ -195,9 +197,7 @@ def test_the_floor_harness_verifies_on_the_pinned_compiler(
     assert completed.returncode == 0, transcript[-4000:]
     require_named_harnesses(transcript, verified=(FLOOR_HARNESS,), failed=())
     require_floor_harness_verified(transcript)
-    assert "unwinding assertion" not in transcript.lower(), (
-        "the floor harness reported an unwinding assertion failure"
-    )
+    require_no_failed_unwinding(transcript)
     report(f"floor harness verified: {FLOOR_HARNESS}")
 
 

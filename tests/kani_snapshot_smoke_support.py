@@ -110,7 +110,8 @@ CRATES: typ.Final[tuple[str, ...]] = (
     *UPSTREAM_BUNDLE_HARNESSES,
 )
 
-_GENERATION: typ.Final[re.Pattern[str]] = re.compile(r"\bat (?P<path>\S+)$")
+#: The CLI renders the generation path unescaped, so it may hold spaces.
+_GENERATION: typ.Final[re.Pattern[str]] = re.compile(r"\bat (?P<path>.+)$")
 
 
 def require_environment(name: str) -> str:

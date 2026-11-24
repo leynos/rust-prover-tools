@@ -551,10 +551,10 @@ opt-in verification target:
 
 <!-- tested-example: kani-snapshot-verify -->
 ```sh
-make kani-snapshot-verify \
-  KANI_SNAPSHOT_ASSET_DIR=<downloaded release directory> \
-  KANI_SNAPSHOT_WHEEL=<built wheel> \
-  KANI_SNAPSHOT_RUSTC_1_93=<path to a Rust 1.93 rustc>
+KANI_SNAPSHOT_ASSET_DIR="$HOME/kani-validation/release" \
+KANI_SNAPSHOT_WHEEL="$HOME/kani-validation/dist/rust_prover_tools-0.1.0-py3-none-any.whl" \
+KANI_SNAPSHOT_RUSTC_1_93="$(rustup which --toolchain 1.93.0 rustc)" \
+make kani-snapshot-verify
 ```
 
 The target installs the wheel into a throwaway virtual environment and runs

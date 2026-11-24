@@ -12,6 +12,7 @@ from __future__ import annotations
 import typing as typ
 
 import pytest
+from cuprum.context import UNSET
 
 from rust_prover_tools import commands
 from rust_prover_tools.errors import ProverToolError
@@ -95,7 +96,9 @@ def test_setup_removes_an_inherited_tar_options(
 
     install_defaults.run_local_bundle_setup(_runtime(tmp_path), tmp_path / "b.tar.gz")
 
-    assert "TAR_OPTIONS" in _homes(seen[-1])
+    assert _homes(seen[-1])["TAR_OPTIONS"] is UNSET, (
+        "an inherited TAR_OPTIONS must be unset, not merely overridden"
+    )
 
 
 def test_the_launcher_receives_only_the_remaining_budget(

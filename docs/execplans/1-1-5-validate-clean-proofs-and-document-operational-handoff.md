@@ -90,7 +90,7 @@ scheduled trigger stays disabled.
   in the decision log.
 - Code: more than 1,800 net lines of Python and Rust fixture code: stop and
   escalate. Raised to 3,800 net lines on 2026-11-24 under D7; the measured
-  Python and Rust addition is 3,009 net lines.
+  Python and Rust addition is 3,211 net lines.
 - Configuration: more than 200 net lines across `Makefile`, `pyproject.toml`
   and `.github/workflows/`: stop and escalate.
 - Documentation: more than 1,600 net lines excluding ExecPlan files: stop and
@@ -190,7 +190,7 @@ only entries in scope.
       pinned upstream sources and run through `cargo kani` under the
       generation's environment, replacing the two local substitutes. The
       runbook states that `strace` is required, and D7 records 63 files and
-      3,009 net Python/Rust lines.
+      3,211 net Python/Rust lines.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
 - [ ] Re-run the consumer smoke against a corrected hosted release from trusted
@@ -271,7 +271,7 @@ only entries in scope.
   and their primitives, the proof fixtures and every transcript and trace
   control, the smoke harness, its support module and its fixtures, the workflow
   consumer-profile step and its contract test, the runbook and the synchronized
-  guides. Measured against `57c1560`: 63 non-ExecPlan files, 3,009 net Python
+  guides. Measured against `57c1560`: 63 non-ExecPlan files, 3,211 net Python
   and Rust lines, 92 net configuration lines and 600 net documentation lines.
   Earlier readings (53 files and 2,307 lines, then 54 and 2,742) were taken
   before successive assessment repairs added the bundle-smoke fixtures, the
@@ -386,12 +386,13 @@ D6/EP-M5    -> REQ-handoff     -> EP-M5-C -> docs/kani-snapshot-operations.md
 ### Abstract model
 
 A transcript is a sequence of events: a harness start naming one harness, a
-terminal verdict for that harness, an optional summary naming verified, failed
+terminal verdict for that harness, one manual summary naming verified, failed
 and total counts, and zero or more tool diagnostics. A valid positive run maps
 every required harness to exactly one successful verdict, has no diagnostics
-that indicate a compiler or solver failure, and (when present) has a summary
-whose counts equal the observed verdicts. A valid negative run maps the false
-harness to exactly one failed verdict and has no compiler diagnostic.
+that indicate a compiler or solver failure or a zero-harness run, and has a
+summary whose counts equal the observed verdicts. A summary is mandatory; a
+transcript without one is refused. A valid negative run maps the false harness
+to exactly one failed verdict and has no compiler diagnostic.
 
 A setup trace is a sequence of `execve` records. Each record has an executable
 and an argument vector. The policy maps a record to allowed or forbidden. A
@@ -545,8 +546,9 @@ Add `tests/integration/test_kani_snapshot_smoke.py`. It is gated by
 `KANI_SNAPSHOT_SMOKE_FIXTURE_ROOT`, `KANI_SNAPSHOT_SMOKE_PROVER_TOOLS` and
 `KANI_SNAPSHOT_SMOKE_RUSTC_1_93`, and runs the public commands. It builds a
 consumer repository from the fixture crate, writes the pin from the manifest
-and its digest, performs the cold install (under `strace` when available), and
-then asserts the required evidence. It reuses the pure validators.
+and its digest, performs the cold install under `strace` (which the target
+requires), and then asserts the required evidence. It reuses the pure
+validators.
 
 Add the `kani-snapshot-verify` Makefile target. It refuses missing variables,
 builds or accepts a wheel, installs it into a temporary virtual environment,
@@ -556,9 +558,10 @@ never part of `all`.
 Focused command:
 
 ```bash
-make kani-snapshot-verify \
-  KANI_SNAPSHOT_ASSET_DIR=/path/to/release \
-  KANI_SNAPSHOT_WHEEL=/path/to/wheel.whl
+KANI_SNAPSHOT_ASSET_DIR=/path/to/release \
+KANI_SNAPSHOT_WHEEL=/path/to/wheel.whl \
+KANI_SNAPSHOT_RUSTC_1_93="$(rustup which --toolchain 1.93.0 rustc)" \
+make kani-snapshot-verify
 ```
 
 ### `EP-M5-C` Operations runbook and documentation synchronization

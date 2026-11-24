@@ -1243,10 +1243,10 @@ module. It is skipped unless `KANI_SNAPSHOT_SMOKE` is set, and
 
 The smoke installs through the public commands in a throwaway consumer
 repository, proves the named harnesses, repeats the install from the warm cache
-and shows a corrupted payload and a changed identity refused. It also validates
-the cold install's `strace` trace when `strace` is available and records the
-gap when it is not. Ordinary `make test` collects the module but skips every
-test in it.
+and shows a corrupted payload and a changed identity refused. `strace` is a
+required prerequisite: the fixture fails before installation without it, and
+the cold install's trace is validated. Ordinary `make test` collects the module
+but skips every test in it.
 
 Two integration defects found by the first real consumer install are worth
 keeping in mind:

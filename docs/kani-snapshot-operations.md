@@ -173,9 +173,11 @@ Expected artefacts, retained for seven days:
 Download the release and validation artefacts into a new, empty directory:
 
 ```sh
-mkdir -p "$HOME/kani-validation/release"
+mkdir -p "$HOME/kani-validation/release" "$HOME/kani-validation/validation"
 gh run download <run-id> --repo leynos/rust-prover-tools \
   -n kani-snapshot-release-<run-id>-1 -D "$HOME/kani-validation/release"
+gh run download <run-id> --repo leynos/rust-prover-tools \
+  -n kani-snapshot-validation-<run-id>-1 -D "$HOME/kani-validation/validation"
 ```
 
 Do not download artefacts from another run, and do not relabel a failed run's

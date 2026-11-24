@@ -175,6 +175,64 @@ def test_rustc_reading_source_from_stdin_is_refused() -> None:
         require_prebuilt_setup(trace)
 
 
+def test_fragments_from_concurrent_children_are_joined() -> None:
+    """strace splits one call when another descendant runs meanwhile."""
+    trace = (
+        '901  execve("/bin/sh", ["sh", "-c", "true"], 0x123 <unfinished ...>\n'
+        '902  execve("/usr/bin/tar", ["tar", "-xf", "t"], 0x456) = 0\n'
+        "901  <... execve resumed>) = 0\n"
+    )
+
+    records = parse_exec_trace(trace)
+
+    # A joined record is emitted where its resume completes, so it follows the
+    # record that ran in between; the set and each argv are what matter.
+    assert {record.executable for record in records} == {"/bin/sh", "/usr/bin/tar"}
+    shell = next(record for record in records if record.executable == "/bin/sh")
+    assert shell.argv == ("sh", "-c", "true")
+
+
+def test_an_unfinished_record_without_a_resume_is_refused() -> None:
+    """A truncated fragment is not evidence of a completed call."""
+    trace = '901  execve("/bin/sh", ["sh"], 0x123 <unfinished ...>\n'
+
+    with pytest.raises(SetupTraceError, match="unfinished"):
+        parse_exec_trace(trace)
+
+
+def test_a_resume_without_a_fragment_is_refused() -> None:
+    """A resume with no matching start is a broken capture."""
+    trace = "901  <... execve resumed>) = 0\n"
+
+    with pytest.raises(SetupTraceError, match="unknown process"):
+        parse_exec_trace(trace)
+
+
+@pytest.mark.parametrize(
+    "compiler", ["gcc-14", "x86_64-linux-gnu-gcc", "cc1", "cc1plus"]
+)
+def test_versioned_and_prefixed_compiler_names_are_refused(compiler: str) -> None:
+    """GCC's versioned, target-prefixed and backend names still compile code."""
+    trace = (
+        _LAUNCHER
+        + f'901  execve("/usr/bin/{compiler}", ["{compiler}", "-c", "a.c"], 0x1) = 0\n'
+    )
+
+    with pytest.raises(SetupTraceError, match="forbidden"):
+        require_prebuilt_setup(trace)
+
+
+def test_a_rustc_response_file_is_refused() -> None:
+    """`rustc @args` can name code generation inside an unread file."""
+    trace = (
+        _LAUNCHER
+        + '901  execve("/toolchain/bin/rustc", ["rustc", "@/tmp/compile.args"], 0x1) = 0\n'
+    )
+
+    with pytest.raises(SetupTraceError, match="rustc"):
+        require_prebuilt_setup(trace)
+
+
 def test_an_empty_trace_is_refused() -> None:
     """An strace log without an execve record proves nothing."""
     with pytest.raises(SetupTraceError, match="no execve"):
