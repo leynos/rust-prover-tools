@@ -163,6 +163,14 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 18:20Z) Fifth assessment round. A pipeline callback that
+  raises while forwarding a line now records its first failure, closes the
+  drain and reports it; the launcher re-raises it after the child and both
+  drains are joined, instead of letting the event loop log it while the run
+  continued. `test_a_callback_failure_mid_chunk_is_relayed_once` drives a
+  failure on the second line of one chunk. `make all` passes with 3,284 tests
+  and 6 skips.
+
 - [x] (2026-11-24 17:45Z) Live fixture rerun at `492e9b6` after the fourth
   assessment round's repairs: 2 passed in 911.99 s. Production code is
   unchanged since `73bbd94`; the only later commit is this record.
