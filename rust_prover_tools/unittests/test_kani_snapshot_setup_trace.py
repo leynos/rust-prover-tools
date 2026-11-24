@@ -123,7 +123,7 @@ _REAL_ALLOWED_WITH_ENV = (
 
 
 def test_a_real_strace_record_with_an_environment_comment_is_accepted() -> None:
-    """strace annotates the environment pointer with its variable count."""
+    """A captured record annotates the environment pointer with its count."""
     trace = _LAUNCHER + _REAL_ALLOWED
 
     records = require_prebuilt_setup(trace)
