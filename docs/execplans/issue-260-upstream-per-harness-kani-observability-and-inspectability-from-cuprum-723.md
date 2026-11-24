@@ -163,6 +163,18 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-25 00:30Z) Seventh assessment round. CodeRabbit confirmed the
+  banner, parsed-mismatch, cleanup, silent-child, launcher, orchestrator and
+  test-strength repairs, and kept two findings open. The live scanner now holds
+  a report-shaped line after a `Description` field until the next line shows it
+  was not continuation content, so an embedded quote cannot expose a fake
+  verdict; a genuine verdict followed by a report boundary is still kept.
+  `test_a_directory_symlink_before_a_parent_segment_is_followed` adds the
+  requested `alias/../lib.rs` case, and a companion test shows
+  `os.path.normpath` would have read the decoy crate. `make all` passes with
+  3,292 tests and 6 skips after one unrelated snapshot-install timing test
+  failed once under load and passed alone.
+
 - [x] (2026-11-24 20:00Z) Live fixture rerun at `99974ad` after the sixth
   assessment round's repairs, including the description framing: 2 passed in
   1,030.42 s. Production code is unchanged since `d1a91c9`; the only later
