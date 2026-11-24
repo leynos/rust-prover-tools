@@ -118,7 +118,9 @@ def _validate_stream_record(
         if not isinstance(stream, str) or stream not in _STREAMS:
             msg = f"{subject}.stream is not a documented value: {stream!r}"
             raise EvidenceFormatError(msg)
-        require_str(document["text"], subject=f"{subject}.text", optional=True)
+        # The producer always writes the decoded line, which may be empty but
+        # is never absent; null would make a consumer's join ambivalent.
+        require_str(document["text"], subject=f"{subject}.text", emptiable=True)
     elif kind == "heartbeat":
         require_seconds(document["idle_seconds"], subject=f"{subject}.idle_seconds")
         require_str(
@@ -162,7 +164,11 @@ def _validate_run_finish(document: dict[str, object], *, subject: str) -> None:
 def _validate_harness_finish(document: dict[str, object], *, subject: str) -> None:
     """Validate a harness-finish record's enumerated and optional values."""
     for field, allowed in _FINISH_ENUMS:
-        require_enum(document[field], allowed, subject=f"{subject}.{field}")
+        value = document[field]
+        if field == "stop_reason" and value is None:
+            # A not-run result has no stop reason; the producer writes it.
+            continue
+        require_enum(value, allowed, subject=f"{subject}.{field}")
     for field in ("exit_code", "signal_number"):
         require_optional_int(document[field], subject=f"{subject}.{field}")
     require_seconds(document["duration_seconds"], subject=f"{subject}.duration_seconds")
@@ -198,7 +204,9 @@ def _validate_stream_record(
         if not isinstance(stream, str) or stream not in _STREAMS:
             msg = f"{subject}.stream is not a documented value: {stream!r}"
             raise EvidenceFormatError(msg)
-        require_str(document["text"], subject=f"{subject}.text", optional=True)
+        # The producer always writes the decoded line, which may be empty but
+        # is never absent; null would make a consumer's join ambivalent.
+        require_str(document["text"], subject=f"{subject}.text", emptiable=True)
     elif kind == "heartbeat":
         require_seconds(document["idle_seconds"], subject=f"{subject}.idle_seconds")
         require_str(
@@ -242,7 +250,11 @@ def _validate_run_finish(document: dict[str, object], *, subject: str) -> None:
 def _validate_harness_finish(document: dict[str, object], *, subject: str) -> None:
     """Validate a harness-finish record's enumerated and optional values."""
     for field, allowed in _FINISH_ENUMS:
-        require_enum(document[field], allowed, subject=f"{subject}.{field}")
+        value = document[field]
+        if field == "stop_reason" and value is None:
+            # A not-run result has no stop reason; the producer writes it.
+            continue
+        require_enum(value, allowed, subject=f"{subject}.{field}")
     for field in ("exit_code", "signal_number"):
         require_optional_int(document[field], subject=f"{subject}.{field}")
     require_seconds(document["duration_seconds"], subject=f"{subject}.duration_seconds")

@@ -106,6 +106,10 @@ class KaniAdapter:
         """Classify one settled attempt under the documented precedence."""
         kani = typ.cast("KaniObserver", observer)
         observed = observe(evidence, kani.facts)
+        if kani.facts_truncated:
+            # A dropped live record makes the retained verdicts ambiguous, and
+            # a stop returns before the parse, so this must precede the stop.
+            observed = dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
         try:
             stopped = _stop_status(evidence, kani, observed)
             if stopped is not None:
@@ -116,10 +120,6 @@ class KaniAdapter:
                     detail=f"launch failed: {evidence.launch_error}",
                     observed=observed,
                 )
-            if kani.facts_truncated:
-                # A dropped live record makes the retained verdicts ambiguous;
-                # the parsed log below is authoritative when it exists.
-                observed = dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
             if kani.banner_version is not None and kani.banner_version != self.version:
                 return classification(
                     ExecutionStatus.ERROR,

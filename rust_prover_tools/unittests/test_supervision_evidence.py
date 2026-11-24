@@ -876,3 +876,35 @@ def test_a_harness_finish_record_without_a_finish_time_is_accepted() -> None:
     (decoded,) = decode_jsonl(json.dumps(record))
 
     assert decoded["timestamp"] is None
+
+
+def test_a_not_run_result_round_trips_through_its_finish_record() -> None:
+    """The producer and reader agree on a harness that never ran."""
+    from rust_prover_tools.supervision.events import harness_finish_record
+    from rust_prover_tools.supervision.run_finalize import not_run_result
+
+    record = {
+        "schema": 1,
+        **harness_finish_record(
+            run_id="run-1", result=not_run_result(spec(), "skipped")
+        ),
+    }
+
+    (decoded,) = decode_jsonl(json.dumps(record))
+
+    assert decoded["status"] == "not-run"
+    assert decoded["stop_reason"] is None
+    assert decoded["timestamp"] is None
+
+
+def test_null_output_text_is_refused_and_empty_text_is_kept() -> None:
+    """The producer always writes the decoded line, possibly empty."""
+    null_record = _valid_record("output")
+    null_record["text"] = None
+    with pytest.raises(EvidenceFormatError, match="text"):
+        decode_jsonl(json.dumps(null_record))
+
+    empty_record = _valid_record("output")
+    empty_record["text"] = ""
+    (decoded,) = decode_jsonl(json.dumps(empty_record))
+    assert decoded["text"] == ""

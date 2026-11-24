@@ -110,14 +110,21 @@ def require_str(
     *,
     subject: str,
     optional: bool = False,
+    emptiable: bool = False,
 ) -> None:
-    """Require a string, or `None` when the field is optional."""
+    """Require a string, or `None` when the field is optional.
+
+    `emptiable` permits the empty string for a field whose producer can write
+    one legitimately, such as a decoded output line with no characters.
+    """
     if value is None and optional:
         return
     if not isinstance(value, str):
         msg = f"{subject} is not a string"
         raise EvidenceFormatError(msg)
-    if not optional and not value:
+    if optional or emptiable:
+        return
+    if not value:
         msg = f"{subject} is an empty string"
         raise EvidenceFormatError(msg)
 

@@ -650,3 +650,85 @@ def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_stopped_attempt_with_a_dropped_duplicate_is_unknown() -> None:
+    """The overflow guard must run before a stop returns.
+
+    One matching selection and verdict are retained, the budget is filled by
+    other names, and a second matching selection is dropped. A timeout then
+    stops the attempt before any parse, so only the pre-stop guard can keep
+    the retained `PASSED` from being reported.
+    """
+    from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
+
+    observer = KaniObserver()
+    clock = VirtualClock()
+    lines = [
+        "Kani Rust Verifier 0.67.0 (cargo plugin)",
+        "Checking harness harnesses::verified...",
+        "VERIFICATION:- SUCCESSFUL",
+        *(
+            f"Checking harness harnesses::filler{index}..."
+            for index in range(MAX_LIVE_RECORDS - 1)
+        ),
+        "Checking harness harnesses::verified...",
+    ]
+    for line in lines:
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+    assert observer.facts_truncated
+    evidence = _evidence(
+        "harnesses::verified",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_spool_failure_is_not_replaced_by_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The flush or parse error survives a failing cleanup.
+
+    A full temporary filesystem can fail both the flush and the close. The
+    caller must see the primary failure, not the cleanup's.
+    """
+    observer = KaniObserver()
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Kani Rust Verifier 0.67.0 (cargo plugin)",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+
+    def fail_flush() -> None:
+        """Fail the flush as a full filesystem would."""
+        msg = "the spool could not be flushed"
+        raise OSError(msg)
+
+    def fail_close() -> None:
+        """Fail the cleanup that follows."""
+        msg = "the spool could not be closed"
+        raise OSError(msg)
+
+    monkeypatch.setattr(observer._spool, "flush", fail_flush)
+    stack = observer._stack
+    assert stack is not None
+    monkeypatch.setattr(stack, "close", fail_close)
+
+    with pytest.raises(OSError, match="flushed"):
+        observer.finish(0)

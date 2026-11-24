@@ -228,9 +228,15 @@ class KaniObserver:
         try:
             self._spool.flush()
             with self._path.open("r", encoding="utf-8", errors="replace") as handle:
-                return parse_kani_log_lines(line.removesuffix("\n") for line in handle)
-        finally:
-            self._close_spool()
+                log = parse_kani_log_lines(line.removesuffix("\n") for line in handle)
+        except BaseException:
+            # The flush or parse failure is the primary one; a cleanup failure
+            # while it unwinds must not replace it.
+            with contextlib.suppress(Exception):
+                self._close_spool()
+            raise
+        self._close_spool()
+        return log
 
     def close(self) -> None:
         """Release the spool, tolerating a repeated or never-opened call.
