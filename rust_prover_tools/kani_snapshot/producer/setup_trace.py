@@ -20,9 +20,10 @@ import re
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-
-if typ.TYPE_CHECKING:
-    import collections.abc as cabc
+from rust_prover_tools.kani_snapshot.producer.trace_fragments import (
+    FragmentError,
+    join_fragments,
+)
 
 __all__ = (
     "MAX_EXEC_RECORDS",
@@ -180,7 +181,11 @@ def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:
     """
     _require_bounded_trace(trace)
     records: list[ExecRecord] = []
-    for line in _joined(trace.splitlines()):
+    try:
+        joined = join_fragments(trace.splitlines())
+    except FragmentError as exc:
+        raise SetupTraceError(str(exc)) from exc
+    for line in joined:
         record = _record(line)
         if record is not None:
             records.append(record)
@@ -188,51 +193,6 @@ def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:
             msg = f"setup trace exceeds the {MAX_EXEC_RECORDS}-record ceiling"
             raise SetupTraceError(msg)
     return tuple(records)
-
-
-#: strace writes a fragment under either a bare PID (`-o`) or `[pid N]` (stderr).
-_PID_PREFIX: typ.Final[str] = r"(?:(?:\[pid\s+(?P<pid>[0-9]+)\]|(?P<plain>[0-9]+))\s+)"
-_UNFINISHED: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PID_PREFIX}(?P<body>.*)<unfinished \.\.\.>$"
-)
-_RESUMED: typ.Final[re.Pattern[str]] = re.compile(
-    rf"^{_PID_PREFIX}<\.\.\. \w+ resumed>(?P<body>.*)$"
-)
-
-
-def _pid(match: re.Match[str]) -> str:
-    """Return the process id a fragment names, in either prefix form."""
-    return match.group("pid") or match.group("plain")
-
-
-def _joined(lines: cabc.Iterable[str]) -> list[str]:
-    """Join strace's unfinished/resumed fragments, keyed by process id.
-
-    Concurrent descendants can make strace split one call across two lines.
-    A fragment with no matching resume is refused, so a truncated trace is
-    never mistaken for a complete one.
-    """
-    pending: dict[str, str] = {}
-    joined: list[str] = []
-    for line in lines:
-        unfinished = _UNFINISHED.match(line)
-        if unfinished is not None:
-            pending[_pid(unfinished)] = unfinished.group("body")
-            continue
-        resumed = _RESUMED.match(line)
-        if resumed is not None:
-            pid = _pid(resumed)
-            if pid not in pending:
-                msg = f"setup trace resumes an unknown process {pid!r}: {line[:200]!r}"
-                raise SetupTraceError(msg)
-            tail = resumed.group("body").lstrip("> ")
-            joined.append(f"{pid} {pending.pop(pid)}{tail}")
-            continue
-        joined.append(line)
-    if pending:
-        msg = f"setup trace has unfinished records: {sorted(pending)}"
-        raise SetupTraceError(msg)
-    return joined
 
 
 def _require_bounded_trace(trace: str) -> None:
