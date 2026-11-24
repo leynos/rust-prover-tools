@@ -369,3 +369,43 @@ def test_unreadable_mountinfo_uses_the_documented_fallback(tmp_path: Path) -> No
     )
 
     assert reader.discover() == str(tmp_path / "fallback" / "job.scope")
+
+
+@pytest.mark.parametrize(
+    ("raw", "decoded"),
+    [
+        (r"/mnt/a\040b", "/mnt/a b"),
+        (r"/mnt/cg\134name", "/mnt/cg\\name"),
+        (r"/mnt/cg\012x", "/mnt/cg\nx"),
+        ("/plain", "/plain"),
+        (r"/x\134040y", "/x\\040y"),
+    ],
+)
+def test_mountinfo_octal_escapes_are_decoded_once(
+    raw: str,
+    decoded: str,
+) -> None:
+    """Space, tab, newline and backslash escapes all decode, exactly once."""
+    from rust_prover_tools.supervision.cgroup import _unescape
+
+    assert _unescape(raw) == decoded
+
+
+def test_an_escaped_cgroup2_mount_point_is_resolved(tmp_path: Path) -> None:
+    """A mount point containing an escaped space is found by its real name."""
+    mount = tmp_path / "host" / "cg name"
+    job = mount / "leaf"
+    job.mkdir(parents=True)
+    (job / "memory.current").write_text("2048\n", encoding="utf-8")
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/job.scope/leaf\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "36 24 0:32 /job.scope /host/cg\\040name rw - cgroup2 cgroup2 rw\n",
+        encoding="utf-8",
+    )
+    reader = CgroupV2Reader(root=mount, self_cgroup=membership, mountinfo=mountinfo)
+
+    path = reader.discover()
+
+    assert path == str(job)

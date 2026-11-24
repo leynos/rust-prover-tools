@@ -124,7 +124,9 @@ class SupervisedRun:
             # cancellation continue.
             self._account_unrecorded(ledger, CANCELLED_DETAIL)
             ledger.interrupted = True
-            with contextlib.suppress(ProverToolError):
+            # Publication failures must not replace the cancellation that is
+            # already unwinding this run.
+            with contextlib.suppress(ProverToolError, OSError, ValueError):
                 self._finalize(ledger, started_at)
             raise
         except Exception:
@@ -132,7 +134,8 @@ class SupervisedRun:
             # INV-FINALIZE still applies: publish what was observed, then let
             # the failure continue so the caller sees the real cause.
             self._account_unrecorded(ledger, NOT_RUN_DETAIL)
-            with contextlib.suppress(ProverToolError):
+            # Likewise, keep the original monitor or runner failure visible.
+            with contextlib.suppress(ProverToolError, OSError, ValueError):
                 self._finalize(ledger, started_at)
             raise
         return self._finalize(ledger, started_at)

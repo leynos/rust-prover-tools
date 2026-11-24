@@ -196,9 +196,29 @@ def _cgroup2_mounts(path: Path) -> list[tuple[str, str]] | None:
     return mounts
 
 
+_ESCAPES = {"040": " ", "011": "\t", "012": "\n", "134": "\\"}
+
+
 def _unescape(field: str) -> str:
-    """Undo the octal escapes mountinfo applies to spaces and tabs."""
-    return field.replace("\\040", " ").replace("\\011", "\t")
+    r"""Undo every octal escape mountinfo applies to a path.
+
+    Linux escapes space, tab, newline and backslash as ``\040``, ``\011``,
+    ``\012`` and ``\134``. Decoding runs once, left to right, so a literal
+    ``\134`` that spells an escape is not decoded twice.
+    """
+    pieces: list[str] = []
+    index = 0
+    while index < len(field):
+        if (
+            field[index] == "\\"
+            and (escape := field[index + 1 : index + 4]) in _ESCAPES
+        ):
+            pieces.append(_ESCAPES[escape])
+            index += 4
+        else:
+            pieces.append(field[index])
+            index += 1
+    return "".join(pieces)
 
 
 def _relative_membership(membership: str, mount_root: str) -> str | None:

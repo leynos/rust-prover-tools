@@ -27,6 +27,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "AttemptEvidence",
+    "AttemptSettlement",
     "finish_cgroup",
     "idle_seconds",
     "latest",
@@ -98,6 +99,48 @@ class AttemptEvidence:
     def os_reported_oom_kill(self) -> int | None:
         """The observed ``oom_kill`` increase, when the cgroup evidence allows it."""
         return self.cgroup.oom_kill_delta
+
+
+@dc.dataclass(frozen=True, slots=True)
+class AttemptSettlement:
+    """The raw facts one settled attempt contributes to its evidence.
+
+    The fields travel together from the attempt loop; grouping them keeps the
+    evidence builder a single translation rather than a ten-argument call.
+    """
+
+    spec: HarnessSpec
+    stop_reason: StopReason
+    result: LaunchResult
+    started_at: dt.datetime
+    finished_at: dt.datetime
+    duration: float
+    samples: tuple[ResourceSample, ...]
+    cgroup: CgroupObservation
+    last_output: str | None
+    stop_detail: str
+
+    def to_evidence(self) -> AttemptEvidence:
+        """Build the attempt's evidence with each summary from its samples."""
+        return AttemptEvidence(
+            spec=self.spec,
+            stop_reason=self.stop_reason,
+            exit_code=self.result.exit_code,
+            signal_number=self.result.signal_number,
+            launch_error=self.result.launch_error,
+            started_at=self.started_at,
+            finished_at=self.finished_at,
+            duration_seconds=self.duration,
+            samples=self.samples,
+            peak_group_rss=peak([sample.group_rss for sample in self.samples]),
+            min_host_available=minimum([
+                sample.host_available for sample in self.samples
+            ]),
+            host_total=latest([sample.host_total for sample in self.samples]),
+            cgroup=self.cgroup,
+            last_output=self.last_output,
+            stop_detail=self.stop_detail,
+        )
 
 
 def peak(values: cabc.Sequence[Measurement]) -> Measurement:

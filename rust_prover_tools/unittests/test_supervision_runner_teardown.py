@@ -1,0 +1,698 @@
+"""Hold cancellation, monitor failure, and report publication to their rules.
+
+The core runner tests own continuation, accounting, and classification; these
+own what happens when a run is cancelled or its monitor fails, and how the
+report is published when a sink fails. They share the same support module.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import dataclasses as dc
+import datetime as dt
+import json
+import typing as typ
+
+import pytest
+
+from rust_prover_tools.supervision import (
+    Diagnostics,
+    ExecutionStatus,
+    HarnessClassification,
+    HarnessSpec,
+    LaunchResult,
+    Measurement,
+    MemorySink,
+    NullSink,
+    ProofVerdict,
+    ResourceSample,
+    RunningHarness,
+    StopReason,
+    run_supervised,
+    validate_report_document,
+)
+from rust_prover_tools.supervision.config import DiagnosticSinks
+from rust_prover_tools.unittests.supervision_doubles import (
+    Script,
+    ScriptedLauncher,
+    ScriptedProbe,
+    VirtualClock,
+    spec,
+)
+from rust_prover_tools.unittests.supervision_runner_support import (
+    NullObserver,
+)
+from rust_prover_tools.unittests.supervision_runner_support import (
+    async_test as _async_test,
+)
+from rust_prover_tools.unittests.supervision_runner_support import (
+    config as _config,
+)
+from rust_prover_tools.unittests.supervision_runner_support import (
+    environment as _environment,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    from pathlib import Path
+
+    from rust_prover_tools.supervision import (
+        AttemptEvidence,
+        LaunchCommand,
+        LineObserver,
+    )
+
+
+def test_a_diagnostic_failure_still_publishes_the_report(
+    tmp_path: Path,
+) -> None:
+    """The report destination does not depend on the live sinks."""
+    asyncio.run(_diagnostic_failure_scenario(tmp_path))
+
+
+async def _diagnostic_failure_scenario(tmp_path: Path) -> None:
+    """Run one passing harness whose JSONL sink fails at finalization."""
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(script=Script(exit_code=0))
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(human=NullSink(), jsonl=_FailOnRunFinish()),
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=10.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+
+    with pytest.raises(OSError, match="full"):
+        await run_supervised((spec(),), config, environment)
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+
+
+class _FailOnHarnessFinish:
+    """A JSONL sink that fails when one harness closes."""
+
+    @property
+    def offset(self) -> int:
+        """Report no bytes, because this sink stores nothing."""
+        return 0
+
+    def write(self, record: dict[str, object]) -> None:
+        """Refuse a harness-finish record, as a broken pipe would."""
+        if record.get("record") == "harness-finish":
+            msg = "the harness sink failed"
+            raise OSError(msg)
+
+    def flush(self) -> None:
+        """Do nothing; writes fail synchronously."""
+
+
+def test_a_harness_finish_failure_still_publishes_the_report(
+    tmp_path: Path,
+) -> None:
+    """A completed result is not discarded when its live record fails."""
+    asyncio.run(_harness_finish_failure_scenario(tmp_path))
+
+
+async def _harness_finish_failure_scenario(tmp_path: Path) -> None:
+    """Run one passing harness whose finish record cannot be written."""
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(script=Script(exit_code=0))
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(human=NullSink(), jsonl=_FailOnHarnessFinish()),
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=10.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+
+    with pytest.raises(OSError, match="harness sink failed"):
+        await run_supervised((spec(),), config, environment)
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    assert len(document["results"]) == 1
+
+
+class _FixedPid:
+    """Report a fixed process-group id to a running handle."""
+
+    pid: int | None = 4321
+    settled_exit_code: int | None = None
+
+
+def test_cancelling_one_waiter_does_not_cancel_the_launch() -> None:
+    """The monitor and runner can both wait on one child safely."""
+
+    async def scenario() -> None:
+        """Cancel one waiter and prove the child is still alive."""
+        release = asyncio.Event()
+
+        async def child() -> LaunchResult:
+            """Wait for the test to release the child."""
+            await release.wait()
+            return LaunchResult(exit_code=0)
+
+        task = asyncio.create_task(child())
+        running = RunningHarness(task, _FixedPid())
+        waiter = asyncio.create_task(running.wait())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await waiter
+
+        assert not task.cancelled()
+        release.set()
+        assert (await running.wait()).exit_code == 0
+
+    asyncio.run(scenario())
+
+
+class _SettlingPid:
+    """Report a fixed pid and no settled status."""
+
+    pid: int | None = 4321
+    settled_exit_code: int | None = None
+
+
+def test_a_cancelled_waiter_does_not_report_an_unsettled_stop() -> None:
+    """A stop is not reported until Cuprum has settled the owned group."""
+
+    async def scenario() -> None:
+        """Cancel one waiter while the group is still being torn down."""
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def child() -> LaunchResult:
+            """Enter teardown on cancellation and settle when released."""
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                await release.wait()
+                raise
+            return LaunchResult(exit_code=0)
+
+        task = asyncio.create_task(child())
+        await started.wait()
+        running = RunningHarness(task, _SettlingPid())
+        running.stop(StopReason.TIMEOUT)
+        await asyncio.sleep(0)
+
+        waiter = asyncio.create_task(running.wait())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        await asyncio.sleep(0)
+
+        assert not waiter.done(), "the waiter reported before the group settled"
+        release.set()
+        result = await asyncio.wait_for(waiter, timeout=1)
+        assert task.done()
+        assert result.exit_code is None
+        assert result.signal_number is None
+
+    asyncio.run(scenario())
+
+
+class _ProbeFailedError(RuntimeError):
+    """The test probe failed while sampling."""
+
+    def __init__(self) -> None:
+        """Record the failure."""
+        super().__init__("probe failed")
+
+
+class _ExplodingProbe:
+    """A probe whose first sample fails, to prove the monitor surfaces it."""
+
+    def sample(
+        self,
+        spec: HarnessSpec,
+        *,
+        group_id: int | None,
+        started_at: dt.datetime,
+        started_monotonic: float,
+    ) -> ResourceSample:
+        """Raise instead of measuring."""
+        del spec, group_id, started_at, started_monotonic
+        raise _ProbeFailedError
+
+
+@_async_test
+async def test_a_monitor_failure_is_not_hidden_by_cancellation() -> None:
+    """A failing sample raises instead of returning a silent cancellation."""
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True)),
+        VirtualClock(),
+        probe=_ExplodingProbe(),
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        await run_supervised(
+            (spec(),),
+            _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+            environment,
+        )
+
+
+@_async_test
+async def test_a_monitor_failure_stops_and_joins_the_child() -> None:
+    """A failing monitor must not leave an unsupervised process group.
+
+    The child's tracked task does not finish when it observes cancellation; it
+    waits on an event the test releases. The run must therefore still be
+    pending after teardown starts, which shows the runner waited for the join
+    rather than returning as soon as it requested a stop.
+    """
+    teardown_started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    class _TrackingLauncher(ScriptedLauncher):
+        """A launcher whose child's task holds teardown open."""
+
+        def start(
+            self,
+            spec: HarnessSpec,
+            build: cabc.Callable[[HarnessSpec], LaunchCommand],
+            on_line: cabc.Callable[[object], None],
+        ) -> RunningHarness:
+            """Wrap the scripted run so teardown can be held."""
+            running = super().start(spec, build, on_line)
+            task = running._task
+
+            async def tracked() -> LaunchResult:
+                """Wait for the test before finishing cancellation."""
+                try:
+                    return await task
+                except asyncio.CancelledError:
+                    teardown_started.set()
+                    await release.wait()
+                    finished.set()
+                    raise
+
+            return RunningHarness(asyncio.create_task(tracked()), running._recorder)
+
+    environment = _environment(
+        _TrackingLauncher(script=Script(block=True)),
+        VirtualClock(),
+        probe=_ExplodingProbe(),
+    )
+    run = asyncio.create_task(
+        run_supervised(
+            (spec(),),
+            _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+            environment,
+        )
+    )
+    await asyncio.wait_for(teardown_started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert not run.done(), "the run returned before its child finished teardown"
+
+    release.set()
+    with pytest.raises(RuntimeError, match="probe failed"):
+        await run
+
+    assert finished.is_set()
+
+
+@_async_test
+async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
+    """A cancelled run reports the in-flight attempt, not work that never ran."""
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(script=Script(block=True), ready=ready)
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    jsonl = MemorySink()
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        statuses={first.qualified: ExecutionStatus.INTERRUPTED},
+    )
+    task = asyncio.create_task(
+        run_supervised(
+            (first, second),
+            _config(timeout_seconds=600.0),
+            environment,
+        )
+    )
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert StopReason.INTERRUPTED in launcher.stops
+    finish = next(
+        record for record in jsonl.records if record["record"] == "run-finish"
+    )
+    assert finish["interrupted"] is True
+    assert finish["complete"] is False
+    accounting = typ.cast("dict[str, object]", finish["accounting"])
+    assert accounting["missing"] == [second.qualified]
+    assert accounting["unexpected"] == []
+
+
+class _ReportingProbe:
+    """A probe that fails after recording one sample, and captures the report."""
+
+    def __init__(self) -> None:
+        """Create a probe with no failure yet."""
+        self.fail = False
+
+    def sample(
+        self,
+        spec: HarnessSpec,
+        *,
+        group_id: int | None,
+        started_at: dt.datetime,
+        started_monotonic: float,
+    ) -> ResourceSample:
+        """Fail once the test asks for it."""
+        del spec, group_id, started_at, started_monotonic
+        if self.fail:
+            msg = "probe failed"
+            raise RuntimeError(msg)
+        return ResourceSample(
+            timestamp_utc=dt.datetime(2026, 11, 21, 12, 0, tzinfo=dt.UTC),
+            elapsed_seconds=1.0,
+            package="p",
+            harness="harnesses::verified",
+            attempt=1,
+            group_rss=Measurement.available(1),
+            host_available=Measurement.available(2),
+            host_total=Measurement.available(3),
+        )
+
+
+@_async_test
+async def test_a_monitor_failure_still_finalizes_the_report() -> None:
+    """INV-FINALIZE applies to a fault, not only to an ordinary ending."""
+    clock = VirtualClock()
+    probe = _ReportingProbe()
+    jsonl = MemorySink()
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    environment = _environment(
+        launcher := ScriptedLauncher(script=Script(block=True)),
+        clock,
+        probe=probe,
+        sinks=Diagnostics(jsonl=jsonl),
+    )
+
+    async def run() -> None:
+        """Fail the probe after the run has started."""
+        probe.fail = True
+        with pytest.raises(RuntimeError, match="probe failed"):
+            await run_supervised(
+                (first, second),
+                _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+                environment,
+            )
+
+    await run()
+
+    kinds = [record["record"] for record in jsonl.records]
+    assert "run-finish" in kinds
+    assert StopReason.INTERRUPTED in launcher.stops
+    finish = next(
+        record for record in jsonl.records if record["record"] == "run-finish"
+    )
+    assert finish["complete"] is False
+    accounting = typ.cast("dict[str, object]", finish["accounting"])
+    assert accounting["missing"] == [second.qualified]
+
+
+class _ObservingAdapter:
+    """An adapter that reports scripted observed identities."""
+
+    def __init__(self, observed: tuple[str, ...]) -> None:
+        """Record the observed identities every attempt reports."""
+        self._observed = observed
+
+    def observer(self, spec: HarnessSpec) -> LineObserver:
+        """Return an observer that records nothing."""
+        del spec
+        return NullObserver()
+
+    def classify(
+        self,
+        evidence: AttemptEvidence,
+        observer: LineObserver,
+    ) -> HarnessClassification:
+        """Report the scripted observation alongside a passing status."""
+        del observer
+        return HarnessClassification(
+            status=ExecutionStatus.PASSED,
+            proof_verdict=ProofVerdict.PASSED,
+            observed=tuple(
+                f"{evidence.spec.package}::{name}" for name in self._observed
+            ),
+        )
+
+
+@_async_test
+async def test_a_mismatched_observation_is_accounted_as_drift() -> None:
+    """An identity the verifier selected but nobody requested is drift."""
+    environment = _environment(
+        ScriptedLauncher(),
+        VirtualClock(),
+        adapter=_ObservingAdapter(("harnesses::other",)),
+    )
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert report.accounting.unexpected == (f"{spec().package}::harnesses::other",)
+    assert spec().qualified in report.accounting.missing
+    assert not report.is_complete
+
+
+@_async_test
+async def test_a_duplicated_observation_is_accounted_as_drift() -> None:
+    """The same identity observed twice is a duplicate execution."""
+    environment = _environment(
+        ScriptedLauncher(),
+        VirtualClock(),
+        adapter=_ObservingAdapter((spec().harness, spec().harness)),
+    )
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert report.accounting.duplicate == (spec().qualified,)
+    assert not report.is_complete
+
+
+@_async_test
+async def test_no_observation_is_accounted_as_missing() -> None:
+    """A child that selected nothing leaves the expected identity missing."""
+    environment = _environment(
+        ScriptedLauncher(),
+        VirtualClock(),
+        adapter=_ObservingAdapter(()),
+    )
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert report.accounting.missing == (spec().qualified,)
+    assert not report.is_complete
+
+
+@_async_test
+async def test_a_matching_observation_is_complete() -> None:
+    """The requested identity observed exactly once is not drift."""
+    environment = _environment(
+        ScriptedLauncher(),
+        VirtualClock(),
+        adapter=_ObservingAdapter((spec().harness,)),
+    )
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert report.accounting.is_empty
+    assert report.is_complete
+
+
+def test_a_cancelled_attempt_is_reported_as_interrupted(tmp_path: Path) -> None:
+    """The reported result names the stop, not an ordinary exit."""
+    asyncio.run(_cancelled_attempt_scenario(tmp_path))
+
+
+async def _cancelled_attempt_scenario(tmp_path: Path) -> None:
+    """Cancel a run and inspect its report and JSONL evidence."""
+    from rust_prover_tools.supervision.config import DiagnosticSinks
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(
+                ("stdout", "Checking harness harnesses::a..."),
+                ("stdout", "VERIFICATION:- SUCCESSFUL"),
+            ),
+            block=True,
+        ),
+        ready=ready,
+    )
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=600.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+    task = asyncio.create_task(run_supervised((first, second), config, environment))
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    finish = next(
+        record
+        for record in jsonl.records
+        if record["record"] == "harness-finish" and record["harness"] == first.harness
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["stop_reason"] == "interrupted"
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert [entry["status"] for entry in results] == ["interrupted", "not-run"]
+    assert results[0]["stop_reason"] == "interrupted"
+    assert results[0]["diagnostic"] is not None
+    accounting = typ.cast("dict[str, object]", document["accounting"])
+    assert accounting["missing"] == [second.qualified]
+    assert accounting["unexpected"] == []
+
+
+def test_a_monitor_fault_is_reported_as_interrupted(tmp_path: Path) -> None:
+    """A fault the supervisor caused is recorded as its own stop."""
+    asyncio.run(_monitor_fault_scenario(tmp_path))
+
+
+async def _monitor_fault_scenario(tmp_path: Path) -> None:
+    """Fail the probe and inspect the reported stop reason."""
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    class _FailingProbe(ScriptedProbe):
+        """A probe that fails on every sample."""
+
+        def sample(self, spec: HarnessSpec, **kwargs: object) -> ResourceSample:
+            """Raise the fault the monitor must survive."""
+            del spec, kwargs
+            msg = "probe failed"
+            raise RuntimeError(msg)
+
+    from rust_prover_tools.supervision.config import DiagnosticSinks
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        ScriptedLauncher(
+            script=Script(
+                lines=(("stdout", "Checking harness harnesses::verified..."),),
+                block=True,
+            )
+        ),
+        clock,
+        probe=_FailingProbe(),
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        await run_supervised((spec(),), config, environment)
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["stop_reason"] == "interrupted"
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert results[0]["status"] == "interrupted"
+    assert results[0]["diagnostic"] is not None
+    accounting = typ.cast("dict[str, object]", document["accounting"])
+    assert accounting["missing"] == []
+    assert accounting["unexpected"] == []
+
+
+def test_a_cancelled_attempt_accounts_for_a_mismatched_observation(
+    tmp_path: Path,
+) -> None:
+    """Accounting uses what the verifier selected, not what was requested."""
+    asyncio.run(_mismatched_cancellation_scenario(tmp_path))
+
+
+async def _mismatched_cancellation_scenario(tmp_path: Path) -> None:
+    """Cancel a run whose child selected a different harness."""
+    from rust_prover_tools.supervision.config import DiagnosticSinks
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    first, second = spec("harnesses::a"), spec("harnesses::b")
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(("stdout", "Checking harness harnesses::other..."),),
+            block=True,
+        ),
+        ready=ready,
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=600.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=MemorySink()),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+    task = asyncio.create_task(run_supervised((first, second), config, environment))
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    accounting = typ.cast("dict[str, list[str]]", document["accounting"])
+    assert accounting["unexpected"] == ["example::harnesses::other"]
+    assert first.qualified in accounting["missing"]
+
+
+class _FailOnRunFinish:
+    """A JSONL sink that fails only when the run closes."""
+
+    @property
+    def offset(self) -> int:
+        """Report no bytes, because this sink stores nothing."""
+        return 0
+
+    def write(self, record: dict[str, object]) -> None:
+        """Refuse the closing record, as a full disk would."""
+        if record.get("record") == "run-finish":
+            msg = "the evidence destination is full"
+            raise OSError(msg)
+
+    def flush(self) -> None:
+        """Do nothing; writes already flush or fail synchronously."""

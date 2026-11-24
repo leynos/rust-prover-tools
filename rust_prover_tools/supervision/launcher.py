@@ -343,8 +343,22 @@ class CuprumHarnessLauncher:
         started: float,
     ) -> tuple[RunOutputOptions, list[PipeDrain]]:
         """Create the child's pipes and the drains that own their read ends."""
-        out_read, out_write = os.pipe()
-        err_read, err_write = os.pipe()
+        readable: list[int] = []
+        writable: list[int] = []
+        try:
+            out_read, out_write = os.pipe()
+            readable.append(out_read)
+            writable.append(out_write)
+            err_read, err_write = os.pipe()
+            readable.append(err_read)
+            writable.append(err_write)
+        except OSError:
+            # Nothing is registered with the recorder yet, so no other
+            # cleanup path owns these descriptors.
+            for descriptor in (*readable, *writable):
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+            raise
         recorder.own(out_write, err_write)
         output = RunOutputOptions(
             capture=False,

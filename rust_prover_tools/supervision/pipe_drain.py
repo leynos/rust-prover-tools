@@ -111,17 +111,25 @@ class PipeDrain:
             )
 
     def close(self) -> None:
-        """Stop reading and forward any retained trailing line."""
+        """Stop reading and forward any retained trailing line.
+
+        The descriptor release and completion signal are in `finally` because
+        a forwarding failure - a spool write raising `OSError`, for instance -
+        must not leave the pipe open or make `settle_drains` wait its whole
+        grace period. Forwarding still happens before either.
+        """
         if self._closed:
             return
         self._closed = True
         with contextlib.suppress(ValueError, RuntimeError):
             asyncio.get_running_loop().remove_reader(self._descriptor)
-        for text in self._splitter.finish():
-            self._emit(text)
-        with contextlib.suppress(OSError):
-            os.close(self._descriptor)
-        self.finished.set()
+        try:
+            for text in self._splitter.finish():
+                self._emit(text)
+        finally:
+            with contextlib.suppress(OSError):
+                os.close(self._descriptor)
+            self.finished.set()
 
 
 async def settle_drains(drains: cabc.Sequence[PipeDrain]) -> None:

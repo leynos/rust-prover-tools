@@ -23,11 +23,9 @@ import typing as typ
 
 from rust_prover_tools.supervision.attempt_state import (
     AttemptEvidence,
+    AttemptSettlement,
     finish_cgroup,
     idle_seconds,
-    latest,
-    minimum,
-    peak,
     resolved_reason,
 )
 from rust_prover_tools.supervision.events import (
@@ -208,15 +206,18 @@ class AttemptSupervisor:
             result = await waiter
         finally:
             monitor.cancel()
+            # Await the retained failure without re-raising it here: it is
+            # re-raised after settlement so the child's exit evidence and
+            # cleanup are not lost to the monitor's exception.
             with contextlib.suppress(asyncio.CancelledError):
-                await monitor
+                await asyncio.gather(monitor, return_exceptions=True)
             if not running.done and running.stop_reason is None:
                 self._request_stop(running, "the supervisor stopped the run")
             joined = await running.settle()
             self._settled = joined
             waiter.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await waiter
+                await asyncio.gather(waiter, return_exceptions=True)
         if failure is not None:
             raise failure
         return joined if result is None else result
@@ -342,7 +343,9 @@ class AttemptSupervisor:
                     run_id=self.run_id,
                     sample=sample,
                     idle_seconds=idle_seconds(self._last_output_elapsed, elapsed),
-                    last_progress=self._recognised_progress(),
+                    last_progress=(
+                        None if self._observer is None else self._observer.last_progress
+                    ),
                 )
             )
         verdict = first_stop(
@@ -365,10 +368,6 @@ class AttemptSupervisor:
         running.stop(verdict.reason)
         return True
 
-    def _recognised_progress(self) -> str | None:
-        """Return the adapter's last recognised progress line, if any."""
-        return None if self._observer is None else self._observer.last_progress
-
     def _evidence(
         self,
         result: LaunchResult,
@@ -377,24 +376,15 @@ class AttemptSupervisor:
         cgroup_start: CgroupObservation,
     ) -> AttemptEvidence:
         """Assemble the attempt's termination and resource evidence."""
-        finished_at = self.clock.now()
-        duration = max(0.0, self.clock.monotonic() - started_monotonic)
-        return AttemptEvidence(
+        return AttemptSettlement(
             spec=self.spec,
             stop_reason=resolved_reason(self._stop_reason, result),
-            exit_code=result.exit_code,
-            signal_number=result.signal_number,
-            launch_error=result.launch_error,
+            result=result,
             started_at=started_at,
-            finished_at=finished_at,
-            duration_seconds=duration,
+            finished_at=self.clock.now(),
+            duration=max(0.0, self.clock.monotonic() - started_monotonic),
             samples=tuple(self._samples),
-            peak_group_rss=peak([sample.group_rss for sample in self._samples]),
-            min_host_available=minimum([
-                sample.host_available for sample in self._samples
-            ]),
-            host_total=latest([sample.host_total for sample in self._samples]),
             cgroup=finish_cgroup(self.cgroup, cgroup_start),
             last_output=self._last_output,
             stop_detail=self._stop_detail,
-        )
+        ).to_evidence()

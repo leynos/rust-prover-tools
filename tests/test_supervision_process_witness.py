@@ -246,7 +246,7 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
         "sys.stdout.write('after\\n')\n",
         encoding="utf-8",
     )
-    forwarded: list[int] = []
+    forwarded: list[str] = []
 
     def build(identity: object) -> LaunchCommand:
         """Run the newline-free script through the real launcher."""
@@ -254,8 +254,8 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
         return LaunchCommand((sys.executable, "-I", str(line)), cwd=tmp_path)
 
     def on_line(item: object) -> None:
-        """Record the forwarded line length."""
-        forwarded.append(len(typ.cast("typ.Any", item).text.encode("utf-8")))
+        """Record the forwarded line text."""
+        forwarded.append(typ.cast("typ.Any", item).text)
 
     async def scenario() -> object:
         """Start the child and wait for it on one loop."""
@@ -272,4 +272,9 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert forwarded, "the child produced no lines"
-    assert max(forwarded) <= 8 * 1024, "a line exceeded the configured bound"
+    assert max(len(line.encode("utf-8")) for line in forwarded) <= 8 * 1024
+    # The clipped line must still arrive, marked, and the line after it must
+    # follow: forwarding only `after` would also satisfy a length-only check.
+    assert forwarded[0].startswith("x")
+    assert "truncated" in forwarded[0]
+    assert forwarded[-1] == "after"
