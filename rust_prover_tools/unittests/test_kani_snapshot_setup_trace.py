@@ -113,7 +113,7 @@ def test_an_unparsable_execve_record_is_refused() -> None:
 
 
 def test_an_elided_argument_is_refused() -> None:
-    """strace's default string limit could hide a `.rs` suffix."""
+    """An argument strace elides could hide a `.rs` suffix."""
     trace = (
         _LAUNCHER + '901  execve("/toolchain/bin/rustc", ["rustc", '
         '"/home/runner/work/a-very-long-path/that/strace/elides/source.rs"...], '

@@ -57,8 +57,7 @@ ALLOWED_UV_LINES: tuple[str, ...] = (
     # the helper: `uv venv` creates the consumer environment and `uv pip
     # install` puts the built wheel in it, so each mention is the gated
     # command rather than a bypass of it.
-    '$(UV_GATE) run -- uv venv "$(KANI_SNAPSHOT_SMOKE_VENV)" --python 3.14',
-    '$(UV_GATE) run -- uv pip install --python "$(KANI_SNAPSHOT_SMOKE_VENV)/bin/python" "$$KANI_SNAPSHOT_WHEEL"',  # ruff: ignore[line-too-long]
+    '@smoke_dir=$$(mktemp -d "$(KANI_SNAPSHOT_SMOKE_PARENT)/kani-snapshot-smoke.XXXXXX"); trap \'rm -rf "$$smoke_dir"\' EXIT INT TERM; $(UV_GATE) run -- uv venv "$$smoke_dir/venv" --python 3.14 && $(UV_GATE) run -- uv pip install --python "$$smoke_dir/venv/bin/python" "$$KANI_SNAPSHOT_WHEEL" && KANI_SNAPSHOT_SMOKE=1 KANI_SNAPSHOT_SMOKE_ASSET_DIR="$$KANI_SNAPSHOT_ASSET_DIR" KANI_SNAPSHOT_SMOKE_PROVER_TOOLS="$$smoke_dir/venv/bin/prover-tools" KANI_SNAPSHOT_SMOKE_RUSTC_1_93="$$KANI_SNAPSHOT_RUSTC_1_93" $(UV_GATE) run -- pytest -q tests/integration/test_kani_snapshot_smoke.py',  # ruff: ignore[line-too-long]
 )
 MAKE = shutil.which("make")
 MARKER = "UV-GATE-MARKER"
