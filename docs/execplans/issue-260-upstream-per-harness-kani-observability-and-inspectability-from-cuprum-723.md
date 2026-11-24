@@ -163,6 +163,18 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 09:30Z) Readiness gate at `ad79e4d`. Hosted CI run
+  45359396262 is green (`lint-test`, `Gecko Security Review`; Sourcery
+  skipped). CodeScene is not configured for this repository. The tags
+  assessments returned no remaining confirmed defect at this head and plan
+  revision `5bd0236`: completeness/correctness (`RPT-266-EXECPLAN-FOLLOWUP12`),
+  proof (`RPT-266-PROOF-FOLLOWUP12`), original issue
+  (`RPT-266-ISSUE-FOLLOWUP12`), and pre-merge reconciliation
+  (`RPT-266-PREMERGE-FOLLOWUP12`). The saved pre-merge rows were not refreshed
+  by the assessment service; their three warning items are dispositioned in
+  this plan and in the PR conversation. The live Kani 0.67.0 fixture passed at
+  `4785ef0`; the only later changes are one test and this plan.
+
 - [x] (2026-11-21 11:35Z) Reconnaissance: read `commands.py`,
   `observability.py`, `kani_release.py`, `kani_snapshot/run.py`, the CLI,
   `pyproject.toml`, the tests, and the Cuprum 0.2.0b2 public API.
