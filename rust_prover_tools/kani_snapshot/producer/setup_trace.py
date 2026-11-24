@@ -42,6 +42,7 @@ _EXECVE: typ.Final[re.Pattern[str]] = re.compile(
     r"(?:0x[0-9a-f]+|[0-9]+)\)"
 )
 _ARGUMENT: typ.Final[re.Pattern[str]] = re.compile(r'"((?:[^"\\]|\\.)*)"')
+_ELIDED: typ.Final[re.Pattern[str]] = re.compile(r'"\s*\.\.\.')
 
 #: Compilers, linkers and build drivers that must never run during setup.
 _BUILD_TOOLS: typ.Final[frozenset[str]] = frozenset({
@@ -123,7 +124,10 @@ def _basename(value: str) -> str:
 
 
 def _unescape(value: str) -> str:
-    """Decode one strace-quoted argument, falling back to its raw text."""
+    """Decode one strace-quoted argument, falling back to its raw text.
+
+    An argument strace elides is refused in `_argv`, before decoding.
+    """
     try:
         decoded = json.loads(f'"{value}"')
     except json.JSONDecodeError:
@@ -132,7 +136,15 @@ def _unescape(value: str) -> str:
 
 
 def _argv(value: str) -> tuple[str, ...]:
-    """Return the argument vector from strace's bracketed list."""
+    """Return the argument vector from strace's bracketed list.
+
+    strace elides a long string as `"prefix"...` under its default string
+    limit, which could hide a `.rs` suffix from the code-generation check. An
+    elided argument is therefore refused rather than silently truncated.
+    """
+    if _ELIDED.search(value) is not None:
+        msg = f"strace elided an argument, so it cannot be checked: {value[:120]!r}"
+        raise SetupTraceError(msg)
     return tuple(_unescape(item) for item in _ARGUMENT.findall(value))
 
 

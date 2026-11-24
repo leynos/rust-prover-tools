@@ -112,6 +112,18 @@ def test_an_unparsable_execve_record_is_refused() -> None:
         require_prebuilt_setup(trace)
 
 
+def test_an_elided_argument_is_refused() -> None:
+    """strace's default string limit could hide a `.rs` suffix."""
+    trace = (
+        _LAUNCHER + '901  execve("/toolchain/bin/rustc", ["rustc", '
+        '"/home/runner/work/a-very-long-path/that/strace/elides/source.rs"...], '
+        "0x7ffd2c1a4b30) = 0\n"
+    )
+
+    with pytest.raises(SetupTraceError, match="elided"):
+        require_prebuilt_setup(trace)
+
+
 def test_rustc_reading_source_from_stdin_is_refused() -> None:
     """`rustc -` compiles standard input without naming a source file."""
     trace = (

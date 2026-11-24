@@ -21,21 +21,34 @@ import typing as typ
 from pathlib import Path
 
 import pytest
+from cuprum.context import UnsetType
 
+from rust_prover_tools.kani_exec_routing import runtime_search_path
+from rust_prover_tools.kani_snapshot.identity import execution_environment
+from rust_prover_tools.kani_snapshot.install import check_active_snapshot
+from rust_prover_tools.kani_snapshot.install_model import InstallOptions
 from rust_prover_tools.kani_snapshot.models import SnapshotPin
-from rust_prover_tools.kani_snapshot.pins import pin_to_toml
+from rust_prover_tools.kani_snapshot.pins import load_pin, pin_to_toml
 from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     MAX_TRACE_BYTES,
     parse_exec_trace,
 )
+from rust_prover_tools.kani_snapshot.snapshot_layout import (
+    SnapshotRuntime,
+    snapshot_layout,
+)
+from rust_prover_tools.kani_snapshot.toolchain_binding import toolchain_root
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+
 __all__ = (
+    "BUILD_SCRIPT_HARNESS",
     "FALSE_HARNESS",
     "FIXTURES",
     "FLOOR_HARNESS",
+    "KISSAT_HARNESS",
     "MAX_CAPTURE_BYTES",
     "POSITIVE_HARNESSES",
     "PROOF_TIMEOUT",
@@ -56,6 +69,7 @@ __all__ = (
     "require_no_setup",
     "run",
     "run_command",
+    "snapshot_environment",
     "traced_run",
     "write_pin",
 )
@@ -72,6 +86,12 @@ FALSE_HARNESS: typ.Final[str] = "deliberately_false_assertion"
 #: The floor harness, which only a 1.94-or-newer compiler accepts.
 FLOOR_HARNESS: typ.Final[str] = "bounded_adjacent_pairs_are_exact"
 
+#: The build-script fixture's harness, mirroring upstream `build-rs-works`.
+BUILD_SCRIPT_HARNESS: typ.Final[str] = "build_script_cfg_is_set"
+
+#: The Kissat fixture's harness, mirroring upstream `simple-kissat`.
+KISSAT_HARNESS: typ.Final[str] = "kissat_proves_a_bounded_sum"
+
 #: How long one real proof may take, in seconds.
 PROOF_TIMEOUT: typ.Final[int] = 1800
 
@@ -87,6 +107,8 @@ CRATES: typ.Final[tuple[str, ...]] = (
     "bounded_collection",
     "false_assertion",
     "compiler_floor",
+    "build_script",
+    "kissat_solver",
 )
 
 _GENERATION: typ.Final[re.Pattern[str]] = re.compile(r"\bat (?P<path>\S+)$")
@@ -119,20 +141,25 @@ class SmokeContext:
         Seconds the child may run.
     check : bool
         Whether a non-zero exit fails the test immediately.
+    replace_env : bool
+        When true, `env` is the child's whole environment rather than an
+        overlay on the caller's.
     """
 
     cwd: Path
     env: cabc.Mapping[str, str] | None = None
     timeout: int = PROOF_TIMEOUT
     check: bool = True
+    replace_env: bool = False
 
 
-def _tail_text(handle: typ.BinaryIO) -> str:
-    """Return at most `MAX_CAPTURE_BYTES` from the end of a captured stream."""
+def _capture(handle: typ.BinaryIO) -> tuple[str, bool]:
+    """Return a captured stream and whether it exceeded the ceiling."""
     handle.seek(0, os.SEEK_END)
     size = handle.tell()
+    truncated = size > MAX_CAPTURE_BYTES
     handle.seek(max(0, size - MAX_CAPTURE_BYTES))
-    return handle.read().decode("utf-8", errors="replace")
+    return handle.read().decode("utf-8", errors="replace"), truncated
 
 
 def run(command: list[str], context: SmokeContext) -> subprocess.CompletedProcess[str]:
@@ -142,22 +169,29 @@ def run(command: list[str], context: SmokeContext) -> subprocess.CompletedProces
     loaded. A proof log is therefore never held whole in memory, and the
     validator ceilings apply to text the caller already had to bound.
     """
+    environment = (
+        dict(context.env or {})
+        if context.replace_env
+        else {**os.environ, **(context.env or {})}
+    )
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         completed = subprocess.run(
             command,
             cwd=context.cwd,
-            env={**os.environ, **(context.env or {})},
+            env=environment,
             stdout=out,
             stderr=err,
             timeout=context.timeout,
             check=False,
         )
-        result = subprocess.CompletedProcess(
-            command,
-            completed.returncode,
-            _tail_text(out),
-            _tail_text(err),
+        stdout, stdout_truncated = _capture(out)
+        stderr, stderr_truncated = _capture(err)
+    if stdout_truncated or stderr_truncated:
+        pytest.fail(
+            f"{' '.join(command)} produced more than {MAX_CAPTURE_BYTES} bytes; "
+            "an incomplete transcript cannot be validated"
         )
+    result = subprocess.CompletedProcess(command, completed.returncode, stdout, stderr)
     if context.check and result.returncode != 0:
         pytest.fail(
             f"{' '.join(command)} exited {result.returncode}\n"
@@ -211,11 +245,7 @@ def build_root(root: Path, pin: SnapshotPin, crate: str) -> Path:
     repository root, so each proof needs its own root with the source file the
     launcher compiles.
     """
-    (root / "src").mkdir(parents=True)
-    shutil.copyfile(
-        FIXTURES / "proofs" / crate / "src" / "lib.rs",
-        root / "src" / "lib.rs",
-    )
+    shutil.copytree(FIXTURES / "proofs" / crate, root, dirs_exist_ok=True)
     write_pin(root, pin)
     report(f"proof root {root}")
     return root
@@ -248,13 +278,25 @@ class Consumer:
     Attributes
     ----------
     roots : dict of str to Path
-        One proof root per fixture crate, each holding `src/lib.rs` and the pin.
+        One proof root per fixture crate, each holding its sources and the pin.
     cache : Path
         Cache shared by every root, so one install serves every proof.
     """
 
     roots: dict[str, Path]
     cache: Path
+
+    def runtime(self, root: Path) -> SnapshotRuntime:
+        """Return the active generation's runtime for one proof root's pin."""
+        pin = load_pin(root / "tools" / "kani" / "snapshot.toml")
+        identity = check_active_snapshot(InstallOptions(pin=pin, cache_home=self.cache))
+        return SnapshotRuntime(
+            layout=snapshot_layout(
+                pin, cache_home=self.cache, generation=identity.generation.name
+            ),
+            toolchain=identity.toolchain,
+            backend_version=identity.backend_version,
+        )
 
 
 def install_command(
@@ -295,15 +337,25 @@ def run_command(
 
 
 def traced_run(
-    command: list[str], cwd: Path, trace: Path
+    command: list[str], trace: Path, context: SmokeContext
 ) -> subprocess.CompletedProcess[str]:
-    """Run one public command under `strace`, or plainly without it."""
+    """Run one public command under `strace`, or plainly without it.
+
+    Parameters
+    ----------
+    command : list of str
+        Command vector to run.
+    trace : Path
+        File `strace` writes its records to.
+    context : SmokeContext
+        Working directory, environment and bounds for the child.
+    """
     strace = shutil.which("strace")
     if strace is None:
-        return run(command, SmokeContext(cwd=cwd, check=False))
+        return run(command, dc.replace(context, check=False))
     return run(
         [strace, "-f", "-e", "trace=execve", "-o", str(trace), *command],
-        SmokeContext(cwd=cwd, check=False),
+        dc.replace(context, check=False),
     )
 
 
@@ -321,10 +373,27 @@ def proof(
 
 
 def require_no_setup(trace: Path) -> None:
-    """Require a trace that did not run the packaged setup again."""
-    if not trace.is_file():
-        return
+    """Require a trace that did not run the packaged setup again.
+
+    The trace is mandatory: without it the test cannot distinguish reuse from
+    an unobserved setup.
+    """
+    assert trace.is_file(), f"{trace} is missing; strace is required"
     records = parse_exec_trace(read_trace(trace))
     assert not any(
         record.name == "cargo-kani" and "setup" in record.argv[1:] for record in records
     ), "setup ran when the generation should have been reused or refused"
+
+
+def snapshot_environment(runtime: SnapshotRuntime) -> dict[str, str]:
+    """Return the exact environment a snapshot proof runs with."""
+    environment = {
+        name: value
+        for name, value in execution_environment(runtime, os.environ).items()
+        if not isinstance(value, UnsetType)
+    }
+    environment["LD_LIBRARY_PATH"] = runtime_search_path(
+        toolchain_root(runtime) / "lib",
+        os.environ.get("LD_LIBRARY_PATH", ""),
+    )
+    return environment

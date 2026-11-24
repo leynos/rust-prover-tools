@@ -148,11 +148,10 @@ KANI_SNAPSHOT_RUSTC_1_93 ?=
 # Exported, never interpolated: each value is data for the recipe's shell.
 export KANI_SNAPSHOT_ASSET_DIR KANI_SNAPSHOT_WHEEL KANI_SNAPSHOT_RUSTC_1_93
 
-# The throwaway environment lives below build/, which is gitignored. The path is
-# fixed rather than caller-selected so the recipe's recursive removal can never
-# delete a directory the caller chose.
-KANI_SNAPSHOT_SMOKE_DIR := $(CURDIR)/build/kani-snapshot-smoke
-KANI_SNAPSHOT_SMOKE_VENV := $(KANI_SNAPSHOT_SMOKE_DIR)/venv
+# The throwaway environment is created inside a private `mktemp -d` tree the
+# recipe owns, so its cleanup can never name a path the caller chose. `build/`
+# is gitignored, and the tree is removed on success and on failure.
+KANI_SNAPSHOT_SMOKE_PARENT := $(CURDIR)/build
 
 kani-snapshot-verify: ## Verify a produced snapshot through the consumer path
 	$(call ensure_uv)
@@ -176,14 +175,15 @@ kani-snapshot-verify: ## Verify a produced snapshot through the consumer path
 	  printf 'Error: KANI_SNAPSHOT_RUSTC_1_93 is not executable: %s\n' "$$KANI_SNAPSHOT_RUSTC_1_93" >&2; \
 	  exit 1; \
 	fi
-	rm -rf "$(KANI_SNAPSHOT_SMOKE_DIR)"
-	mkdir -p "$(KANI_SNAPSHOT_SMOKE_DIR)"
-	$(UV_GATE) run -- uv venv "$(KANI_SNAPSHOT_SMOKE_VENV)" --python 3.14
-	$(UV_GATE) run -- uv pip install --python \
-	  "$(KANI_SNAPSHOT_SMOKE_VENV)/bin/python" "$$KANI_SNAPSHOT_WHEEL"
+	@mkdir -p "$(KANI_SNAPSHOT_SMOKE_PARENT)"
+	@smoke_dir=$$(mktemp -d "$(KANI_SNAPSHOT_SMOKE_PARENT)/kani-snapshot-smoke.XXXXXX"); \
+	trap 'rm -rf "$$smoke_dir"' EXIT INT TERM; \
+	$(UV_GATE) run -- uv venv "$$smoke_dir/venv" --python 3.14 && \
+	$(UV_GATE) run -- uv pip install --python "$$smoke_dir/venv/bin/python" \
+	  "$$KANI_SNAPSHOT_WHEEL" && \
 	KANI_SNAPSHOT_SMOKE=1 \
 	  KANI_SNAPSHOT_SMOKE_ASSET_DIR="$$KANI_SNAPSHOT_ASSET_DIR" \
-	  KANI_SNAPSHOT_SMOKE_PROVER_TOOLS="$(KANI_SNAPSHOT_SMOKE_VENV)/bin/prover-tools" \
+	  KANI_SNAPSHOT_SMOKE_PROVER_TOOLS="$$smoke_dir/venv/bin/prover-tools" \
 	  KANI_SNAPSHOT_SMOKE_RUSTC_1_93="$$KANI_SNAPSHOT_RUSTC_1_93" \
 	  $(UV_GATE) run -- pytest -q tests/integration/test_kani_snapshot_smoke.py
 

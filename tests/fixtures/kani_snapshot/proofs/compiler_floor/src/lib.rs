@@ -17,6 +17,7 @@ fn adjacent_pairs(values: &[u32]) -> Vec<(u32, u32)> {
 }
 
 #[kani::proof]
+#[kani::unwind(4)]
 fn bounded_adjacent_pairs_are_exact() {
     let values: [u32; 3] = [1, 2, 3];
     let pairs = adjacent_pairs(&values);

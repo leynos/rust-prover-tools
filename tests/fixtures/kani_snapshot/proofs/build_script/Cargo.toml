@@ -1,0 +1,11 @@
+[package]
+name = "kani-snapshot-smoke-build-script"
+version = "0.0.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[workspace]
+
+[lints.rust]
+unexpected_cfgs = "allow"

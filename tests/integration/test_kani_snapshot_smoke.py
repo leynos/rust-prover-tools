@@ -42,9 +42,11 @@ from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     require_prebuilt_setup,
 )
 from tests.kani_snapshot_smoke_support import (
+    BUILD_SCRIPT_HARNESS,
     FALSE_HARNESS,
     FIXTURES,
     FLOOR_HARNESS,
+    KISSAT_HARNESS,
     POSITIVE_HARNESSES,
     Consumer,
     SmokeContext,
@@ -58,6 +60,7 @@ from tests.kani_snapshot_smoke_support import (
     require_no_setup,
     run,
     run_command,
+    snapshot_environment,
     traced_run,
 )
 
@@ -161,6 +164,9 @@ def test_the_named_positive_harnesses_verify(
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, transcript[-4000:]
         require_named_harnesses(transcript, verified=(harness,), failed=())
+        assert "unwinding assertion" not in transcript.lower(), (
+            f"{harness} reported an unwinding assertion failure"
+        )
         report(f"verified {harness}")
 
 
@@ -189,6 +195,9 @@ def test_the_floor_harness_verifies_on_the_pinned_compiler(
     assert completed.returncode == 0, transcript[-4000:]
     require_named_harnesses(transcript, verified=(FLOOR_HARNESS,), failed=())
     require_floor_harness_verified(transcript)
+    assert "unwinding assertion" not in transcript.lower(), (
+        "the floor harness reported an unwinding assertion failure"
+    )
     report(f"floor harness verified: {FLOOR_HARNESS}")
 
 
@@ -199,8 +208,8 @@ def test_the_below_floor_compiler_rejects_the_floor_api(tmp_path: Path) -> None:
     version = run(
         [rustc, "--version"], SmokeContext(cwd=tmp_path, timeout=120)
     ).stdout.strip()
-    assert parse_rustc_version(version) < COMPILER_FLOOR, (
-        f"the control compiler {version!r} is not below the floor"
+    assert parse_rustc_version(version) == (1, 93), (
+        f"the control compiler {version!r} is not the required 1.93 release"
     )
     completed = run(
         [
@@ -220,6 +229,50 @@ def test_the_below_floor_compiler_rejects_the_floor_api(tmp_path: Path) -> None:
     require_unstable_feature_rejected(completed.stderr)
 
 
+def _snapshot_cargo(consumer: Consumer, crate: str, trace: Path) -> Completed:
+    """Run `cargo kani` in one crate with the snapshot's own environment.
+
+    Upstream's bundle test runs `cargo kani` for the `simple-lib`,
+    `build-rs-works` and `simple-kissat` fixtures. The generation's `PATH`
+    selects the pinned launcher and toolchain, and its homes are private, so
+    this is the same route a consumer uses. The run is traced so a missing
+    generation or an unintended setup shows up as evidence rather than silence.
+    """
+    root = consumer.roots[crate]
+    environment = snapshot_environment(consumer.runtime(root))
+    return traced_run(
+        ["cargo", "kani"],
+        trace,
+        SmokeContext(cwd=root, env=environment, replace_env=True),
+    )
+
+
+def test_the_upstream_build_script_bundle_smoke_verifies(
+    consumer: Consumer, installed: Completed
+) -> None:
+    """Upstream's `build-rs-works` route works through the snapshot."""
+    trace = consumer.roots["build_script"] / "build-script.trace"
+    completed = _snapshot_cargo(consumer, "build_script", trace)
+    transcript = completed.stdout + completed.stderr
+
+    assert completed.returncode == 0, transcript[-4000:]
+    require_named_harnesses(transcript, verified=(BUILD_SCRIPT_HARNESS,), failed=())
+    report(f"build-script bundle smoke verified {BUILD_SCRIPT_HARNESS}")
+
+
+def test_the_upstream_kissat_bundle_smoke_verifies(
+    consumer: Consumer, installed: Completed
+) -> None:
+    """Upstream's `simple-kissat` route works through the snapshot."""
+    trace = consumer.roots["kissat_solver"] / "kissat.trace"
+    completed = _snapshot_cargo(consumer, "kissat_solver", trace)
+    transcript = completed.stdout + completed.stderr
+
+    assert completed.returncode == 0, transcript[-4000:]
+    require_named_harnesses(transcript, verified=(KISSAT_HARNESS,), failed=())
+    report(f"kissat bundle smoke verified {KISSAT_HARNESS}")
+
+
 def test_a_warm_repeat_reuses_the_generation(
     consumer: Consumer,
     prover_tools: list[str],
@@ -230,7 +283,9 @@ def test_a_warm_repeat_reuses_the_generation(
     root = consumer.roots["bounded_collection"]
     trace = root / "warm.trace"
     completed = traced_run(
-        install_command(prover_tools, root, assets, consumer.cache), root, trace
+        install_command(prover_tools, root, assets, consumer.cache),
+        trace,
+        SmokeContext(cwd=root),
     )
 
     assert completed.returncode == 0, completed.stderr[-4000:]
@@ -263,15 +318,15 @@ def test_a_corrupted_payload_is_refused_before_execution(
 
     completed = traced_run(
         install_command(prover_tools, consumer_root, root / "assets", root / "cache"),
-        consumer_root,
         trace,
+        SmokeContext(cwd=consumer_root),
     )
 
     output = (completed.stdout + completed.stderr).lower()
     assert completed.returncode != 0, "a corrupted payload must be refused"
     assert "checksum" in output or "digest" in output, output
     require_no_setup(trace)
-    assert not list(consumer_root.glob(".kani-snapshots/*/generations/*")), (
+    assert not list((root / "cache").glob("*/generations/*")), (
         "a refused install must not publish a generation"
     )
 
@@ -292,8 +347,8 @@ def test_a_changed_identity_is_refused_before_setup(
 
     completed = traced_run(
         install_command(prover_tools, consumer_root, assets, root / "cache"),
-        consumer_root,
         trace,
+        SmokeContext(cwd=consumer_root),
     )
 
     assert completed.returncode != 0, "a pin naming another revision must be refused"

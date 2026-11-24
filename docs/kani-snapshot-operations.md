@@ -221,8 +221,10 @@ publishes and is never part of `make all`.
 The verification requires:
 
 - A cold `snapshot install` that names the pin's tag and the observed compiler.
-- The pinned launcher's own `--version` naming the manifest's backend version
-  (the upstream bundle smoke).
+- The pinned launcher's own `--version` naming the manifest's backend version.
+- `cargo kani` running upstream's bundle scenarios: a crate with a build script
+  and a Kissat-backed harness, each verifying under the generation's own
+  environment.
 - An effective compiler at or above Rust 1.94, parsed from the install's
   `rustc:` report.
 - `snapshot check` accepting the generation.
