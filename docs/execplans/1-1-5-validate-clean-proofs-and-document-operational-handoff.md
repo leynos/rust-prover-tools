@@ -90,7 +90,7 @@ scheduled trigger stays disabled.
   in the decision log.
 - Code: more than 1,800 net lines of Python and Rust fixture code: stop and
   escalate. Raised to 3,800 net lines on 2026-11-24 under D7; the measured
-  Python and Rust addition is 3,088 net lines.
+  Python and Rust addition is 3,135 net lines.
 - Configuration: more than 200 net lines across `Makefile`, `pyproject.toml`
   and `.github/workflows/`: stop and escalate.
 - Documentation: more than 1,600 net lines excluding ExecPlan files: stop and
@@ -190,7 +190,7 @@ only entries in scope.
       pinned upstream sources and run through `cargo kani` under the
       generation's environment, replacing the two local substitutes. The
       runbook states that `strace` is required, and D7 records 63 files and
-      3,088 net Python/Rust lines.
+      3,135 net Python/Rust lines.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
 - [ ] Re-run the consumer smoke against a corrected hosted release from trusted
@@ -271,7 +271,7 @@ only entries in scope.
   and their primitives, the proof fixtures and every transcript and trace
   control, the smoke harness, its support module and its fixtures, the workflow
   consumer-profile step and its contract test, the runbook and the synchronized
-  guides. Measured against `57c1560`: 63 non-ExecPlan files, 3,088 net Python
+  guides. Measured against `57c1560`: 63 non-ExecPlan files, 3,135 net Python
   and Rust lines, 92 net configuration lines and 600 net documentation lines.
   Earlier readings (53 files and 2,307 lines, then 54 and 2,742) were taken
   before successive assessment repairs added the bundle-smoke fixtures, the

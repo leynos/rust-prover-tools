@@ -260,54 +260,78 @@ def require_named_harnesses(
     expected_verified = frozenset(verified)
     expected_failed = frozenset(failed)
     _reject_collisions(report, qualified=qualified)
-    actual_verified = _matching(report.verified_names, qualified=qualified)
-    actual_failed = _matching(report.failed_names, qualified=qualified)
-    _require_paths(expected_verified, actual_verified, actual_failed, status="verify")
-    _require_paths(expected_failed, actual_failed, actual_verified, status="fail")
+    comparison = _Comparison(qualified=qualified)
+    comparison.require(
+        expected_verified,
+        report.verified_names,
+        report.failed_names,
+        status="verify",
+    )
+    comparison.require(
+        expected_failed,
+        report.failed_names,
+        report.verified_names,
+        status="fail",
+    )
     return report
 
 
-def _require_paths(
-    wanted: frozenset[str],
-    reported: frozenset[str],
-    opposite: frozenset[str],
-    *,
-    status: str,
-) -> None:
-    """Require every expectation to name one reported harness and no more.
+@dc.dataclass(frozen=True, slots=True)
+class _Comparison:
+    """How reported harness names are compared with expectations.
 
-    Each expectation must match exactly one reported name, and each reported
-    name must satisfy exactly one expectation, so a wrong-module replacement or
-    an extra harness is refused while a bare expectation still matches a
-    qualified print.
+    Attributes
+    ----------
+    qualified : bool
+        Whether an expectation may name only part of a module-qualified print.
     """
-    unused = set(reported)
-    for name in sorted(wanted):
-        matches = {item for item in unused if _matches(name, item)}
-        if not matches:
-            _require_status(frozenset({name}), opposite, expected=status)
-        if len(matches) > 1:
-            msg = (
-                f"harness {name!r} matches more than one reported harness: "
-                f"{sorted(matches)}"
-            )
-            raise ProofTranscriptError(msg)
-        unused -= matches
-    if unused:
-        _require_unexpected(frozenset(unused), status)
+
+    qualified: bool
+
+    def matches(self, expected: str, reported: str) -> bool:
+        """Say whether one reported name satisfies one expectation.
+
+        Default mode compares the exact reported name, so a harness in another
+        module cannot stand in for the expected one. Qualified mode accepts the
+        expectation as a full suffix of the print, so a crate-relative name such
+        as `kani_tests::test_sum` matches what Kani prints.
+        """
+        if not self.qualified:
+            return reported == expected
+        return reported == expected or reported.endswith(f"::{expected}")
+
+    def require(
+        self,
+        wanted: frozenset[str],
+        reported: frozenset[str],
+        opposite: frozenset[str],
+        *,
+        status: str,
+    ) -> None:
+        """Require each expectation to name one reported harness and no more."""
+        unused = set(reported)
+        for name in sorted(wanted):
+            matched = {item for item in unused if self.matches(name, item)}
+            if not matched:
+                _require_status(frozenset({name}), opposite, expected=status)
+            if len(matched) > 1:
+                msg = (
+                    f"harness {name!r} matches more than one reported harness: "
+                    f"{sorted(matched)}"
+                )
+                raise ProofTranscriptError(msg)
+            unused -= matched
+        if unused:
+            _require_unexpected(frozenset(unused), status)
 
 
 def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
-    """Return the names to compare, keeping a printed module path when asked.
+    """Return the names to compare, unchanged.
 
-    In qualified mode a name keeps its printed path. An expectation may then be
-    written either as the bare function name or as any full suffix of that path,
-    so `test_sum` matches `simple_lib::kani_tests::test_sum` while a harness in
-    another module does not: the expected path is compared against the reported
-    one, and only a matching suffix satisfies it.
+    The comparison itself distinguishes the two modes; both keep the reported
+    name so a qualified print is never reduced before it is compared.
     """
-    if not qualified:
-        return names
+    del qualified
     return names
 
 
@@ -328,11 +352,6 @@ def _reject_collisions(report: ProofReport, *, qualified: bool) -> None:
             f"name, so the set is ambiguous: {repeated}"
         )
         raise ProofTranscriptError(msg)
-
-
-def _matches(expected: str, reported: str) -> bool:
-    """Say whether a reported qualified name ends with the expected path."""
-    return reported == expected or reported.endswith(f"::{expected}")
 
 
 def _require_status(

@@ -79,13 +79,14 @@ FLOOR_HARNESS: typ.Final[str] = "bounded_adjacent_pairs_are_exact"
 
 #: Upstream's three bundle-test crates and every harness each one declares.
 #:
-#: A harness inside a module is printed with its module path, so each expected
-#: name is the path the pinned driver reports rather than a bare function name.
-#: A harness from another module therefore cannot satisfy it.
+#: Kani's `readable_name` strips the local crate prefix before the driver prints
+#: a harness, so a harness inside a module is reported as `kani_tests::test_sum`
+#: rather than as a bare function name. A harness from another module therefore
+#: cannot satisfy these expectations.
 UPSTREAM_BUNDLE_HARNESSES: typ.Final[dict[str, tuple[str, ...]]] = {
     "simple-lib": (
-        "simple_lib::kani_tests::test_sum",
-        "simple_lib::pair::kani_tests::test_one_plus_two",
+        "kani_tests::test_sum",
+        "pair::kani_tests::test_one_plus_two",
     ),
     "build-rs-works": ("check",),
     "simple-kissat": ("check_concat",),

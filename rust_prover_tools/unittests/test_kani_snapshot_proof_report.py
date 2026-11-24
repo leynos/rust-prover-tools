@@ -217,10 +217,37 @@ def test_qualified_matching_keeps_the_exact_set() -> None:
         )
 
 
+def test_default_mode_compares_the_exact_reported_name() -> None:
+    """A harness in another module cannot satisfy a default-mode expectation."""
+    transcript = _transcript(("other::bounded_push_contents_are_exact",), ())
+
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(
+            transcript, verified=("bounded_push_contents_are_exact",), failed=()
+        )
+
+
+def test_a_crate_relative_expectation_matches_a_qualified_print() -> None:
+    """Kani prints a harness inside a module without its crate prefix."""
+    transcript = _transcript(
+        ("kani_tests::test_sum", "pair::kani_tests::test_one_plus_two"), ()
+    )
+
+    require_named_harnesses(
+        transcript,
+        verified=(
+            "kani_tests::test_sum",
+            "pair::kani_tests::test_one_plus_two",
+        ),
+        failed=(),
+        qualified=True,
+    )
+
+
 def test_two_qualified_harnesses_with_one_name_are_refused() -> None:
     """Collapsing a module path must not merge two distinct harnesses."""
     transcript = _transcript(
-        ("simple_lib::kani_tests::test_sum", "other::test_sum", "other::test_two"), ()
+        ("kani_tests::test_sum", "other::test_sum", "other::test_two"), ()
     )
 
     with pytest.raises(ProofTranscriptError, match="ambiguous"):
@@ -244,8 +271,8 @@ def test_a_wrong_module_cannot_satisfy_an_expected_path() -> None:
         )
 
 
-def test_an_expected_path_matches_its_reported_prefix() -> None:
-    """A full expected path matches a report that carries it as a suffix."""
+def test_an_expected_path_matches_its_reported_suffix() -> None:
+    """An expectation is matched as a full suffix of the reported path."""
     transcript = _transcript(("simple_lib::kani_tests::test_sum",), ())
 
     require_named_harnesses(
