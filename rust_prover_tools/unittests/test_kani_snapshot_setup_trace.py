@@ -221,6 +221,18 @@ def test_an_unfinished_record_without_a_resume_is_refused() -> None:
         parse_exec_trace(trace)
 
 
+def test_a_second_unfinished_fragment_for_one_pid_is_refused() -> None:
+    """Replacing a fragment would silently drop a compiler attempt."""
+    trace = (
+        '901  execve("/usr/bin/gcc", ["gcc", "-c", "a.c"], 0x1 <unfinished ...>\n'
+        '901  execve("/usr/bin/tar", ["tar"], 0x2 <unfinished ...>\n'
+        "901  <... execve resumed>) = 0\n"
+    )
+
+    with pytest.raises(SetupTraceError, match="more than one unfinished"):
+        parse_exec_trace(trace)
+
+
 def test_a_resume_without_a_fragment_is_refused() -> None:
     """A resume with no matching start is a broken capture."""
     trace = "901  <... execve resumed>) = 0\n"

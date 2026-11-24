@@ -62,7 +62,14 @@ def _consume(line: str, pending: dict[str, str], joined: list[str]) -> bool:
     """Consume one fragment line, reporting whether it belonged to a fragment."""
     unfinished = _UNFINISHED.match(line)
     if unfinished is not None:
-        pending[_pid(unfinished)] = unfinished.group("body")
+        pid = _pid(unfinished)
+        if pid in pending:
+            msg = (
+                f"setup trace has more than one unfinished record for process "
+                f"{pid!r}: {line[:200]!r}"
+            )
+            raise FragmentError(msg)
+        pending[pid] = unfinished.group("body")
         return True
     resumed = _RESUMED.match(line)
     if resumed is not None:

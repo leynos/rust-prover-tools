@@ -173,12 +173,17 @@ Expected artefacts, retained for seven days:
 Download the release and validation artefacts into a new, empty directory:
 
 ```sh
-mkdir -p "$HOME/kani-validation/release" "$HOME/kani-validation/validation"
+EVIDENCE="$HOME/kani-validation/<run-id>-<run-attempt>"
+mkdir -p "$EVIDENCE/release" "$EVIDENCE/validation"
 gh run download <run-id> --repo leynos/rust-prover-tools \
-  -n kani-snapshot-release-<run-id>-1 -D "$HOME/kani-validation/release"
+  -n kani-snapshot-release-<run-id>-<run-attempt> -D "$EVIDENCE/release"
 gh run download <run-id> --repo leynos/rust-prover-tools \
-  -n kani-snapshot-validation-<run-id>-1 -D "$HOME/kani-validation/validation"
+  -n kani-snapshot-validation-<run-id>-<run-attempt> -D "$EVIDENCE/validation"
 ```
+
+Use a fresh directory per run and attempt; `gh run download` will not remove
+files left by an earlier download, and the release and validation artefacts
+must come from the same attempt.
 
 Do not download artefacts from another run, and do not relabel a failed run's
 partial output as evidence.
