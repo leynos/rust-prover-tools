@@ -10,7 +10,11 @@ edit to either the example or the recipe breaks the contract they share.
 
 from __future__ import annotations
 
+import os
 import pathlib
+import shutil
+import subprocess
+import typing as typ
 
 import pytest
 
@@ -35,7 +39,13 @@ _VERIFY_EXAMPLE = "kani-snapshot-verify"
 _SNAPSHOT_EXAMPLE = "migration-snapshot-consumer"
 
 #: The documents whose examples this project registers and tests.
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+
 _DOCUMENTS = (_USERS_GUIDE, _MIGRATION_GUIDE)
+
+MAKE = shutil.which("make")
+NEEDS_MAKE = pytest.mark.skipif(MAKE is None, reason="GNU make is required")
 
 
 def _examples(document: pathlib.Path) -> dict[str, DocumentedExample]:
@@ -210,13 +220,7 @@ def test_the_smoke_example_names_the_target_and_its_inputs() -> None:
 
 
 def test_the_verify_example_names_the_target_and_its_inputs() -> None:
-    """The documented consumer verification runs the shipped target.
-
-    The example cannot execute in an ordinary gate: it installs a pinned
-    toolchain and runs real proofs. The test therefore holds the part a
-    reader depends on, that the guide and the Makefile agree on the target
-    and every input it refuses to run without.
-    """
+    """The documented consumer verification runs the shipped target."""
     example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
 
     assert example.language == "sh", "the verification example must be shell"
@@ -231,6 +235,52 @@ def test_the_verify_example_names_the_target_and_its_inputs() -> None:
         assert variable in example.body, f"the example omits {variable}"
     assert _target_recipe("kani-snapshot-verify"), (
         "the Makefile has no verification target"
+    )
+
+
+@NEEDS_MAKE
+def test_the_verify_example_executes_and_passes_all_three_inputs(
+    tmp_path: Path,
+) -> None:
+    """The guide's example runs in a shell and reaches `make` with its inputs.
+
+    `make` and `rustup` are stubbed first on `PATH`, so the example's shell
+    syntax is exercised without installing a toolchain or running a proof.
+    The stub records its arguments, which proves the three assignments reach
+    it as values rather than as redirections.
+    """
+    shell = shutil.which("sh")
+    assert shell is not None, "a POSIX shell is required to run the example"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "make-args"
+    for name, body in (
+        ("make", '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$MAKE_ARGS_FILE"\n'),
+        ("rustup", "#!/bin/sh\nprintf '/fake/rustc\\n'\n"),
+    ):
+        stub = bin_dir / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+    example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
+
+    completed = subprocess.run(
+        [shell, "-eu", "-c", example.body],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "MAKE_ARGS_FILE": str(log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert log.read_text(encoding="utf-8").split() == ["kani-snapshot-verify"], (
+        "the example did not invoke the verification target with make"
     )
 
 

@@ -551,6 +551,7 @@ opt-in verification target:
 
 <!-- tested-example: kani-snapshot-verify -->
 ```sh
+rustup toolchain install 1.93.0
 KANI_SNAPSHOT_ASSET_DIR="$HOME/kani-validation/release" \
 KANI_SNAPSHOT_WHEEL="$HOME/kani-validation/dist/rust_prover_tools-0.1.0-py3-none-any.whl" \
 KANI_SNAPSHOT_RUSTC_1_93="$(rustup which --toolchain 1.93.0 rustc)" \

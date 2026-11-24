@@ -192,6 +192,27 @@ def test_fragments_from_concurrent_children_are_joined() -> None:
     assert shell.argv == ("sh", "-c", "true")
 
 
+def test_bracketed_pid_fragments_are_joined() -> None:
+    """A stderr trace prefixes each fragment with `[pid N]`."""
+    trace = (
+        '[pid 901] execve("/bin/sh", ["sh", "-c", "true"], 0x1 <unfinished ...>\n'
+        '[pid 902] execve("/usr/bin/tar", ["tar"], 0x2) = 0\n'
+        "[pid 901] <... execve resumed>) = 0\n"
+    )
+
+    records = parse_exec_trace(trace)
+
+    assert {record.name for record in records} == {"sh", "tar"}
+
+
+def test_a_bracketed_resume_without_a_fragment_is_refused() -> None:
+    """A bracketed resume with no start is a broken capture too."""
+    trace = "[pid 901] <... execve resumed>) = 0\n"
+
+    with pytest.raises(SetupTraceError, match="unknown process"):
+        parse_exec_trace(trace)
+
+
 def test_an_unfinished_record_without_a_resume_is_refused() -> None:
     """A truncated fragment is not evidence of a completed call."""
     trace = '901  execve("/bin/sh", ["sh"], 0x123 <unfinished ...>\n'

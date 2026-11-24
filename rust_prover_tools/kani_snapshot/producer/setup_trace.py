@@ -190,12 +190,19 @@ def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:
     return tuple(records)
 
 
+#: strace writes a fragment under either a bare PID (`-o`) or `[pid N]` (stderr).
+_PID_PREFIX: typ.Final[str] = r"(?:(?:\[pid\s+(?P<pid>[0-9]+)\]|(?P<plain>[0-9]+))\s+)"
 _UNFINISHED: typ.Final[re.Pattern[str]] = re.compile(
-    r"^(?P<pid>[0-9]+)\s+(?P<body>.*)<unfinished \.\.\.>$"
+    rf"^{_PID_PREFIX}(?P<body>.*)<unfinished \.\.\.>$"
 )
 _RESUMED: typ.Final[re.Pattern[str]] = re.compile(
-    r"^(?P<pid>[0-9]+)\s+<\.\.\. \w+ resumed>(?P<body>.*)$"
+    rf"^{_PID_PREFIX}<\.\.\. \w+ resumed>(?P<body>.*)$"
 )
+
+
+def _pid(match: re.Match[str]) -> str:
+    """Return the process id a fragment names, in either prefix form."""
+    return match.group("pid") or match.group("plain")
 
 
 def _joined(lines: cabc.Iterable[str]) -> list[str]:
@@ -210,11 +217,11 @@ def _joined(lines: cabc.Iterable[str]) -> list[str]:
     for line in lines:
         unfinished = _UNFINISHED.match(line)
         if unfinished is not None:
-            pending[unfinished.group("pid")] = unfinished.group("body")
+            pending[_pid(unfinished)] = unfinished.group("body")
             continue
         resumed = _RESUMED.match(line)
         if resumed is not None:
-            pid = resumed.group("pid")
+            pid = _pid(resumed)
             if pid not in pending:
                 msg = f"setup trace resumes an unknown process {pid!r}: {line[:200]!r}"
                 raise SetupTraceError(msg)
