@@ -337,3 +337,12 @@ def test_a_zero_wall_measurement_is_valid(tmp_path: pathlib.Path) -> None:
 
     measured = parse_build_evidence((tmp_path / "evidence.json").read_bytes())
     assert measured.wall_seconds == pytest.approx(0.0)
+
+
+def test_an_unreadable_components_file_is_reported(tmp_path: pathlib.Path) -> None:
+    """A missing components file fails with a clear error, not a bare OSError."""
+    sysroot = _sysroot(tmp_path)
+    (sysroot / "lib" / "rustlib" / "components").unlink()
+
+    with pytest.raises(ProverToolError, match="rustup components list"):
+        measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))

@@ -7,11 +7,20 @@ path the CLI renders unescaped, which may contain spaces.
 
 from __future__ import annotations
 
-from tests.kani_snapshot_smoke_support import generation_from_output
+import typing as typ
+
+import pytest
+
+from tests import kani_snapshot_smoke_support
+from tests.kani_snapshot_smoke_commands import require_strace, strace_prefix
+from tests.kani_snapshot_smoke_support import generation_from_output, read_trace
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_a_generation_path_with_spaces_is_captured_whole() -> None:
-    """A cache below `/tmp/kani smoke` yields a path containing a space."""
+    """A cache below a directory with a space yields a path with a space."""
     path = "/home/tester/kani smoke/.kani-snapshots/abc/generations/gen"
     text = f"snapshot kani-snapshot-2026-11-0d2328a93f0e-r1 installed at {path}\n"
 
@@ -28,3 +37,43 @@ def test_an_ordinary_generation_path_is_captured() -> None:
 def test_output_without_a_generation_line_yields_none() -> None:
     """A failed install names no generation."""
     assert generation_from_output("error: the payload digest differs\n") is None
+
+
+def test_a_trace_at_the_ceiling_is_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trace exactly at the ceiling is accepted."""
+    monkeypatch.setattr(kani_snapshot_smoke_support, "MAX_TRACE_BYTES", 16)
+    trace = tmp_path / "small.trace"
+    trace.write_bytes(b"x" * 16)
+
+    assert read_trace(trace) == "x" * 16
+
+
+def test_a_trace_over_the_ceiling_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trace larger than the ceiling is refused rather than truncated."""
+    monkeypatch.setattr(kani_snapshot_smoke_support, "MAX_TRACE_BYTES", 8)
+    trace = tmp_path / "large.trace"
+    trace.write_bytes(b"x" * 9)
+
+    with pytest.raises(AssertionError, match="ceiling"):
+        read_trace(trace)
+
+
+def test_the_strace_prefix_requests_complete_arguments(tmp_path: Path) -> None:
+    """The prefix raises strace's string limit and stays quiet."""
+    trace = tmp_path / "trace"
+    prefix = strace_prefix("/usr/bin/strace", trace)
+
+    assert "-qq" in prefix
+    assert prefix[prefix.index("-s") + 1] == "4096"
+    assert prefix[-1] == str(trace)
+
+
+def test_require_strace_returns_the_tool_path() -> None:
+    """The helper returns the resolved strace path when it is installed."""
+    path = require_strace()
+
+    assert path.endswith("strace")

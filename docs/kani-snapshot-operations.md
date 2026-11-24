@@ -174,6 +174,7 @@ Download the release and validation artefacts into a new, empty directory:
 
 ```sh
 EVIDENCE="$HOME/kani-validation/<run-id>-<run-attempt>"
+test ! -e "$EVIDENCE" || { echo "refusing existing $EVIDENCE" >&2; exit 1; }
 mkdir -p "$EVIDENCE/release" "$EVIDENCE/validation"
 gh run download <run-id> --repo leynos/rust-prover-tools \
   -n kani-snapshot-release-<run-id>-<run-attempt> -D "$EVIDENCE/release"
@@ -212,11 +213,11 @@ Prerequisites:
 KANI_SNAPSHOT_RUSTC_1_93="$(rustup which --toolchain 1.93.0 rustc)"
 ```
 
-Run the verification target:
+Run the verification target against the evidence directory downloaded above:
 
 ```sh
 make kani-snapshot-verify \
-  KANI_SNAPSHOT_ASSET_DIR="$HOME/kani-validation/release" \
+  KANI_SNAPSHOT_ASSET_DIR="$EVIDENCE/release" \
   KANI_SNAPSHOT_WHEEL="$HOME/kani-validation/dist/rust_prover_tools-0.1.0-py3-none-any.whl" \
   KANI_SNAPSHOT_RUSTC_1_93="$KANI_SNAPSHOT_RUSTC_1_93"
 ```
