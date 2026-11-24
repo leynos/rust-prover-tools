@@ -378,12 +378,12 @@ Plain-language terms used in this plan:
   accepted input or a classification, so the live result still describes this
   code path. The live fixture exercises library harnesses only.
 
-- [x] (2026-11-24 06:10Z) Tenth follow-up round. Added the requested
-  regression that drives an oversized whitespace-only line through description
-  lookahead: the blank run between `middle"` and the next non-blank line is
-  walked by lookahead itself, and the line budget refuses it. Corrected the
-  live-run note to name the later commits precisely. `make all` passes with
-  3,232 tests and 6 skips.
+- [x] (2026-11-24 06:10Z) Tenth follow-up round. Added a first regression for
+  an oversized whitespace-only line in a description's blank run. Review found
+  that it replaced the first blank line, which the cursor's own read reaches
+  before `_blank_closes_entry` peeks, so it did not yet exercise the lookahead
+  walk; `f0c814b` replaces the second. Corrected the live-run note to name the
+  later commits precisely. `make all` passes with 3,233 tests and 6 skips.
 
 - [x] (2026-11-24 06:30Z) Eleventh follow-up round. The streaming source now
   also bounds aggregate retention: the window bounds the line count, the line
