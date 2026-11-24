@@ -163,6 +163,14 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 14:20Z) Third assessment round. A parsable report is parsed
+  before live-fact overflow can fail it, and a truncated live record makes the
+  retained verdict unknown. The observer clears its spool fields before
+  closing, a wrong-shaped stream is a schema refusal rather than a `TypeError`,
+  and a not-run finish record's null timestamp is accepted. Added coverage for
+  a changing inherited environment and a failing trailing-line callback.
+  `make all` passes with 3,279 tests and 6 skips.
+
 - [x] (2026-11-24 13:40Z) Live fixture rerun after the formal-review repairs:
   2 passed in 977.23 s at `6cdaa44`. This covers the parsed-log classification,
   the spool release, the supervision failure paths, the evidence validation,
@@ -177,21 +185,23 @@ Plain-language terms used in this plan:
   tests and 6 skips.
 
 - [x] (2026-11-24 12:30Z) First formal CodeRabbit review: 24 inline findings
-  plus one Codex finding, all addressed with regressions. The classifier now
-  trusts the parsed log's blocks for selection (a description containing
-  `Checking harness ...` no longer causes `multiple-match`), parses once and
-  closes the observer spool on every path, checks signals before a missing exit
-  status, and refuses to attribute a verdict across duplicate records. Monitor
-  failures still join the child before propagating; drains and pipes release
-  descriptors on every failure; the run preserves its original failure when
-  finalization also fails; mountinfo escapes all decode. JSONL record values,
-  not only their keys, are validated, as are cgroup fields. Discovery gains
-  cfg_attr conditionality from gating attributes only, inner cfg_attr
-  propagation, XID identifiers and lexical crate-root lookup. Selection scans
-  short-option clusters and stops at value options, the JSONL destination guard
-  compares device and inode for pipes, and the frozen environment is validated
-  from one snapshot. `make all` passes with 3,273 tests and 6 skips;
-  `make markdownlint` and `make nixie` pass.
+  plus one Codex finding, all addressed with regressions in the first repair
+  pass; the follow-up assessment then found five further defects in those
+  repairs, fixed in `cb27906` and `75a4427` with their own regressions. The
+  classifier now trusts the parsed log's blocks for selection (a description
+  containing `Checking harness ...` no longer causes `multiple-match`), parses
+  once and closes the observer spool on every path, checks signals before a
+  missing exit status, and refuses to attribute a verdict across duplicate
+  records. Monitor failures still join the child before propagating; drains and
+  pipes release descriptors on every failure; the run preserves its original
+  failure when finalization also fails; mountinfo escapes all decode. JSONL
+  record values, not only their keys, are validated, as are cgroup fields.
+  Discovery gains cfg_attr conditionality from gating attributes only, inner
+  cfg_attr propagation, XID identifiers and lexical crate-root lookup.
+  Selection scans short-option clusters and stops at value options, the JSONL
+  destination guard compares device and inode for pipes, and the frozen
+  environment is validated from one snapshot. `make all` passes with 3,273
+  tests and 6 skips; `make markdownlint` and `make nixie` pass.
 
 - [x] (2026-11-24 09:30Z) Readiness gate at `ad79e4d`. Hosted CI run
   45359396262 is green (`lint-test`, `Gecko Security Review`; Sourcery
