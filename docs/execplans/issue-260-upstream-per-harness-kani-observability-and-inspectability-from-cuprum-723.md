@@ -163,6 +163,11 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 20:00Z) Live fixture rerun at `99974ad` after the sixth
+  assessment round's repairs, including the description framing: 2 passed in
+  1,030.42 s. Production code is unchanged since `d1a91c9`; the only later
+  commit is this record.
+
 - [x] (2026-11-24 19:40Z) Sixth assessment round, from the first incremental
   formal review (13 findings). Live facts now exclude description content and
   keep the first banner; a parsed selection mismatch clears any live verdict; a
