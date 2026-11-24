@@ -227,7 +227,6 @@ def require_named_harnesses(
     *,
     verified: cabc.Iterable[str],
     failed: cabc.Iterable[str],
-    qualified: bool = False,
 ) -> ProofReport:
     """Require the exact expected harness sets and their expected statuses.
 
@@ -239,11 +238,6 @@ def require_named_harnesses(
         Harnesses that must have verified.
     failed : collections.abc.Iterable of str
         Harnesses that must have failed verification.
-    qualified : bool
-        Compare on each harness's final `::` component. Kani prints a harness
-        inside a module with its module path, so a fixture's `test_sum` appears
-        as `simple_lib::kani_tests::test_sum`. The set must still match exactly;
-        only the printed prefix is ignored.
 
     Returns
     -------
@@ -257,18 +251,14 @@ def require_named_harnesses(
         statuses differ from the expectation.
     """
     report = parse_proof_report(transcript)
-    expected_verified = frozenset(verified)
-    expected_failed = frozenset(failed)
-    _reject_collisions(report, qualified=qualified)
-    comparison = _Comparison(qualified=qualified)
-    comparison.require(
-        expected_verified,
+    _require_paths(
+        frozenset(verified),
         report.verified_names,
         report.failed_names,
         status="verify",
     )
-    comparison.require(
-        expected_failed,
+    _require_paths(
+        frozenset(failed),
         report.failed_names,
         report.verified_names,
         status="fail",
@@ -276,82 +266,27 @@ def require_named_harnesses(
     return report
 
 
-@dc.dataclass(frozen=True, slots=True)
-class _Comparison:
-    """How reported harness names are compared with expectations.
+def _require_paths(
+    wanted: frozenset[str],
+    reported: frozenset[str],
+    opposite: frozenset[str],
+    *,
+    status: str,
+) -> None:
+    """Require each expectation to equal exactly one reported harness.
 
-    Attributes
-    ----------
-    qualified : bool
-        Whether an expectation may name only part of a module-qualified print.
+    The reported name is compared exactly. Kani strips the local crate prefix
+    but keeps any module path, so an expectation states the crate-relative name
+    it requires (`kani_tests::test_sum`), and a harness in another module does
+    not satisfy it. No reported harness may be left over.
     """
-
-    qualified: bool
-
-    def matches(self, expected: str, reported: str) -> bool:
-        """Say whether one reported name satisfies one expectation.
-
-        Default mode compares the exact reported name, so a harness in another
-        module cannot stand in for the expected one. Qualified mode accepts the
-        expectation as a full suffix of the print, so a crate-relative name such
-        as `kani_tests::test_sum` matches what Kani prints.
-        """
-        if not self.qualified:
-            return reported == expected
-        return reported == expected or reported.endswith(f"::{expected}")
-
-    def require(
-        self,
-        wanted: frozenset[str],
-        reported: frozenset[str],
-        opposite: frozenset[str],
-        *,
-        status: str,
-    ) -> None:
-        """Require each expectation to name one reported harness and no more."""
-        unused = set(reported)
-        for name in sorted(wanted):
-            matched = {item for item in unused if self.matches(name, item)}
-            if not matched:
-                _require_status(frozenset({name}), opposite, expected=status)
-            if len(matched) > 1:
-                msg = (
-                    f"harness {name!r} matches more than one reported harness: "
-                    f"{sorted(matched)}"
-                )
-                raise ProofTranscriptError(msg)
-            unused -= matched
-        if unused:
-            _require_unexpected(frozenset(unused), status)
-
-
-def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
-    """Return the names to compare, unchanged.
-
-    The comparison itself distinguishes the two modes; both keep the reported
-    name so a qualified print is never reduced before it is compared.
-    """
-    del qualified
-    return names
-
-
-def _reject_collisions(report: ProofReport, *, qualified: bool) -> None:
-    """Refuse two printed harnesses that a bare expectation cannot tell apart.
-
-    A bare expectation names only a final component. If two reported harnesses
-    share one, that expectation would be satisfied by either, so the transcript
-    is reported as ambiguous rather than silently merged.
-    """
-    if not qualified:
-        return
-    bare = [item.name.rsplit("::", 1)[-1] for item in report.outcomes]
-    repeated = sorted({name for name in bare if bare.count(name) > 1})
-    if repeated:
-        msg = (
-            "proof transcript prints distinct qualified harnesses with the same "
-            f"name, so the set is ambiguous: {repeated}"
-        )
-        raise ProofTranscriptError(msg)
+    unused = set(reported)
+    for name in sorted(wanted):
+        if name not in unused:
+            _require_status(frozenset({name}), opposite, expected=status)
+        unused.remove(name)
+    if unused:
+        _require_unexpected(frozenset(unused), status)
 
 
 def _require_status(

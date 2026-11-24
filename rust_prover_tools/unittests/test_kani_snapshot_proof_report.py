@@ -190,97 +190,37 @@ def test_require_named_harnesses_refuses_the_wrong_status() -> None:
         )
 
 
-def test_qualified_names_match_on_their_final_component() -> None:
-    """Kani prints a harness inside a module with its module path."""
-    transcript = _transcript(("simple_lib::kani_tests::test_sum",), ())
-
-    report = require_named_harnesses(
-        transcript, verified=("test_sum",), failed=(), qualified=True
-    )
-
-    assert report.verified_names == {"simple_lib::kani_tests::test_sum"}
-
-
-def test_qualified_matching_keeps_the_exact_set() -> None:
-    """A qualified run still refuses an extra or missing harness."""
-    transcript = _transcript(
-        (
-            "simple_lib::kani_tests::test_sum",
-            "simple_lib::pair::kani_tests::test_one_plus_two",
-        ),
-        (),
-    )
-
-    with pytest.raises(ProofTranscriptError, match="unexpected"):
-        require_named_harnesses(
-            transcript, verified=("test_sum",), failed=(), qualified=True
-        )
-
-
-def test_default_mode_compares_the_exact_reported_name() -> None:
-    """A harness in another module cannot satisfy a default-mode expectation."""
-    transcript = _transcript(("other::bounded_push_contents_are_exact",), ())
-
-    with pytest.raises(ProofTranscriptError, match="did not verify"):
-        require_named_harnesses(
-            transcript, verified=("bounded_push_contents_are_exact",), failed=()
-        )
-
-
-def test_a_crate_relative_expectation_matches_a_qualified_print() -> None:
-    """Kani prints a harness inside a module without its crate prefix."""
+def test_a_crate_relative_expectation_matches_its_reported_name() -> None:
+    """Kani strips the crate prefix but keeps the module path."""
     transcript = _transcript(
         ("kani_tests::test_sum", "pair::kani_tests::test_one_plus_two"), ()
     )
 
     require_named_harnesses(
         transcript,
-        verified=(
-            "kani_tests::test_sum",
-            "pair::kani_tests::test_one_plus_two",
-        ),
+        verified=("kani_tests::test_sum", "pair::kani_tests::test_one_plus_two"),
         failed=(),
-        qualified=True,
     )
 
 
-def test_two_qualified_harnesses_with_one_name_are_refused() -> None:
-    """Collapsing a module path must not merge two distinct harnesses."""
-    transcript = _transcript(
-        ("kani_tests::test_sum", "other::test_sum", "other::test_two"), ()
-    )
-
-    with pytest.raises(ProofTranscriptError, match="ambiguous"):
-        require_named_harnesses(
-            transcript, verified=("test_sum",), failed=(), qualified=True
-        )
-
-
-def test_a_wrong_module_cannot_satisfy_an_expected_path() -> None:
+def test_an_extra_module_prefix_does_not_satisfy_an_expectation() -> None:
     """A harness in another module is a different harness, not a match."""
-    transcript = _transcript(
-        ("other::test_sum", "simple_lib::kani_tests::test_two"), ()
-    )
+    transcript = _transcript(("other::kani_tests::test_sum",), ())
 
     with pytest.raises(ProofTranscriptError, match="did not verify"):
         require_named_harnesses(
-            transcript,
-            verified=("simple_lib::kani_tests::test_sum",),
-            failed=(),
-            qualified=True,
+            transcript, verified=("kani_tests::test_sum",), failed=()
         )
 
 
-def test_an_expected_path_matches_its_reported_suffix() -> None:
-    """An expectation is matched as a full suffix of the reported path."""
-    transcript = _transcript(("simple_lib::kani_tests::test_sum",), ())
+def test_default_mode_compares_the_exact_reported_name() -> None:
+    """A bare expectation does not match a module-qualified print."""
+    transcript = _transcript(("other::bounded_push_contents_are_exact",), ())
 
-    require_named_harnesses(
-        transcript,
-        verified=("kani_tests::test_sum",),
-        failed=(),
-        qualified=True,
-    )
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(
+            transcript, verified=("bounded_push_contents_are_exact",), failed=()
+        )
 
 
 def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:

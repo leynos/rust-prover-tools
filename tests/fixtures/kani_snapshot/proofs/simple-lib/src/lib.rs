@@ -1,8 +1,9 @@
 // Copyright Kani Contributors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Upstream `tests/cargo-kani/simple-lib`, reproduced verbatim: `lib.rs` and
-//! `pair.rs` are copies of the pinned upstream files.
+//! Upstream `tests/cargo-kani/simple-lib`. `lib.rs` and `pair.rs` are copied
+//! from the pinned upstream commit, with a fixture documentation comment
+//! added.
 
 pub mod pair;
 pub use pair::Pair;

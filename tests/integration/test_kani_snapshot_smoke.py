@@ -264,11 +264,9 @@ def test_the_upstream_bundle_fixtures_verify(
         completed = _snapshot_cargo(consumer, crate, trace)
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, f"{crate}: {transcript[-4000:]}"
-        # Each expectation is the module-qualified path the pinned driver
+        # Each expectation is the exact crate-relative name the pinned driver
         # prints, so a harness from another module cannot satisfy it.
-        require_named_harnesses(
-            transcript, verified=harnesses, failed=(), qualified=True
-        )
+        require_named_harnesses(transcript, verified=harnesses, failed=())
         report(f"upstream bundle smoke verified {crate}: {', '.join(harnesses)}")
 
 
