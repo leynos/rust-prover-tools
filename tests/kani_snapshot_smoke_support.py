@@ -77,11 +77,11 @@ FALSE_HARNESS: typ.Final[str] = "deliberately_false_assertion"
 #: The floor harness, which only a 1.94-or-newer compiler accepts.
 FLOOR_HARNESS: typ.Final[str] = "bounded_adjacent_pairs_are_exact"
 
-#: Upstream's three bundle-test crates, reproduced verbatim.
-UPSTREAM_BUNDLE_CRATES: typ.Final[tuple[tuple[str, str], ...]] = (
-    ("simple-lib", "test_sum"),
-    ("build-rs-works", "check"),
-    ("simple-kissat", "check_concat"),
+#: Upstream's three bundle-test crates and every harness each one declares.
+UPSTREAM_BUNDLE_CRATES: typ.Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("simple-lib", ("test_sum", "test_one_plus_two")),
+    ("build-rs-works", ("check",)),
+    ("simple-kissat", ("check_concat",)),
 )
 
 #: How long one real proof may take, in seconds.

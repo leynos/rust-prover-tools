@@ -140,6 +140,7 @@ def require_no_setup(trace: Path) -> None:
     """
     assert trace.is_file(), f"{trace} is missing; strace is required"
     records = parse_exec_trace(read_trace(trace))
+    assert records, f"{trace} holds no execve records, so it proves nothing"
     assert not any(
         record.name == "cargo-kani" and "setup" in record.argv[1:] for record in records
     ), "setup ran when the generation should have been reused or refused"

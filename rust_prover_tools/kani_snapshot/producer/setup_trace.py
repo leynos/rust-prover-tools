@@ -45,6 +45,8 @@ _EXECVE: typ.Final[re.Pattern[str]] = re.compile(
 )
 _ARGUMENT: typ.Final[re.Pattern[str]] = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _ELIDED: typ.Final[re.Pattern[str]] = re.compile(r'"\s*\.\.\.')
+#: strace writes a standalone `...` when it omits trailing argument entries.
+_OMITTED: typ.Final[re.Pattern[str]] = re.compile(r"(?:^|[,\[])\s*\.\.\.\s*(?:,|$|\])")
 
 #: Compilers, linkers and build drivers that must never run during setup.
 _BUILD_TOOLS: typ.Final[frozenset[str]] = frozenset({
@@ -144,7 +146,7 @@ def _argv(value: str) -> tuple[str, ...]:
     limit, which could hide a `.rs` suffix from the code-generation check. An
     elided argument is therefore refused rather than silently truncated.
     """
-    if _ELIDED.search(value) is not None:
+    if _ELIDED.search(value) is not None or _OMITTED.search(value) is not None:
         msg = f"strace elided an argument, so it cannot be checked: {value[:120]!r}"
         raise SetupTraceError(msg)
     return tuple(_unescape(item) for item in _ARGUMENT.findall(value))

@@ -141,6 +141,17 @@ def test_a_real_strace_record_with_a_full_environment_is_accepted() -> None:
     assert records[1].argv == ("env",)
 
 
+def test_a_standalone_omitted_argument_marker_is_refused() -> None:
+    """`["rustc", ...]` hides an argument that could name source code."""
+    trace = (
+        _LAUNCHER + '901  execve("/toolchain/bin/rustc", ["rustc", ...], '
+        "0x7ffd2c1a4b30) = 0\n"
+    )
+
+    with pytest.raises(SetupTraceError, match="elided"):
+        require_prebuilt_setup(trace)
+
+
 def test_an_elided_argument_is_refused() -> None:
     """An argument strace elides could hide a `.rs` suffix."""
     trace = (

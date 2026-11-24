@@ -1,32 +1,23 @@
 // Copyright Kani Contributors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Upstream `tests/cargo-kani/simple-lib`, with its `pair` module flattened
-//! into this file. The harness is the upstream one, unchanged.
+//! Upstream `tests/cargo-kani/simple-lib`, reproduced verbatim: `lib.rs` and
+//! `pair.rs` are copies of the pinned upstream files.
 
-/// A pair of unsigned values.
-pub struct Pair {
-    first: u64,
-    second: u64,
-}
+pub mod pair;
+pub use pair::Pair;
 
-impl Pair {
-    /// Build a pair.
-    #[must_use]
-    pub fn new(first: u64, second: u64) -> Self {
-        Self { first, second }
-    }
-
-    /// Return the wrapping sum.
-    #[must_use]
-    pub fn sum(&self) -> u64 {
-        self.first.wrapping_add(self.second)
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn it_works() {
+        assert_eq!(2 + 2, 4);
     }
 }
 
 #[cfg(kani)]
 mod kani_tests {
-    use super::Pair;
+    use super::*;
 
     #[kani::proof]
     fn test_sum() {

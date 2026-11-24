@@ -95,8 +95,7 @@ def test_clean_setup_compiles_no_tool_source(
 ) -> None:
     """The setup trace shows prebuilt installation and no source build."""
     trace = consumer.roots["bounded_collection"] / "setup.trace"
-    if not trace.is_file():
-        pytest.skip("strace is unavailable, so descendant execution is unobserved")
+    assert trace.is_file(), "the cold install wrote no trace; strace is required"
     require_prebuilt_setup(read_trace(trace))
 
 
@@ -259,13 +258,13 @@ def test_the_upstream_bundle_fixtures_verify(
     environment reproduces the same scenarios, including the manifest that
     selects Kissat through `--external-sat-solver`.
     """
-    for crate, harness in UPSTREAM_BUNDLE_CRATES:
+    for crate, harnesses in UPSTREAM_BUNDLE_CRATES:
         trace = consumer.roots[crate] / "cargo-kani.trace"
         completed = _snapshot_cargo(consumer, crate, trace)
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, f"{crate}: {transcript[-4000:]}"
-        require_named_harnesses(transcript, verified=(harness,), failed=())
-        report(f"upstream bundle smoke verified {crate}:{harness}")
+        require_named_harnesses(transcript, verified=harnesses, failed=())
+        report(f"upstream bundle smoke verified {crate}: {', '.join(harnesses)}")
 
 
 def test_a_warm_repeat_reuses_the_generation(
