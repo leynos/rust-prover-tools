@@ -229,21 +229,31 @@ def test_two_qualified_harnesses_with_one_name_are_refused() -> None:
         )
 
 
-def test_a_harness_in_another_module_is_a_different_harness() -> None:
-    """Qualified matching compares names, so a module move is visible.
-
-    This is the boundary of the opt-in comparison: it normalises the printed
-    module path, so a harness that moved to another module still satisfies a
-    bare expectation. The collision test above is what stops two distinct
-    qualified harnesses from being merged.
-    """
-    transcript = _transcript(("other::test_two",), ())
-
-    report = require_named_harnesses(
-        transcript, verified=("test_two",), failed=(), qualified=True
+def test_a_wrong_module_cannot_satisfy_an_expected_path() -> None:
+    """A harness in another module is a different harness, not a match."""
+    transcript = _transcript(
+        ("other::test_sum", "simple_lib::kani_tests::test_two"), ()
     )
 
-    assert report.verified_names == {"other::test_two"}
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(
+            transcript,
+            verified=("simple_lib::kani_tests::test_sum",),
+            failed=(),
+            qualified=True,
+        )
+
+
+def test_an_expected_path_matches_its_reported_prefix() -> None:
+    """A full expected path matches a report that carries it as a suffix."""
+    transcript = _transcript(("simple_lib::kani_tests::test_sum",), ())
+
+    require_named_harnesses(
+        transcript,
+        verified=("kani_tests::test_sum",),
+        failed=(),
+        qualified=True,
+    )
 
 
 def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:

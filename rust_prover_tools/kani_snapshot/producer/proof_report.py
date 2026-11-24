@@ -259,34 +259,68 @@ def require_named_harnesses(
     report = parse_proof_report(transcript)
     expected_verified = frozenset(verified)
     expected_failed = frozenset(failed)
+    _reject_collisions(report, qualified=qualified)
     actual_verified = _matching(report.verified_names, qualified=qualified)
     actual_failed = _matching(report.failed_names, qualified=qualified)
-    _require_status(
-        expected_verified - actual_verified,
-        actual_failed,
-        expected="verify",
-    )
-    _require_unexpected(actual_verified - expected_verified, "verified")
-    _require_status(
-        expected_failed - actual_failed,
-        actual_verified,
-        expected="fail",
-    )
-    _require_unexpected(actual_failed - expected_failed, "failed")
+    _require_paths(expected_verified, actual_verified, actual_failed, status="verify")
+    _require_paths(expected_failed, actual_failed, actual_verified, status="fail")
     return report
 
 
-def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
-    """Return the names to compare, dropping a module path when asked.
+def _require_paths(
+    wanted: frozenset[str],
+    reported: frozenset[str],
+    opposite: frozenset[str],
+    *,
+    status: str,
+) -> None:
+    """Require every expectation to name one reported harness and no more.
 
-    Dropping a module path can make two different harnesses look like one, so a
-    collision is refused rather than collapsed: `a::test_sum` beside
-    `b::test_sum` would otherwise let an unexpected extra harness satisfy a
-    one-name expectation.
+    Each expectation must match exactly one reported name, and each reported
+    name must satisfy exactly one expectation, so a wrong-module replacement or
+    an extra harness is refused while a bare expectation still matches a
+    qualified print.
+    """
+    unused = set(reported)
+    for name in sorted(wanted):
+        matches = {item for item in unused if _matches(name, item)}
+        if not matches:
+            _require_status(frozenset({name}), opposite, expected=status)
+        if len(matches) > 1:
+            msg = (
+                f"harness {name!r} matches more than one reported harness: "
+                f"{sorted(matches)}"
+            )
+            raise ProofTranscriptError(msg)
+        unused -= matches
+    if unused:
+        _require_unexpected(frozenset(unused), status)
+
+
+def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
+    """Return the names to compare, keeping a printed module path when asked.
+
+    In qualified mode a name keeps its printed path. An expectation may then be
+    written either as the bare function name or as any full suffix of that path,
+    so `test_sum` matches `simple_lib::kani_tests::test_sum` while a harness in
+    another module does not: the expected path is compared against the reported
+    one, and only a matching suffix satisfies it.
     """
     if not qualified:
         return names
-    bare = [name.rsplit("::", 1)[-1] for name in names]
+    return names
+
+
+def _reject_collisions(report: ProofReport, *, qualified: bool) -> None:
+    """Refuse two printed harnesses that a bare expectation cannot tell apart.
+
+    A bare expectation names only a final component. If two reported harnesses
+    share one, that expectation would be satisfied by either, so the transcript
+    is reported as ambiguous rather than silently merged.
+    """
+    if not qualified:
+        return
+    bare = [item.name.rsplit("::", 1)[-1] for item in report.outcomes]
     repeated = sorted({name for name in bare if bare.count(name) > 1})
     if repeated:
         msg = (
@@ -294,7 +328,11 @@ def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
             f"name, so the set is ambiguous: {repeated}"
         )
         raise ProofTranscriptError(msg)
-    return frozenset(bare)
+
+
+def _matches(expected: str, reported: str) -> bool:
+    """Say whether a reported qualified name ends with the expected path."""
+    return reported == expected or reported.endswith(f"::{expected}")
 
 
 def _require_status(

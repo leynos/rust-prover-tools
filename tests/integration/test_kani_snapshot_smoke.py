@@ -53,7 +53,7 @@ from tests.kani_snapshot_smoke_support import (
     FIXTURES,
     FLOOR_HARNESS,
     POSITIVE_HARNESSES,
-    UPSTREAM_BUNDLE_CRATES,
+    UPSTREAM_BUNDLE_HARNESSES,
     Consumer,
     SmokeContext,
     build_root,
@@ -259,13 +259,13 @@ def test_the_upstream_bundle_fixtures_verify(
     selects Kissat through `--external-sat-solver`. Their manifests carry a
     `[workspace]` entry so each stands alone.
     """
-    for crate, harnesses in UPSTREAM_BUNDLE_CRATES:
+    for crate, harnesses in UPSTREAM_BUNDLE_HARNESSES.items():
         trace = consumer.roots[crate] / "cargo-kani.trace"
         completed = _snapshot_cargo(consumer, crate, trace)
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, f"{crate}: {transcript[-4000:]}"
-        # Kani prints a harness inside a module with its module path, so the
-        # comparison ignores the printed prefix but still requires the exact set.
+        # Each expectation is the module-qualified path the pinned driver
+        # prints, so a harness from another module cannot satisfy it.
         require_named_harnesses(
             transcript, verified=harnesses, failed=(), qualified=True
         )

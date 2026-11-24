@@ -48,7 +48,7 @@ __all__ = (
     "POSITIVE_HARNESSES",
     "PROOF_TIMEOUT",
     "REPO_ROOT",
-    "UPSTREAM_BUNDLE_CRATES",
+    "UPSTREAM_BUNDLE_HARNESSES",
     "Consumer",
     "SmokeContext",
     "assets_dir",
@@ -78,11 +78,18 @@ FALSE_HARNESS: typ.Final[str] = "deliberately_false_assertion"
 FLOOR_HARNESS: typ.Final[str] = "bounded_adjacent_pairs_are_exact"
 
 #: Upstream's three bundle-test crates and every harness each one declares.
-UPSTREAM_BUNDLE_CRATES: typ.Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
-    ("simple-lib", ("test_sum", "test_one_plus_two")),
-    ("build-rs-works", ("check",)),
-    ("simple-kissat", ("check_concat",)),
-)
+#:
+#: A harness inside a module is printed with its module path, so each expected
+#: name is the path the pinned driver reports rather than a bare function name.
+#: A harness from another module therefore cannot satisfy it.
+UPSTREAM_BUNDLE_HARNESSES: typ.Final[dict[str, tuple[str, ...]]] = {
+    "simple-lib": (
+        "simple_lib::kani_tests::test_sum",
+        "simple_lib::pair::kani_tests::test_one_plus_two",
+    ),
+    "build-rs-works": ("check",),
+    "simple-kissat": ("check_concat",),
+}
 
 #: How long one real proof may take, in seconds.
 PROOF_TIMEOUT: typ.Final[int] = 1800
@@ -99,7 +106,7 @@ CRATES: typ.Final[tuple[str, ...]] = (
     "bounded_collection",
     "false_assertion",
     "compiler_floor",
-    *(crate for crate, _ in UPSTREAM_BUNDLE_CRATES),
+    *UPSTREAM_BUNDLE_HARNESSES,
 )
 
 _GENERATION: typ.Final[re.Pattern[str]] = re.compile(r"\bat (?P<path>\S+)$")
