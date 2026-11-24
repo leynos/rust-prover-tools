@@ -176,7 +176,7 @@ def test_rustc_reading_source_from_stdin_is_refused() -> None:
 
 
 def test_fragments_from_concurrent_children_are_joined() -> None:
-    """strace splits one call when another descendant runs meanwhile."""
+    """A trace can split one call when another descendant runs meanwhile."""
     trace = (
         '901  execve("/bin/sh", ["sh", "-c", "true"], 0x123 <unfinished ...>\n'
         '902  execve("/usr/bin/tar", ["tar", "-xf", "t"], 0x456) = 0\n'
@@ -224,10 +224,11 @@ def test_versioned_and_prefixed_compiler_names_are_refused(compiler: str) -> Non
 
 def test_a_rustc_response_file_is_refused() -> None:
     """`rustc @args` can name code generation inside an unread file."""
-    trace = (
-        _LAUNCHER
-        + '901  execve("/toolchain/bin/rustc", ["rustc", "@/tmp/compile.args"], 0x1) = 0\n'
+    response_file = (
+        '901  execve("/toolchain/bin/rustc", '
+        '["rustc", "@/tmp/compile.args"], 0x1) = 0\n'
     )
+    trace = _LAUNCHER + response_file
 
     with pytest.raises(SetupTraceError, match="rustc"):
         require_prebuilt_setup(trace)
