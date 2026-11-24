@@ -25,6 +25,7 @@ __all__ = (
     "require_optional_int",
     "require_seconds",
     "require_str",
+    "validate_accounting",
     "validate_cgroup",
 )
 
@@ -158,6 +159,27 @@ def measurement_keys(document: object, *, subject: str) -> None:
     raise EvidenceFormatError(msg)
 
 
+def validate_accounting(accounting: object, *, subject: str = "accounting") -> None:
+    """Require the accounting object to carry the three drift lists."""
+    if not isinstance(accounting, dict):
+        msg = f"{subject} is not an object"
+        raise EvidenceFormatError(msg)
+    require_exact(
+        accounting,
+        frozenset({"missing", "duplicate", "unexpected"}),
+        subject=subject,
+    )
+    for field in ("missing", "duplicate", "unexpected"):
+        entries = accounting[field]
+        if not isinstance(entries, list):
+            msg = f"{subject} {field} is not an array"
+            raise EvidenceFormatError(msg)
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, str) or not entry:
+                msg = f"{subject} {field}[{index}] is not a non-empty identity string"
+                raise EvidenceFormatError(msg)
+
+
 def decode_measurement(document: object, *, subject: str = "measurement") -> None:
     """Validate one measurement object.
 
@@ -194,6 +216,15 @@ def validate_cgroup(document: object, *, subject: str) -> None:
             "unavailable_reason",
         }),
         subject=subject,
+    )
+    require_str(document["path"], subject=f"{subject}.path", optional=True)
+    require_optional_int(
+        document["oom_kill_delta"], subject=f"{subject}.oom_kill_delta"
+    )
+    require_str(
+        document["unavailable_reason"],
+        subject=f"{subject}.unavailable_reason",
+        optional=True,
     )
     for side in ("start", "finish"):
         memory = document[side]

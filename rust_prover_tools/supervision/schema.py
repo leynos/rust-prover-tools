@@ -21,6 +21,7 @@ from rust_prover_tools.supervision.schema_fields import (
     REPORT_FIELDS,
     REPORT_RESULT_FIELDS,
 )
+from rust_prover_tools.supervision.schema_records import validate_record
 from rust_prover_tools.supervision.schema_values import (
     EvidenceFormatError,
     decode_measurement,
@@ -32,6 +33,7 @@ from rust_prover_tools.supervision.schema_values import (
     require_optional_int,
     require_seconds,
     require_str,
+    validate_accounting,
     validate_cgroup,
 )
 
@@ -112,28 +114,8 @@ def _decode_record(line: str, number: int) -> dict[str, object]:
         require_optional(document, fields | _TRUNCATED_CONTEXT, required=fields)
     else:
         require_exact(document, fields, subject=f"record {number}")
-    _validate_record_measurements(kind, document, subject=f"record {number}")
+    validate_record(kind, document, subject=f"record {number}")
     return typ.cast("dict[str, object]", document)
-
-
-def _validate_record_measurements(
-    kind: str,
-    document: dict[str, object],
-    *,
-    subject: str,
-) -> None:
-    """Validate the measurements and cgroup evidence one record kind carries."""
-    if kind == "harness-finish":
-        for field in ("peak_group_rss", "min_host_available", "host_total"):
-            decode_measurement(document[field], subject=f"{subject}.{field}")
-        validate_cgroup(document["cgroup"], subject=f"{subject}.cgroup")
-        return
-    if kind == "run-finish":
-        _validate_accounting(document["accounting"])
-        return
-    for field in ("group_rss", "host_available", "host_total"):
-        if field in document:
-            decode_measurement(document[field], subject=f"{subject}.{field}")
 
 
 def validate_report_document(document: object) -> None:
@@ -171,7 +153,7 @@ def validate_report_document(document: object) -> None:
         msg = "the report notes are not an array of strings"
         raise EvidenceFormatError(msg)
     _validate_expected(document["expected"])
-    _validate_accounting(document["accounting"])
+    validate_accounting(document["accounting"], subject="the report accounting")
     _validate_results(document["results"])
 
 
@@ -201,30 +183,6 @@ def _validate_expected(expected: object) -> None:
         if attempt < 1:
             msg = f"expected entry {index}.attempt is not positive"
             raise EvidenceFormatError(msg)
-
-
-def _validate_accounting(accounting: object) -> None:
-    """Require the accounting object to carry the three drift lists."""
-    if not isinstance(accounting, dict):
-        msg = "the report accounting is not an object"
-        raise EvidenceFormatError(msg)
-    require_exact(
-        accounting,
-        frozenset({"missing", "duplicate", "unexpected"}),
-        subject="the report accounting",
-    )
-    for field in ("missing", "duplicate", "unexpected"):
-        entries = accounting[field]
-        if not isinstance(entries, list):
-            msg = f"the report accounting {field} is not an array"
-            raise EvidenceFormatError(msg)
-        for index, entry in enumerate(entries):
-            if not isinstance(entry, str) or not entry:
-                msg = (
-                    f"the report accounting {field}[{index}] is not a "
-                    "non-empty identity string"
-                )
-                raise EvidenceFormatError(msg)
 
 
 def _validate_results(results: object) -> None:

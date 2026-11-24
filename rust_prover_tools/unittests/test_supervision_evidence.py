@@ -724,3 +724,135 @@ def test_a_non_string_accounting_entry_is_refused(field: str, entry: object) -> 
 
     with pytest.raises(EvidenceFormatError, match=field):
         validate_report_document(document)
+
+
+_UNAVAILABLE = {"unavailable_reason": "not sampled"}
+
+
+def _valid_record(kind: str) -> dict[str, object]:
+    """Return one minimal valid record of `kind`."""
+    base: dict[str, object] = {
+        "schema": 1,
+        "record": kind,
+        "run_id": "run-1",
+        "timestamp": "2026-11-21T12:00:00.000Z",
+        "package": "alpha",
+        "harness": "a",
+        "attempt": 1,
+    }
+    if kind != "harness-finish":
+        base["elapsed_seconds"] = 0.5
+    if kind == "output":
+        base.update({"stream": "stdout", "text": "line"})
+    elif kind == "heartbeat":
+        base.update({
+            "idle_seconds": 0.5,
+            "group_rss": _UNAVAILABLE,
+            "host_available": _UNAVAILABLE,
+            "last_progress": None,
+        })
+    elif kind == "harness-finish":
+        base.update({
+            "status": "passed",
+            "stop_reason": "exited",
+            "exit_code": 0,
+            "signal_number": None,
+            "proof_verdict": "passed",
+            "duration_seconds": 1.0,
+            "peak_group_rss": _UNAVAILABLE,
+            "min_host_available": _UNAVAILABLE,
+            "host_total": _UNAVAILABLE,
+            "cgroup": {
+                "path": None,
+                "start": None,
+                "finish": None,
+                "oom_kill_delta": None,
+                "unavailable_reason": "not mounted",
+            },
+            "last_output": None,
+            "last_progress": None,
+            "detail": "",
+        })
+    else:
+        raise ValueError(kind)
+    return base
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value"),
+    [
+        ("output", "stream", 17),
+        ("output", "text", 17),
+        ("output", "elapsed_seconds", -1.0),
+        ("output", "attempt", 0),
+        ("output", "run_id", 17),
+        ("heartbeat", "idle_seconds", -1.0),
+        ("heartbeat", "last_progress", 17),
+        ("harness-finish", "status", "invented"),
+        ("harness-finish", "stop_reason", "perhaps"),
+        ("harness-finish", "proof_verdict", "probably"),
+        ("harness-finish", "duration_seconds", -1.0),
+        ("harness-finish", "exit_code", "zero"),
+        ("harness-finish", "last_output", 17),
+    ],
+)
+def test_a_correctly_keyed_record_with_a_bad_value_is_refused(
+    kind: str,
+    field: str,
+    value: object,
+) -> None:
+    """The key set alone must not admit an invented or negative value."""
+    record = _valid_record(kind)
+    record[field] = value
+
+    with pytest.raises(EvidenceFormatError, match=field.split("_")[0]):
+        decode_jsonl(json.dumps(record))
+
+
+def test_a_run_finish_record_with_an_invented_outcome_is_refused() -> None:
+    """A run outcome must be one the report model documents."""
+    record: dict[str, object] = {
+        "schema": 1,
+        "record": "run-finish",
+        "run_id": "run-1",
+        "timestamp": "2026-11-21T12:00:00.000Z",
+        "outcome": "invented",
+        "complete": True,
+        "interrupted": False,
+        "interrupt_signal": None,
+        "accounting": {"missing": [], "duplicate": [], "unexpected": []},
+    }
+
+    with pytest.raises(EvidenceFormatError, match="outcome"):
+        decode_jsonl(json.dumps(record))
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("path", 17),
+        ("oom_kill_delta", "two"),
+        ("unavailable_reason", 17),
+    ],
+)
+def test_a_cgroup_field_with_a_bad_value_is_refused(
+    field: str,
+    value: object,
+) -> None:
+    """An available-looking cgroup object still validates its own fields."""
+    cgroup: dict[str, object] = {
+        "path": "/sys/fs/cgroup/job",
+        "start": None,
+        "finish": None,
+        "oom_kill_delta": 1,
+        "unavailable_reason": None,
+    }
+    cgroup[field] = value
+
+    with pytest.raises(EvidenceFormatError, match=field.split("_")[0]):
+        decode_jsonl(
+            json.dumps({
+                **_valid_record("harness-finish"),
+                "cgroup": cgroup,
+            })
+        )
