@@ -370,6 +370,11 @@ Plain-language terms used in this plan:
   covered in both metadata orders. `make all` passes with 3,231 tests and 6
   skips.
 
+- [x] (2026-11-24 04:25Z) Live fixture rerun after the parser line bound:
+  2 passed in 875.93 s at `c54ea45`. That run covers the line-budget change,
+  the metadata keying and the preparation tests; commits after it are this
+  record alone.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
