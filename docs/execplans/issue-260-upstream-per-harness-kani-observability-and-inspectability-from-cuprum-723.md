@@ -163,6 +163,14 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 17:10Z) Fourth assessment round. The live-fact truncation
+  guard now runs before the stop classification, so a timeout cannot report a
+  retained `PASSED` after a duplicate selection was dropped, with a regression
+  that builds exactly that shape. A flush or parse failure is kept when cleanup
+  also raises. The finish-record reader matches its producer: a not-run harness
+  may have no stop reason or finish time, null output text is refused, and
+  empty text is kept. `make all` passes with 3,283 tests and 6 skips.
+
 - [x] (2026-11-24 14:55Z) Live fixture rerun at `498c4ae` after the third
   assessment round's repairs: 2 passed in 1,046.84 s. Production code is
   unchanged since `75a4427`; the only later commit is this record.
