@@ -171,7 +171,7 @@ Plain-language terms used in this plan:
   status, and refuses to attribute a verdict across duplicate records. Monitor
   failures still join the child before propagating; drains and pipes release
   descriptors on every failure; the run preserves its original failure when
-  finalisation also fails; mountinfo escapes all decode. JSONL record values,
+  finalization also fails; mountinfo escapes all decode. JSONL record values,
   not only their keys, are validated, as are cgroup fields. Discovery gains
   cfg_attr conditionality from gating attributes only, inner cfg_attr
   propagation, XID identifiers and lexical crate-root lookup. Selection scans
