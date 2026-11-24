@@ -163,6 +163,10 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 17:45Z) Live fixture rerun at `492e9b6` after the fourth
+  assessment round's repairs: 2 passed in 911.99 s. Production code is
+  unchanged since `73bbd94`; the only later commit is this record.
+
 - [x] (2026-11-24 17:10Z) Fourth assessment round. The live-fact truncation
   guard now runs before the stop classification, so a timeout cannot report a
   retained `PASSED` after a duplicate selection was dropped, with a regression
