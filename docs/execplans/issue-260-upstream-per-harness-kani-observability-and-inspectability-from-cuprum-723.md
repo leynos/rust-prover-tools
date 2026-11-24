@@ -393,6 +393,11 @@ Plain-language terms used in this plan:
   requested in the same round are in `bcef074`. `make all` passes with 3,233
   tests and 6 skips.
 
+- [x] (2026-11-24 07:05Z) Live fixture rerun at the aggregate-bound head
+  `4785ef0`: 2 passed in 1,108.87 s. This run covers every parser, attribution
+  and preparation change on the branch, so the earlier per-commit caveats no
+  longer apply.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
