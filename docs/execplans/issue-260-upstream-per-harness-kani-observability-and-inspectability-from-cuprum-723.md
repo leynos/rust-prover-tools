@@ -163,6 +163,11 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 13:40Z) Live fixture rerun after the formal-review repairs:
+  2 passed in 977.23 s at `6cdaa44`. This covers the parsed-log classification,
+  the spool release, the supervision failure paths, the evidence validation,
+  discovery and selection, and the pipe-setup unwind.
+
 - [x] (2026-11-24 13:10Z) Second assessment round after the first formal
   review. Live-fact overflow no longer fails a parsable report: the parsed
   blocks decide selection, overflow fails only when nothing parsed, and a
