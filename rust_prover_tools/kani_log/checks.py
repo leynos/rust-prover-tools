@@ -144,9 +144,17 @@ def _joined_description(
     Raises
     ------
     KaniLogError
-        If the log ends before the description's closing quote.
+        If the log ends before the description's closing quote, or the
+        description exceeds its character budget on any line, including the
+        first.
 
     """
+    if len(value) > MAX_DESCRIPTION_CHARS:
+        msg = (
+            f"{reader.where()}: the check description exceeds the "
+            f"{MAX_DESCRIPTION_CHARS}-character budget"
+        )
+        raise KaniLogError(msg)
     pieces = [value]
     frame = _Frame(value, value, len(value))
     while _is_open_quotation(reader, frame, seen):

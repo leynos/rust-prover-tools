@@ -58,16 +58,55 @@ def test_a_released_line_cannot_be_read_again() -> None:
         source.at(0)
 
 
-def test_a_long_blank_run_fails_closed() -> None:
+def _framed_report(blanks: int) -> list[str]:
+    """Return a complete report whose description spans a run of blank lines.
+
+    The description's first continuation line ends in a quote, so whether the
+    frame has closed is decided by the next non-blank line. With a blank run
+    after it, that decision is the parser's only multi-line lookahead.
+    """
+    return [
+        "Kani Rust Verifier 0.67.0 (cargo plugin)",
+        "Checking harness h0...",
+        "RESULTS:",
+        "Check 1: h0.assertion.1",
+        "\t - Status: SUCCESS",
+        '\t - Description: "opening',
+        'middle"',
+        *("" for _ in range(blanks)),
+        "closing text",
+        'last"',
+        "\t - Location: src/x.rs:1:1 in function h0",
+        "",
+        "SUMMARY:",
+        " ** 0 of 1 failed",
+        "",
+        "VERIFICATION:- SUCCESSFUL",
+        "Verification Time: 0.1s",
+        "",
+        "Manual Harness Summary:",
+        "Complete - 1 successfully verified harnesses, 0 failures, 1 total.",
+    ]
+
+
+def test_a_blank_run_inside_the_window_is_read_in_full() -> None:
+    """A description spanning fewer blank lines than the window parses."""
+    from rust_prover_tools.kani_log.lines import MAX_WINDOW_LINES
+
+    log = parse_kani_log_lines(iter(_framed_report(MAX_WINDOW_LINES - 20)))
+
+    (block,) = log.blocks
+    description = block.properties[0].description
+    assert description.startswith('opening\nmiddle"\n')
+    assert description.endswith("\nclosing text\nlast")
+
+
+def test_a_blank_run_past_the_window_is_a_lookahead_refusal() -> None:
     """Lookahead past the retained window is refused, not buffered forever."""
     from rust_prover_tools.kani_log.lines import MAX_WINDOW_LINES
 
-    lines = ["Kani Rust Verifier 0.67.0 (cargo plugin)"]
-    lines.extend("" for _ in range(MAX_WINDOW_LINES + 10))
-    lines.append("Checking harness h...")
-
-    with pytest.raises(KaniLogError):
-        parse_kani_log_lines(iter(lines))
+    with pytest.raises(KaniLogError, match="lookahead"):
+        parse_kani_log_lines(iter(_framed_report(MAX_WINDOW_LINES + 10)))
 
 
 def test_the_window_is_bounded_for_streaming_input() -> None:

@@ -127,9 +127,9 @@ Plain-language terms used in this plan:
 
 - Risk: Cuprum's `run()` forces capture on its owned-handle path, and a verbose
   proof log could exhaust memory. Severity: high. Likelihood: medium.
-  Mitigation: use `SafeCmd.run()` with `RunOutputOptions(capture=False)` and a
-  bounded `on_line` consumer; never use `SafeCmd.start()`, whose handle forces
-  capture.
+  Mitigation: use `SafeCmd.run()` with `RunOutputOptions(capture=False)` and
+  the supervisor-owned pipes that D34 records; never use `SafeCmd.start()`,
+  whose handle forces capture.
 - Risk: the async monitor loop may race the launcher task.
   Severity: medium. Likelihood: medium. Mitigation: a single monitor task owns
   the launcher task and every stop decision; every stop awaits the launcher's
@@ -149,11 +149,12 @@ Plain-language terms used in this plan:
   whole-text port. Severity: high. Likelihood: medium. Mitigation: implement
   whole-text parsing as feed-line plus finish, and add a line-fed equivalence
   property test over every corpus log and generated chatter.
-- Risk: a newline-free verbose line can accumulate in Cuprum before the
-  bounded hook receives it. Severity: high. Likelihood: low. Mitigation:
-  document the residual upstream limit, bound every line and sink the
-  supervisor receives, and ensure the classifier never needs the full line. The
-  incomplete-line buffer is not claimed to be bounded.
+- Risk: a newline-free verbose line could accumulate before it reaches a bound.
+  Severity: high. Likelihood: low. Mitigation: the supervisor owns the child's
+  stdout and stderr through `StdioTarget.fd`, splits them with the bounded
+  splitter, and never uses Cuprum's line hook, whose incomplete-line buffer D24
+  records as the earlier gap. `test_a_newline_free_line_is_bounded_end_to_end`
+  proves the bound through a real child.
 - Risk: CodeRabbit's shared review allowance may be exhausted.
   Severity: low. Likelihood: medium. Mitigation: run the deterministic gates
   before each review request; wait with `vsleep` as instructed on rate limits.
@@ -320,6 +321,15 @@ Plain-language terms used in this plan:
   `make all` passes with 3,220 tests and 6 skips; the live result still applies
   because that commit changes tests only.
 
+- [x] (2026-11-24 00:45Z) Seventh follow-up round. The description budget is
+  now checked on the first rendered line as well as on continuations, so a
+  single-line description larger than the budget is refused rather than
+  retained. The streaming tests replace the incomplete long-blank-run case with
+  a complete report whose description spans a blank run: a run inside the
+  window parses in full, and a run past it is refused by the lookahead. The
+  active risks and D1 now describe the owned pipes of D34 rather than Cuprum's
+  line hook. `make all` passes with 3,223 tests and 6 skips.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
@@ -368,12 +378,13 @@ Plain-language terms used in this plan:
 ## Decision log
 
 - D1. Decision: supervision uses `SafeCmd.run()` with
-  `RunOutputOptions(capture=False, on_line=...)` and
+  `RunOutputOptions(capture=False)` and
   `ExecutionContext(process_group=OWN_GROUP)`, and obtains the child PID and
   `exec_id` from a scoped `cuprum.observe()` hook's `start` event. Rationale:
   `start()` forces capture, which would retain a whole proof log. `run()`
   honours `capture=False`, its cancellation path settles the owned process
-  group, and the `start` event is documented to carry `pid`. Date/Author:
+  group, and the `start` event is documented to carry `pid`. The line hook
+  named here was replaced by the supervisor-owned pipes of D34. Date/Author:
   2026-11-21, implementation agent.
 - D2. Decision: implement the incremental parser as the single source of truth;
   `parse(text)` feeds lines and calls `finish(0)`. Rationale: a separate
@@ -884,11 +895,12 @@ status, in the documented precedence order.
   Method: the shared parser's own corpus, structure, count, solver, decision,
   and mutant suites cover the grammar and reconciliation against
   `tests/fixtures/kani_logs/0.67.0/`. `test_kani_log_streaming` covers the
-  streaming entry point: it compares streamed and batch facts for a capture,
-  exercises the bounded window and the released-line refusal, and checks the
-  long-blank-run refusal. The supervision tests cover the launcher's encoded
-  line bound, the observer's fact and spool budgets, and the real-process
-  witness drives an 8 MiB newline-free line. Artefacts: `tests/kani_log_*.py`,
+  streaming entry point: it compares complete facts and refusal text for every
+  corpus log, exercises the bounded window and the released-line refusal, and
+  checks a description spanning a blank run below the window and one past it.
+  The supervision tests cover the launcher's encoded line bound, the observer's
+  fact and spool budgets, and the real-process witness drives an 8 MiB
+  newline-free line. Artefacts: `tests/kani_log_*.py`,
   `rust_prover_tools/unittests/test_kani_log_*.py`,
   `rust_prover_tools/unittests/test_supervision_stream_lines.py`,
   `tests/test_supervision_process_witness.py`. Evidence: `make test`.

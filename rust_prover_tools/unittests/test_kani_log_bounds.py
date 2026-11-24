@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from rust_prover_tools.kani_log import KaniLogError, parse_kani_log
+from rust_prover_tools.kani_log.checks import MAX_DESCRIPTION_CHARS
 from rust_prover_tools.kani_log.extract import MAX_PARSER_RECORDS
 from rust_prover_tools.kani_log.reports import MAX_BLOCK_RECORDS
 from rust_prover_tools.kani_log.unsupported import MAX_UNSUPPORTED
@@ -105,3 +106,46 @@ def test_more_than_the_unsupported_budget_is_refused() -> None:
     ]
 
     assert "unsupported list" in _refusal(*lines)
+
+
+def _description_report(description: str) -> str:
+    """Return a complete report whose only check carries `description`."""
+    return "\n".join([
+        _BANNER,
+        "Checking harness h0...",
+        "RESULTS:",
+        "Check 1: h0.assertion.1",
+        "\t - Status: SUCCESS",
+        f'\t - Description: "{description}"',
+        "\t - Location: src/x.rs:1:1 in function h0",
+        "",
+        "SUMMARY:",
+        " ** 0 of 1 failed",
+        "",
+        "VERIFICATION:- SUCCESSFUL",
+        "Verification Time: 0.1s",
+        "",
+        "Manual Harness Summary:",
+        "Complete - 1 successfully verified harnesses, 0 failures, 1 total.",
+    ])
+
+
+def test_a_single_line_description_past_the_budget_is_refused() -> None:
+    """The first description line counts against the budget, not only its tail."""
+    text = _description_report("x" * (MAX_DESCRIPTION_CHARS + 1))
+
+    with pytest.raises(KaniLogError, match="character budget"):
+        parse_kani_log(text)
+
+
+def test_a_single_line_description_at_the_budget_is_accepted() -> None:
+    """A rendered description exactly at the budget is retained.
+
+    The budget counts the value as Kani prints it, framing quotes included,
+    which is the same span the continuation accounting measures.
+    """
+    payload = "x" * (MAX_DESCRIPTION_CHARS - 2)
+    text = _description_report(payload)
+
+    block = parse_kani_log(text).blocks[0]
+    assert block.properties[0].description == payload
