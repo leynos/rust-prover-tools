@@ -328,7 +328,12 @@ Plain-language terms used in this plan:
   a complete report whose description spans a blank run: a run inside the
   window parses in full, and a run past it is refused by the lookahead. The
   active risks and D1 now describe the owned pipes of D34 rather than Cuprum's
-  line hook. `make all` passes with 3,223 tests and 6 skips.
+  line hook. `test_a_stale_gated_test_pin_is_refused_before_qualification`
+  proves the supported `prepare_harnesses` path refuses the stale pin without
+  qualifying the route, so the guard cannot be bypassed by a caller that never
+  executes. `make all` passes with 3,224 tests and 6 skips; the live fixture is
+  unaffected because these commits change tests, the parser's description
+  check, and documentation.
 
 ## Surprises & discoveries
 

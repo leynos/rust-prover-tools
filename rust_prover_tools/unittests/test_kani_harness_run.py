@@ -21,10 +21,12 @@ from rust_prover_tools.kani_harness_run import (
 )
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
+    InventoryDiscoveryError,
     InventoryHarness,
     PackageInventory,
     compose_arguments,
 )
+from rust_prover_tools.kani_inventory.discover import cargo_metadata
 from rust_prover_tools.kani_routes import PreparedRoute
 from rust_prover_tools.supervision import (
     Diagnostics,
@@ -449,3 +451,52 @@ def test_the_log_budget_reaches_the_policy() -> None:
     )
 
     assert config.max_log_bytes == 2 * 1024 * 1024
+
+
+_FIXTURE_WORKSPACE = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "kani_harness_workspace"
+)
+
+
+def test_a_stale_gated_test_pin_is_refused_before_qualification() -> None:
+    """Preparation refuses the pin on the supported path, before any launch.
+
+    A cfg-disabled test harness can be absent from the build while a
+    same-named harness elsewhere is selected. The guard must therefore reject
+    the stale pin during preparation, not rely on a run never starting, so the
+    route is never qualified for it.
+    """
+    pinned = InventoryHarness(
+        package="beta",
+        target="integration",
+        target_kind="test",
+        harness="gated_proof",
+        source="tests/integration.rs",
+        line=8,
+    )
+    inventory = HarnessInventory((PackageInventory("beta", (pinned,)),))
+    metadata = cargo_metadata(_FIXTURE_WORKSPACE)
+    qualified: list[object] = []
+
+    def prepare(route: object) -> PreparedRoute:
+        """Record a qualification the guard should have prevented."""
+        qualified.append(route)
+        return _prepared()
+
+    options = KaniHarnessRunOptions(
+        repo_root=_FIXTURE_WORKSPACE,
+        route=LegacyRoute(
+            installation=_FIXTURE_WORKSPACE,
+            cwd=_FIXTURE_WORKSPACE,
+        ),
+        inventory=inventory,
+        metadata=metadata,
+        dependencies=KaniHarnessDependencies(prepare=prepare),
+    )
+
+    with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
+        prepare_harnesses(options)
+    assert qualified == []
