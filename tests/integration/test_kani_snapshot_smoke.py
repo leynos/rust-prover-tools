@@ -42,12 +42,11 @@ from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     require_prebuilt_setup,
 )
 from tests.kani_snapshot_smoke_support import (
-    BUILD_SCRIPT_HARNESS,
     FALSE_HARNESS,
     FIXTURES,
     FLOOR_HARNESS,
-    KISSAT_HARNESS,
     POSITIVE_HARNESSES,
+    UPSTREAM_BUNDLE_CRATES,
     Consumer,
     SmokeContext,
     build_root,
@@ -247,30 +246,24 @@ def _snapshot_cargo(consumer: Consumer, crate: str, trace: Path) -> Completed:
     )
 
 
-def test_the_upstream_build_script_bundle_smoke_verifies(
+def test_the_upstream_bundle_fixtures_verify(
     consumer: Consumer, installed: Completed
 ) -> None:
-    """Upstream's `build-rs-works` route works through the snapshot."""
-    trace = consumer.roots["build_script"] / "build-script.trace"
-    completed = _snapshot_cargo(consumer, "build_script", trace)
-    transcript = completed.stdout + completed.stderr
+    """Upstream's own TestBundle scenarios run through the snapshot.
 
-    assert completed.returncode == 0, transcript[-4000:]
-    require_named_harnesses(transcript, verified=(BUILD_SCRIPT_HARNESS,), failed=())
-    report(f"build-script bundle smoke verified {BUILD_SCRIPT_HARNESS}")
-
-
-def test_the_upstream_kissat_bundle_smoke_verifies(
-    consumer: Consumer, installed: Completed
-) -> None:
-    """Upstream's `simple-kissat` route works through the snapshot."""
-    trace = consumer.roots["kissat_solver"] / "kissat.trace"
-    completed = _snapshot_cargo(consumer, "kissat_solver", trace)
-    transcript = completed.stdout + completed.stderr
-
-    assert completed.returncode == 0, transcript[-4000:]
-    require_named_harnesses(transcript, verified=(KISSAT_HARNESS,), failed=())
-    report(f"kissat bundle smoke verified {KISSAT_HARNESS}")
+    Upstream's release workflow runs `cargo kani` in `simple-lib`,
+    `build-rs-works` and `simple-kissat`. This repository carries those three
+    crates verbatim, so running `cargo kani` in each under the generation's own
+    environment reproduces the same scenarios, including the manifest that
+    selects Kissat through `--external-sat-solver`.
+    """
+    for crate, harness in UPSTREAM_BUNDLE_CRATES:
+        trace = consumer.roots[crate] / "cargo-kani.trace"
+        completed = _snapshot_cargo(consumer, crate, trace)
+        transcript = completed.stdout + completed.stderr
+        assert completed.returncode == 0, f"{crate}: {transcript[-4000:]}"
+        require_named_harnesses(transcript, verified=(harness,), failed=())
+        report(f"upstream bundle smoke verified {crate}:{harness}")
 
 
 def test_a_warm_repeat_reuses_the_generation(

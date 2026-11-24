@@ -44,15 +44,14 @@ if typ.TYPE_CHECKING:
 
 
 __all__ = (
-    "BUILD_SCRIPT_HARNESS",
     "FALSE_HARNESS",
     "FIXTURES",
     "FLOOR_HARNESS",
-    "KISSAT_HARNESS",
     "MAX_CAPTURE_BYTES",
     "POSITIVE_HARNESSES",
     "PROOF_TIMEOUT",
     "REPO_ROOT",
+    "UPSTREAM_BUNDLE_CRATES",
     "Consumer",
     "SmokeContext",
     "assets_dir",
@@ -67,6 +66,7 @@ __all__ = (
     "report",
     "require_environment",
     "require_no_setup",
+    "require_strace",
     "run",
     "run_command",
     "snapshot_environment",
@@ -86,11 +86,12 @@ FALSE_HARNESS: typ.Final[str] = "deliberately_false_assertion"
 #: The floor harness, which only a 1.94-or-newer compiler accepts.
 FLOOR_HARNESS: typ.Final[str] = "bounded_adjacent_pairs_are_exact"
 
-#: The build-script fixture's harness, mirroring upstream `build-rs-works`.
-BUILD_SCRIPT_HARNESS: typ.Final[str] = "build_script_cfg_is_set"
-
-#: The Kissat fixture's harness, mirroring upstream `simple-kissat`.
-KISSAT_HARNESS: typ.Final[str] = "kissat_proves_a_bounded_sum"
+#: Upstream's three bundle-test crates, reproduced verbatim.
+UPSTREAM_BUNDLE_CRATES: typ.Final[tuple[tuple[str, str], ...]] = (
+    ("simple-lib", "test_sum"),
+    ("build-rs-works", "check"),
+    ("simple-kissat", "check_concat"),
+)
 
 #: How long one real proof may take, in seconds.
 PROOF_TIMEOUT: typ.Final[int] = 1800
@@ -107,8 +108,7 @@ CRATES: typ.Final[tuple[str, ...]] = (
     "bounded_collection",
     "false_assertion",
     "compiler_floor",
-    "build_script",
-    "kissat_solver",
+    *(crate for crate, _ in UPSTREAM_BUNDLE_CRATES),
 )
 
 _GENERATION: typ.Final[re.Pattern[str]] = re.compile(r"\bat (?P<path>\S+)$")
@@ -336,10 +336,22 @@ def run_command(
     ]
 
 
+def require_strace() -> str:
+    """Return the strace path, failing when the tool is absent.
+
+    The verification target needs `strace`; without it the reuse, refusal and
+    setup claims cannot be observed, so the target refuses to start rather than
+    reporting an unproven pass.
+    """
+    strace = shutil.which("strace")
+    assert strace, "strace is required; install it before running this target"
+    return strace
+
+
 def traced_run(
     command: list[str], trace: Path, context: SmokeContext
 ) -> subprocess.CompletedProcess[str]:
-    """Run one public command under `strace`, or plainly without it.
+    """Run one public command under `strace`.
 
     Parameters
     ----------
@@ -350,13 +362,32 @@ def traced_run(
     context : SmokeContext
         Working directory, environment and bounds for the child.
     """
-    strace = shutil.which("strace")
-    if strace is None:
-        return run(command, dc.replace(context, check=False))
+    strace = require_strace()
     return run(
-        [strace, "-f", "-e", "trace=execve", "-o", str(trace), *command],
+        [*_strace_prefix(strace, trace), *command],
         dc.replace(context, check=False),
     )
+
+
+def _strace_prefix(strace: str, trace: Path) -> list[str]:
+    """Return the strace arguments that capture complete argument vectors.
+
+    `-s 4096` raises strace's default 32-byte string limit enough for every
+    invocation vector this smoke observes, and `-qq` keeps its own noise out of
+    the trace. The parser still refuses an elided argument, so an unexpectedly
+    long one fails loudly rather than being silently truncated.
+    """
+    return [
+        strace,
+        "-f",
+        "-qq",
+        "-s",
+        "4096",
+        "-e",
+        "trace=execve",
+        "-o",
+        str(trace),
+    ]
 
 
 def proof(

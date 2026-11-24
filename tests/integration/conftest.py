@@ -8,7 +8,6 @@ ordinary `make test` never runs a real install.
 
 from __future__ import annotations
 
-import shutil
 import typing as typ
 
 import pytest
@@ -17,12 +16,14 @@ from tests.kani_snapshot_smoke_support import (
     CRATES,
     Consumer,
     SmokeContext,
+    _strace_prefix,
     assets_dir,
     build_root,
     install_command,
     manifest_document,
     pin_for,
     prover_tools_command,
+    require_strace,
     run,
 )
 
@@ -84,15 +85,13 @@ def installed(
 ) -> subprocess.CompletedProcess[str]:
     """Install the produced snapshot through the public command, cold.
 
-    Setup is traced only when `strace` is available; the descendant-process
-    test records the gap rather than claiming the check ran.
+    Setup is always traced: the target requires `strace`, because the reuse,
+    refusal and setup claims cannot be observed without it.
     """
     root = consumer.roots["bounded_collection"]
     command = install_command(prover_tools, root, assets, consumer.cache)
-    strace = shutil.which("strace")
-    if strace is None:
-        return run(command, SmokeContext(cwd=root))
+    strace = require_strace()
     return run(
-        [strace, "-f", "-e", "trace=execve", "-o", str(root / "setup.trace"), *command],
+        [*_strace_prefix(strace, root / "setup.trace"), *command],
         SmokeContext(cwd=root),
     )

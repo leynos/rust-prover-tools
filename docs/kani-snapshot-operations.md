@@ -196,9 +196,9 @@ Prerequisites:
 - `gh` on `PATH`, authenticated enough to verify a public attestation.
 - Network access for `gh attestation verify` and the pinned Rust toolchain
   download.
-- `strace` for the descendant-process evidence. Without it the install runs
-  untraced and the setup-trace test skips; record that gap rather than claiming
-  the check ran.
+- `strace`. The target requires it: without a trace the reuse, refusal and
+  clean-setup claims cannot be observed, so the target fails early instead of
+  reporting an unproven pass.
 - A Rust 1.93 compiler for the below-floor control. Resolve it explicitly:
 
 ```sh
@@ -222,9 +222,10 @@ The verification requires:
 
 - A cold `snapshot install` that names the pin's tag and the observed compiler.
 - The pinned launcher's own `--version` naming the manifest's backend version.
-- `cargo kani` running upstream's bundle scenarios: a crate with a build script
-  and a Kissat-backed harness, each verifying under the generation's own
-  environment.
+- `cargo kani` running upstream's TestBundle crates under the generation's own
+  environment: `simple-lib`, `build-rs-works` and `simple-kissat`, reproduced
+  verbatim, so the library, build-script and external-Kissat-solver routes are
+  all exercised.
 - An effective compiler at or above Rust 1.94, parsed from the install's
   `rustc:` report.
 - `snapshot check` accepting the generation.

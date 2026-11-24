@@ -112,6 +112,35 @@ def test_an_unparsable_execve_record_is_refused() -> None:
         require_prebuilt_setup(trace)
 
 
+#: Records captured from real `strace -f -qq -s 4096 -e trace=execve` output.
+_REAL_ALLOWED = (
+    '2576251 execve("/bin/sh", ["/bin/sh", "-c", "true"], '
+    "0x7ffc5b3c5958 /* 109 vars */) = 0\n"
+)
+_REAL_ALLOWED_WITH_ENV = (
+    '2576257 execve("/usr/bin/env", ["env"], ["HOME=/root", "PATH=/usr/bin"]) = 0\n'
+)
+
+
+def test_a_real_strace_record_with_an_environment_comment_is_accepted() -> None:
+    """strace annotates the environment pointer with its variable count."""
+    trace = _LAUNCHER + _REAL_ALLOWED
+
+    records = require_prebuilt_setup(trace)
+
+    assert records[1].executable == "/bin/sh"
+    assert records[1].argv == ("/bin/sh", "-c", "true")
+
+
+def test_a_real_strace_record_with_a_full_environment_is_accepted() -> None:
+    """`strace -v` writes the environment as a list instead of a pointer."""
+    trace = _LAUNCHER + _REAL_ALLOWED_WITH_ENV
+
+    records = require_prebuilt_setup(trace)
+
+    assert records[1].argv == ("env",)
+
+
 def test_an_elided_argument_is_refused() -> None:
     """An argument strace elides could hide a `.rs` suffix."""
     trace = (

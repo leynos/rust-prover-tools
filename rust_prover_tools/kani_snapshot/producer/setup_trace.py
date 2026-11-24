@@ -39,7 +39,9 @@ MAX_EXEC_RECORDS: typ.Final[int] = 10_000
 _EXECVE: typ.Final[re.Pattern[str]] = re.compile(
     r"^(?:(?:\[pid\s+[0-9]+\]\s+)|(?:[0-9]+\s+))?"
     r'execve\("(?P<path>(?:[^"\\]|\\.)*)",\s*\[(?P<argv>.*)\],\s*'
-    r"(?:0x[0-9a-f]+|[0-9]+)\)"
+    # strace writes the environment as a pointer, optionally annotated with its
+    # variable count, or as the whole variable list under `-v`.
+    r"(?:0x[0-9a-f]+(?:\s*/\*\s*[0-9]+\s+vars?\s*\*/)?|\[[^\]]*\]|[0-9]+)\)"
 )
 _ARGUMENT: typ.Final[re.Pattern[str]] = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _ELIDED: typ.Final[re.Pattern[str]] = re.compile(r'"\s*\.\.\.')
