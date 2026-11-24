@@ -51,6 +51,7 @@ from rust_prover_tools.supervision.kani_outcome import (
 from rust_prover_tools.supervision.models import (
     ExecutionStatus,
     HarnessSpec,
+    ProofVerdict,
     StopReason,
 )
 
@@ -116,12 +117,9 @@ class KaniAdapter:
                     observed=observed,
                 )
             if kani.facts_truncated:
-                return classification(
-                    ExecutionStatus.ERROR,
-                    detail="the verifier produced more selection records than "
-                    f"the supervisor retains ({MAX_LIVE_RECORDS})",
-                    observed=observed,
-                )
+                # A dropped live record makes the retained verdicts ambiguous;
+                # the parsed log below is authoritative when it exists.
+                observed = dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
             if kani.banner_version is not None and kani.banner_version != self.version:
                 return classification(
                     ExecutionStatus.ERROR,
@@ -138,6 +136,13 @@ class KaniAdapter:
                     identities=tuple(
                         f"{evidence.spec.package}::{block.name}" for block in log.blocks
                     ),
+                )
+            if log is None and kani.facts_truncated:
+                return classification(
+                    ExecutionStatus.ERROR,
+                    detail="the verifier produced more selection records than "
+                    f"the supervisor retains ({MAX_LIVE_RECORDS})",
+                    observed=observed,
                 )
             selection = _selection_status(evidence, kani, observed, log)
             if selection is not None:

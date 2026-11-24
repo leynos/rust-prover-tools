@@ -47,6 +47,7 @@ from rust_prover_tools.supervision.launch_command import (
     CommandBuilder,
     LaunchCommand,
 )
+from rust_prover_tools.supervision.launch_pid import PidRecorder
 from rust_prover_tools.supervision.models import (
     LaunchResult,
     StopReason,
@@ -61,8 +62,6 @@ from rust_prover_tools.supervision.pipe_drain import (
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import datetime as dt
-
-    from cuprum.events import ExecEvent
 
     from rust_prover_tools.supervision.models import HarnessSpec
 
@@ -93,40 +92,6 @@ class PidSource(typ.Protocol):
     def settled_exit_code(self) -> int | None:
         """The status Cuprum settled with, or `None` when it reported none."""
         ...
-
-
-class _PidRecorder:
-    """Capture the child PID and settled status from the run's events."""
-
-    def __init__(self) -> None:
-        """Create a recorder that has seen no event."""
-        self.pid: int | None = None
-        self.settled_exit_code: int | None = None
-        self._closing: list[int] = []
-
-    def own(self, *descriptors: int) -> None:
-        """Close the parent's copies of the child's pipe ends after the spawn.
-
-        The write ends must leave the parent once the child owns them, or the
-        read ends never observe EOF.
-        """
-        self._closing.extend(descriptors)
-
-    def __call__(self, event: ExecEvent) -> None:
-        """Record the pid and any status the run announced."""
-        if event.phase == "start":
-            if event.pid is not None:
-                self.pid = event.pid
-            self.close_parent_ends()
-        if event.phase in {"exit", "settled"} and event.exit_code is not None:
-            self.settled_exit_code = event.exit_code
-
-    def close_parent_ends(self) -> None:
-        """Close every borrowed descriptor once, tolerating a repeated call."""
-        for descriptor in self._closing:
-            with contextlib.suppress(OSError):
-                os.close(descriptor)
-        self._closing.clear()
 
 
 class RunningHarness:
@@ -306,7 +271,7 @@ class CuprumHarnessLauncher:
             The running child. The task is created on the running loop, so this
             must be called from a coroutine.
         """
-        recorder = _PidRecorder()
+        recorder = PidRecorder()
         task = asyncio.get_running_loop().create_task(
             self._run(spec, build, on_line, recorder)
         )
@@ -317,7 +282,7 @@ class CuprumHarnessLauncher:
         spec: HarnessSpec,
         build: CommandBuilder,
         on_line: cabc.Callable[[object], None],
-        recorder: _PidRecorder,
+        recorder: PidRecorder,
     ) -> LaunchResult:
         """Run one invocation on its own task, scoping the pid observer."""
         started = self._monotonic()
@@ -338,7 +303,7 @@ class CuprumHarnessLauncher:
 
     def _streams(
         self,
-        recorder: _PidRecorder,
+        recorder: PidRecorder,
         on_line: cabc.Callable[[object], None],
         started: float,
     ) -> tuple[RunOutputOptions, list[PipeDrain]]:
@@ -374,13 +339,34 @@ class CuprumHarnessLauncher:
             on_line=on_line,
             started=started,
         )
-        drains = [
-            PipeDrain(out_read, "stdout", config),
-            PipeDrain(err_read, "stderr", config),
-        ]
-        for drain in drains:
-            drain.start()
+        drains: list[PipeDrain] = []
+        try:
+            drains = [
+                PipeDrain(out_read, "stdout", config),
+                PipeDrain(err_read, "stderr", config),
+            ]
+            for drain in drains:
+                drain.start()
+        except _SETUP_FAILURES:
+            # The recorder owns the write ends and the caller's finally closes
+            # them; the read ends belong here until a drain takes ownership.
+            for drain in drains:
+                drain.close()
+            for descriptor in (out_read, err_read):
+                with contextlib.suppress(OSError):
+                    os.close(descriptor)
+            raise
         return output, drains
+
+
+#: Failures that can occur between allocating the pipes and starting the
+#: drains: an allocation or descriptor error, an invalid drain configuration,
+#: or a loop registration failure.
+_SETUP_FAILURES: typ.Final[tuple[type[BaseException], ...]] = (
+    OSError,
+    ValueError,
+    RuntimeError,
+)
 
 
 def _exit_status(code: int | None) -> LaunchResult:

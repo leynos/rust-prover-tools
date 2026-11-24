@@ -583,3 +583,70 @@ def test_a_stopped_attempt_releases_its_spool() -> None:
     assert not spool.exists()
     observer.close()
     observer.close()
+
+
+def _log_with_selection_noise(count: int) -> list[str]:
+    """Return a passing log whose description holds `count` fake selections."""
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    noise = [f"Checking harness fake{index}..." for index in range(count)]
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        *noise,
+        'last"',
+    ]
+    return log
+
+
+def _observed_log(log: list[str]) -> KaniObserver:
+    """Return an observer fed one prepared log."""
+    observer = KaniObserver()
+    clock = VirtualClock()
+    for line in log:
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+    return observer
+
+
+def test_live_fact_overflow_does_not_fail_a_parsable_report() -> None:
+    """Description noise that exhausts the live cap is not a run failure.
+
+    The parsed log is authoritative: enough selection-shaped description lines
+    to overflow the live budget still leave one valid block, which passes.
+    """
+    from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
+
+    observer = _observed_log(_log_with_selection_noise(MAX_LIVE_RECORDS + 10))
+    assert observer.facts_truncated
+    adapter = KaniAdapter()
+
+    classification = adapter.classify(_evidence("harnesses::verified"), observer)
+
+    assert classification.status is ExecutionStatus.PASSED
+    assert classification.observed == ("alpha::harnesses::verified",)
+
+
+def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
+    """A dropped live record makes the retained verdict unattributable."""
+    from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
+
+    observer = _observed_log(_log_with_selection_noise(MAX_LIVE_RECORDS + 10))
+    evidence = _evidence(
+        "harnesses::verified",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
