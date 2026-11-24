@@ -254,9 +254,10 @@ def test_the_upstream_bundle_fixtures_verify(
 
     Upstream's release workflow runs `cargo kani` in `simple-lib`,
     `build-rs-works` and `simple-kissat`. This repository carries those three
-    crates verbatim, so running `cargo kani` in each under the generation's own
+    crates, so running `cargo kani` in each under the generation's own
     environment reproduces the same scenarios, including the manifest that
-    selects Kissat through `--external-sat-solver`.
+    selects Kissat through `--external-sat-solver`. Their manifests carry a
+    `[workspace]` entry so each stands alone.
     """
     for crate, harnesses in UPSTREAM_BUNDLE_CRATES:
         trace = consumer.roots[crate] / "cargo-kani.trace"

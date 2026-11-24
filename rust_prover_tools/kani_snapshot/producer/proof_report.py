@@ -277,10 +277,24 @@ def require_named_harnesses(
 
 
 def _matching(names: frozenset[str], *, qualified: bool) -> frozenset[str]:
-    """Return the names to compare, dropping a module path when asked."""
+    """Return the names to compare, dropping a module path when asked.
+
+    Dropping a module path can make two different harnesses look like one, so a
+    collision is refused rather than collapsed: `a::test_sum` beside
+    `b::test_sum` would otherwise let an unexpected extra harness satisfy a
+    one-name expectation.
+    """
     if not qualified:
         return names
-    return frozenset(name.rsplit("::", 1)[-1] for name in names)
+    bare = [name.rsplit("::", 1)[-1] for name in names]
+    repeated = sorted({name for name in bare if bare.count(name) > 1})
+    if repeated:
+        msg = (
+            "proof transcript prints distinct qualified harnesses with the same "
+            f"name, so the set is ambiguous: {repeated}"
+        )
+        raise ProofTranscriptError(msg)
+    return frozenset(bare)
 
 
 def _require_status(

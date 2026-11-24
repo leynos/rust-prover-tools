@@ -186,8 +186,8 @@ only entries in scope.
       the `-v` list), `strace` is required rather than optional, capture asks
       for complete argument strings and still refuses an elided one, and
       regressions use real captured output. Upstream's TestBundle crates
-      `simple-lib`, `build-rs-works` and `simple-kissat` are reproduced verbatim
-      and run through `cargo kani` under the generation's environment, replacing
+      `simple-lib`, `build-rs-works` and `simple-kissat` are reproduced from the
+      pinned upstream sources and run through `cargo kani` under the generation's environment, replacing
       the two local substitutes. The runbook states that `strace` is required,
       and D7 records 63 files and 2,989 net Python/Rust lines.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
@@ -271,7 +271,7 @@ only entries in scope.
   control, the smoke harness, its support module and its fixtures, the workflow
   consumer-profile step and its contract test, the runbook and the synchronized
   guides. Measured against `57c1560`: 63 non-ExecPlan files, 2,989 net Python
-  and Rust lines, 25 net configuration lines and 600 net documentation lines.
+  and Rust lines, 92 net configuration lines and 600 net documentation lines.
   Earlier readings (53 files and 2,307 lines, then 54 and 2,742) were taken
   before successive assessment repairs added the bundle-smoke fixtures, the
   real-`strace` regressions and their controls; the numbers here are the

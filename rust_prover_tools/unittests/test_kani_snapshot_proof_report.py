@@ -217,6 +217,35 @@ def test_qualified_matching_keeps_the_exact_set() -> None:
         )
 
 
+def test_two_qualified_harnesses_with_one_name_are_refused() -> None:
+    """Collapsing a module path must not merge two distinct harnesses."""
+    transcript = _transcript(
+        ("simple_lib::kani_tests::test_sum", "other::test_sum", "other::test_two"), ()
+    )
+
+    with pytest.raises(ProofTranscriptError, match="ambiguous"):
+        require_named_harnesses(
+            transcript, verified=("test_sum",), failed=(), qualified=True
+        )
+
+
+def test_a_harness_in_another_module_is_a_different_harness() -> None:
+    """Qualified matching compares names, so a module move is visible.
+
+    This is the boundary of the opt-in comparison: it normalises the printed
+    module path, so a harness that moved to another module still satisfies a
+    bare expectation. The collision test above is what stops two distinct
+    qualified harnesses from being merged.
+    """
+    transcript = _transcript(("other::test_two",), ())
+
+    report = require_named_harnesses(
+        transcript, verified=("test_two",), failed=(), qualified=True
+    )
+
+    assert report.verified_names == {"other::test_two"}
+
+
 def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:
     """The rendered multivariant output is pinned by a Syrupy snapshot."""
     assert render_proof_report(parse_proof_report(_fixture("positive.txt"))) == snapshot
