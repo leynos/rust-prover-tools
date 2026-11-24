@@ -163,6 +163,14 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-24 13:10Z) Second assessment round after the first formal
+  review. Live-fact overflow no longer fails a parsable report: the parsed
+  blocks decide selection, overflow fails only when nothing parsed, and a
+  retained verdict becomes unknown when a record was dropped. Drain creation
+  and reader registration are inside the pipe-setup cleanup, and the pid
+  recorder moved to `supervision/launch_pid.py`. `make all` passes with 3,275
+  tests and 6 skips.
+
 - [x] (2026-11-24 12:30Z) First formal CodeRabbit review: 24 inline findings
   plus one Codex finding, all addressed with regressions. The classifier now
   trusts the parsed log's blocks for selection (a description containing
