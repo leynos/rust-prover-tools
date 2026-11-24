@@ -193,6 +193,18 @@ and Cargo may skip the target: a pinned harness the verifier never builds
 cannot be attributed to the run, even though the result would be an error
 rather than a false pass.
 
+The refusal above rests on measured Kani 0.67.0 behaviour, not on inference. In
+a fixture package whose integration test declared `required-features`,
+`cargo kani --tests` aborted with "target `integration` in package … requires
+the features" and produced no verification record at all. With the same
+`required-features` removed and the test copy disabled by `cfg`, the library
+copy of the identical pretty name was the only record, and it passed; Kani
+never reported the absent test copy. With both copies compiled, Kani printed
+two records for the one name and reported one success and one failure; the
+supervisor's live selection facts then hold two identities, which classify as
+`multiple-match` rather than crediting either, and the shared parser refuses
+the finished log as a harness reported twice.
+
 Kani 0.67.0 has no flag that selects one integration-test target. Its `--tests`
 option enables verification of test crates _and_ leaves the library and every
 binary eligible, so a harness name alone does not say which test target

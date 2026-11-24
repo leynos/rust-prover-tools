@@ -335,6 +335,19 @@ Plain-language terms used in this plan:
   unaffected because these commits change tests, the parser's description
   check, and documentation.
 
+- [x] (2026-11-24 01:05Z) Measured the collision both assessments asked for.
+  Against Kani 0.67.0, `cargo kani --tests` aborted with "requires the
+  features" when the test target declared `required-features` and emitted no
+  verification record. With that field removed and the test copy
+  `cfg`-disabled, the library copy of the same pretty name was the only record
+  and passed, so the claim that a missing test copy can be replaced by a
+  same-named harness is now observed rather than inferred. With both copies
+  compiled, Kani printed two records for the name and the shared parser refused
+  the finished log as a harness reported twice.
+  `test_a_duplicated_pretty_name_is_a_multiple_match` pins the live-fact
+  outcome, and `docs/kani-supervised-execution.md` records the measurement.
+  `make all` passes with 3,225 tests and 6 skips.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at

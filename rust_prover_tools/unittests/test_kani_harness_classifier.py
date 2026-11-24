@@ -454,3 +454,36 @@ def test_a_log_over_the_budget_records_no_further_facts() -> None:
 
     assert observer.selection_records == ["harnesses::late"]
     assert observer.finish(0) is None
+
+
+def test_a_duplicated_pretty_name_is_a_multiple_match() -> None:
+    """Two targets reporting one pretty name credit neither.
+
+    Measured with Kani 0.67.0: a library and a test copy of one name printed
+    two selection records and one success plus one failure. The pair must not
+    be reduced to a single pass, and the request is not silently satisfied by
+    either record.
+    """
+    log = _log("verified", "collision_proof")
+    first = log.index("Checking harness collision_proof...")
+    last = next(
+        index for index, line in enumerate(log) if line.startswith("Verification Time:")
+    )
+    block = log[first : last + 1]
+    observer = KaniObserver()
+    clock = VirtualClock()
+    for line in [*log[:first], *block, *block, *log[last + 1 :]]:
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+    adapter = KaniAdapter()
+
+    classification = adapter.classify(_evidence("collision_proof"), observer)
+
+    assert classification.status is ExecutionStatus.MULTIPLE_MATCH
+    assert "2" in classification.detail
