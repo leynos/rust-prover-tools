@@ -162,7 +162,7 @@ class KaniObserver:
         if text.strip() and not text.startswith(NOISE_PREFIXES):
             self.last_progress = text
 
-    def _record(self, records: list[typ.Any], value: object) -> None:
+    def _record[T](self, records: list[T], value: T) -> None:
         """Retain one live record, failing closed when the budget is spent."""
         if len(records) >= MAX_LIVE_RECORDS:
             self.facts_truncated = True
@@ -225,12 +225,21 @@ class KaniObserver:
         if self._spool is None or self._path is None:
             msg = "the log does not begin with a Kani banner"
             raise KaniLogError(msg)
-        self._spool.flush()
         try:
+            self._spool.flush()
             with self._path.open("r", encoding="utf-8", errors="replace") as handle:
                 return parse_kani_log_lines(line.removesuffix("\n") for line in handle)
         finally:
             self._close_spool()
+
+    def close(self) -> None:
+        """Release the spool, tolerating a repeated or never-opened call.
+
+        The spool is only opened when the child produces output, so a caller
+        that classifies a stopped attempt without parsing still owns the
+        handle. `close` is idempotent and safe on every classification path.
+        """
+        self._close_spool()
 
     def _close_spool(self) -> None:
         """Close the spool if one is open, tolerating a repeated call."""

@@ -423,8 +423,13 @@ def test_the_live_fact_budget_fails_closed() -> None:
     assert "selection records" in classification.detail
 
 
-def test_a_log_over_the_budget_records_no_further_facts() -> None:
-    """Records received after the spool limit do not grow the live facts."""
+def test_live_facts_continue_after_the_spool_stops() -> None:
+    """Overflow stops the spool, not the live facts, which have their own cap.
+
+    The log parser can no longer see a harness named after overflow, but the
+    live scanner still records it so the run can account for what the verifier
+    started.
+    """
     observer = KaniObserver(max_log_bytes=64)
     observer.observe(
         OutputLine(
@@ -486,4 +491,95 @@ def test_a_duplicated_pretty_name_is_a_multiple_match() -> None:
     classification = adapter.classify(_evidence("collision_proof"), observer)
 
     assert classification.status is ExecutionStatus.MULTIPLE_MATCH
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
     assert "2" in classification.detail
+
+
+def test_a_selection_shaped_description_line_is_not_a_selection() -> None:
+    """Description content cannot add a selection record.
+
+    Kani prints descriptions without escaping newlines, so a proof message can
+    contain a line that looks exactly like a selection record. The parsed log
+    knows the frame; the live scanner does not. Classification must trust the
+    parse, or a passing single-harness run fails as ``multiple-match``.
+    """
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        "Checking harness fake...",
+        'last"',
+    ]
+    observer = KaniObserver()
+    clock = VirtualClock()
+    for line in log:
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+    assert "fake" in observer.facts.selection_records
+    adapter = KaniAdapter()
+
+    classification = adapter.classify(_evidence("harnesses::verified"), observer)
+
+    assert classification.status is ExecutionStatus.PASSED
+    assert classification.observed == ("alpha::harnesses::verified",)
+
+
+def test_a_signalled_child_with_a_passing_log_is_exit_nonzero() -> None:
+    """A complete passing log does not hide a terminating signal.
+
+    A child the supervisor signalled has no exit status, so the termination
+    must be read from the signal rather than reported as missing evidence.
+    """
+    result = _classify(
+        "harnesses::verified",
+        exit_code=None,
+        signal=15,
+    )
+
+    assert result.status is ExecutionStatus.EXIT_NONZERO
+    assert result.proof_verdict is ProofVerdict.PASSED
+    assert "signal 15" in result.detail
+
+
+def test_a_silent_zero_exit_is_an_error_not_exit_nonzero() -> None:
+    """A zero exit with no verifier output is missing evidence."""
+    evidence = _evidence("harnesses::x", exit_code=0)
+
+    classification = KaniAdapter().classify(evidence, KaniObserver())
+
+    assert classification.status is ExecutionStatus.ERROR
+    assert "no verifier output" in classification.detail
+
+
+def test_a_stopped_attempt_releases_its_spool() -> None:
+    """Classification releases the spool on a path that never parses it.
+
+    A timed-out attempt returns before the parse, so an unclosed spool would
+    keep its temporary directory alive for as long as the caller retains the
+    observer.
+    """
+    observer = _observer("harnesses::verified")
+    spool = observer._path
+    assert spool is not None
+    assert spool.exists()
+    evidence = _evidence(
+        "harnesses::verified",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert not spool.exists()
+    observer.close()
+    observer.close()
