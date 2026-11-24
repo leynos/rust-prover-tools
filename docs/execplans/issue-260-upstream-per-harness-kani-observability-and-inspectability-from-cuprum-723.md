@@ -145,10 +145,12 @@ Plain-language terms used in this plan:
   lifetimes. Severity: medium. Likelihood: medium. Mitigation: a small explicit
   scanner with tests for each lexical form, plus fixture workspaces covering
   `#[path]`, inline modules, and `cfg`-gated items.
-- Risk: the parser's incremental state machine could disagree with the
-  whole-text port. Severity: high. Likelihood: medium. Mitigation: implement
-  whole-text parsing as feed-line plus finish, and add a line-fed equivalence
-  property test over every corpus log and generated chatter.
+- Risk: the shared parser's streaming source could disagree with whole-text
+  parsing. Severity: high. Likelihood: medium. Mitigation: `parse_kani_log` is
+  a thin wrapper over `parse_kani_log_lines`, so both entry points share one
+  engine, and `test_streaming_parse_matches_the_batch_parse` compares complete
+  facts or the exact refusal text for every corpus log. The feed-line design
+  this risk named was replaced when `main`'s #264 parser was adopted (D39).
 - Risk: a newline-free verbose line could accumulate before it reaches a bound.
   Severity: high. Likelihood: low. Mitigation: the supervisor owns the child's
   stdout and stderr through `StdioTarget.fd`, splits them with the bounded
@@ -359,6 +361,15 @@ Plain-language terms used in this plan:
   the evidence for that section rather than cited from an unversioned scratch
   directory. `make all` passes with 3,227 tests and 6 skips.
 
+- [x] (2026-11-24 04:00Z) Ninth follow-up round. `StreamingLines` now refuses a
+  single line beyond `MAX_LINE_BYTES` (4 MiB), so the parser's window bounds
+  the size of what it holds and not only the count; the supervised launcher's
+  own line bound is unchanged. Boundary tests cover one character past the
+  budget and an exactly-at-budget whitespace line. The parser risk and D14 now
+  match the delivered engine and the measured collision, and preparation is
+  covered in both metadata orders. `make all` passes with 3,231 tests and 6
+  skips.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
@@ -492,10 +503,15 @@ Plain-language terms used in this plan:
   `--tests`. Rationale: verified against the Kani 0.67.0 driver source,
   `--tests` enables test-crate verification *and* leaves the library and every
   binary eligible, and the driver passes one `--test <name>` per test target
-  itself. A single test target is therefore the only possible source of its
-  harness; with several, a same-named harness elsewhere could be credited to
-  the pinned target, so the run fails closed. Date/Author: 2026-11-23,
-  implementation agent (revising the 2026-11-21 entry after source review).
+  itself. With several test targets a same-named harness elsewhere could be
+  credited to the pinned target, so the run fails closed. **Superseded in part
+  by D26 and the 2026-11-24 measurement:** a sole test target is not the only
+  possible source, because a `cfg`-disabled test copy leaves a same-named
+  library harness as the sole record. Attribution therefore also requires the
+  live identity to match target and kind, no `cfg` gate on either entry, and no
+  `required-features` on the live target. Date/Author: 2026-11-23,
+  implementation agent (revising the 2026-11-21 entry after source review);
+  corrected 2026-11-24.
 - D20. Decision: accounting compares observed identities, not only requested
   invocations. Rationale: the classifier already refuses a wrong name, but the
   accounting report could still show no drift. The Kani adapter now supplies

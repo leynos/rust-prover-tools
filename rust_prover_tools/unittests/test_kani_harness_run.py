@@ -500,3 +500,73 @@ def test_a_stale_gated_test_pin_is_refused_before_qualification() -> None:
     with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
         prepare_harnesses(options)
     assert qualified == []
+
+
+@pytest.mark.parametrize("same_name_first", [True, False])
+def test_preparation_keys_required_features_by_target_kind(
+    *, same_name_first: bool
+) -> None:
+    """Preparation refuses the target's features whatever metadata order holds.
+
+    Cargo permits a library and a test target with one name. Indexing metadata
+    by name alone lets a later library entry answer for the test target and
+    hide its ``required-features``, so both orders are exercised through the
+    supported preparation path.
+    """
+    from rust_prover_tools.kani_inventory.discover import (
+        CargoPackage,
+        CargoTarget,
+    )
+
+    pinned = InventoryHarness(
+        package="beta",
+        target="integration",
+        target_kind="test",
+        harness="integration_proof",
+        source="tests/integration.rs",
+        line=4,
+    )
+    test = CargoTarget(
+        name="integration",
+        kind="test",
+        src_path=_FIXTURE_WORKSPACE / "beta" / "tests" / "integration.rs",
+        required_features=("gated",),
+    )
+    library = CargoTarget(
+        name="integration",
+        kind="lib",
+        src_path=_FIXTURE_WORKSPACE / "beta" / "src" / "helper.rs",
+    )
+    ordered = (test, library) if same_name_first else (library, test)
+    metadata = tuple(
+        CargoPackage(
+            name=package.name,
+            manifest_path=package.manifest_path,
+            targets=tuple(target for target in package.targets if target.kind != "test")
+            + ordered,
+        )
+        if package.name == "beta"
+        else package
+        for package in cargo_metadata(_FIXTURE_WORKSPACE)
+    )
+    qualified: list[object] = []
+
+    def prepare(route: object) -> PreparedRoute:
+        """Record a qualification the guard should have prevented."""
+        qualified.append(route)
+        return _prepared()
+
+    options = KaniHarnessRunOptions(
+        repo_root=_FIXTURE_WORKSPACE,
+        route=LegacyRoute(
+            installation=_FIXTURE_WORKSPACE,
+            cwd=_FIXTURE_WORKSPACE,
+        ),
+        inventory=HarnessInventory((PackageInventory("beta", (pinned,)),)),
+        metadata=metadata,
+        dependencies=KaniHarnessDependencies(prepare=prepare),
+    )
+
+    with pytest.raises(InventoryDiscoveryError, match="requires features"):
+        prepare_harnesses(options)
+    assert qualified == []

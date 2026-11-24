@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from rust_prover_tools.kani_log import KaniLogError, parse_kani_log
+from rust_prover_tools.kani_log import (
+    KaniLogError,
+    parse_kani_log,
+    parse_kani_log_lines,
+)
 from rust_prover_tools.kani_log.checks import MAX_DESCRIPTION_CHARS
 from rust_prover_tools.kani_log.extract import MAX_PARSER_RECORDS
 from rust_prover_tools.kani_log.reports import MAX_BLOCK_RECORDS
@@ -149,3 +153,32 @@ def test_a_single_line_description_at_the_budget_is_accepted() -> None:
 
     block = parse_kani_log(text).blocks[0]
     assert block.properties[0].description == payload
+
+
+def test_a_single_line_past_the_line_budget_is_refused() -> None:
+    """A streamed line larger than the source retains is refused.
+
+    The window bounds how many lines are held; this bounds how large one may
+    be, so a caller streaming untrusted output cannot hand the parser a line
+    that description lookahead keeps several of.
+    """
+    from rust_prover_tools.kani_log.lines import MAX_LINE_BYTES
+
+    oversized = " " * (MAX_LINE_BYTES + 1)
+
+    with pytest.raises(KaniLogError, match="line budget"):
+        parse_kani_log_lines(iter((_BANNER, oversized)))
+
+
+def test_a_whitespace_line_at_the_line_budget_is_accepted() -> None:
+    """A line exactly at the source's budget is still read."""
+    from rust_prover_tools.kani_log.lines import MAX_LINE_BYTES
+
+    lines = list(_passing_block("h0"))
+    lines.insert(1, " " * MAX_LINE_BYTES)
+    text = [*lines, "Manual Harness Summary:"]
+    text.append("Complete - 1 successfully verified harnesses, 0 failures, 1 total.")
+
+    block = parse_kani_log_lines(iter([_BANNER, *text])).blocks[0]
+
+    assert block.name == "h0"

@@ -20,6 +20,11 @@ __all__ = ("MAX_WINDOW_LINES", "LineSource", "ListLines", "StreamingLines")
 
 #: Largest lookahead window the streaming source retains.
 MAX_WINDOW_LINES: typ.Final[int] = 4_096
+#: Largest single line the streaming source retains, in characters.
+#: Larger than the check-description budget, so a description exactly at its
+#: own limit still fits on one line, and small enough that several lines of
+#: lookahead cannot size the caller's memory.
+MAX_LINE_BYTES: typ.Final[int] = 4 * 1024 * 1024
 
 
 class LineSource(typ.Protocol):
@@ -66,6 +71,7 @@ class StreamingLines:
         lines: cabc.Iterable[str],
         *,
         max_window: int = MAX_WINDOW_LINES,
+        max_line_bytes: int = MAX_LINE_BYTES,
     ) -> None:
         """Wrap `lines` without reading more than one line ahead of the cursor."""
         self._lines = iter(lines)
@@ -73,6 +79,7 @@ class StreamingLines:
         self._base = 0
         self._eof = False
         self._max_window = max_window
+        self._max_line_bytes = max_line_bytes
 
     def at(self, index: int) -> str | None:
         """Return the line at `index`, pulling from the iterator as needed."""
@@ -87,13 +94,32 @@ class StreamingLines:
             raise KaniLogError(msg)
         while self._base + len(self._buffer) <= index and not self._eof:
             try:
-                self._buffer.append(next(self._lines))
+                line = next(self._lines)
             except StopIteration:
                 self._eof = True
+            else:
+                self._buffer.append(self._bounded(line, index))
         offset = index - self._base
         if offset >= len(self._buffer):
             return None
         return self._buffer[offset]
+
+    def _bounded(self, line: str, index: int) -> str:
+        """Refuse a line larger than this source retains.
+
+        The window bounds how many lines are held, not how large one may be.
+        A caller that streams untrusted output could otherwise hand the parser
+        one enormous line, and description lookahead could retain several. The
+        supervised route buffers each line at the launcher, and this check is
+        the parser's own guarantee for every other caller.
+        """
+        if len(line) <= self._max_line_bytes:
+            return line
+        msg = (
+            f"line {index + 1} is longer than the "
+            f"{self._max_line_bytes}-character line budget"
+        )
+        raise KaniLogError(msg)
 
     @property
     def buffered(self) -> int:

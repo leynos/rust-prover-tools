@@ -333,11 +333,12 @@ The final parse uses the repository's single Kani parser. The observer spools
 the child's lines to a temporary file up to `max_log_bytes` (64 MiB by default,
 or `--max-log-mib` on the CLI) and then parses that file through
 `parse_kani_log_lines`, whose streaming line source retains only the small
-lookahead the parser needs. No whole log is held in memory; a log longer than
-the budget is reported as truncated evidence. Cuprum's own line hook retains an
-unterminated line before invoking the hook, which is why supervision does not
-use it; that remains true of Cuprum 0.2.0b2 and is recorded here as historical
-context, not as an active limitation of this route.
+lookahead the parser needs and refuses a single line beyond `MAX_LINE_BYTES` (4
+MiB). No whole log is held in memory; a log longer than the budget is reported
+as truncated evidence. Cuprum's own line hook retains an unterminated line
+before invoking the hook, which is why supervision does not use it; that
+remains true of Cuprum 0.2.0b2 and is recorded here as historical context, not
+as an active limitation of this route.
 
 ### JSONL records, version 1
 
