@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import re
+import string
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
@@ -97,6 +98,7 @@ _C_ESCAPE_VALUES: typ.Final[dict[str, str]] = {
     "v": "\v",
 }
 #: An octal escape holds a byte, and strace writes non-ASCII text that way.
+_OCTAL_DIGITS: typ.Final[frozenset[str]] = frozenset(string.octdigits)
 _MAX_BYTE: typ.Final[int] = 0xFF
 
 
@@ -145,8 +147,13 @@ def _escaped_byte(escape: str, whole: str) -> int:
             msg = f"setup trace has a malformed escape: {whole[:120]!r}"
             raise SetupTraceError(msg)
         value = int(body[1:], 16)
-    elif body[:1].isdigit():
+    elif body[:1] in _OCTAL_DIGITS:
         value = int(body, 8)
+    elif body[:1].isdigit():
+        # `\8` and `\9` are not octal escapes; reading them as base 8 would
+        # raise `ValueError` from inside the parser.
+        msg = f"setup trace has a malformed escape: {whole[:120]!r}"
+        raise SetupTraceError(msg)
     elif body in _C_ESCAPE_VALUES:
         return ord(_C_ESCAPE_VALUES[body])
     else:
@@ -183,13 +190,24 @@ def _argv(value: str) -> tuple[str, ...]:
 
 
 def _argument_tokens(value: str) -> list[str]:
-    """Return each quoted argument's undecoded body, refusing anything else."""
+    """Return each quoted argument's undecoded body, refusing anything else.
+
+    The field is a comma-separated list, so the grammar is `token ("," token)*`
+    with optional spaces around each comma. A missing, doubled, leading or
+    trailing comma is a damaged capture: strace writes exactly one comma
+    between arguments, so anything else means a token was lost or merged.
+    """
     tokens: list[str] = []
     index = 0
     length = len(value)
+    first = True
     while index < length:
-        while index < length and value[index] in " ,":
-            index += 1
+        if not first:
+            index = _require_comma(value, index)
+            if index >= length:
+                msg = f"setup trace has an unreadable argument list: {value[:120]!r}"
+                raise SetupTraceError(msg)
+        index = _skip_spaces(value, index)
         if index >= length:
             break
         match = _ARGUMENT.match(value, index)
@@ -198,7 +216,29 @@ def _argument_tokens(value: str) -> list[str]:
             raise SetupTraceError(msg)
         tokens.append(match.group(1))
         index = match.end()
+        first = False
     return tokens
+
+
+def _require_comma(value: str, index: int) -> int:
+    """Require exactly one comma, surrounded by optional spaces."""
+    index = _skip_spaces(value, index)
+    if index >= len(value) or value[index] != ",":
+        msg = f"setup trace has an unreadable argument list: {value[:120]!r}"
+        raise SetupTraceError(msg)
+    index += 1
+    index = _skip_spaces(value, index)
+    if index < len(value) and value[index] == ",":
+        msg = f"setup trace has an unreadable argument list: {value[:120]!r}"
+        raise SetupTraceError(msg)
+    return index
+
+
+def _skip_spaces(value: str, index: int) -> int:
+    """Return the index of the first non-space character at or after `index`."""
+    while index < len(value) and value[index] == " ":
+        index += 1
+    return index
 
 
 def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:

@@ -324,15 +324,22 @@ def test_a_shell_or_interpreter_build_is_refused(
 
 @pytest.mark.parametrize(
     ("escape", "message"),
-    [("\\xZZ", "malformed escape"), ("\\777", "out-of-range")],
-    ids=["non-hex", "octal-overflow"],
+    [
+        ("\\xZZ", "malformed escape"),
+        ("\\777", "out-of-range"),
+        ("\\8", "malformed escape"),
+        ("\\9", "malformed escape"),
+    ],
+    ids=["non-hex", "octal-overflow", "eight", "nine"],
 )
 def test_a_malformed_escape_is_refused(escape: str, message: str) -> None:
-    """A damaged escape fails loudly rather than being read as raw text.
+    r"""A damaged escape fails loudly rather than being read as raw text.
 
     The raw text fallback this replaced would have compared the undecoded
     escape sequence against the policy's lists, so an argument could be
-    checked as something other than what strace recorded.
+    checked as something other than what strace recorded. `\\8` and `\\9` are
+    not octal digits: reading them as a base-8 literal would raise `ValueError`
+    from inside the parser instead of a `SetupTraceError`.
     """
     trace = (
         _LAUNCHER
@@ -378,15 +385,30 @@ def test_a_c_escaped_control_character_is_decoded() -> None:
         '"rustc", "--emit=link" @compile.args',
         '"rustc", @compile.args, "-vV"',
         '"rustc", bare-token',
+        '"rustc" "-vV"',
+        '"rustc",, "-vV"',
+        ',"rustc", "-vV"',
+        '"rustc", "-vV",',
     ],
-    ids=["leading", "no-separator", "trailing", "unquoted"],
+    ids=[
+        "leading",
+        "no-separator",
+        "trailing",
+        "unquoted",
+        "missing-comma",
+        "double-comma",
+        "leading-comma",
+        "trailing-comma",
+    ],
 )
 def test_an_unreadable_argument_field_is_refused(field: str) -> None:
     """Every token must be a quoted argument, or the record cannot be checked.
 
     `re.findall` alone would return only `"rustc"` here and silently drop
     `@compile.args`, so a response-file compile could pass the policy as a
-    bare version probe.
+    bare version probe. Separators are checked too: strace writes exactly one
+    comma between arguments, so a missing, repeated, leading or trailing comma
+    is a damaged capture rather than something to walk past.
     """
     trace = _LAUNCHER + f'901  execve("/toolchain/bin/rustc", [{field}], 0x1) = 0\n'
 

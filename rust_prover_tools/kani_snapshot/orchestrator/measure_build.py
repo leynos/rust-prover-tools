@@ -21,6 +21,9 @@ import typing as typ
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.components_file import (
+    components_digest_of_file,
+)
 from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     CacheObservation,
@@ -40,7 +43,6 @@ from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_model import (
     FileRecord,
     ToolchainIdentity,
-    components_digest_of_file,
 )
 from rust_prover_tools.kani_snapshot.validation import (
     require_full_sha,

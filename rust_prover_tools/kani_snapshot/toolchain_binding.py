@@ -25,11 +25,11 @@ import typing as typ
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
-from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
-from rust_prover_tools.kani_snapshot.toolchain_model import (
+from rust_prover_tools.kani_snapshot.components_file import (
     components_digest_of_file,
 )
+from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
+from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_name import is_safe_toolchain_name
 from rust_prover_tools.kani_snapshot.validation import is_contained_relative_path
 
@@ -218,7 +218,7 @@ def _require_components(tree: _ToolchainTree, expected: str) -> None:
 
     The digest covers the canonical sorted names rather than the file's raw
     bytes, because rustup's write order is not deterministic. The bounded read
-    is `toolchain_model.components_digest_of_file`, the same query the producer
+    is `components_file.components_digest_of_file`, the same query the producer
     measures with, so both sides share one ceiling and one failure text.
     """
     description = "component records"

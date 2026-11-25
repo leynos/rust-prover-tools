@@ -90,13 +90,14 @@ scheduled trigger stays disabled.
   non-ExecPlan files, so 20 remain — 22 % of the limit.
 - Code: more than 1,800 net lines of Python and Rust fixture code: stop and
   escalate. Raised to 3,800 on 2026-11-24 under D7 and to 4,600 on 2026-11-25
-  under D8. Measured: 4,182 net lines, which exceeded the 3,800 limit by 382
-  before D8 raised it; 418 remain — 9 % of the new limit.
+  under D8. Measured after the sixth-round repairs: 4,219 net lines, so 381
+  remain — 8 % of the limit. The D7 limit of 3,800 was already exceeded when D8
+  raised it.
 - Configuration: more than 200 net lines across `Makefile`, `pyproject.toml`
   and `.github/workflows/`: stop and escalate. Measured: 94 net lines, so 106
   remain.
 - Documentation: more than 1,600 net lines excluding ExecPlan files: stop and
-  escalate. Measured: 604 net lines, so 996 remain.
+  escalate. Measured: 606 net lines, so 994 remain.
 - Interface: any change to a public CLI option or snapshot wire format beyond
   the additions described here: stop and escalate.
 - Dependencies: any new runtime or development dependency: stop and escalate.
@@ -245,6 +246,29 @@ only entries in scope.
       exceeded. D8 raises it to 4,600 and records each budget's headroom
       separately. All eight gates pass: 2,894 passed / 19 skipped / 20
       snapshots, Pylint 10.00/10, interrogate 100 %.
+- [x] (2026-11-25) Sixth-round pre-merge repairs, from CodeRabbit's review of
+      `0e5efc6`. Three checks failed; each is actioned:
+      - Testing (Overall): `\8` and `\9` are not octal digits, and the digit
+        branch read them with `int(body, 8)`, which raised a bare `ValueError`
+        from inside the parser instead of a `SetupTraceError`. The branch now
+        accepts only `0`-`7` and refuses anything else as malformed. The
+        argument tokenizer also accepted a missing, doubled, leading or
+        trailing comma; it now requires exactly one comma between arguments.
+        Both were written as failing tests first and confirmed to fail against
+        the previous code.
+      - Module-Level Documentation: `simple-lib` copies upstream `lib.rs` and
+        `pair.rs`. `pair.rs` now carries a module doc comment stating the
+        struct, its constructor and method, the `lib.rs` declaration and
+        re-export, and the pinned upstream commit; `lib.rs`'s note cites the
+        same commit and says both files carry the addition.
+      - Domain Architecture: the bounded component read moved out of
+        `toolchain_model` into the adapter module `components_file`, which both
+        the producer's measurement and the consumer's check call. The model
+        keeps only the pure rules — `MAX_COMPONENTS_BYTES`,
+        `canonical_component_names` and `components_digest` — and no filesystem
+        access. D8's intent of one shared read is preserved.
+      All eight gates pass: 2,900 passed, 19 skipped, 20 snapshots; Pylint
+      10.00/10; interrogate 100 %.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
 - [ ] Re-run the consumer smoke against a corrected hosted release from trusted

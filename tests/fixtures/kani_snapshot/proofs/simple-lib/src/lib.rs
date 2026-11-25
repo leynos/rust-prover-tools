@@ -1,9 +1,12 @@
 // Copyright Kani Contributors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Upstream `tests/cargo-kani/simple-lib`. `lib.rs` and `pair.rs` are copied
-//! from the pinned upstream commit, with a fixture documentation comment
-//! added.
+//! Upstream `tests/cargo-kani/simple-lib`, copied from the pinned commit
+//! `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, with a fixture documentation
+//! comment added to this file and to `pair.rs`.
+//!
+//! It declares `pair` with `pub mod pair;` and re-exports `Pair`, then adds
+//! the `test_sum` harness the bundle smoke runs.
 
 pub mod pair;
 pub use pair::Pair;

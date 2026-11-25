@@ -15,11 +15,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.components_file import (
+    components_digest_of_file,
+)
 from rust_prover_tools.kani_snapshot.toolchain_model import (
     MAX_COMPONENTS_BYTES,
     canonical_component_names,
     components_digest,
-    components_digest_of_file,
 )
 
 if typ.TYPE_CHECKING:

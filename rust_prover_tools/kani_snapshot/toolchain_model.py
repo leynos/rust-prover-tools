@@ -4,10 +4,10 @@ These records are the manifest's evidence about compiler bytes. Recording the
 published Rustup archives and the digests of the extracted files keeps the
 reviewed compiler an artefact of content rather than of a version string.
 
-The module also owns the one bounded query that reads a rustup component record
-from disk. Reading it here, beside the canonicalization it feeds, means the
-producer's measurement and the consumer's check cannot drift apart on the byte
-ceiling or the failure text.
+Everything here is pure: the byte ceiling and the canonicalization are domain
+rules, so they can be tested from literal bytes. The adapter that reads a
+component record from disk is `components_file`, which both the producer's
+measurement and the consumer's check call.
 """
 
 from __future__ import annotations
@@ -18,9 +18,6 @@ import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
 
-if typ.TYPE_CHECKING:
-    from pathlib import Path
-
 __all__ = (
     "MAX_COMPONENTS_BYTES",
     "ComponentRecord",
@@ -28,7 +25,6 @@ __all__ = (
     "ToolchainIdentity",
     "canonical_component_names",
     "components_digest",
-    "components_digest_of_file",
 )
 
 #: Largest rustup component record accepted. Rustup writes a few short lines.
@@ -108,42 +104,6 @@ def components_digest(data: bytes) -> str:
         Raised when the record is not a valid component list.
     """
     return hashlib.sha256(canonical_component_names(data)).hexdigest()
-
-
-def components_digest_of_file(path: Path) -> str:
-    """Read one rustup component record and return its canonical digest.
-
-    The read is bounded: at most `MAX_COMPONENTS_BYTES + 1` bytes are loaded,
-    so the extra byte makes an over-limit file visible without reading it
-    whole. `components_digest` then refuses anything over the ceiling.
-
-    This is the single definition of the read. The producer's build measurement
-    and the consumer's pre-execution check both call it, so the byte ceiling,
-    the canonicalization and the failure text cannot diverge.
-
-    Parameters
-    ----------
-    path : Path
-        The toolchain's `lib/rustlib/components` file.
-
-    Returns
-    -------
-    str
-        Lowercase SHA-256 of the canonical sorted component names.
-
-    Raises
-    ------
-    ProverToolError
-        Raised when the file cannot be read, or when its contents are not a
-        valid component list.
-    """
-    try:
-        with path.open("rb") as handle:
-            data = handle.read(MAX_COMPONENTS_BYTES + 1)
-    except OSError as exc:
-        msg = f"failed to read rustup components list: {exc}"
-        raise ProverToolError(msg) from exc
-    return components_digest(data)
 
 
 @dc.dataclass(frozen=True, slots=True)

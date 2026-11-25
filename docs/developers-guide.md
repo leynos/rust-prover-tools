@@ -1261,11 +1261,13 @@ must keep:
   text into `ExecRecord` values — refusing an argument it cannot unquote rather
   than passing the raw text on. `setup_trace` holds the policy alone: bounded
   input, no forbidden build action, and a packaged `cargo-kani setup` record.
-- `toolchain_model.canonical_component_names` and `components_digest` are the
-  single definition of the component-record digest. `components_digest_of_file`
-  is the single definition of the bounded read that feeds it, so the producer
-  measurement and the consumer check share one byte ceiling, one
-  canonicalization and one failure text; do not compare the raw file again.
+- `toolchain_model.canonical_component_names`, `components_digest` and
+  `MAX_COMPONENTS_BYTES` are the pure rules: the canonical form, the digest and
+  the byte ceiling of a rustup component record. `components_file` is the
+  adapter that reads one record and returns its digest, and it is the single
+  definition of that read, so the producer measurement and the consumer check
+  share one ceiling, one canonicalization and one failure text; do not compare
+  the raw file again, and keep filesystem access out of `toolchain_model`.
 
 The smoke installs through the public commands in a throwaway consumer
 repository, proves the named harnesses, repeats the install from the warm cache
