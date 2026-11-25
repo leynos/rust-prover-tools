@@ -516,9 +516,12 @@ with application_signal_policy():
     run = execute_harnesses(prepared, options.config)
 ```
 
-`DiagnosticSinks` refuses two roles that resolve to the same file, so human and
-JSONL records can never share one append handle. Every destination in the CLI
-is checked under the same rule before either file is opened.
+`DiagnosticSinks` records the configured destinations without touching the
+filesystem. `supervision.destinations.require_distinct_destinations` resolves
+them and refuses two roles that name one file, so human and JSONL records can
+never share one append handle. `kani_diagnostics.open_diagnostics` applies the
+rule for library callers before opening a handle, and every CLI destination is
+checked under the same rule before either file is opened.
 
 Every dependency can be overridden through `KaniHarnessDependencies`: clock,
 launcher, resource probe, cgroup reader, sleeper, diagnostics, interrupt

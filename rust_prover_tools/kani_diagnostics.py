@@ -17,6 +17,7 @@ from rust_prover_tools.supervision import (
     NullSink,
     SupervisionConfig,
     jsonl_append_offset,
+    require_distinct_destinations,
 )
 
 if typ.TYPE_CHECKING:
@@ -58,7 +59,17 @@ def _open(
     stack: contextlib.ExitStack,
     config: SupervisionConfig,
 ) -> Diagnostics:
-    """Open the configured sink destinations for one run."""
+    """Open the configured sink destinations for one run.
+
+    Library callers reach the filesystem here, so the inode-aware alias rule
+    runs here before the first handle exists; the CLI checks the same rule
+    before it hands over its own destinations.
+    """
+    require_distinct_destinations(
+        human_path=config.sinks.human_path,
+        jsonl_path=config.sinks.jsonl_path,
+        report_path=config.sinks.report_path,
+    )
     human = _human_sink(stack, config)
     jsonl = _jsonl_sink(stack, config)
     return Diagnostics(human=human, jsonl=jsonl)

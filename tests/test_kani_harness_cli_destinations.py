@@ -102,6 +102,34 @@ def test_standard_output_cannot_alias_a_jsonl_destination(
             supervision_policy(PolicyFlags(), DestinationFlags(jsonl=path))
 
 
+def test_a_symlink_alias_is_refused_by_the_cli_adapter(tmp_path: Path) -> None:
+    """Resolved paths, not spellings, decide whether two roles collide."""
+    target = tmp_path / "evidence.jsonl"
+    target.touch()
+    alias = tmp_path / "alias.json"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="distinct"):
+        supervision_policy(
+            PolicyFlags(),
+            DestinationFlags(jsonl=target, report=alias),
+        )
+
+
+def test_a_hard_link_alias_is_refused_by_the_cli_adapter(tmp_path: Path) -> None:
+    """Resolved paths differ, but one inode under two names is still shared."""
+    first = tmp_path / "first.log"
+    first.touch()
+    second = tmp_path / "second.log"
+    second.hardlink_to(first)
+
+    with pytest.raises(ValueError, match="distinct"):
+        supervision_policy(
+            PolicyFlags(),
+            DestinationFlags(human=first, jsonl=second),
+        )
+
+
 def test_stdout_is_checked_even_when_human_has_a_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -48,6 +48,8 @@ from rust_prover_tools.supervision.config import (
     DEFAULT_WATCHDOG_THRESHOLD_BYTES,
     DiagnosticSinks,
     SupervisionConfig,
+)
+from rust_prover_tools.supervision.destinations import (
     require_distinct_destinations,
 )
 from rust_prover_tools.supervision.formatting import (

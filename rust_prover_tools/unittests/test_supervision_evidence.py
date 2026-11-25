@@ -437,6 +437,48 @@ def test_open_diagnostics_starts_at_a_line_boundary(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8").splitlines()[0] == "x" * 100
 
 
+def test_a_symlink_alias_is_refused_before_a_handle_is_opened(
+    tmp_path: Path,
+) -> None:
+    """Resolved paths, not spellings, decide whether two roles collide.
+
+    A library caller reaches this rule through the adapter that opens the
+    destinations, which must refuse the alias before appending anything.
+    """
+    from rust_prover_tools.kani_diagnostics import open_diagnostics
+
+    target = tmp_path / "evidence"
+    target.touch()
+    alias = tmp_path / "alias"
+    alias.symlink_to(target)
+    config = SupervisionConfig(
+        sinks=DiagnosticSinks(jsonl_path=target, report_path=alias)
+    )
+
+    with pytest.raises(ValueError, match="distinct"), open_diagnostics(config, None):
+        pass
+    assert target.read_text(encoding="utf-8") == ""
+
+
+def test_a_hard_link_alias_is_refused_before_a_handle_is_opened(
+    tmp_path: Path,
+) -> None:
+    """Resolved paths differ, but one inode under two names is still shared."""
+    from rust_prover_tools.kani_diagnostics import open_diagnostics
+
+    first = tmp_path / "first.log"
+    first.touch()
+    second = tmp_path / "second.log"
+    second.hardlink_to(first)
+    config = SupervisionConfig(
+        sinks=DiagnosticSinks(human_path=first, jsonl_path=second)
+    )
+
+    with pytest.raises(ValueError, match="distinct"), open_diagnostics(config, None):
+        pass
+    assert first.read_text(encoding="utf-8") == ""
+
+
 def test_a_run_finish_record_with_malformed_accounting_is_refused() -> None:
     """The nested accounting object obeys its documented key set."""
     sink = MemorySink()

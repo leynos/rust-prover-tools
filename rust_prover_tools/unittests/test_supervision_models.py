@@ -144,40 +144,38 @@ def test_non_finite_timing_values_are_refused(value: float) -> None:
         SupervisionConfig(timeout_seconds=value)
 
 
-def test_one_file_cannot_hold_two_diagnostic_grammars(tmp_path: Path) -> None:
-    """Human and JSONL records in one file are neither format."""
+def test_the_policy_holds_destinations_without_inspecting_the_filesystem(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Policy construction is pure; only an adapter resolves destination identity.
+
+    The alias rule needs `stat()` and `resolve()`, so it lives beside the file
+    handles. A policy built from any spellings, even the same path twice, must
+    not consult the host filesystem.
+    """
+    from pathlib import Path as _Path
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        """Fail the test if policy construction performs filesystem I/O."""
+        del args, kwargs
+        msg = "policy construction touched the filesystem"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(_Path, "resolve", refuse)
+    monkeypatch.setattr(_Path, "stat", refuse)
     shared = tmp_path / "evidence"
 
-    with pytest.raises(ValueError, match="distinct"):
-        DiagnosticSinks(human_path=shared, jsonl_path=shared)
+    sinks = DiagnosticSinks(human_path=shared, jsonl_path=shared)
 
-
-def test_a_symlink_alias_is_not_a_distinct_destination(tmp_path: Path) -> None:
-    """Resolved paths, not spellings, decide whether two roles collide."""
-    target = tmp_path / "evidence"
-    target.touch()
-    alias = tmp_path / "alias"
-    alias.symlink_to(target)
-
-    with pytest.raises(ValueError, match="distinct"):
-        DiagnosticSinks(jsonl_path=target, report_path=alias)
+    assert sinks.human_path == shared
+    assert sinks.jsonl_path == shared
 
 
 def test_a_directly_constructed_negative_measurement_is_refused() -> None:
     """The value object, not only its factory, refuses impossible bytes."""
     with pytest.raises(ValueError, match="negative"):
         Measurement(value=-1)
-
-
-def test_a_hard_link_alias_is_not_a_distinct_destination(tmp_path: Path) -> None:
-    """Resolved paths differ, but one inode under two names is still shared."""
-    first = tmp_path / "first.log"
-    first.touch()
-    second = tmp_path / "second.log"
-    second.hardlink_to(first)
-
-    with pytest.raises(ValueError, match="distinct"):
-        DiagnosticSinks(human_path=first, jsonl_path=second)
 
 
 def test_a_boolean_measurement_is_refused() -> None:

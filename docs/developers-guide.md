@@ -1040,8 +1040,13 @@ responsibility rather than by prover:
   discovers the inventory, selects exact identities, qualifies one route,
   composes and validates each argv, runs the supervisor, and returns a
   `KaniHarnessRun`.
-- `rust_prover_tools.kani_diagnostics` opens the human, JSONL, and report
-  destinations and validates that they are distinct.
+- `rust_prover_tools.supervision.destinations` resolves evidence destinations
+  and refuses two roles that name one file, including symlink and hard-link
+  aliases. The rule needs filesystem identity, so it lives beside the adapters
+  and never inside the policy value object.
+- `rust_prover_tools.kani_diagnostics` opens the configured human, JSONL, and
+  report destinations for a library run, applying that rule before the first
+  handle exists.
 - `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
   `kani harnesses list` and `kani harnesses run`.
 
