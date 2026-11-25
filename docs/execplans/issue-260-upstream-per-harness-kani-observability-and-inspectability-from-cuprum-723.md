@@ -163,6 +163,10 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-25 01:15Z) Live fixture rerun at `e85255e` after the
+  description-frame and symlink repairs: 2 passed in 757.79 s. Production code
+  is unchanged since `bb57fd8`; the only later commit is this record.
+
 - [x] (2026-11-25 00:30Z) Seventh assessment round. CodeRabbit confirmed the
   banner, parsed-mismatch, cleanup, silent-child, launcher, orchestrator and
   test-strength repairs, and kept two findings open. The live scanner now holds
