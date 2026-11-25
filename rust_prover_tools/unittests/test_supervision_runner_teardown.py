@@ -12,6 +12,7 @@ import contextlib
 import dataclasses as dc
 import datetime as dt
 import json
+import os
 import typing as typ
 
 import pytest
@@ -750,6 +751,145 @@ class _FailsOnRunFinishWith:
         """Do nothing; writes fail synchronously."""
 
 
+class _SettledPid:
+    """Report a fixed pid and the status the owned group settled with."""
+
+    pid: int | None = 4321
+    settled_exit_code: int | None = -15
+    failure: BaseException | None = None
+
+
+def test_a_stopped_run_reports_the_status_the_group_settled_with() -> None:
+    """A signalled child's settled status is evidence, not an unknown."""
+
+    async def scenario() -> None:
+        """Stop the child and read the status its settle reported."""
+        started = asyncio.Event()
+
+        async def child() -> LaunchResult:
+            """Wait to be stopped, as a supervised child does."""
+            started.set()
+            await asyncio.sleep(60)
+            return LaunchResult(exit_code=0)
+
+        task = asyncio.create_task(child())
+        await started.wait()
+        running = RunningHarness(task, _SettledPid())
+        running.stop(StopReason.TIMEOUT)
+        await asyncio.sleep(0)
+
+        result = await running.wait()
+
+        assert result.exit_code == -15
+        assert result.signal_number == 15
+
+    asyncio.run(scenario())
+
+
+def test_a_report_writer_failure_does_not_replace_a_cancellation(
+    tmp_path: Path,
+) -> None:
+    """A publication failure while the cancellation unwinds is suppressed."""
+    ready = asyncio.Event()
+
+    def writer(path: Path, report: RunReport) -> None:
+        """Fail as a full report destination would."""
+        del path, report
+        msg = "report writer failed"
+        raise OSError(msg)
+
+    environment = dc.replace(
+        _environment(
+            ScriptedLauncher(script=Script(block=True), ready=ready),
+            VirtualClock(),
+        ),
+        report_writer=writer,
+    )
+    config = dc.replace(
+        _config(timeout_seconds=600.0),
+        sinks=DiagnosticSinks(report_path=tmp_path / "report.json"),
+    )
+
+    async def scenario() -> None:
+        """Cancel the run once its child is launched."""
+        task = asyncio.create_task(run_supervised((spec(),), config, environment))
+        await asyncio.wait_for(ready.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
+def test_a_report_writer_failure_does_not_replace_a_monitor_failure(
+    tmp_path: Path,
+) -> None:
+    """A publication failure must not mask the monitor's own fault."""
+
+    def writer(path: Path, report: RunReport) -> None:
+        """Fail as a full report destination would."""
+        del path, report
+        msg = "report writer failed"
+        raise OSError(msg)
+
+    environment = dc.replace(
+        _environment(
+            ScriptedLauncher(script=Script(block=True)),
+            VirtualClock(),
+            probe=_ExplodingProbe(),
+        ),
+        report_writer=writer,
+    )
+    config = dc.replace(
+        _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+        sinks=DiagnosticSinks(report_path=tmp_path / "report.json"),
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        asyncio.run(run_supervised((spec(),), config, environment))
+
+
+def _blocking_child(tmp_path: Path) -> tuple[Path, Path]:
+    """Write a child that reports its pid, prints one line, then blocks."""
+    script = tmp_path / "blocking.py"
+    pid_file = tmp_path / "child.pid"
+    script.write_text(
+        "import os, sys, time\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "sys.stdout.write('first\\n')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    return script, pid_file
+
+
+class _FailsOnFirstStdoutLine:
+    """Fail the first stdout line, recording whether the child was alive."""
+
+    def __init__(self, pid_file: Path) -> None:
+        """Remember where the child wrote its pid."""
+        self._pid_file = pid_file
+        self.delivered: list[str] = []
+        self.alive_at_failure: list[bool] = []
+
+    def __call__(self, item: object) -> None:
+        """Fail as a full spool would, while the child is still running."""
+        line = typ.cast("typ.Any", item)
+        if line.stream != "stdout" or line.text != "first":
+            return
+        self.delivered.append(line.text)
+        pid = int(self._pid_file.read_text(encoding="utf-8"))
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            self.alive_at_failure.append(False)
+        else:
+            self.alive_at_failure.append(True)
+        msg = "the spool is full"
+        raise OSError(msg)
+
+
 def test_a_live_callback_failure_is_raised_and_the_report_validates(
     tmp_path: Path,
 ) -> None:
@@ -759,7 +899,6 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     attempt, accounts for the unrecorded harnesses, publishes a schema-valid
     report, then re-raises the original failure.
     """
-    import asyncio
     import sys
 
     from rust_prover_tools.supervision.clock import AsyncSleeper, SystemClock
@@ -776,25 +915,15 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
         NullObserver,
     )
 
-    script = tmp_path / "blocking.py"
-    script.write_text(
-        "import sys, time\\n"
-        "sys.stdout.write('first\\n')\\n"
-        "sys.stdout.flush()\\n"
-        "time.sleep(120)\\n",
-        encoding="utf-8",
-    )
+    script, pid_file = _blocking_child(tmp_path)
+    fail = _FailsOnFirstStdoutLine(pid_file)
 
     def build(identity: HarnessSpec) -> LaunchCommand:
         """Run the blocking script from the test's directory."""
         del identity
         return LaunchCommand((sys.executable, "-I", str(script)), cwd=tmp_path)
 
-    def refuse(item: object) -> None:
-        """Fail as a full spool would."""
-        del item
-        msg = "the spool is full"
-        raise OSError(msg)
+    refuse = fail
 
     class _FailingAdapter:
         """An adapter whose observer forwards every line to the failing hook."""
@@ -854,6 +983,11 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     with pytest.raises(OSError, match="the spool is full"):
         asyncio.run(run_supervised((spec(),), config, environment))
 
+    # The failing write came from the child's stdout while that child was
+    # alive and blocked, so the launcher stopped a real long-lived process
+    # rather than losing a write from one that had already exited.
+    assert fail.delivered == ["first"]
+    assert fail.alive_at_failure == [True]
     document = json.loads(report_path.read_text(encoding="utf-8"))
     validate_report_document(document)
     results = typ.cast("list[dict[str, object]]", document["results"])

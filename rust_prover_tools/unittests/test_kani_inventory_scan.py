@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.kani_inventory import (
     InventoryDiscoveryError,
@@ -45,6 +47,23 @@ def test_masking_blanks_comments_and_strings_but_keeps_layout() -> None:
     assert masked.count("\n") == text.count("\n")
     assert "fake" not in masked
     assert "mod real" in masked
+
+
+@given(st.text())
+@settings(max_examples=100, deadline=None)
+def test_masking_preserves_length_and_newline_positions(text: str) -> None:
+    """Masked source keeps every position, so line numbers describe it.
+
+    The contract is structural: comments and literals become spaces, but no
+    character is added or removed, and every newline stays where it was. That
+    makes a reported location in the masked text a location in the original.
+    """
+    masked = mask_source(text)
+
+    assert len(masked) == len(text)
+    assert [index for index, char in enumerate(masked) if char == "\n"] == [
+        index for index, char in enumerate(text) if char == "\n"
+    ]
 
 
 def test_masking_keeps_lifetimes_and_masks_character_literals() -> None:

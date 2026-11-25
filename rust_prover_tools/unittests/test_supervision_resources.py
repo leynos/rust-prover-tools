@@ -409,3 +409,31 @@ def test_an_escaped_cgroup2_mount_point_is_resolved(tmp_path: Path) -> None:
     path = reader.discover()
 
     assert path == str(job)
+
+
+def test_an_escaped_mount_root_matching_the_membership_is_resolved(
+    tmp_path: Path,
+) -> None:
+    """An escaped space in the mount's own root still matches the membership.
+
+    The `root` test override replaces only the mount point. Membership
+    matching still reads the escaped root field, so a space there must decode
+    or a real sub-tree mount is reported as unavailable.
+    """
+    base = tmp_path / "override"
+    job = base / "leaf"
+    job.mkdir(parents=True)
+    (job / "memory.current").write_text("4096\n", encoding="utf-8")
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/a b/job.scope/leaf\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "36 24 0:32 /a\\040b/job.scope /host/cgroup rw - cgroup2 cgroup2 rw\n",
+        encoding="utf-8",
+    )
+    reader = CgroupV2Reader(root=base, self_cgroup=membership, mountinfo=mountinfo)
+
+    path = reader.discover()
+
+    assert path == str(job)
+    assert reader.read(path).current.value == 4096

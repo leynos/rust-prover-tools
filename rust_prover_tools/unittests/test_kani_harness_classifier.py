@@ -18,7 +18,12 @@ from rust_prover_tools.supervision import (
     StopReason,
 )
 from rust_prover_tools.supervision.attempt_state import AttemptEvidence
-from rust_prover_tools.supervision.kani import KaniAdapter, KaniObserver
+from rust_prover_tools.supervision.kani import (
+    KaniAdapter,
+    KaniLiveFacts,
+    KaniObserver,
+)
+from rust_prover_tools.supervision.kani_outcome import observed_verdict
 from rust_prover_tools.unittests.supervision_doubles import VirtualClock
 
 _CORPUS = (
@@ -724,6 +729,108 @@ def test_a_stopped_attempt_with_a_dropped_duplicate_is_unknown() -> None:
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def _live_facts(
+    *,
+    selections: tuple[str, ...] = (),
+    verdicts: tuple[tuple[str, str], ...] = (),
+) -> KaniLiveFacts:
+    """Return synthetic live facts, including verdicts the observer never records."""
+    return KaniLiveFacts(
+        banner_version=None,
+        selection_records=selections,
+        verdicts=verdicts,
+        last_progress=None,
+        completed=False,
+        no_match_reason=None,
+    )
+
+
+def test_a_duplicate_live_selection_leaves_the_verdict_unattributable() -> None:
+    """Two live selection records for one pretty name cannot take a verdict.
+
+    The observer never records verdicts itself, but `observed_verdict` owns the
+    attribution rule for supplied facts; without the single-selection guard an
+    ambiguous attempt would be credited with `PASSED`.
+    """
+    facts = _live_facts(
+        selections=("harnesses::verified", "harnesses::verified"),
+        verdicts=(("harnesses::verified", "SUCCESSFUL"),),
+    )
+
+    verdict = observed_verdict(_evidence("harnesses::verified"), facts)
+
+    assert verdict is ProofVerdict.UNKNOWN
+
+
+def test_duplicate_live_verdicts_leave_the_verdict_unattributable() -> None:
+    """Two live verdicts for one selection are ambiguous."""
+    facts = _live_facts(
+        selections=("harnesses::verified",),
+        verdicts=(
+            ("harnesses::verified", "SUCCESSFUL"),
+            ("harnesses::verified", "FAILED"),
+        ),
+    )
+
+    verdict = observed_verdict(_evidence("harnesses::verified"), facts)
+
+    assert verdict is ProofVerdict.UNKNOWN
+
+
+def test_one_live_selection_and_verdict_are_attributed() -> None:
+    """Exactly one selection and one verdict name the attempt's outcome."""
+    facts = _live_facts(
+        selections=("harnesses::verified",),
+        verdicts=(("harnesses::verified", "SUCCESSFUL"),),
+    )
+
+    verdict = observed_verdict(_evidence("harnesses::verified"), facts)
+
+    assert verdict is ProofVerdict.PASSED
+
+
+def test_a_spool_close_failure_does_not_replace_a_stop() -> None:
+    """A cleanup failure while stopping is suppressed, not substituted.
+
+    A stop returns before the parse, so the `finally` is the only cleanup. The
+    attempt must still report the stop reason and detail it already holds.
+    """
+
+    class _FailingClose(KaniObserver):
+        """An observer whose spool cleanup fails."""
+
+        def close(self) -> None:
+            """Fail as a closed spool file would."""
+            msg = "the spool could not be closed"
+            raise OSError(msg)
+
+    observer = _FailingClose()
+    clock = VirtualClock()
+    for line in (
+        "Kani Rust Verifier 0.67.0 (cargo plugin)",
+        "Checking harness harnesses::verified...",
+    ):
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+    evidence = _evidence(
+        "harnesses::verified",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out after 30s",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert classification.detail == "timed out after 30s"
 
 
 def test_a_spool_failure_is_not_replaced_by_cleanup(
