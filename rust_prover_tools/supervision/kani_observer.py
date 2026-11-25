@@ -27,7 +27,7 @@ from rust_prover_tools.kani_log import (
     KaniLogError,
     parse_kani_log_lines,
 )
-from rust_prover_tools.kani_log.syntax import FIELD, NO_HARNESS_MATCH
+from rust_prover_tools.kani_log.syntax import CHECK, FIELD, NO_HARNESS_MATCH
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.models import OutputLine
@@ -44,14 +44,6 @@ DEFAULT_MAX_LOG_BYTES: typ.Final[int] = 64 * 1024 * 1024
 #: Live selection and verdict records retained before the facts fail closed.
 MAX_LIVE_RECORDS: typ.Final[int] = 256
 
-#: Shortest value that can carry both opening and closing quotes.
-_QUOTED_PAIR = 2
-
-
-def _is_quote_terminated(text: str) -> bool:
-    """Whether a line ends with a quotation mark."""
-    return len(text) >= _QUOTED_PAIR and text.endswith('"')
-
 
 @dc.dataclass(frozen=True, slots=True)
 class _Candidate:
@@ -60,6 +52,25 @@ class _Candidate:
     kind: str
     value: str | None
     text: str
+
+
+#: Report markers that can only follow a finished description.
+_MARKERS: typ.Final[tuple[str, ...]] = (
+    "RESULTS:",
+    "SUMMARY:",
+    "Manual Harness Summary:",
+)
+
+
+def _is_structural(text: str) -> bool:
+    """Whether a line is a report structure that cannot be description content.
+
+    Report-shaped candidates are excluded on purpose: a verdict, selection or
+    banner printed inside a description looks exactly like the real one.
+    """
+    if FIELD.match(text) is not None:
+        return True
+    return text in _MARKERS or CHECK.match(text) is not None
 
 
 def _is_notable(text: str) -> bool:
@@ -136,8 +147,7 @@ class KaniObserver:
     log_truncated: bool = False
     facts_truncated: bool = False
     _current: str | None = dc.field(default=None, init=False)
-    _after_description: bool = dc.field(default=False, init=False)
-    _suspect: list[_Candidate] = dc.field(default_factory=list, init=False)
+    _in_description: bool = dc.field(default=False, init=False)
     _spool: typ.IO[str] | None = dc.field(default=None, init=False)
     _path: Path | None = dc.field(default=None, init=False)
     _stack: contextlib.ExitStack | None = dc.field(default=None, init=False)
@@ -164,38 +174,23 @@ class KaniObserver:
     def _observe_facts(self, text: str) -> None:
         """Update the live facts from one line.
 
-        Kani prints check descriptions without escaping newlines, so a
-        description can contain a line that looks like a banner, a selection
-        or a verdict. A report-shaped line that arrives directly after a
-        ``Description`` field is therefore held until the next line shows
-        whether it was description content. The held lines are committed only
-        when a following line is neither quote-terminated continuation nor
-        another candidate; otherwise they are discarded, which fails closed:
-        a stopped attempt loses an ambiguous live fact rather than gaining a
-        false one, and a complete log is parsed authoritatively.
+        Kani prints check descriptions without escaping newlines and escapes
+        nothing inside them, so description content can contain a line that
+        looks like a banner, a selection, a verdict, or the closing quote
+        itself. The scanner therefore keeps the frame open from a
+        ``Description`` field until a report structure that cannot be content
+        follows - a field such as ``Location``, a results or summary marker, or
+        a fresh check entry. Everything between is description content and is
+        never recorded, which fails closed: an unresolved frame loses its live
+        facts rather than crediting prose, and a complete log is parsed
+        authoritatively.
         """
-        if self._after_description:
-            if _is_quote_terminated(text):
-                self._suspect.clear()
-                self._after_description = False
+        if self._in_description:
+            if not _is_structural(text):
+                if _is_notable(text):
+                    self.last_progress = text
                 return
-            candidate = self._candidate(text)
-            if candidate is not None:
-                self._suspect.append(candidate)
-                self.last_progress = text
-                return
-            self._commit_suspect()
-            self._after_description = False
-        self._absorb(text)
-
-    def _commit_suspect(self) -> None:
-        """Record every held candidate, in arrival order."""
-        held, self._suspect = self._suspect, []
-        for candidate in held:
-            self._commit(candidate)
-
-    def _absorb(self, text: str) -> None:
-        """Record one ordinary line, or open a description frame."""
+            self._in_description = False
         if self._opens_description(text):
             return
         candidate = self._candidate(text)
@@ -204,6 +199,16 @@ class KaniObserver:
             self.last_progress = text
         elif _is_notable(text):
             self.last_progress = text
+
+    def _opens_description(self, text: str) -> bool:
+        """Enter a description frame when a field value begins a quotation."""
+        field = FIELD.match(text)
+        if field is None or field["key"] != "Description":
+            return False
+        if not field["value"].startswith('"'):
+            return False
+        self._in_description = True
+        return True
 
     @staticmethod
     def _candidate(text: str) -> _Candidate | None:
@@ -238,22 +243,6 @@ class KaniObserver:
             self.no_match_reason = candidate.text
         elif candidate.kind == "complete":
             self.completed = True
-
-    def _opens_description(self, text: str) -> bool:
-        """Track a quoted description frame and ignore its content.
-
-        A description opens on a field line whose value begins a quotation.
-        The line after it is held, because a value ending in a quote may still
-        continue over further lines: Kani escapes nothing, so an embedded
-        quote ends a printed line just as the closing one does.
-        """
-        field = FIELD.match(text)
-        if field is None or field["key"] != "Description":
-            return False
-        if not field["value"].startswith('"'):
-            return False
-        self._after_description = True
-        return True
 
     def _record[T](self, records: list[T], value: T) -> None:
         """Retain one live record, failing closed when the budget is spent."""

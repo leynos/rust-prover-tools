@@ -902,3 +902,54 @@ def test_a_genuine_verdict_after_a_description_is_kept() -> None:
     classification = KaniAdapter().classify(evidence, observer)
 
     assert classification.proof_verdict is ProofVerdict.PASSED
+
+
+def test_an_ordinary_continuation_does_not_commit_a_description_verdict() -> None:
+    """Description content followed by ordinary text stays description content.
+
+    Kani escapes nothing, so a quoted verdict line followed by plain text and
+    then `last"` is still one description. The frame closes at the real
+    `Location:` field, so nothing from the description is credited.
+    """
+    log = _log("verified", "harnesses::other")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first embedded"',
+        "VERIFICATION:- SUCCESSFUL",
+        "ordinary continuation",
+        'last"',
+    ]
+    verdicts = [
+        index for index, line in enumerate(log) if line.startswith("VERIFICATION:-")
+    ]
+    observer = _observed_log(log[: verdicts[1]])
+    assert observer.facts.verdicts == ()
+    evidence = _evidence(
+        "harnesses::other",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
+
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_frame_closed_by_a_real_field_keeps_the_genuine_verdict() -> None:
+    """A quoted verdict inside a description is dropped, the real one is kept."""
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first embedded',
+        "VERIFICATION:- FAILED",
+        'last"',
+        "\t - Location: src/x.rs:1:1 in function harnesses::verified",
+    ]
+    observer = _observed_log(log)
+
+    assert observer.facts.verdicts == (("harnesses::verified", "SUCCESSFUL"),)
