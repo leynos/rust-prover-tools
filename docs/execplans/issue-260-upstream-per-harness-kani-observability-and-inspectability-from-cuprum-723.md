@@ -163,6 +163,13 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-25 11:30Z) Ninth assessment round. CodeRabbit showed that
+  `RESULTS:` is also possible description content, so no line-level live rule
+  is sound. Live facts no longer carry a verdict at all: a stopped attempt
+  reports `UNKNOWN`, and a complete log supplies its verdict from the shared
+  parser. This supersedes the earlier live-verdict attribution (D40).
+  `make all` passes with 3,294 tests and 6 skips.
+
 - [x] (2026-11-25 05:10Z) Live fixture rerun at `5052c46` after the structural
   frame rule: 2 passed in 706.32 s. Production code is unchanged since
   `79fbb6c`; the only later commit is this record.
@@ -765,6 +772,14 @@ Plain-language terms used in this plan:
   bounded lookahead window; block records and joined descriptions are capped
   and exhaustion is a structural refusal. The CLI exposes the spool budget as
   `--max-log-mib`. Date/Author: 2026-11-23, implementation agent.
+- D40. Decision: the live Kani scanner never attributes a proof verdict; a
+  verdict comes only from the shared parser over the completed log. Rationale:
+  Kani escapes nothing inside a check description, so description content can
+  contain a verdict line, a results marker, or a line ending in the closing
+  quote, and the parser's own boundary test needs lookahead the live scanner
+  does not have. A stopped attempt therefore reports `UNKNOWN`, which is the
+  safe direction; this supersedes the earlier "a stop keeps the observed
+  verdict" behaviour. Date/Author: 2026-11-25, implementation agent.
 - D39. Decision: the Coding Plan's shared `feed_line(stream, text)` and
   `finish(exit_code)` parser interface is replaced by
   `parse_kani_log_lines(lines)` over a bounded line source, with live facts
