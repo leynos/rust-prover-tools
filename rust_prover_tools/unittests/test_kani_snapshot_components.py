@@ -8,6 +8,8 @@ tests pin that order is irrelevant while any change to the set is detected.
 
 from __future__ import annotations
 
+import typing as typ
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -17,7 +19,11 @@ from rust_prover_tools.kani_snapshot.toolchain_model import (
     MAX_COMPONENTS_BYTES,
     canonical_component_names,
     components_digest,
+    components_digest_of_file,
 )
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 _NAMES = st.from_regex(r"[a-z][a-z0-9-]{0,20}", fullmatch=True)
 
@@ -81,13 +87,48 @@ def test_invalid_utf8_is_refused() -> None:
         canonical_component_names(b"\xff\xfe")
 
 
-@given(names=st.sets(_NAMES, min_size=1, max_size=12))
-@settings(max_examples=40, deadline=None)
-def test_every_permutation_has_one_digest(names: set[str]) -> None:
-    """Generated component sets hash identically in any written order."""
-    ordered = "".join(f"{name}\n" for name in sorted(names)).encode()
-    reversed_order = "".join(f"{name}\n" for name in sorted(names, reverse=True))
-    shuffled = reversed_order.encode()
+def test_a_component_file_is_read_and_digested_in_one_query(tmp_path: Path) -> None:
+    """The shared file query returns the same digest as the byte query."""
+    components = tmp_path / "components"
+    components.write_bytes(b"rust-std\ncargo\nrustc\n")
 
-    assert components_digest(ordered) == components_digest(shuffled)
+    assert components_digest_of_file(components) == components_digest(
+        b"rustc\ncargo\nrust-std\n"
+    )
+
+
+def test_a_missing_component_file_is_reported_as_a_read_failure(
+    tmp_path: Path,
+) -> None:
+    """The producer and the consumer share one failure text for a read error."""
+    with pytest.raises(ProverToolError, match="failed to read rustup components list"):
+        components_digest_of_file(tmp_path / "absent")
+
+
+def test_an_oversized_component_file_is_refused(tmp_path: Path) -> None:
+    """The bounded read leaves the ceiling check to the digest it calls."""
+    components = tmp_path / "components"
+    components.write_bytes(b"x" * (MAX_COMPONENTS_BYTES + 1))
+
+    with pytest.raises(ProverToolError, match="ceiling"):
+        components_digest_of_file(components)
+
+
+@given(names=st.sets(_NAMES, min_size=1, max_size=12), data=st.data())
+@settings(max_examples=40, deadline=None)
+def test_any_written_order_has_the_sorted_digest(
+    names: set[str], data: st.DataObject
+) -> None:
+    """Any order has the digest of the sorted names, not just two of them.
+
+    An earlier version checked ascending and descending order only, which
+    proves nothing about a set with more than two orders. This shuffles the
+    names independently for each example and compares each result with the
+    sorted form.
+    """
+    ordered = "".join(f"{name}\n" for name in sorted(names)).encode()
+    shuffled_names = data.draw(st.permutations(sorted(names)))
+    shuffled = "".join(f"{name}\n" for name in shuffled_names).encode()
+
     assert canonical_component_names(shuffled) == ordered
+    assert components_digest(shuffled) == components_digest(ordered)

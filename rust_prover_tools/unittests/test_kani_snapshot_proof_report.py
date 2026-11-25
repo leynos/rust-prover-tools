@@ -16,6 +16,9 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from rust_prover_tools.kani_snapshot.producer.proof_rendering import (
+    render_proof_report,
+)
 from rust_prover_tools.kani_snapshot.producer.proof_report import (
     MAX_TRANSCRIPT_BYTES,
     HarnessOutcome,
@@ -23,9 +26,7 @@ from rust_prover_tools.kani_snapshot.producer.proof_report import (
     ProofSolverError,
     ProofTranscriptError,
     parse_proof_report,
-    render_proof_report,
     require_named_harnesses,
-    require_no_failed_unwinding,
 )
 
 if typ.TYPE_CHECKING:
@@ -233,7 +234,11 @@ def test_a_no_harness_diagnostic_is_refused_beside_successful_sections() -> None
 
 
 def test_a_successful_unwinding_description_is_accepted() -> None:
-    """Regular output prints every description, including a passing one."""
+    """Regular output prints every description, including a passing one.
+
+    The parse path performs this check itself, so a transcript that parses is
+    also a transcript whose unwinding descriptions all succeeded.
+    """
     transcript = _fixture("positive.txt").replace(
         " ** 0 of 12 failed",
         '\t - Status: SUCCESS\n\t - Description: "unwinding assertion"\n'
@@ -241,11 +246,20 @@ def test_a_successful_unwinding_description_is_accepted() -> None:
         1,
     )
 
-    require_no_failed_unwinding(transcript)
+    report = parse_proof_report(transcript)
+
+    assert report.verified_names == {
+        "bounded_push_contents_are_exact",
+        "raii_release_runs_once",
+    }
 
 
-def test_a_failed_unwinding_check_is_refused() -> None:
-    """A failed unwinding check is not a proof result."""
+def test_a_failed_unwinding_check_is_refused_by_parsing() -> None:
+    """A failed unwinding check is not a proof result.
+
+    A caller cannot admit this transcript by forgetting a second call: the
+    parse path refuses it.
+    """
     transcript = _fixture("positive.txt").replace(
         " ** 0 of 12 failed",
         '\t - Status: FAILURE\n\t - Description: "unwinding assertion"\n'
@@ -254,7 +268,7 @@ def test_a_failed_unwinding_check_is_refused() -> None:
     )
 
     with pytest.raises(ProofTranscriptError, match="unwinding"):
-        require_no_failed_unwinding(transcript)
+        parse_proof_report(transcript)
 
 
 def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:

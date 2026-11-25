@@ -87,14 +87,14 @@ scheduled trigger stays disabled.
 
 - Files: more than 45 non-ExecPlan files changed: stop and escalate. Raised to
   90 on 2026-11-24 under D7, with the measured 63 non-ExecPlan files recorded
-  in the decision log.
+  in the decision log; 65 after the fourth-round repairs (still inside 90).
 - Code: more than 1,800 net lines of Python and Rust fixture code: stop and
   escalate. Raised to 3,800 net lines on 2026-11-24 under D7; the measured
-  Python and Rust addition is 3,444 net lines.
+  Python and Rust addition is 3,470 net lines.
 - Configuration: more than 200 net lines across `Makefile`, `pyproject.toml`
-  and `.github/workflows/`: stop and escalate.
+  and `.github/workflows/`: stop and escalate. Measured: 94 net lines.
 - Documentation: more than 1,600 net lines excluding ExecPlan files: stop and
-  escalate.
+  escalate. Measured: 604 net lines.
 - Interface: any change to a public CLI option or snapshot wire format beyond
   the additions described here: stop and escalate.
 - Dependencies: any new runtime or development dependency: stop and escalate.
@@ -191,6 +191,32 @@ only entries in scope.
       generation's environment, replacing the two local substitutes. The
       runbook states that `strace` is required, and D7 records 63 files and
       3,444 net Python/Rust lines.
+- [x] (2026-11-25) Fourth-round pre-merge repairs, from CodeRabbit's review of
+      `bc8af45`. Both failing checks were actioned in full:
+      - Testing (Overall): refusal tests now cover `sh build.sh`,
+        `bash -c make`, `python3 setup.py build_ext` and `python build.py`;
+        `rustc --emit=link`, `-o out`, `--crate-type lib` and `--crate-name`
+        each without a `.rs` argument; and every `kani-snapshot-verify` guard
+        (asset directory, wheel, 1.93 compiler) in the new
+        `tests/test_kani_snapshot_verify_recipe.py`, with a positive case
+        proving the guards let usable inputs through. The documented example
+        now records the three variables in its stub and asserts their values.
+        The component-order property is renamed and now draws an independent
+        permutation. Each new refusal test was confirmed to fail when its
+        implementing clause is removed (five mutation runs, all detected).
+      - Unit Architecture: `run_local_bundle_setup` takes an injected `clock`;
+        the rustup step is the named `disable_rustup_self_update`; the bounded
+        component read and digest are one query,
+        `toolchain_model.components_digest_of_file`, used by both the producer
+        and the consumer; `proof_rendering` holds the snapshot text and the
+        unwinding check is folded into `parse_proof_report`; strace parsing
+        moved to `strace_records` with an explicit refusal for an argument it
+        cannot unquote, and the duplicated `rustc` docstrings are merged; the
+        smoke support module is split into `kani_snapshot_smoke_support`
+        (fixtures, pins, consumer), `_runner` (bounded process runner) and
+        `_evidence` (log readers).
+      All eight gates pass on the repaired head: Pylint 10.00/10, interrogate
+      100 %, 2,887 passed / 19 skipped / 20 snapshots.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
 - [ ] Re-run the consumer smoke against a corrected hosted release from trusted
@@ -271,15 +297,16 @@ only entries in scope.
   and their primitives, the proof fixtures and every transcript and trace
   control, the smoke harness, its support module and its fixtures, the workflow
   consumer-profile step and its contract test, the runbook and the synchronized
-  guides. Measured against `57c1560`: 63 non-ExecPlan files, 3,444 net Python
-  and Rust lines, 92 net configuration lines and 600 net documentation lines.
-  Earlier readings (53 files and 2,307 lines, then 54 and 2,742) were taken
-  before successive assessment repairs added the bundle-smoke fixtures, the
-  real-`strace` regressions and their controls; the numbers here are the
-  current measurement. The raised limits leave about 26 percent contingency
-  rather than being open-ended. No milestone, requirement or acceptance
-  criterion changes. Date/Author: 2026-11-24, agent; recorded for the user's
-  review in this draft.
+  guides. Measured against `57c1560` after the fourth-round pre-merge repairs:
+  65 non-ExecPlan files, 3,470 net Python and Rust lines, 94 net configuration
+  lines and 604 net documentation lines. Earlier readings (53 files and 2,307
+  lines, then 54 and 2,742, then 63 and 3,444) were taken before successive
+  assessment and review repairs added the bundle-smoke fixtures, the
+  real-`strace` regressions, the fourth-round refactor split and their
+  controls; the numbers here are the current measurement. The raised limits
+  leave about 26 percent contingency rather than being open-ended. No
+  milestone, requirement or acceptance criterion changes. Date/Author:
+  2026-11-24, agent; recorded for the user's review in this draft.
 - D6. **Approved 2026-11-23 as D6a. Implemented.** The design's
   D4 and manifest schema v1 bind a toolchain to `rustup_components_sha256`, a
   SHA-256 of the exact bytes of `<toolchain>/lib/rustlib/components`. Rustup

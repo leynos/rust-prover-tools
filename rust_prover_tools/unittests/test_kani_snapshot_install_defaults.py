@@ -9,6 +9,8 @@ The configuration step must therefore run first, with the same homes.
 
 from __future__ import annotations
 
+import inspect
+import time
 import typing as typ
 
 import pytest
@@ -105,13 +107,19 @@ def test_the_launcher_receives_only_the_remaining_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A slow configuration command shortens the launcher's timeout."""
+    """A slow configuration command shortens the launcher's timeout.
+
+    The clock is injected rather than read from the module, so this test proves
+    the budget arithmetic consults the caller's clock and nothing else.
+    """
     seen = _record_commands(monkeypatch)
     ticks = iter([100.0, 104.0])
-    monkeypatch.setattr(install_defaults.time, "monotonic", lambda: next(ticks))
 
     install_defaults.run_local_bundle_setup(
-        _runtime(tmp_path), tmp_path / "bundle.tar.gz", timeout_seconds=10.0
+        _runtime(tmp_path),
+        tmp_path / "bundle.tar.gz",
+        timeout_seconds=10.0,
+        clock=lambda: next(ticks),
     )
 
     assert seen[0].timeout_seconds == pytest.approx(10.0), (
@@ -129,11 +137,40 @@ def test_an_expired_setup_budget_refuses_to_start_the_launcher(
     """The budget is checked before the launcher starts, not only during it."""
     seen = _record_commands(monkeypatch)
     ticks = iter([100.0, 111.0])
-    monkeypatch.setattr(install_defaults.time, "monotonic", lambda: next(ticks))
 
     with pytest.raises(ProverToolError, match="budget"):
         install_defaults.run_local_bundle_setup(
-            _runtime(tmp_path), tmp_path / "bundle.tar.gz", timeout_seconds=10.0
+            _runtime(tmp_path),
+            tmp_path / "bundle.tar.gz",
+            timeout_seconds=10.0,
+            clock=lambda: next(ticks),
         )
 
     assert len(seen) == 1, "the launcher must not start after the budget expires"
+
+
+def test_the_default_clock_is_the_monotonic_clock() -> None:
+    """Production reads no wall clock, so an injected clock is the only seam."""
+    default_clock = (
+        inspect
+        .signature(install_defaults.run_local_bundle_setup)
+        .parameters["clock"]
+        .default
+    )
+
+    assert default_clock is time.monotonic, (
+        "setup must default to the monotonic clock, not a wall clock"
+    )
+
+
+def test_the_rustup_configuration_step_is_named_and_documented() -> None:
+    """The side effect is its own function, so a reader can see what it changes."""
+    configure = getattr(install_defaults, "disable_rustup_self_update", None)
+
+    assert configure is not None, (
+        "the rustup configuration step must be its own named function"
+    )
+    assert configure.__doc__, "the configuration step must state its side effect"
+    assert "self-update" in configure.__doc__, (
+        "the docstring must name the setting it changes"
+    )

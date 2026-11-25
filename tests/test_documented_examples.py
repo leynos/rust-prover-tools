@@ -238,6 +238,33 @@ def test_the_verify_example_names_the_target_and_its_inputs() -> None:
     )
 
 
+def _stub_environment(tmp_path: Path) -> tuple[Path, Path]:
+    """Write the example's stubs and return the stub directory and its log.
+
+    The `make` stub records its environment as well as its arguments, so a test
+    can show the three assignments reached it as values. The `rustup` stub
+    answers `which` so the example can be run without a real toolchain.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "make-args"
+    make_body = (
+        "#!/bin/sh\n"
+        'printf "ARGS:%s\\n" "$@" > "$MAKE_ARGS_FILE"\n'
+        'printf "ASSET_DIR:%s\\n" "$KANI_SNAPSHOT_ASSET_DIR" >> "$MAKE_ARGS_FILE"\n'
+        'printf "WHEEL:%s\\n" "$KANI_SNAPSHOT_WHEEL" >> "$MAKE_ARGS_FILE"\n'
+        'printf "RUSTC_1_93:%s\\n" "$KANI_SNAPSHOT_RUSTC_1_93" >> "$MAKE_ARGS_FILE"\n'
+    )
+    for name, body in (
+        ("make", make_body),
+        ("rustup", "#!/bin/sh\nprintf '/fake/toolchains/1.93.0/bin/rustc\\n'\n"),
+    ):
+        stub = bin_dir / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+    return bin_dir, log
+
+
 @NEEDS_MAKE
 def test_the_verify_example_executes_and_passes_all_three_inputs(
     tmp_path: Path,
@@ -245,22 +272,14 @@ def test_the_verify_example_executes_and_passes_all_three_inputs(
     """The guide's example runs in a shell and reaches `make` with its inputs.
 
     `make` and `rustup` are stubbed first on `PATH`, so the example's shell
-    syntax is exercised without installing a toolchain or running a proof.
-    The stub records its arguments, which proves the three assignments reach
-    it as values rather than as redirections.
+    syntax is exercised without installing a toolchain or running a proof. The
+    stub records its arguments *and* the three variables, which is what proves
+    the assignments reach `make` as values: dropping any assignment from the
+    example leaves its recorded value empty and fails here.
     """
     shell = shutil.which("sh")
     assert shell is not None, "a POSIX shell is required to run the example"
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "make-args"
-    for name, body in (
-        ("make", '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$MAKE_ARGS_FILE"\n'),
-        ("rustup", "#!/bin/sh\nprintf '/fake/rustc\\n'\n"),
-    ):
-        stub = bin_dir / name
-        stub.write_text(body, encoding="utf-8")
-        stub.chmod(0o755)
+    bin_dir, log = _stub_environment(tmp_path)
     example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
 
     completed = subprocess.run(
@@ -279,8 +298,15 @@ def test_the_verify_example_executes_and_passes_all_three_inputs(
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert log.read_text(encoding="utf-8").split() == ["kani-snapshot-verify"], (
+    recorded = log.read_text(encoding="utf-8").splitlines()
+    assert "ARGS:kani-snapshot-verify" in recorded, (
         "the example did not invoke the verification target with make"
+    )
+    values = dict(line.split(":", 1) for line in recorded if ":" in line)
+    assert values["ASSET_DIR"], "the review directory never reached make"
+    assert values["WHEEL"].endswith(".whl"), "the wheel path never reached make"
+    assert values["RUSTC_1_93"].endswith("/rustc"), (
+        "the 1.93 compiler path never reached make"
     )
 
 

@@ -1248,20 +1248,24 @@ must keep:
   Kani forms: harness starts, per-harness verdicts, the manual summary and the
   no-harness diagnostic. It raises `ProofTranscriptError`, `ProofCompileError`
   or `ProofSolverError`; it performs no policy beyond those shapes.
-- `proof_report` owns the policy: `parse_proof_report`,
-  `require_named_harnesses` (exact names, including module-qualified
-  crate-relative names) and `require_no_failed_unwinding` (a `FAILURE` property
-  whose description names unwinding; a successful description is accepted). A
-  summary is mandatory and its counts and named failures must agree with the
-  verdicts.
+- `proof_report` owns the policy, and `parse_proof_report` is the whole check:
+  it refuses a summary that disagrees with the verdicts *and* a `FAILURE`
+  property whose description names unwinding, so a caller cannot admit a
+  transcript by remembering only one of the two. `require_named_harnesses` adds
+  exact names, including module-qualified crate-relative names.
+  `proof_rendering.render_proof_report` holds the snapshot-pinned text and
+  imports the report; presentation is a separate reason to change.
 - `trace_fragments` owns strace's unfinished/resumed reassembly under either
-  PID prefix and raises `FragmentError`; `setup_trace` maps that to
-  `SetupTraceError`, so callers see one trace error type. The policy lives in
-  `setup_trace`: bounded input, no forbidden build action, and a packaged
-  `cargo-kani setup` record.
+  PID prefix and raises `FragmentError`; `strace_records` maps that to
+  `SetupTraceError`, so callers see one trace error type, and turns strace's
+  text into `ExecRecord` values — refusing an argument it cannot unquote rather
+  than passing the raw text on. `setup_trace` holds the policy alone: bounded
+  input, no forbidden build action, and a packaged `cargo-kani setup` record.
 - `toolchain_model.canonical_component_names` and `components_digest` are the
-  single definition of the component-record digest. The producer measurement
-  and the consumer check both call them; do not compare the raw file again.
+  single definition of the component-record digest. `components_digest_of_file`
+  is the single definition of the bounded read that feeds it, so the producer
+  measurement and the consumer check share one byte ceiling, one
+  canonicalization and one failure text; do not compare the raw file again.
 
 The smoke installs through the public commands in a throwaway consumer
 repository, proves the named harnesses, repeats the install from the warm cache

@@ -11,9 +11,9 @@ import typing as typ
 
 import pytest
 
-from tests import kani_snapshot_smoke_commands, kani_snapshot_smoke_support
+from tests import kani_snapshot_smoke_commands, kani_snapshot_smoke_evidence
 from tests.kani_snapshot_smoke_commands import require_strace, strace_prefix
-from tests.kani_snapshot_smoke_support import generation_from_output, read_trace
+from tests.kani_snapshot_smoke_evidence import generation_from_output, read_trace
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -43,7 +43,7 @@ def test_a_trace_at_the_ceiling_is_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A trace exactly at the ceiling is accepted."""
-    monkeypatch.setattr(kani_snapshot_smoke_support, "MAX_TRACE_BYTES", 16)
+    monkeypatch.setattr(kani_snapshot_smoke_evidence, "MAX_TRACE_BYTES", 16)
     trace = tmp_path / "small.trace"
     trace.write_bytes(b"x" * 16)
 
@@ -54,7 +54,7 @@ def test_a_trace_over_the_ceiling_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A trace larger than the ceiling is refused rather than truncated."""
-    monkeypatch.setattr(kani_snapshot_smoke_support, "MAX_TRACE_BYTES", 8)
+    monkeypatch.setattr(kani_snapshot_smoke_evidence, "MAX_TRACE_BYTES", 8)
     trace = tmp_path / "large.trace"
     trace.write_bytes(b"x" * 9)
 

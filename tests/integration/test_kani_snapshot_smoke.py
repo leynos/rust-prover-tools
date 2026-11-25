@@ -11,8 +11,10 @@ before execution.
 
 The public `kani run` command executes the standalone `kani` launcher from the
 repository root, so each proof root holds the fixture source file the launcher
-compiles. Fixtures live in `tests/integration/conftest.py`; the remaining
-plumbing lives in `tests/kani_snapshot_smoke_support.py`.
+compiles. Fixtures live in `tests/integration/conftest.py`; the fixture data and
+consumer tree in `tests/kani_snapshot_smoke_support.py`, the bounded runner in
+`tests/kani_snapshot_smoke_runner.py`, and the log readers in
+`tests/kani_snapshot_smoke_evidence.py`.
 
 It is skipped unless `KANI_SNAPSHOT_SMOKE` is set. `make kani-snapshot-verify`
 supplies the environment; ordinary `make test` never reaches it.
@@ -37,7 +39,6 @@ from rust_prover_tools.kani_snapshot.producer.compiler_floor import (
 )
 from rust_prover_tools.kani_snapshot.producer.proof_report import (
     require_named_harnesses,
-    require_no_failed_unwinding,
 )
 from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     require_prebuilt_setup,
@@ -167,8 +168,9 @@ def test_the_named_positive_harnesses_verify(
         completed = proof(consumer, prover_tools, "bounded_collection", harness)
         transcript = completed.stdout + completed.stderr
         assert completed.returncode == 0, transcript[-4000:]
+        # `require_named_harnesses` parses, and the parse path already refuses
+        # a failed unwinding check, so there is no second call to remember.
         require_named_harnesses(transcript, verified=(harness,), failed=())
-        require_no_failed_unwinding(transcript)
         report(f"verified {harness}")
 
 
@@ -195,9 +197,11 @@ def test_the_floor_harness_verifies_on_the_pinned_compiler(
     transcript = completed.stdout + completed.stderr
 
     assert completed.returncode == 0, transcript[-4000:]
-    require_named_harnesses(transcript, verified=(FLOOR_HARNESS,), failed=())
+    report_of = require_named_harnesses(
+        transcript, verified=(FLOOR_HARNESS,), failed=()
+    )
+    assert report_of.total_count == 1, "the floor run must state one harness"
     require_floor_harness_verified(transcript)
-    require_no_failed_unwinding(transcript)
     report(f"floor harness verified: {FLOOR_HARNESS}")
 
 

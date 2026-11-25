@@ -1,4 +1,4 @@
-"""Strict readings of one Kani proof transcript.
+"""The policy a Kani proof transcript must satisfy to count as evidence.
 
 A non-zero process status is not a proof result: a compile error, a solver
 crash, a run that discovered no harnesses and a harness that genuinely failed
@@ -7,8 +7,14 @@ the pinned Kani driver writes — the named `Checking harness` start, that
 harness's own `VERIFICATION:-` verdict and the final manual summary — and
 requires them to agree.
 
-The parser is pure: it takes text and returns frozen records. Bounding the
-input belongs here too, because a consumer may hand it a whole captured log.
+`parse_proof_report` is the whole check, not a first stage: besides the verdicts
+and the summary it refuses a failed unwinding check, so a caller cannot admit a
+transcript by forgetting that step. Everything here is pure — text in, frozen
+records or a named error out. Bounding the input belongs here too, because a
+consumer may hand it a whole captured log.
+
+Rendering pinned text for a snapshot lives in `proof_rendering`, which imports
+this module; presentation is a separate reason to change from policy.
 """
 
 from __future__ import annotations
@@ -41,9 +47,7 @@ __all__ = (
     "ProofSolverError",
     "ProofTranscriptError",
     "parse_proof_report",
-    "render_proof_report",
     "require_named_harnesses",
-    "require_no_failed_unwinding",
 )
 
 #: Largest transcript accepted. The CLI retains a bounded tail per stream, so a
@@ -145,6 +149,10 @@ def _raise_solver_failure(*, has_compile_failure: bool) -> typ.NoReturn:
 def parse_proof_report(transcript: str) -> ProofReport:
     """Return the named verdicts one Kani transcript states.
 
+    This is the complete acceptance check. It also refuses a failed unwinding
+    check, so admitting a transcript does not depend on a caller remembering a
+    second call.
+
     Parameters
     ----------
     transcript : str
@@ -163,8 +171,9 @@ def parse_proof_report(transcript: str) -> ProofReport:
         Raised when the transcript reports a CBMC failure.
     ProofTranscriptError
         Raised for an oversized transcript, a run that found no harnesses, a
-        missing or duplicated verdict, a missing or duplicated summary, or a
-        summary whose counts or named failures contradict the verdicts.
+        missing or duplicated verdict, a missing or duplicated summary, a
+        summary whose counts or named failures contradict the verdicts, or a
+        property whose `FAILURE` status is an unwinding check.
     """
     text = _bounded(transcript)
     _diagnose(text)
@@ -174,6 +183,7 @@ def parse_proof_report(transcript: str) -> ProofReport:
     outcomes = _outcomes(text)
     summary = summary_counts(text)
     _require_summary_agrees(summary, outcomes)
+    _require_no_failed_unwinding(text)
     return ProofReport(
         outcomes=outcomes,
         verified_count=summary.verified,
@@ -325,7 +335,7 @@ _DESCRIPTION: typ.Final[re.Pattern[str]] = re.compile(
 )
 
 
-def require_no_failed_unwinding(transcript: str) -> None:
+def _require_no_failed_unwinding(transcript: str) -> None:
     """Refuse a transcript that reports a failed unwinding check.
 
     Kani prints every property's description in regular output, including a
@@ -354,26 +364,3 @@ def _is_failed_unwinding(status: str, description: re.Match[str] | None) -> bool
     if status != "FAILURE" or description is None:
         return False
     return "unwind" in description.group("text").lower()
-
-
-def render_proof_report(report: ProofReport) -> str:
-    """Render a report in a stable form suitable for a snapshot.
-
-    Parameters
-    ----------
-    report : ProofReport
-        Validated report.
-
-    Returns
-    -------
-    str
-        One line per category, with names sorted.
-    """
-    verified = ", ".join(sorted(report.verified_names)) or "-"
-    failed = ", ".join(sorted(report.failed_names)) or "-"
-    return (
-        f"verified: {verified}\n"
-        f"failed: {failed}\n"
-        f"counts: {report.verified_count} verified, {report.failed_count} failed, "
-        f"{report.total_count} total"
-    )

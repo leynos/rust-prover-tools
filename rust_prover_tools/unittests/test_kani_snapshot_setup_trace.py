@@ -267,6 +267,76 @@ def test_a_rustc_response_file_is_refused() -> None:
         require_prebuilt_setup(trace)
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--emit=link",),
+        ("-o", "out"),
+        ("--crate-type", "lib"),
+        ("--crate-name", "probe"),
+    ],
+    ids=["emit", "output", "crate-type", "crate-name"],
+)
+def test_rustc_code_generation_without_a_source_file_is_refused(
+    arguments: tuple[str, ...],
+) -> None:
+    """Each code-generation flag is refused on its own, with no `.rs` argument.
+
+    None of these vectors ends in `.rs`, so the refusal can only come from the
+    flag clause; removing it would make every case here pass.
+    """
+    trace = (
+        _LAUNCHER
+        + '901  execve("/toolchain/bin/rustc", ["rustc", '
+        + ", ".join(f'"{argument}"' for argument in arguments)
+        + "], 0x1) = 0\n"
+    )
+
+    with pytest.raises(SetupTraceError, match="rustc"):
+        require_prebuilt_setup(trace)
+
+
+@pytest.mark.parametrize(
+    ("executable", "arguments"),
+    [
+        ("/bin/sh", ("sh", "build.sh")),
+        ("/bin/bash", ("bash", "-c", "make")),
+        ("/usr/bin/python3", ("python3", "setup.py", "build_ext")),
+        ("/usr/bin/python", ("python", "build.py")),
+    ],
+    ids=["sh-script", "bash-make", "python3-setup", "python-build"],
+)
+def test_a_shell_or_interpreter_build_is_refused(
+    executable: str, arguments: tuple[str, ...]
+) -> None:
+    """A shell or interpreter asked to build source is refused and named.
+
+    Each vector is a separate route to a build (`sh build.sh`, `bash -c make`,
+    `python3 setup.py build_ext`, `python build.py`), so removing the shell or
+    interpreter clause leaves its own case passing.
+    """
+    argv = ", ".join(f'"{argument}"' for argument in arguments)
+    trace = _LAUNCHER + f'901  execve("{executable}", [{argv}], 0x1) = 0\n'
+
+    with pytest.raises(SetupTraceError, match="forbidden"):
+        require_prebuilt_setup(trace)
+
+
+def test_an_argument_strace_cannot_quote_is_refused() -> None:
+    """A capture this reader cannot decode fails loudly, not silently.
+
+    The raw text fallback this replaced would have compared the undecoded
+    escape sequence against the policy's lists, so an argument could be
+    checked as something other than what strace recorded.
+    """
+    trace = (
+        _LAUNCHER + '901  execve("/usr/bin/tar", ["tar", "bad\\xZZescape"], 0x1) = 0\n'
+    )
+
+    with pytest.raises(SetupTraceError, match="cannot quote"):
+        parse_exec_trace(trace)
+
+
 def test_an_empty_trace_is_refused() -> None:
     """An strace log without an execve record proves nothing."""
     with pytest.raises(SetupTraceError, match="no execve"):

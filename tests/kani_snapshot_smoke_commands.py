@@ -1,9 +1,9 @@
 """Command construction and tracing for the opt-in consumer smoke.
 
 These helpers build the public command vectors and run them under `strace`, so
-every reuse, refusal and setup claim is observed rather than inferred. They sit
-apart from the environment and fixture helpers in
-`tests/kani_snapshot_smoke_support.py` to keep both modules readable.
+every reuse, refusal and setup claim is observed rather than inferred. The
+runner and evidence readers they use live in their own modules, so this one
+holds only the commands themselves and the trace policy.
 """
 
 from __future__ import annotations
@@ -13,11 +13,14 @@ import shutil
 import typing as typ
 
 from rust_prover_tools.kani_snapshot.producer.setup_trace import parse_exec_trace
-from tests.kani_snapshot_smoke_support import Consumer, SmokeContext, read_trace, run
+from tests.kani_snapshot_smoke_evidence import read_trace
+from tests.kani_snapshot_smoke_runner import SmokeContext, run
 
 if typ.TYPE_CHECKING:
     import subprocess
     from pathlib import Path
+
+    from tests.kani_snapshot_smoke_support import Consumer
 
 __all__ = (
     "install_command",
