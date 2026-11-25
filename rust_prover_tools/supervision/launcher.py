@@ -249,19 +249,22 @@ class CuprumHarnessLauncher:
             on_failure=on_failure,
         )
         drains: list[PipeDrain] = []
+        unowned = [out_read, err_read]
         try:
-            drains = [
-                PipeDrain(out_read, "stdout", config),
-                PipeDrain(err_read, "stderr", config),
-            ]
+            for descriptor, stream in ((out_read, "stdout"), (err_read, "stderr")):
+                drains.append(PipeDrain(descriptor, stream, config))
+                unowned.remove(descriptor)
             for drain in drains:
                 drain.start()
         except _SETUP_FAILURES:
-            # The recorder owns the write ends and the caller's finally closes
-            # them; the read ends belong here until a drain takes ownership.
+            # A drain owns its read end from construction. Closing the drain and
+            # then closing the same number again could release an unrelated
+            # descriptor the process reused in between, so only read ends no
+            # drain took ownership of are closed here. The recorder owns the
+            # write ends and the caller's finally closes them.
             for drain in drains:
                 drain.close()
-            for descriptor in (out_read, err_read):
+            for descriptor in unowned:
                 with contextlib.suppress(OSError):
                     os.close(descriptor)
             raise
