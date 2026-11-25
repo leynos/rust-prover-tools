@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,303 passed and 6
-skipped at code head `d9ddcd8`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,316 passed and 6
+skipped at code head `bf1a546`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passes at this candidate: 2 passed in 455.01 s at `16fb35c`.
+passes at this candidate: 2 passed in 661.92 s at `bf1a546`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -559,6 +559,25 @@ Plain-language terms used in this plan:
   than the cursor's own read, and the assertion pins the reported line number.
   `make all` passes with 3,233 tests and 6 skips.
 
+- [x] (2026-11-25 21:55Z) Pre-merge follow-up round. Closed the remaining
+  focus items: the launcher's setup-failure path now closes each descriptor
+  once (drains own their read ends; only unwrapped ends are closed raw), with
+  regressions for a failing second `os.pipe` and a failing `PipeDrain.start`;
+  the supervisor-level live-callback witness now writes a real multi-line child
+  script, proves the failing stdout line arrived while the child was alive, and
+  still stops and joins it; `observed_verdict` has direct synthetic-fact tests
+  for duplicate selections and duplicate verdicts; a stop classification
+  survives a raising spool close; and `mask_source` has a generated
+  length/newline-position property. The destination alias rule moved out of the
+  policy value object into `supervision/destinations.py`, enforced by
+  `kani_diagnostics.open_diagnostics` for library callers and by the CLI's
+  `supervision_policy`; `DiagnosticSinks` construction is pure. Settled exit
+  evidence after a stop, report-writer failure during cancellation and during a
+  monitor fault, and escaped cgroup mount roots each have a regression.
+  `make check-fmt`, `make all` (3,316 passed, 6 skipped), `make markdownlint`,
+  and `make nixie` pass at `bf1a546`; the opt-in live Kani 0.67.0 fixture
+  passes at the same head: 2 passed in 661.92 s.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
@@ -832,12 +851,17 @@ Plain-language terms used in this plan:
   inspection use the standard library. Rationale: the capability needs no
   third-party runtime package, and the repository's gates already cover the
   standard library. Date/Author: 2026-11-21, implementation agent.
-- D17. Decision: `DiagnosticSinks` and the CLI reject two destinations that
-  resolve to one file. Rationale: human and JSONL records have different
-  grammars, so sharing an append handle produces a file that is neither, and
-  JSONL offsets silently stop matching; the report's atomic write would destroy
-  evidence at the same path. Paths are resolved first so symlink aliases cannot
-  evade the check. Date/Author: 2026-11-21, implementation agent.
+- D17. Decision: the destination policy records paths, and the adapters that
+  open them reject two destinations that resolve to one file. Rationale: human
+  and JSONL records have different grammars, so sharing an append handle
+  produces a file that is neither, and JSONL offsets silently stop matching;
+  the report's atomic write would destroy evidence at the same path. Paths are
+  resolved first so symlink aliases cannot evade the check. The inode-aware
+  rule lives in `supervision/destinations.py` and runs in
+  `kani_diagnostics.open_diagnostics` for library callers and in the CLI's
+  `supervision_policy`, because deciding identity needs the filesystem and
+  policy construction must stay pure. Date/Author: 2026-11-21, amended
+  2026-11-25 by the implementation agent.
 - D18. Decision: discovery, selection, and route qualification are a separate
   `prepare_harnesses` phase from `execute_harnesses`. Rationale: the CLI's
   handlers can stop a supervised child but cannot stop Cargo metadata or a

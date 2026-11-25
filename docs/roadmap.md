@@ -80,8 +80,8 @@ runner loss. See the
   human and JSONL evidence, process-group RSS and host-memory sampling, a
   timeout and host-memory watchdog, typed outcomes and multiset accounting, and
   versioned JSONL and report schemas. Exposed through a typed Python API and
-  `kani harnesses list`/`run`. Delivered; the final gate reports 3,303 passed
-  and 6 skipped at code head `d9ddcd8`.
+  `kani harnesses list`/`run`. Delivered; the final gate reports 3,316 passed
+  and 6 skipped at code head `bf1a546`.
 - [ ] 2.1.2. Adopt the capability in Cuprum. Requires 2.1.1. Wire the
   package-specific Make targets, CI matrix split, fault-check dependencies, the
   19-harness inventory, and any proof repairs in
