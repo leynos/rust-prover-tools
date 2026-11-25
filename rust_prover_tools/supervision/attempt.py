@@ -27,6 +27,7 @@ from rust_prover_tools.supervision.attempt_state import (
     finish_cgroup,
     idle_seconds,
     resolved_reason,
+    waiter_failed,
 )
 from rust_prover_tools.supervision.events import (
     heartbeat_record,
@@ -211,6 +212,12 @@ class AttemptSupervisor:
             # cleanup are not lost to the monitor's exception.
             with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.gather(monitor, return_exceptions=True)
+            # A launcher that raised has already stopped the child from
+            # inside, because its evidence callback failed. Record that as the
+            # supervisor's own stop; otherwise the empty settled status would
+            # read as an ordinary exit.
+            if waiter_failed(waiter):
+                self._request_stop(running, "the supervisor stopped the run")
             if not running.done and running.stop_reason is None:
                 self._request_stop(running, "the supervisor stopped the run")
             joined = await running.settle()

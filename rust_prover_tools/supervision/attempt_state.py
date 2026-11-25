@@ -20,6 +20,7 @@ from rust_prover_tools.supervision.models import (
 )
 
 if typ.TYPE_CHECKING:
+    import asyncio
     import collections.abc as cabc
     import datetime as dt
 
@@ -34,6 +35,7 @@ __all__ = (
     "minimum",
     "peak",
     "resolved_reason",
+    "waiter_failed",
 )
 
 #: Reason reported when a summary has no sample to summarise.
@@ -213,6 +215,13 @@ def resolved_reason(stop_reason: StopReason | None, result: LaunchResult) -> Sto
     if result.launch_error is not None:
         return StopReason.LAUNCH_FAILED
     return StopReason.EXITED
+
+
+def waiter_failed(waiter: asyncio.Task[LaunchResult]) -> bool:
+    """Whether a finished waiter failed, without consuming a cancellation."""
+    if not waiter.done() or waiter.cancelled():
+        return False
+    return waiter.exception() is not None
 
 
 def finish_cgroup(

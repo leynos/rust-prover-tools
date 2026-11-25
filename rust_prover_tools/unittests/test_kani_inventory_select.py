@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.kani_cli_grammar import KANI_067
 from rust_prover_tools.kani_inventory import (
@@ -286,4 +288,47 @@ def test_a_value_option_in_a_cluster_keeps_its_value(argument: tuple[str, ...]) 
 
     assert compose_arguments(_harness("harnesses::a"), KANI_067, argument)[-1:] == (
         argument[0],
+    )
+
+
+#: Short-option characters that are neither forbidden nor value-taking.
+_NEUTRAL_SHORT = st.text(alphabet="abdefghiklmnrstuvwxyz", max_size=4)
+#: A forbidden flag that does not take a value.
+_FORBIDDEN_SHORT = st.sampled_from(("p", "j", "q"))
+#: A caller-facing option whose value is the rest of the token.
+_VALUE_SHORT = st.sampled_from(("F", "Z", "C", "A", "L", "o"))
+#: Value text chosen to spell forbidden options if it were rescanned.
+_PROVOCATIVE_VALUE = st.text(alphabet="pqjxyz", max_size=8)
+
+
+@given(prefix=_NEUTRAL_SHORT, forbidden=_FORBIDDEN_SHORT, suffix=st.text(max_size=6))
+@settings(max_examples=50, deadline=None)
+def test_a_forbidden_short_before_a_value_option_is_refused(
+    prefix: str,
+    forbidden: str,
+    suffix: str,
+) -> None:
+    """A forbidden flag anywhere before a value option is still that flag."""
+    argument = f"-{prefix}{forbidden}{suffix}"
+
+    assert conflicting_options((argument,), KANI_067) == (argument,)
+
+
+@given(
+    prefix=_NEUTRAL_SHORT,
+    value=_VALUE_SHORT,
+    suffix=_PROVOCATIVE_VALUE,
+)
+@settings(max_examples=50, deadline=None)
+def test_a_value_option_ends_the_scan_and_keeps_its_value(
+    prefix: str,
+    value: str,
+    suffix: str,
+) -> None:
+    """Value text is not rescanned, even when it spells forbidden options."""
+    argument = f"-{prefix}{value}{suffix}"
+
+    assert not conflicting_options((argument,), KANI_067)
+    assert compose_arguments(_harness("harnesses::a"), KANI_067, (argument,))[-1:] == (
+        argument,
     )

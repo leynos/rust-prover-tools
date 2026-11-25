@@ -26,6 +26,7 @@ from rust_prover_tools.supervision import (
     Measurement,
     MemorySink,
     NullSink,
+    OutputLine,
     ProofVerdict,
     ResourceSample,
     RunningHarness,
@@ -786,6 +787,53 @@ def test_a_stopped_run_reports_the_status_the_group_settled_with() -> None:
     asyncio.run(scenario())
 
 
+def test_a_monitor_fault_keeps_the_settled_exit_evidence(tmp_path: Path) -> None:
+    """A stopped child's settled status survives the monitor's failure."""
+    asyncio.run(_monitor_fault_settled_scenario(tmp_path))
+
+
+async def _monitor_fault_settled_scenario(tmp_path: Path) -> None:
+    """Fail the probe, then inspect the stored settled status."""
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        ScriptedLauncher(
+            script=Script(
+                lines=(("stdout", "Checking harness harnesses::verified..."),),
+                block=True,
+            ),
+            settled_exit_code=-15,
+        ),
+        clock,
+        probe=_ExplodingProbe(),
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(version="0.67.0"),
+    )
+
+    with pytest.raises(_ProbeFailedError, match="probe failed"):
+        await run_supervised((spec(),), config, environment)
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["exit_code"] == -15
+    assert finish["signal_number"] == 15
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert results[0]["status"] == "interrupted"
+    assert results[0]["exit_code"] == -15
+    assert results[0]["signal_number"] == 15
+
+
 def test_a_report_writer_failure_does_not_replace_a_cancellation(
     tmp_path: Path,
 ) -> None:
@@ -902,6 +950,7 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     import sys
 
     from rust_prover_tools.supervision.clock import AsyncSleeper, SystemClock
+    from rust_prover_tools.supervision.kani import KaniAdapter, KaniObserver
     from rust_prover_tools.supervision.launch_command import LaunchCommand
     from rust_prover_tools.supervision.launcher import CuprumHarnessLauncher
     from rust_prover_tools.supervision.run_environment import RunEnvironment
@@ -910,9 +959,6 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     )
     from rust_prover_tools.unittests.supervision_doubles import (
         ScriptedProbe as _ScriptedProbe,
-    )
-    from rust_prover_tools.unittests.supervision_runner_support import (
-        NullObserver,
     )
 
     script, pid_file = _blocking_child(tmp_path)
@@ -923,37 +969,21 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
         del identity
         return LaunchCommand((sys.executable, "-I", str(script)), cwd=tmp_path)
 
-    refuse = fail
+    class _FailingObserver(KaniObserver):
+        """A live observer that fails on the child's first stdout line."""
 
-    class _FailingAdapter:
-        """An adapter whose observer forwards every line to the failing hook."""
+        def observe(self, line: OutputLine) -> None:
+            """Record the intended line, fail, and otherwise forward."""
+            fail(line)
+            super().observe(line)
 
-        def observer(self, spec: HarnessSpec) -> NullObserver:
-            """Return an observer that invokes the failing hook per line."""
+    class _FailingAdapter(KaniAdapter):
+        """The real Kani adapter, with a failing live observer."""
+
+        def observer(self, spec: HarnessSpec) -> KaniObserver:
+            """Return the observer that fails on the first stdout line."""
             del spec
-            observer = NullObserver()
-            original = observer.observe
-
-            def observe(line: object) -> None:
-                """Forward each line to the failing hook."""
-                refuse(line)
-                original(typ.cast("typ.Any", line))
-
-            observer.observe = observe  # type: ignore[method-assign]
-            return observer
-
-        def classify(
-            self,
-            evidence: AttemptEvidence,
-            observer: LineObserver,
-        ) -> HarnessClassification:
-            """Never reached: the supervisor faults before classification."""
-            del evidence, observer
-            return HarnessClassification(
-                status=ExecutionStatus.PASSED,
-                proof_verdict=ProofVerdict.PASSED,
-                detail="",
-            )
+            return _FailingObserver()
 
     clock = SystemClock()
     launcher = CuprumHarnessLauncher(
@@ -968,7 +998,7 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
         cgroup=_ScriptedCgroup(),
         diagnostics=Diagnostics(jsonl=MemorySink()),
         build=build,
-        adapter=typ.cast("typ.Any", _FailingAdapter()),
+        adapter=_FailingAdapter(version="0.67.0"),
         sleeper=AsyncSleeper(),
     )
     config = dc.replace(
@@ -993,6 +1023,8 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     results = typ.cast("list[dict[str, object]]", document["results"])
     assert len(results) == 1
     assert results[0]["harness"] == spec().harness
+    assert results[0]["status"] == "interrupted"
+    assert results[0]["stop_reason"] == "interrupted"
     assert report_path.exists()
 
 

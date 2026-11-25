@@ -192,6 +192,7 @@ class ScriptedLauncher:
     clock: VirtualClock | None = None
     seconds_per_line: float = 0.0
     ready: asyncio.Event | None = None
+    settled_exit_code: int | None = None
 
     def start(
         self,
@@ -205,7 +206,8 @@ class ScriptedLauncher:
         if self.ready is not None:
             self.ready.set()
         task = asyncio.get_running_loop().create_task(self._run(script, on_line))
-        return _ScriptedRunningHarness(task, _PidRecorder(4321), self.stops)
+        recorder = _PidRecorder(4321, settled_exit_code=self.settled_exit_code)
+        return _ScriptedRunningHarness(task, recorder, self.stops)
 
     async def _run(
         self,
@@ -241,10 +243,15 @@ class ScriptedLauncher:
 class _PidRecorder:
     """Report a fixed process-group ID, as a real run would."""
 
-    def __init__(self, pid: int | None) -> None:
-        """Record the pid to report."""
+    def __init__(
+        self,
+        pid: int | None,
+        *,
+        settled_exit_code: int | None = None,
+    ) -> None:
+        """Record the pid and settled status to report."""
         self.pid = pid
-        self.settled_exit_code: int | None = None
+        self.settled_exit_code = settled_exit_code
         self.failure: BaseException | None = None
 
 
