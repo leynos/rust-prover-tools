@@ -292,8 +292,13 @@ def test_an_unregistered_banner_becomes_typed_evidence() -> None:
     assert "0.68.0" in classification.detail
 
 
-def test_a_stopped_harness_keeps_the_verdict_it_already_reported() -> None:
-    """A timeout outranks the status, but not an observed proof verdict."""
+def test_a_stopped_harness_does_not_claim_an_unparsed_verdict() -> None:
+    """A timeout reports its own status and leaves the verdict unknown.
+
+    Kani escapes nothing inside a description, so a live verdict can be prose.
+    The verdict is therefore attributed only from a parsed log, and a stopped
+    attempt reports `UNKNOWN` rather than a claim the supervisor cannot check.
+    """
     identity = "harnesses::verified"
     evidence = _evidence(identity, stop=StopReason.TIMEOUT, exit_code=None)
     adapter = KaniAdapter(version="0.67.0")
@@ -301,7 +306,7 @@ def test_a_stopped_harness_keeps_the_verdict_it_already_reported() -> None:
     classification = adapter.classify(evidence, _observer(identity))
 
     assert classification.status is ExecutionStatus.TIMED_OUT
-    assert classification.proof_verdict is ProofVerdict.PASSED
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
 
 def test_a_nonzero_exit_with_no_output_is_not_a_selection_diagnosis() -> None:
@@ -872,38 +877,6 @@ def test_a_description_ending_in_a_quote_still_hides_its_verdict() -> None:
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
 
-def test_a_genuine_verdict_after_a_description_is_kept() -> None:
-    """A real verdict is not lost merely because a description preceded it.
-
-    The line after a description is held until the next line shows it was not
-    continuation content; a genuine verdict followed by a report boundary is
-    committed, so a stopped attempt still reports the verdict it saw.
-    """
-    log = _log("verified", "harnesses::verified")
-    description = next(
-        index for index, line in enumerate(log) if "Description:" in line
-    )
-    log[description : description + 1] = [
-        '\t - Description: "first',
-        'last"',
-    ]
-    verdict = next(
-        index for index, line in enumerate(log) if line.startswith("VERIFICATION:-")
-    )
-    observer = _observed_log(log[: verdict + 1])
-    assert observer.facts.verdicts == (("harnesses::verified", "SUCCESSFUL"),)
-    evidence = _evidence(
-        "harnesses::verified",
-        stop=StopReason.TIMEOUT,
-        exit_code=None,
-        detail="timed out",
-    )
-
-    classification = KaniAdapter().classify(evidence, observer)
-
-    assert classification.proof_verdict is ProofVerdict.PASSED
-
-
 def test_an_ordinary_continuation_does_not_commit_a_description_verdict() -> None:
     """Description content followed by ordinary text stays description content.
 
@@ -938,18 +911,46 @@ def test_an_ordinary_continuation_does_not_commit_a_description_verdict() -> Non
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
 
-def test_a_frame_closed_by_a_real_field_keeps_the_genuine_verdict() -> None:
-    """A quoted verdict inside a description is dropped, the real one is kept."""
-    log = _log("verified", "harnesses::verified")
+def test_a_stopped_attempt_does_not_claim_a_verdict_from_prose() -> None:
+    """No live verdict is attributed, so description prose cannot fabricate one.
+
+    A description quoting `RESULTS:` and a verdict is ambiguous to any
+    line-level scan. A stopped attempt therefore reports `UNKNOWN` unless its
+    log parsed.
+    """
+    log = _log("verified", "harnesses::other")
     description = next(
         index for index, line in enumerate(log) if "Description:" in line
     )
     log[description : description + 1] = [
-        '\t - Description: "first embedded',
-        "VERIFICATION:- FAILED",
+        '\t - Description: "first',
+        "RESULTS:",
+        "VERIFICATION:- SUCCESSFUL",
+        "ordinary continuation",
         'last"',
-        "\t - Location: src/x.rs:1:1 in function harnesses::verified",
     ]
-    observer = _observed_log(log)
+    verdicts = [
+        index for index, line in enumerate(log) if line.startswith("VERIFICATION:-")
+    ]
+    observer = _observed_log(log[: verdicts[1]])
+    assert observer.facts.verdicts == ()
+    evidence = _evidence(
+        "harnesses::other",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+        detail="timed out",
+    )
 
-    assert observer.facts.verdicts == (("harnesses::verified", "SUCCESSFUL"),)
+    classification = KaniAdapter().classify(evidence, observer)
+
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_complete_log_still_supplies_its_verdict() -> None:
+    """The parser, not the live scan, attributes a genuine verdict."""
+    observer = _observer("harnesses::verified")
+
+    classification = KaniAdapter().classify(_evidence("harnesses::verified"), observer)
+
+    assert classification.status is ExecutionStatus.PASSED
+    assert classification.proof_verdict is ProofVerdict.PASSED

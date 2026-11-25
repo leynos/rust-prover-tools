@@ -22,7 +22,6 @@ from rust_prover_tools.kani_log import (
     HARNESS_START,
     LIST_WRITTEN,
     NOISE_PREFIXES,
-    VERIFICATION,
     KaniLog,
     KaniLogError,
     parse_kani_log_lines,
@@ -89,7 +88,8 @@ class KaniLiveFacts:
     selection_records : tuple[str, ...]
         Harness names from ``Checking harness`` lines, in arrival order.
     verdicts : tuple[tuple[str, str], ...]
-        ``(harness, verdict)`` pairs from ``VERIFICATION:`` lines.
+        Always empty in the live facts: a verdict is attributed only from the
+        parsed log, because description prose can contain a verdict line.
     last_progress : str | None
         Last line that carried report structure, bounded by the caller.
     completed : bool
@@ -120,7 +120,8 @@ class KaniObserver:
     selection_records : list[str]
         Harness names from ``Checking harness`` lines, in arrival order.
     verdicts : list[tuple[str, str]]
-        ``(harness, verdict)`` pairs, in arrival order.
+        Never appended to: see the class note. Kept so ``facts`` has a stable
+        shape for callers that read it.
     last_progress : str | None
         Last line that carried report structure.
     completed : bool
@@ -217,8 +218,6 @@ class KaniObserver:
             return _Candidate("banner", match["version"], text)
         if (match := HARNESS_START.match(text)) is not None:
             return _Candidate("selection", match["name"], text)
-        if (match := VERIFICATION.match(text)) is not None:
-            return _Candidate("verdict", match["verdict"], text)
         if NO_HARNESS_MATCH.match(text) is not None:
             return _Candidate("no-match", None, text)
         if COMPLETE.match(text) is not None or text.startswith(LIST_WRITTEN):
@@ -226,19 +225,18 @@ class KaniObserver:
         return None
 
     def _commit(self, candidate: _Candidate) -> None:
-        """Record one fact this scanner read from a report line."""
+        """Record one fact this scanner read from a report line.
+
+        A verdict is never attributed live. Kani escapes nothing inside a
+        description, so a resolved line can still be prose; the attempt's
+        parsed log supplies the verdict instead.
+        """
         if candidate.kind == "banner":
             if self.banner_version is None:
                 self.banner_version = candidate.value
         elif candidate.kind == "selection":
             self._current = candidate.value
             self._record(self.selection_records, typ.cast("str", candidate.value))
-        elif candidate.kind == "verdict":
-            if self._current is not None:
-                self._record(
-                    self.verdicts,
-                    (self._current, typ.cast("str", candidate.value)),
-                )
         elif candidate.kind == "no-match":
             self.no_match_reason = candidate.text
         elif candidate.kind == "complete":
