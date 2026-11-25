@@ -163,6 +163,16 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-25 04:30Z) Eighth assessment round. CodeRabbit kept the
+  description-frame finding open because an ordinary continuation still
+  committed a held verdict. The frame now closes only at a field, a results or
+  summary marker, or a fresh check entry, none of which can be description
+  content; report-shaped lines inside it are ignored. Regressions cover an
+  embedded quote followed by a verdict and plain text (stopped before the
+  genuine verdict, so `UNKNOWN`) and a quoted verdict that is dropped while the
+  real one after `Location:` is kept. `make all` passes with 3,294 tests and 6
+  skips.
+
 - [x] (2026-11-25 01:15Z) Live fixture rerun at `e85255e` after the
   description-frame and symlink repairs: 2 passed in 757.79 s. Production code
   is unchanged since `bb57fd8`; the only later commit is this record.
