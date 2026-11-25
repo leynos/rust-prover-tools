@@ -5,8 +5,11 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS (main's #264 parser adopted; this branch's supervision
-layered on it; deterministic gates green)
+Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
+is layered on it. The final deterministic gate reports 3,303 passed and 6
+skipped at code head `d9ddcd8`; `make all` counts collected outcomes, so a
+passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
+last passed at `19d3ac8` in 848.91 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -162,6 +165,20 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-25 21:30Z) Tenth assessment round, from the pre-merge checks.
+  The command model no longer exposes Cuprum types: `LaunchEnvironment` is a
+  neutral replace-or-overlay mapping translated only by `command_for`. A
+  relayed output-callback failure is recorded on the recorder, stops the run,
+  and outranks a settled status even after a timeout or cancellation, with
+  launcher-level and supervisor-level regressions. Report publication is an
+  injected `ReportWriter`, checked by a recording double. Cargo metadata is
+  read through an injected provider, only when discovery or a test target needs
+  it. Removed the duplicated schema validators left by the earlier split, added
+  the requested Hypothesis properties for the line splitter, bounded text,
+  fitted records and the streaming source, and updated the developer guide,
+  roadmap and this plan's delivered state. `make all` passes with 3,303 tests
+  and 6 skips.
 
 - [x] (2026-11-25 12:20Z) Live fixture rerun at `19d3ac8` after removing live
   verdict attribution: 2 passed in 848.91 s. Production code is unchanged since

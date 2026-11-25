@@ -550,6 +550,40 @@ names an unregistered release is retained as a typed error rather than escaping
 the line hook. An adapter for another prover must not reimplement timing,
 measurement, evidence, or accounting.
 
+The Kani adapter lives in the prover-neutral supervision package, as
+`supervision/kani.py` and `supervision/kani_outcome.py`, because the adapter
+seam is two methods. A second prover adds a sibling module rather than a new
+package. Its observer (`supervision/kani_observer.py`, `KaniObserver` and
+`KaniLiveFacts`) records live selection and progress facts and spools the
+report for the parser. It never attributes a proof verdict: Kani escapes
+nothing inside a check description, so description prose can contain a
+verdict-shaped line, and only the parser has the lookahead that decides where
+the description ended. A stopped attempt whose log did not parse therefore
+reports `UNKNOWN`.
+
+## Injected dependencies and their fallbacks
+
+`RunEnvironment` and `KaniHarnessDependencies` are composition bags by design:
+each field is one seam from `supervision/protocols.py`, and a consumer replaces
+only the seam it needs. They deliberately mix process, time, inspection, and
+evidence concerns because they are constructed once at the composition root and
+passed through unchanged; splitting them would make every constructor call
+repeat unrelated wiring.
+
+Two convenience fallbacks sit at that boundary:
+
+- `KaniHarnessDependencies.metadata` defaults to `cargo_metadata`, which runs
+  `cargo metadata --no-deps --format-version 1` in the repository root. A
+  caller that has already read the metadata, or a test, supplies another
+  callable; preparation itself never calls Cargo directly.
+- `LegacyRoute.environment` and `SnapshotRoute.environment` default to the
+  process environment, read as `os.environ` when qualification runs. A
+  `SnapshotRoute` whose `cwd` is `None` uses `Path.cwd()` for its proof working
+  directory. Both defaults are read once at qualification, which is why the
+  supervise path freezes the resulting environment with `EnvMode.REPLACE`. The
+  CLI leaves them at their defaults; a library caller that needs an explicit
+  environment passes it on the route.
+
 ## Test doubles
 
 The deterministic suite uses:

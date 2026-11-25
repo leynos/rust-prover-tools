@@ -998,15 +998,19 @@ single-invocation execution: which exact harness is running, how much memory
 and time it is using, and why it stopped. Its modules divide that question by
 responsibility rather than by prover:
 
-- `rust_prover_tools.kani_log` is the shared 0.67.0 grammar, incremental
-  reader, report reconciliation, and exact-version registry. Its grammar,
-  model, reader, and corpus derive from Combobulate at commit `9dd6e3c`; see
-  `rust_prover_tools/kani_log/ATTRIBUTION.md`. `parse` is a thin wrapper over
-  `KaniLogReader` so the live and offline paths cannot drift.
+- `rust_prover_tools.kani_log` is the shared 0.67.0 grammar, report model,
+  reader, and reconciliation. Its grammar, model, reader, and corpus derive
+  from Combobulate at commit `9dd6e3c`; see
+  `rust_prover_tools/kani_log/ATTRIBUTION.md`. `parse_kani_log` parses whole
+  text and `parse_kani_log_lines` drives the same engine from a bounded line
+  source, so the live and offline paths cannot drift.
 - `rust_prover_tools.kani_inventory` resolves Cargo packages and targets,
   scans Rust sources lexically for proofs, follows module declarations and
   `#[path]`, and reads or writes the strict version-1 inventory document.
   `select` chooses exact harnesses and composes the verifier argv.
+- `rust_prover_tools.kani_routes` defines `LegacyRoute`, `SnapshotRoute`, and
+  the `PreparedRoute` seam. Every harness command is derived from one prepared
+  route, so identity probes and the environment are not rebuilt per harness.
 - `rust_prover_tools.kani_qualification` validates one release installation,
   builds its child environment, probes the compiler and verifier identities
   once, and derives every harness command from that base. The legacy
@@ -1014,17 +1018,30 @@ responsibility rather than by prover:
 - `rust_prover_tools.kani_snapshot.run` exposes `prepare_snapshot_proof` and
   `QualifiedSnapshotProof` so a supervised snapshot run reads one activation
   and builds one proof environment.
-- `rust_prover_tools.supervision` is prover-neutral. It owns the typed models,
-  the validated policy, the Linux procfs and cgroup readers, flushed human and
-  JSONL sinks, the strict schema readers, multiset accounting, the async Cuprum
-  launcher, the monitor-driven attempt supervisor, and the run orchestrator.
-- `rust_prover_tools.supervision.kani` is the Kani adapter. It feeds the shared
-  reader as lines arrive and classifies the settled attempt under the
-  documented precedence.
+- `rust_prover_tools.supervision` is prover-neutral. Its protocols module
+  names every injectable seam: clocks, launchers, resource probes, cgroup
+  readers, interrupt sources, sleepers, and evidence sinks. `RunEnvironment`
+  binds them for one run, and `rust_prover_tools.kani_harness_models.py` holds
+  the options and dependency overrides a consumer sets. The tests substitute
+  each through those protocols rather than patching the runner.
+- `rust_prover_tools.supervision.sinks` owns the human and JSONL sinks;
+  `schema_fields`, `schema_values`, `schema_records`, and `schema` own the
+  strict JSONL and report contracts; `report` publishes the final document.
+- `rust_prover_tools.supervision.kani` and
+  `rust_prover_tools.supervision.kani_outcome` are the Kani adapter and its
+  outcome construction. They live in the supervision package because the
+  adapter seam is small and prover-neutral; a second prover adds a sibling
+  module rather than another package.
+- `rust_prover_tools.supervision.kani_observer` is `KaniObserver` and
+  `KaniLiveFacts`. The observer records live selection and progress facts and
+  spools the report; it never attributes a proof verdict, because description
+  prose can contain a verdict-shaped line. The parse supplies the verdict.
 - `rust_prover_tools.kani_harness_run` is the composition root. It loads or
   discovers the inventory, selects exact identities, qualifies one route,
   composes and validates each argv, runs the supervisor, and returns a
   `KaniHarnessRun`.
+- `rust_prover_tools.kani_diagnostics` opens the human, JSONL, and report
+  destinations and validates that they are distinct.
 - `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
   `kani harnesses list` and `kani harnesses run`.
 
