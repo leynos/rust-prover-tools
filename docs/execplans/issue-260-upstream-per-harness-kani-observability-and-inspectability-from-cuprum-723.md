@@ -163,6 +163,10 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-25 05:10Z) Live fixture rerun at `5052c46` after the structural
+  frame rule: 2 passed in 706.32 s. Production code is unchanged since
+  `79fbb6c`; the only later commit is this record.
+
 - [x] (2026-11-25 04:30Z) Eighth assessment round. CodeRabbit kept the
   description-frame finding open because an ordinary continuation still
   committed a held verdict. The frame now closes only at a field, a results or
