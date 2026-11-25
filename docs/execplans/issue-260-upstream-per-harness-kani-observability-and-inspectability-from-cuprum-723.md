@@ -163,6 +163,10 @@ Plain-language terms used in this plan:
 
 ## Progress
 
+- [x] (2026-11-25 12:20Z) Live fixture rerun at `19d3ac8` after removing live
+  verdict attribution: 2 passed in 848.91 s. Production code is unchanged since
+  `f5ad593`; the only later commit is this record.
+
 - [x] (2026-11-25 11:30Z) Ninth assessment round. CodeRabbit showed that
   `RESULTS:` is also possible description content, so no line-level live rule
   is sound. Live facts no longer carry a verdict at all: a stopped attempt
