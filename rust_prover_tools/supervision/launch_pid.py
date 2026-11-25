@@ -25,6 +25,8 @@ class PidRecorder:
         """Create a recorder that has seen no event."""
         self.pid: int | None = None
         self.settled_exit_code: int | None = None
+        #: First output-callback failure, which outranks a settled status.
+        self.failure: BaseException | None = None
         self._closing: list[int] = []
 
     def own(self, *descriptors: int) -> None:

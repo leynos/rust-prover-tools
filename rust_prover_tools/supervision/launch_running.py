@@ -37,6 +37,11 @@ class PidSource(typ.Protocol):
         """The status Cuprum settled with, or `None` when it reported none."""
         ...
 
+    @property
+    def failure(self) -> BaseException | None:
+        """The first output-callback failure, if one was relayed."""
+        ...
+
 
 class RunningHarness:
     """One harness invocation that is already running or starting.
@@ -145,6 +150,10 @@ class RunningHarness:
         """Return the evidence a finished launch task left behind."""
         if self._result is not None:
             return self._result
+        if self._recorder.failure is not None:
+            # A lost evidence write outranks whatever ended the child: the
+            # attempt must not be reported from partial facts.
+            raise self._recorder.failure
         if self._task.cancelled():
             # The supervisor's own stop sent the signal, so no self-inflicted
             # number is recorded as if the child had terminated itself.

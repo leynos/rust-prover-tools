@@ -63,6 +63,7 @@ from rust_prover_tools.supervision.launcher import (
     CommandBuilder,
     CuprumHarnessLauncher,
     LaunchCommand,
+    LaunchEnvironment,
     RunningHarness,
 )
 from rust_prover_tools.supervision.memory_sink import MemorySink
@@ -165,6 +166,7 @@ __all__ = [
     "InventoryDrift",
     "JsonlSink",
     "LaunchCommand",
+    "LaunchEnvironment",
     "LaunchResult",
     "LineObserver",
     "Measurement",

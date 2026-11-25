@@ -46,6 +46,7 @@ from cuprum.sh.stdio import StdioTarget
 from rust_prover_tools.supervision.launch_command import (
     CommandBuilder,
     LaunchCommand,
+    LaunchEnvironment,
 )
 from rust_prover_tools.supervision.launch_pid import PidRecorder
 from rust_prover_tools.supervision.launch_running import (
@@ -71,6 +72,7 @@ __all__ = (
     "CommandBuilder",
     "CuprumHarnessLauncher",
     "LaunchCommand",
+    "LaunchEnvironment",
     "PidSource",
     "RunningHarness",
 )
@@ -152,31 +154,59 @@ class CuprumHarnessLauncher:
         """Run one invocation on its own task, scoping the pid observer."""
         started = self._monotonic()
         drains: list[PipeDrain] = []
-        # A drain callback failing is the supervisor's failure, not the event
-        # loop's: record the first one so it can be raised after the child is
-        # joined rather than letting the loop log it while the run continues.
-        failures: list[BaseException] = []
+        run: asyncio.Task[cuprum.CommandResult] | None = None
 
         def relay(error: BaseException) -> None:
-            """Record the first callback failure."""
-            if not failures:
-                failures.append(error)
+            """Record the first callback failure and stop the child.
+
+            The failure is kept on the recorder, which survives an outer
+            cancellation, so neither a timeout nor a cancellation can hide a
+            lost evidence write.
+            """
+            if recorder.failure is not None:
+                return
+            recorder.failure = error
+            if run is not None and not run.done():
+                run.cancel()
 
         try:
             cmd, context = command_for(build(spec))
             output, drains = self._streams(recorder, on_line, started, relay)
             with cuprum.observe(recorder):
-                result = await cmd.run(output=output, context=context)
+                run = asyncio.ensure_future(cmd.run(output=output, context=context))
+                result = await self._await_run(run, recorder)
             await settle_drains(drains)
         except (OSError, cuprum.UnknownProgramError) as error:
+            # A relayed callback failure is the primary failure even though it
+            # arrives as the same OSError a launch problem would.
+            if recorder.failure is not None:
+                raise recorder.failure from error
             return LaunchResult(launch_error=f"{type(error).__name__}: {error}")
         finally:
             recorder.close_parent_ends()
             for drain in drains:
                 drain.close()
-        if failures:
-            raise failures[0]
+        if recorder.failure is not None:
+            raise recorder.failure
         return exit_status(result.exit_code)
+
+    @staticmethod
+    async def _await_run(
+        run: asyncio.Task[cuprum.CommandResult],
+        recorder: PidRecorder,
+    ) -> cuprum.CommandResult:
+        """Await the child, surfacing a relayed callback failure.
+
+        Cancelling the run task for a relayed failure is an internal stop; an
+        outer cancellation with no relayed failure is the supervisor's and is
+        re-raised for the handle to settle.
+        """
+        try:
+            return await run
+        except asyncio.CancelledError:
+            if recorder.failure is not None:
+                raise recorder.failure from None
+            raise
 
     def _streams(
         self,

@@ -44,7 +44,7 @@ def _config(on_line: cabc.Callable[[object], None]) -> DrainConfig:
     )
 
 
-def _drain_with_trailing_text(on_line: cabc.Callable[[object], None]) -> int:
+def _drain_with_trailing_text() -> int:
     """Create a pipe holding one unterminated line and return its read end."""
     read_fd, write_fd = os.pipe()
     os.write(write_fd, b"trailing text")
@@ -67,7 +67,7 @@ def test_a_failing_callback_still_releases_the_descriptor() -> None:
         msg = "the spool is full"
         raise OSError(msg)
 
-    descriptor = _drain_with_trailing_text(refuse)
+    descriptor = _drain_with_trailing_text()
 
     async def scenario() -> PipeDrain:
         """Let EOF deliver the unterminated text, then inspect the drain."""

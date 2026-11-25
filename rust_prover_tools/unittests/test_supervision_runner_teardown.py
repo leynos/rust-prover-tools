@@ -61,6 +61,7 @@ if typ.TYPE_CHECKING:
         AttemptEvidence,
         LaunchCommand,
         LineObserver,
+        RunReport,
     )
 
 
@@ -150,6 +151,7 @@ class _FixedPid:
 
     pid: int | None = 4321
     settled_exit_code: int | None = None
+    failure: BaseException | None = None
 
 
 def test_cancelling_one_waiter_does_not_cancel_the_launch() -> None:
@@ -184,6 +186,7 @@ class _SettlingPid:
 
     pid: int | None = 4321
     settled_exit_code: int | None = None
+    failure: BaseException | None = None
 
 
 def test_a_cancelled_waiter_does_not_report_an_unsettled_stop() -> None:
@@ -745,3 +748,144 @@ class _FailsOnRunFinishWith:
 
     def flush(self) -> None:
         """Do nothing; writes fail synchronously."""
+
+
+def test_a_live_callback_failure_is_raised_and_the_report_validates(
+    tmp_path: Path,
+) -> None:
+    """A real launcher's evidence failure reaches the caller and still reports.
+
+    The supervisor sees the failure as a monitor fault: it stops and joins the
+    attempt, accounts for the unrecorded harnesses, publishes a schema-valid
+    report, then re-raises the original failure.
+    """
+    import asyncio
+    import sys
+
+    from rust_prover_tools.supervision.clock import AsyncSleeper, SystemClock
+    from rust_prover_tools.supervision.launch_command import LaunchCommand
+    from rust_prover_tools.supervision.launcher import CuprumHarnessLauncher
+    from rust_prover_tools.supervision.run_environment import RunEnvironment
+    from rust_prover_tools.unittests.supervision_doubles import (
+        ScriptedCgroup as _ScriptedCgroup,
+    )
+    from rust_prover_tools.unittests.supervision_doubles import (
+        ScriptedProbe as _ScriptedProbe,
+    )
+    from rust_prover_tools.unittests.supervision_runner_support import (
+        NullObserver,
+    )
+
+    script = tmp_path / "blocking.py"
+    script.write_text(
+        "import sys, time\\n"
+        "sys.stdout.write('first\\n')\\n"
+        "sys.stdout.flush()\\n"
+        "time.sleep(120)\\n",
+        encoding="utf-8",
+    )
+
+    def build(identity: HarnessSpec) -> LaunchCommand:
+        """Run the blocking script from the test's directory."""
+        del identity
+        return LaunchCommand((sys.executable, "-I", str(script)), cwd=tmp_path)
+
+    def refuse(item: object) -> None:
+        """Fail as a full spool would."""
+        del item
+        msg = "the spool is full"
+        raise OSError(msg)
+
+    class _FailingAdapter:
+        """An adapter whose observer forwards every line to the failing hook."""
+
+        def observer(self, spec: HarnessSpec) -> NullObserver:
+            """Return an observer that invokes the failing hook per line."""
+            del spec
+            observer = NullObserver()
+            original = observer.observe
+
+            def observe(line: object) -> None:
+                """Forward each line to the failing hook."""
+                refuse(line)
+                original(typ.cast("typ.Any", line))
+
+            observer.observe = observe  # type: ignore[method-assign]
+            return observer
+
+        def classify(
+            self,
+            evidence: AttemptEvidence,
+            observer: LineObserver,
+        ) -> HarnessClassification:
+            """Never reached: the supervisor faults before classification."""
+            del evidence, observer
+            return HarnessClassification(
+                status=ExecutionStatus.PASSED,
+                proof_verdict=ProofVerdict.PASSED,
+                detail="",
+            )
+
+    clock = SystemClock()
+    launcher = CuprumHarnessLauncher(
+        clock=clock.now,
+        monotonic=clock.monotonic,
+    )
+    report_path = tmp_path / "report.json"
+    environment = RunEnvironment(
+        clock=clock,
+        launcher=launcher,
+        probe=_ScriptedProbe(),
+        cgroup=_ScriptedCgroup(),
+        diagnostics=Diagnostics(jsonl=MemorySink()),
+        build=build,
+        adapter=typ.cast("typ.Any", _FailingAdapter()),
+        sleeper=AsyncSleeper(),
+    )
+    config = dc.replace(
+        _config(
+            timeout_seconds=30.0,
+            sample_interval_seconds=30.0,
+            heartbeat_interval_seconds=30.0,
+        ),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+
+    with pytest.raises(OSError, match="the spool is full"):
+        asyncio.run(run_supervised((spec(),), config, environment))
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert len(results) == 1
+    assert results[0]["harness"] == spec().harness
+    assert report_path.exists()
+
+
+def test_the_report_writer_is_injected_without_touching_the_filesystem(
+    tmp_path: Path,
+) -> None:
+    """A recording writer receives the report; no file is created."""
+    import asyncio as _asyncio
+
+    recorded: list[tuple[Path, RunReport]] = []
+
+    def writer(path: Path, report: RunReport) -> None:
+        """Record the publication instead of writing."""
+        recorded.append((path, report))
+
+    clock = VirtualClock()
+    environment = dc.replace(
+        _environment(ScriptedLauncher(clock=clock), clock),
+        report_writer=writer,
+    )
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+
+    report = _asyncio.run(run_supervised((spec(),), config, environment))
+
+    assert recorded == [(report_path, report)]
+    assert not report_path.exists()

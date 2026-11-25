@@ -278,3 +278,100 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
     assert forwarded[0].startswith("x")
     assert "truncated" in forwarded[0]
     assert forwarded[-1] == "after"
+
+
+def _failing_callback_script(tmp_path: Path) -> Path:
+    """Write a child that prints two lines and then blocks."""
+    script = tmp_path / "blocking.py"
+    pid_file = tmp_path / "child.pid"
+    script.write_text(
+        "import os, sys, time\n"
+        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "sys.stdout.write('first\\n')\n"
+        "sys.stdout.flush()\n"
+        "sys.stdout.write('second\\n')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def test_an_output_callback_failure_stops_and_joins_the_child(
+    tmp_path: Path,
+) -> None:
+    """A lost evidence write stops the child and is raised to the caller."""
+    import asyncio
+
+    script = _failing_callback_script(tmp_path)
+    delivered: list[str] = []
+
+    def build(identity: object) -> LaunchCommand:
+        """Run the blocking script through the real launcher."""
+        del identity
+        return LaunchCommand((sys.executable, "-I", str(script)), cwd=tmp_path)
+
+    def refuse(item: object) -> None:
+        """Record the delivery and fail as a full spool would."""
+        delivered.append(typ.cast("typ.Any", item).text)
+        msg = "the spool is full"
+        raise OSError(msg)
+
+    async def scenario() -> None:
+        """Start the child, wait for its failure, and probe the group."""
+        clock = SystemClock()
+        launcher = CuprumHarnessLauncher(
+            clock=clock.now,
+            monotonic=clock.monotonic,
+            max_line_bytes=8 * 1024,
+        )
+        running = launcher.start(spec(), build, refuse)
+        with pytest.raises(OSError, match="the spool is full"):
+            await running.wait()
+        pid = int((tmp_path / "child.pid").read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    asyncio.run(scenario())
+
+    assert delivered == ["first"]
+
+
+def test_a_cancelled_run_does_not_lose_a_callback_failure(
+    tmp_path: Path,
+) -> None:
+    """A supervisor stop after a callback failure still reports the failure."""
+    import asyncio
+
+    script = _failing_callback_script(tmp_path)
+    failure_seen = asyncio.Event()
+    ready = asyncio.Event()
+
+    def build(identity: object) -> LaunchCommand:
+        """Run the blocking script through the real launcher."""
+        del identity
+        return LaunchCommand((sys.executable, "-I", str(script)), cwd=tmp_path)
+
+    def refuse(item: object) -> None:
+        """Fail on the first delivered line."""
+        del item
+        failure_seen.set()
+        msg = "the spool is full"
+        raise OSError(msg)
+
+    async def scenario() -> None:
+        """Stop the run as soon as the callback has failed."""
+        clock = SystemClock()
+        launcher = CuprumHarnessLauncher(
+            clock=clock.now,
+            monotonic=clock.monotonic,
+            max_line_bytes=8 * 1024,
+        )
+        running = launcher.start(spec(), build, refuse)
+        ready.set()
+        await asyncio.wait_for(failure_seen.wait(), timeout=5)
+        running.stop(StopReason.INTERRUPTED)
+        with pytest.raises(OSError, match="the spool is full"):
+            await running.settle()
+
+    asyncio.run(scenario())

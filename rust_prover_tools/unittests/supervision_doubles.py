@@ -245,6 +245,7 @@ class _PidRecorder:
         """Record the pid to report."""
         self.pid = pid
         self.settled_exit_code: int | None = None
+        self.failure: BaseException | None = None
 
 
 @dc.dataclass(slots=True)

@@ -15,6 +15,8 @@ import os
 import typing as typ
 from pathlib import Path
 
+from cuprum.context import EnvMode
+
 from rust_prover_tools.kani_cli_grammar import KaniGrammar, grammar_for
 from rust_prover_tools.kani_inventory import InventoryHarness, compose_arguments
 from rust_prover_tools.kani_qualification import qualify_kani_installation
@@ -31,11 +33,12 @@ from rust_prover_tools.kani_snapshot.run import (
     SnapshotOutput,
     prepare_snapshot_proof,
 )
-from rust_prover_tools.supervision import LaunchCommand
+from rust_prover_tools.supervision import LaunchCommand, LaunchEnvironment
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from rust_prover_tools.commands import CommandSpec
     from rust_prover_tools.kani_snapshot.install_model import InstallHooks
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
@@ -131,6 +134,17 @@ def route_working_directory(route: KaniRoute) -> Path:
     return Path.cwd() if route.cwd is None else route.cwd
 
 
+def _launch_environment(command: CommandSpec) -> LaunchEnvironment:
+    """Render one command's environment without Cuprum's types."""
+    values: dict[str, str | None] = {}
+    for name, value in (command.env or {}).items():
+        values[name] = value if isinstance(value, str) else None
+    return LaunchEnvironment(
+        values=values,
+        replace=command.env_mode is EnvMode.REPLACE,
+    )
+
+
 def prepare_route(route: KaniRoute) -> PreparedRoute:
     """Qualify the selected route once and return its per-harness builder."""
     if isinstance(route, LegacyRoute):
@@ -155,8 +169,7 @@ def _prepare_legacy(route: LegacyRoute) -> PreparedRoute:
         return LaunchCommand(
             argv=command.argv,
             cwd=command.cwd,
-            env=command.env,
-            env_mode=command.env_mode,
+            env=_launch_environment(command),
         )
 
     return PreparedRoute(grammar=grammar, kind="legacy", build=build)
@@ -188,8 +201,7 @@ def _prepare_snapshot(route: SnapshotRoute) -> PreparedRoute:
         return LaunchCommand(
             argv=command.argv,
             cwd=command.cwd,
-            env=command.env,
-            env_mode=command.env_mode,
+            env=_launch_environment(command),
         )
 
     return PreparedRoute(grammar=grammar, kind="snapshot", build=build)

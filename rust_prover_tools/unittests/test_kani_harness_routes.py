@@ -277,8 +277,6 @@ def test_the_supervised_legacy_build_freezes_replacement_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A derived legacy command replaces, rather than overlays, its environment."""
-    from cuprum.context import EnvMode
-
     from rust_prover_tools.kani_inventory import InventoryHarness
     from rust_prover_tools.kani_routes import LegacyRoute, prepare_route
 
@@ -298,7 +296,8 @@ def test_the_supervised_legacy_build_freezes_replacement_environment(
 
     command = prepared.build(harness)
 
-    assert command.env_mode is EnvMode.REPLACE
+    assert command.env is not None
+    assert command.env.replace is True
 
 
 def test_identity_probes_preserve_the_prepared_environment_mode(

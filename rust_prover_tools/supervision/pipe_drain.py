@@ -22,6 +22,7 @@ from cuprum import (
     ProjectSettings,
     sh,
 )
+from cuprum.context import UNSET, EnvMode
 
 from rust_prover_tools.supervision.models import OutputLine
 from rust_prover_tools.supervision.stream_lines import BoundedLineSplitter
@@ -180,9 +181,17 @@ def command_for(command: LaunchCommand) -> tuple[typ.Any, ExecutionContext]:
     )
     catalogue = ProgramCatalogue(projects=(project,))
     cmd = sh.make(program, catalogue=catalogue)(*command.argv[1:])
+    env = None
+    env_mode = EnvMode.INHERIT
+    if command.env is not None:
+        env = {
+            name: UNSET if value is None else value
+            for name, value in command.env.values.items()
+        }
+        env_mode = EnvMode.REPLACE if command.env.replace else EnvMode.OVERLAY
     context = ExecutionContext(
-        env=command.env,
-        env_mode=command.env_mode,
+        env=env,
+        env_mode=env_mode,
         cwd=command.cwd,
         process_group=ProcessGroupPolicy.OWN_GROUP,
     )
