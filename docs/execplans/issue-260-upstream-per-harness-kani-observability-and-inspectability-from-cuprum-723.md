@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,316 passed and 6
-skipped at code head `bf1a546`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,321 passed and 6
+skipped at code head `49fcabd`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passes at this candidate: 2 passed in 661.92 s at `bf1a546`.
+passes at this candidate: 2 passed in 1,103.94 s at `49fcabd`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -573,10 +573,15 @@ Plain-language terms used in this plan:
   `kani_diagnostics.open_diagnostics` for library callers and by the CLI's
   `supervision_policy`; `DiagnosticSinks` construction is pure. Settled exit
   evidence after a stop, report-writer failure during cancellation and during a
-  monitor fault, and escaped cgroup mount roots each have a regression.
-  `make check-fmt`, `make all` (3,316 passed, 6 skipped), `make markdownlint`,
-  and `make nixie` pass at `bf1a546`; the opt-in live Kani 0.67.0 fixture
-  passes at the same head: 2 passed in 661.92 s.
+  monitor fault, and escaped cgroup mount roots each have a regression. A
+  launcher that raises now records the supervisor's own stop before settling,
+  so a failed evidence callback reports the attempt as interrupted rather than
+  passed; the witness runs the real Kani adapter over a failing live observer,
+  and generated properties cover the live observer's no-verdict and bounded
+  contracts and the short-option cluster scan. `make check-fmt`, `make all`
+  (3,321 passed, 6 skipped), `make markdownlint`, and `make nixie` pass at
+  `49fcabd`; the opt-in live Kani 0.67.0 fixture passes at the same head: 2
+  passed in 1,103.94 s.
 
 ## Surprises & discoveries
 
