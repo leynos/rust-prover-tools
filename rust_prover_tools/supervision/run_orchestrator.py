@@ -37,7 +37,6 @@ from rust_prover_tools.supervision.models import (
     HarnessSpec,
     StopReason,
 )
-from rust_prover_tools.supervision.report import write_report
 from rust_prover_tools.supervision.run_finalize import (
     CANCELLED_DETAIL,
     INTERRUPTED_DETAIL,
@@ -342,4 +341,4 @@ class SupervisedRun:
         """Write the JSON report when a destination is configured."""
         path = self.config.sinks.report_path
         if path is not None:
-            write_report(path, report)
+            self.environment.report_writer(path, report)

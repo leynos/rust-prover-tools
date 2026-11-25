@@ -11,6 +11,8 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
+from rust_prover_tools.supervision.report import write_report
+
 if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.launcher import CommandBuilder
     from rust_prover_tools.supervision.protocols import (
@@ -19,6 +21,7 @@ if typ.TYPE_CHECKING:
         HarnessAdapter,
         HarnessLauncher,
         InterruptSource,
+        ReportWriter,
         ResourceProbe,
         Sleeper,
     )
@@ -52,6 +55,9 @@ class RunEnvironment:
     interrupts : InterruptSource | None
         Signal source, when the caller installs one. The library installs
         none of its own.
+    report_writer : ReportWriter
+        Publishes the final report. Injected so a test can record the report
+        without touching the filesystem.
     """
 
     clock: Clock
@@ -63,3 +69,4 @@ class RunEnvironment:
     adapter: HarnessAdapter
     sleeper: Sleeper
     interrupts: InterruptSource | None = None
+    report_writer: ReportWriter = write_report

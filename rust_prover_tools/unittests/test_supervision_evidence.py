@@ -9,6 +9,8 @@ import typing as typ
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.supervision import (
     MIN_LINE_BYTES,
@@ -908,3 +910,38 @@ def test_null_output_text_is_refused_and_empty_text_is_kept() -> None:
     empty_record["text"] = ""
     (decoded,) = decode_jsonl(json.dumps(empty_record))
     assert decoded["text"] == ""
+
+
+@given(st.text(max_size=200), st.integers(min_value=64, max_value=512))
+@settings(max_examples=50, deadline=None)
+def test_bounded_text_stays_within_its_encoded_limit(
+    text: str,
+    limit: int,
+) -> None:
+    """Arbitrary text is bounded by encoded bytes, and short text is kept."""
+    bounded = bounded_text(text, limit)
+
+    assert len(bounded.encode("utf-8")) <= limit
+    if len(text.encode("utf-8")) <= limit:
+        assert bounded == text
+
+
+@given(st.text(max_size=300), st.integers(min_value=MIN_LINE_BYTES, max_value=1024))
+@settings(max_examples=50, deadline=None)
+def test_fit_record_output_is_valid_json_within_its_limit(
+    text: str,
+    limit: int,
+) -> None:
+    """A record that does not fit is still serialized as valid bounded JSON."""
+    payload: dict[str, object] = {
+        "schema": 1,
+        "record": "output",
+        "run_id": "run-1",
+        "text": text,
+        "nested": {"description": text},
+    }
+
+    line = fit_record(payload, limit)
+
+    assert len(line.encode("utf-8")) <= limit
+    json.loads(line)

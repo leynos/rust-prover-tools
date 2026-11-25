@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from rust_prover_tools.supervision.stream_lines import BoundedLineSplitter
 
 
@@ -152,3 +155,26 @@ def test_a_valid_wide_line_stays_within_the_encoded_limit() -> None:
     (line,) = splitter.feed("é".encode() * 100 + b"\n")
 
     assert len(line.encode("utf-8")) <= 64
+
+
+@given(
+    st.lists(st.binary(min_size=0, max_size=48), max_size=8),
+    st.integers(min_value=64, max_value=256),
+)
+@settings(max_examples=50, deadline=None)
+def test_the_chunk_split_does_not_change_the_emitted_lines(
+    chunks: list[bytes],
+    limit: int,
+) -> None:
+    """Splitting the same bytes differently emits the same bounded lines."""
+    split = BoundedLineSplitter(max_line_bytes=limit)
+    emitted: list[str] = []
+    for chunk in chunks:
+        emitted.extend(split.feed(chunk))
+    emitted.extend(split.finish())
+
+    whole = BoundedLineSplitter(max_line_bytes=limit)
+    expected = [*whole.feed(b"".join(chunks)), *whole.finish()]
+
+    assert emitted == expected
+    assert all(len(line.encode("utf-8")) <= limit for line in emitted)

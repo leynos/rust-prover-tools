@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.kani_log import (
     KaniLogError,
@@ -159,3 +161,26 @@ def test_aggregate_lookahead_memory_is_bounded() -> None:
 
     with pytest.raises(KaniLogError, match="retention budget"):
         source.at(len(lines) - 1)
+
+
+@given(
+    st.lists(st.text(max_size=12), min_size=1, max_size=12),
+    st.integers(min_value=1, max_value=6),
+)
+@settings(max_examples=50, deadline=None)
+def test_reads_inside_the_window_succeed_and_released_lines_are_refused(
+    lines: list[str],
+    window: int,
+) -> None:
+    """A generated source reads its window, refuses behind it and beyond it."""
+    source = StreamingLines(iter(lines), max_window=window)
+
+    for index in range(min(len(lines), window)):
+        assert source.at(index) == lines[index]
+    assert source.buffered <= window
+
+    source.release(1)
+    with pytest.raises(KaniLogError, match="released"):
+        source.at(0)
+    with pytest.raises(KaniLogError, match="lookahead"):
+        source.at(window + 1)

@@ -20,6 +20,7 @@ if typ.TYPE_CHECKING:
     import asyncio
     import collections.abc as cabc
     import datetime as dt
+    from pathlib import Path
 
     from rust_prover_tools.supervision.attempt_state import AttemptEvidence
     from rust_prover_tools.supervision.launcher import LaunchCommand
@@ -31,7 +32,10 @@ if typ.TYPE_CHECKING:
         ResourceSample,
         StopReason,
     )
-    from rust_prover_tools.supervision.results import HarnessClassification
+    from rust_prover_tools.supervision.results import (
+        HarnessClassification,
+        RunReport,
+    )
 
 __all__ = (
     "CgroupReader",
@@ -43,6 +47,7 @@ __all__ = (
     "Launcher",
     "LineConsumer",
     "LineObserver",
+    "ReportWriter",
     "ResourceProbe",
     "RunningHarnessHandle",
     "Sleeper",
@@ -261,6 +266,14 @@ class CgroupReader(typ.Protocol):
 
     def read(self, path: str | None) -> CgroupMemory:
         """Return one instant of the cgroup's memory files."""
+        ...
+
+
+class ReportWriter(typ.Protocol):
+    """Publishes the final report and validates its destination."""
+
+    def __call__(self, path: Path, report: RunReport) -> None:
+        """Write `report` to `path`."""
         ...
 
 
