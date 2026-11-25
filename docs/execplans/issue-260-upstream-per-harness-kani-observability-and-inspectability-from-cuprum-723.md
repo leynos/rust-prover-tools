@@ -9,7 +9,7 @@ Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
 is layered on it. The final deterministic gate reports 3,303 passed and 6
 skipped at code head `d9ddcd8`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-last passed at `19d3ac8` in 848.91 s.
+passes at this candidate: 2 passed in 455.01 s at `16fb35c`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -165,6 +165,10 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-25 22:00Z) Live fixture at the tenth-round candidate: 2 passed
+  in 455.01 s at `16fb35c`. Production code is unchanged since `d9ddcd8`; the
+  later commit is this record.
 
 - [x] (2026-11-25 21:30Z) Tenth assessment round, from the pre-merge checks.
   The command model no longer exposes Cuprum types: `LaunchEnvironment` is a
