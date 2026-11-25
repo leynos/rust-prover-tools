@@ -179,6 +179,10 @@ def test_a_signal_during_inventory_discovery_ends_the_cli(
         raise KeyboardInterrupt
 
     monkeypatch.setattr(
+        "rust_prover_tools.kani_harness_run.cargo_metadata",
+        lambda root: (),
+    )
+    monkeypatch.setattr(
         "rust_prover_tools.kani_harness_run.discover_inventory", interrupted
     )
 

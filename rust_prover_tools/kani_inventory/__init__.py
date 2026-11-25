@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from rust_prover_tools.kani_inventory.attribution import (
     test_targets,
+    verify_selected_test_targets,
     verify_test_target_attribution,
 )
 from rust_prover_tools.kani_inventory.discover import (
@@ -82,6 +83,7 @@ __all__ = [
     "select_packages",
     "selections",
     "test_targets",
+    "verify_selected_test_targets",
     "verify_test_target_attribution",
     "write_inventory",
 ]

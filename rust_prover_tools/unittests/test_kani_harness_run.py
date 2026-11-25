@@ -26,7 +26,7 @@ from rust_prover_tools.kani_inventory import (
     PackageInventory,
     compose_arguments,
 )
-from rust_prover_tools.kani_inventory.discover import cargo_metadata
+from rust_prover_tools.kani_inventory.discover import CargoPackage, cargo_metadata
 from rust_prover_tools.kani_routes import PreparedRoute
 from rust_prover_tools.supervision import (
     Diagnostics,
@@ -570,3 +570,28 @@ def test_preparation_keys_required_features_by_target_kind(
     with pytest.raises(InventoryDiscoveryError, match="requires features"):
         prepare_harnesses(options)
     assert qualified == []
+
+
+def test_preparation_uses_the_injected_metadata_source(tmp_path: Path) -> None:
+    """Preparation asks the injected provider, not Cargo, for metadata."""
+    provider_calls: list[Path] = []
+
+    def provider(root: Path) -> tuple[CargoPackage, ...]:
+        """Record the request and supply no packages."""
+        provider_calls.append(root)
+        return ()
+
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+        inventory=_inventory("harnesses::a"),
+        dependencies=KaniHarnessDependencies(
+            metadata=provider,
+            prepare=lambda route: _prepared(),
+        ),
+    )
+
+    preparation = prepare_harnesses(options)
+
+    assert provider_calls == []
+    assert preparation.selected[0].harness == "harnesses::a"

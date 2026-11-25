@@ -48,7 +48,7 @@ from rust_prover_tools.kani_inventory import (
     load_inventory,
     restrict_inventory,
     select_harnesses,
-    verify_test_target_attribution,
+    verify_selected_test_targets,
 )
 from rust_prover_tools.kani_routes import (
     KaniRoute,
@@ -214,6 +214,12 @@ def run_kani_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
 def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     """Discover or load, select, and qualify one route without running it.
 
+    Cargo metadata is read through `KaniHarnessDependencies.metadata` (default
+    `cargo_metadata`) when the inventory must be discovered, and again when a
+    selected harness belongs to a test target, because those entries are
+    revalidated against the live tree. Route qualification probes the release
+    or snapshot identities once.
+
     Parameters
     ----------
     options : KaniHarnessRunOptions
@@ -227,13 +233,16 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     Raises
     ------
     InventoryDiscoveryError
-        Raised when discovery cannot produce a complete inventory.
+        Raised when discovery cannot produce a complete inventory, Cargo
+        metadata cannot be read, or a test-target harness cannot be
+        attributed to the live tree.
     InventoryFormatError
         Raised when a supplied inventory document is invalid.
     SelectionError
         Raised when the harness selection is ambiguous or overridden.
     ProverToolError
-        Raised when the route cannot be qualified.
+        Raised when the route cannot be qualified or its identity probes
+        disagree.
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
@@ -245,10 +254,15 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
             f"{route_cwd} is not {root}"
         )
         raise ProverToolError(msg)
-    inventory = _inventory(options)
-    selected = select_harnesses(inventory, options.harnesses)
-    _verify_test_targets(root, selected, options.metadata)
     dependencies = options.dependencies or KaniHarnessDependencies()
+    provider = dependencies.metadata or cargo_metadata
+    metadata = _metadata_for(options, provider, root)
+    inventory = _inventory(options, metadata)
+    selected = select_harnesses(inventory, options.harnesses)
+    if any(harness.target_kind == "test" for harness in selected):
+        if metadata is None:
+            metadata = tuple(provider(root))
+        verify_selected_test_targets(root, selected, metadata)
     qualifier = dependencies.prepare or prepare_route
     prepared = qualifier(options.route)
     return KaniHarnessPreparation(
@@ -257,29 +271,6 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         prepared=prepared,
         commands=_command_map(selected, prepared.build),
     )
-
-
-def _verify_test_targets(
-    root: Path,
-    selected: cabc.Sequence[InventoryHarness],
-    metadata: cabc.Sequence[CargoPackage] | None,
-) -> None:
-    """Refuse an unattributable test-target harness against the live tree.
-
-    Kani 0.67.0 cannot select one integration-test target, so the check reads
-    the same Cargo metadata the run will build from rather than trusting a
-    possibly stale inventory. Packages without a selected test-target harness
-    are not inspected.
-    """
-    if not any(harness.target_kind == "test" for harness in selected):
-        return
-    packages = tuple(metadata) if metadata is not None else cargo_metadata(root)
-    live = discover_inventory(
-        root,
-        tuple(dict.fromkeys(harness.package for harness in selected)),
-        metadata=packages,
-    )
-    verify_test_target_attribution(selected, live, packages)
 
 
 def execute_harnesses(
@@ -333,7 +324,22 @@ def execute_harnesses(
     )
 
 
-def _inventory(options: KaniHarnessRunOptions) -> HarnessInventory:
+def _metadata_for(
+    options: KaniHarnessRunOptions,
+    provider: cabc.Callable[[Path], cabc.Sequence[CargoPackage]],
+    root: Path,
+) -> tuple[CargoPackage, ...] | None:
+    """Resolve the metadata discovery needs, or `None` when it needs none."""
+    if options.metadata is not None:
+        return tuple(options.metadata)
+    discovering = not any((options.inventory, options.inventory_path))
+    return tuple(provider(root)) if discovering else None
+
+
+def _inventory(
+    options: KaniHarnessRunOptions,
+    metadata: cabc.Sequence[CargoPackage] | None,
+) -> HarnessInventory:
     """Load, discover, or narrow the inventory."""
     if options.inventory is not None:
         inventory = options.inventory
@@ -343,7 +349,7 @@ def _inventory(options: KaniHarnessRunOptions) -> HarnessInventory:
         inventory = discover_inventory(
             options.repo_root,
             options.packages,
-            metadata=options.metadata,
+            metadata=metadata,
         )
     if not options.packages:
         return inventory

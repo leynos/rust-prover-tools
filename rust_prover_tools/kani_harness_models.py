@@ -63,6 +63,9 @@ class KaniHarnessDependencies:
     prepare : cabc.Callable[[KaniRoute], PreparedRoute] | None
         Route qualifier. `None` uses the production qualifier; a test can
         supply a prepared base without a real installation.
+    metadata : cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None
+        Cargo metadata source. `None` runs `cargo metadata`; a caller that has
+        already read it, or a test double, can supply another source.
     """
 
     clock: Clock | None = None
@@ -73,6 +76,7 @@ class KaniHarnessDependencies:
     diagnostics: Diagnostics | None = None
     interrupts: InterruptSource | None = None
     prepare: cabc.Callable[[KaniRoute], PreparedRoute] | None = None
+    metadata: cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

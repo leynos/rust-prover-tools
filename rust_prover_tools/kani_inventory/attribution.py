@@ -18,11 +18,13 @@ from rust_prover_tools.kani_inventory.models import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.kani_inventory.discover import CargoPackage, CargoTarget
 
 __all__ = (
     "test_targets",
+    "verify_selected_test_targets",
     "verify_test_target_attribution",
 )
 
@@ -46,6 +48,31 @@ def test_targets(packages: cabc.Sequence[CargoPackage]) -> dict[str, tuple[str, 
         )
         for package in packages
     }
+
+
+def verify_selected_test_targets(
+    root: Path,
+    selected: cabc.Sequence[InventoryHarness],
+    metadata: cabc.Sequence[CargoPackage],
+) -> None:
+    """Refuse an unattributable test-target harness against the live tree.
+
+    Kani 0.67.0 cannot select one integration-test target, so the check reads
+    the same Cargo metadata the run will build from rather than trusting a
+    possibly stale inventory. Packages without a selected test-target harness
+    are not inspected.
+    """
+    if not any(harness.target_kind == "test" for harness in selected):
+        return
+    from rust_prover_tools.kani_inventory.discover import discover_inventory
+
+    packages = tuple(metadata)
+    live = discover_inventory(
+        root,
+        tuple(dict.fromkeys(harness.package for harness in selected)),
+        metadata=packages,
+    )
+    verify_test_target_attribution(selected, live, packages)
 
 
 def verify_test_target_attribution(
