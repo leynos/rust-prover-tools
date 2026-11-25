@@ -322,18 +322,75 @@ def test_a_shell_or_interpreter_build_is_refused(
         require_prebuilt_setup(trace)
 
 
-def test_an_argument_strace_cannot_quote_is_refused() -> None:
-    """A capture this reader cannot decode fails loudly, not silently.
+@pytest.mark.parametrize(
+    ("escape", "message"),
+    [("\\xZZ", "malformed escape"), ("\\777", "out-of-range")],
+    ids=["non-hex", "octal-overflow"],
+)
+def test_a_malformed_escape_is_refused(escape: str, message: str) -> None:
+    """A damaged escape fails loudly rather than being read as raw text.
 
     The raw text fallback this replaced would have compared the undecoded
     escape sequence against the policy's lists, so an argument could be
     checked as something other than what strace recorded.
     """
     trace = (
-        _LAUNCHER + '901  execve("/usr/bin/tar", ["tar", "bad\\xZZescape"], 0x1) = 0\n'
+        _LAUNCHER
+        + f'901  execve("/usr/bin/tar", ["tar", "bad{escape}escape"], 0x1) = 0\n'
     )
 
-    with pytest.raises(SetupTraceError, match="cannot quote"):
+    with pytest.raises(SetupTraceError, match=message):
+        parse_exec_trace(trace)
+
+
+def test_an_octal_escaped_utf8_path_is_decoded() -> None:
+    r"""Strace writes a non-ASCII byte as an octal escape, not a JSON escape.
+
+    `caf\303\251` is strace's spelling of `café`. Refusing it would fail an
+    installation under such a path, so the reader must follow strace's C-string
+    format rather than JSON's.
+    """
+    trace = _LAUNCHER + (
+        '901  execve("/home/caf\\303\\251/toolchain/bin/rustc", '
+        '["rustc", "-vV"], 0x1) = 0\n'
+    )
+
+    records = parse_exec_trace(trace)
+
+    assert records[1].executable == "/home/café/toolchain/bin/rustc"
+
+
+def test_a_c_escaped_control_character_is_decoded() -> None:
+    r"""A named C escape such as `\t` is decoded to the character it denotes."""
+    trace = _LAUNCHER + (
+        '901  execve("/usr/bin/tar", ["tar", "a\\tb", "c\\\\d", "e\\"f"], 0x1) = 0\n'
+    )
+
+    records = parse_exec_trace(trace)
+
+    assert records[1].argv == ("tar", "a\tb", "c\\d", 'e"f')
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        '"rustc", @compile.args',
+        '"rustc", "--emit=link" @compile.args',
+        '"rustc", @compile.args, "-vV"',
+        '"rustc", bare-token',
+    ],
+    ids=["leading", "no-separator", "trailing", "unquoted"],
+)
+def test_an_unreadable_argument_field_is_refused(field: str) -> None:
+    """Every token must be a quoted argument, or the record cannot be checked.
+
+    `re.findall` alone would return only `"rustc"` here and silently drop
+    `@compile.args`, so a response-file compile could pass the policy as a
+    bare version probe.
+    """
+    trace = _LAUNCHER + f'901  execve("/toolchain/bin/rustc", [{field}], 0x1) = 0\n'
+
+    with pytest.raises(SetupTraceError, match="unreadable argument list"):
         parse_exec_trace(trace)
 
 

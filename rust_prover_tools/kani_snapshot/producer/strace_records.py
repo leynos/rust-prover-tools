@@ -13,7 +13,6 @@ a new strace spelling touches only the reader.
 from __future__ import annotations
 
 import dataclasses as dc
-import json
 import re
 import typing as typ
 
@@ -83,28 +82,95 @@ def basename(value: str) -> str:
     return value.rsplit("/", 1)[-1]
 
 
-def _unescape(value: str) -> str:
-    """Decode one strace-quoted argument, refusing text strace cannot encode.
+#: One C escape strace may write inside a quoted string.
+_C_ESCAPE: typ.Final[re.Pattern[str]] = re.compile(
+    r"\\(?:[0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)", re.DOTALL
+)
+#: C escapes whose meaning differs from the character they name.
+_C_ESCAPE_VALUES: typ.Final[dict[str, str]] = {
+    "a": "\a",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+}
+#: An octal escape holds a byte, and strace writes non-ASCII text that way.
+_MAX_BYTE: typ.Final[int] = 0xFF
 
-    strace quotes a C string, so a value that is not valid JSON-in-a-string is
-    a capture this reader does not understand. Returning the raw text would let
-    an odd escape sequence pass through as if it had been decoded, and a policy
-    check on that text could then read a different argument than the one that
-    ran. The refusal is explicit for that reason.
+
+def _unescape(value: str) -> str:
+    r"""Decode one strace-quoted argument, refusing text strace cannot encode.
+
+    Strace quotes a C string, not a JSON string: it writes a non-ASCII byte as
+    an octal escape (`caf\303\251` for `café`), which `json.loads` rejects.
+    Decoding must follow strace's own format, or a valid capture under such a
+    path would be refused and the clean-setup check would fail on a correct
+    installation.
+
+    Because strace writes the argument's bytes, the escapes are accumulated as
+    bytes and the whole value is decoded as UTF-8 once. Every escape is
+    consumed in one pass and an unrecognized one is refused rather than passed
+    through as raw text: a policy check reading undecoded text could then
+    compare a different argument from the one that ran.
     """
+    raw = bytearray()
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character != "\\":
+            raw += character.encode("utf-8")
+            index += 1
+            continue
+        match = _C_ESCAPE.match(value, index)
+        if match is None:
+            msg = f"setup trace has an argument strace cannot quote: {value[:120]!r}"
+            raise SetupTraceError(msg)
+        raw.append(_escaped_byte(match.group(), value))
+        index = match.end()
     try:
-        decoded = json.loads(f'"{value}"')
-    except json.JSONDecodeError as exc:
-        msg = f"setup trace has an argument strace cannot quote: {value[:120]!r}"
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        msg = f"setup trace has an argument that is not UTF-8: {value[:120]!r}"
         raise SetupTraceError(msg) from exc
-    if not isinstance(decoded, str):  # pragma: no cover - json.loads returns str
-        msg = f"setup trace has a non-string argument: {value[:120]!r}"
+
+
+def _escaped_byte(escape: str, whole: str) -> int:
+    """Return the single byte one complete C escape denotes."""
+    body = escape[1:]
+    if body[:1] in {"x", "X"}:
+        if len(body) == 1:
+            # strace never writes a bare `\x`; it means the capture is damaged.
+            msg = f"setup trace has a malformed escape: {whole[:120]!r}"
+            raise SetupTraceError(msg)
+        value = int(body[1:], 16)
+    elif body[:1].isdigit():
+        value = int(body, 8)
+    elif body in _C_ESCAPE_VALUES:
+        return ord(_C_ESCAPE_VALUES[body])
+    else:
+        # `\\` and `\"` denote themselves; any other escaped character is the
+        # character, which is how a C string treats an unrecognized escape.
+        encoded = body.encode("utf-8")
+        if len(encoded) != 1:
+            msg = f"setup trace has a multi-byte escape: {whole[:120]!r}"
+            raise SetupTraceError(msg)
+        return encoded[0]
+    if value > _MAX_BYTE:
+        msg = f"setup trace has an out-of-range escape: {whole[:120]!r}"
         raise SetupTraceError(msg)
-    return decoded
+    return value
 
 
 def _argv(value: str) -> tuple[str, ...]:
     """Return the argument vector from strace's bracketed list.
+
+    Every token of the field must be a quoted argument. `re.findall` alone
+    would skip an unconsumed token, so `["rustc", @compile.args]` would read as
+    the single argument `rustc` and the response-file check would never see it.
+    The field is therefore split on commas at top level and each token must
+    match exactly.
 
     strace elides a long string as `"prefix"...` under its default string
     limit, which could hide a `.rs` suffix from the code-generation check. An
@@ -113,7 +179,26 @@ def _argv(value: str) -> tuple[str, ...]:
     if _ELIDED.search(value) is not None or _OMITTED.search(value) is not None:
         msg = f"strace elided an argument, so it cannot be checked: {value[:120]!r}"
         raise SetupTraceError(msg)
-    return tuple(_unescape(item) for item in _ARGUMENT.findall(value))
+    return tuple(_unescape(item) for item in _argument_tokens(value))
+
+
+def _argument_tokens(value: str) -> list[str]:
+    """Return each quoted argument's undecoded body, refusing anything else."""
+    tokens: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        while index < length and value[index] in " ,":
+            index += 1
+        if index >= length:
+            break
+        match = _ARGUMENT.match(value, index)
+        if match is None:
+            msg = f"setup trace has an unreadable argument list: {value[:120]!r}"
+            raise SetupTraceError(msg)
+        tokens.append(match.group(1))
+        index = match.end()
+    return tokens
 
 
 def parse_exec_trace(trace: str) -> tuple[ExecRecord, ...]:

@@ -35,6 +35,13 @@ _SMOKE_EXAMPLE = "kani-snapshot-smoke"
 #: The identifier the guide gives its consumer verification example.
 _VERIFY_EXAMPLE = "kani-snapshot-verify"
 
+#: The inputs the verification example assigns, which the test must not inherit.
+_VERIFY_INPUTS: typ.Final[tuple[str, ...]] = (
+    "KANI_SNAPSHOT_ASSET_DIR",
+    "KANI_SNAPSHOT_WHEEL",
+    "KANI_SNAPSHOT_RUSTC_1_93",
+)
+
 #: The identifier the migration guide gives its snapshot consumer example.
 _SNAPSHOT_EXAMPLE = "migration-snapshot-consumer"
 
@@ -273,20 +280,25 @@ def test_the_verify_example_executes_and_passes_all_three_inputs(
 
     `make` and `rustup` are stubbed first on `PATH`, so the example's shell
     syntax is exercised without installing a toolchain or running a proof. The
-    stub records its arguments *and* the three variables, which is what proves
-    the assignments reach `make` as values: dropping any assignment from the
-    example leaves its recorded value empty and fails here.
+    stub records its arguments *and* the three variables. The three names are
+    cleared from the inherited environment first, and each recorded value is
+    then compared with the exact value the example must have assigned, so a
+    host that already exports one of them cannot make a removed assignment
+    look correct.
     """
     shell = shutil.which("sh")
     assert shell is not None, "a POSIX shell is required to run the example"
     bin_dir, log = _stub_environment(tmp_path)
     example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
+    inherited = {
+        name: value for name, value in os.environ.items() if name not in _VERIFY_INPUTS
+    }
 
     completed = subprocess.run(
         [shell, "-eu", "-c", example.body],
         cwd=tmp_path,
         env={
-            **os.environ,
+            **inherited,
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "HOME": str(tmp_path),
             "MAKE_ARGS_FILE": str(log),
@@ -303,10 +315,17 @@ def test_the_verify_example_executes_and_passes_all_three_inputs(
         "the example did not invoke the verification target with make"
     )
     values = dict(line.split(":", 1) for line in recorded if ":" in line)
-    assert values["ASSET_DIR"], "the review directory never reached make"
-    assert values["WHEEL"].endswith(".whl"), "the wheel path never reached make"
-    assert values["RUSTC_1_93"].endswith("/rustc"), (
-        "the 1.93 compiler path never reached make"
+    assert values["ASSET_DIR"] == str(tmp_path / "kani-validation" / "release"), (
+        "the asset directory the example assigns did not reach make"
+    )
+    assert values["WHEEL"] == str(
+        tmp_path
+        / "kani-validation"
+        / "dist"
+        / "rust_prover_tools-0.1.0-py3-none-any.whl"
+    ), "the wheel path the example assigns did not reach make"
+    assert values["RUSTC_1_93"] == "/fake/toolchains/1.93.0/bin/rustc", (
+        "the 1.93 compiler path did not reach make"
     )
 
 
