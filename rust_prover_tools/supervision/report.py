@@ -1,4 +1,4 @@
-"""Render a supervised run as a versioned report and a short table.
+"""Render a supervised run as a versioned report document and a short table.
 
 The table is for a human reading a job log after the fact. It deliberately
 carries the identity, status, duration, sampled peak group RSS, minimum host
@@ -15,12 +15,7 @@ draw a stronger conclusion than the evidence supports.
 
 from __future__ import annotations
 
-import contextlib
-import json
-import os
-import tempfile
 import typing as typ
-from pathlib import Path
 
 from rust_prover_tools.supervision.events import (
     cgroup_document,
@@ -37,7 +32,6 @@ __all__ = (
     "REPORT_SCHEMA_VERSION",
     "render_table",
     "report_document",
-    "write_report",
 )
 
 #: Version of the final JSON report schema.
@@ -232,45 +226,3 @@ def report_document(report: RunReport) -> dict[str, object]:
         "results": [_result_document(result) for result in report.results],
         "notes": list(REPORT_NOTES),
     }
-
-
-def write_report(path: Path, report: RunReport) -> None:
-    """Write the JSON report atomically.
-
-    Parameters
-    ----------
-    path : Path
-        Destination path.
-    report : RunReport
-        Report to write.
-
-    Notes
-    -----
-    The document is written to a sibling temporary file, flushed, synced, and
-    renamed over the destination. An interrupted write therefore leaves the
-    previous report intact rather than a half-written one.
-    """
-    destination = path.resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(
-                report_document(report),
-                handle,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        Path(temporary).replace(destination)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            Path(temporary).unlink()
-        raise
