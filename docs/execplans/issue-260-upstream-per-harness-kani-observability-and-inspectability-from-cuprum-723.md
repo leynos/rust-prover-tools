@@ -6,10 +6,12 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,330 passed and 6
-skipped at code head `834612c`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,331 passed and 6
+skipped at code head `fed1f5d`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passes at the final head: 2 passed in 234.13 s at `7b0e70e`.
+passed at the last code head it was run on: 2 passed in 108.19 s at `3406f88`.
+No code changed after that revision; only this plan text and the
+repository-layout document did.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -586,9 +588,12 @@ Plain-language terms used in this plan:
   packages holding a selected test harness, kept a settled exit code and signal
   when a recorder failure wins, recorded the partial report in the writer
   tests, bounded the real-process witness waits, and documented the grammar
-  registry and module boundaries. `make check-fmt`, `make all` (3,330 passed, 6
-  skipped), `make markdownlint`, and `make nixie` pass at `834612c`; the opt-in
-  live Kani 0.67.0 fixture passes at `7b0e70e`: 2 passed in 234.13 s.
+  registry and module boundaries. A later review round moved the
+  module-responsibility descriptions into `docs/repository-layout.md`, made
+  `_drive` re-raise a cancellation swallowed during its joins, and added the
+  matching regression. `make check-fmt`, `make all` (3,331 passed, 6 skipped),
+  `make markdownlint`, and `make nixie` pass at `fed1f5d`; the opt-in live Kani
+  0.67.0 fixture passed at `3406f88`: 2 passed in 108.19 s.
 
 ## Surprises & discoveries
 
