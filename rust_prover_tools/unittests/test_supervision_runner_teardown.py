@@ -372,18 +372,37 @@ async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
 @_async_test
 async def test_an_earlier_cancellation_does_not_interrupt_a_later_attempt() -> None:
     """A cancellation count inherited from earlier work is not this attempt's."""
-    task = asyncio.current_task()
-    assert task is not None
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.sleep(0)
-    assert task.cancelling() > 0
+    from rust_prover_tools.unittests.supervision_doubles import (
+        ScriptedCancellations,
+    )
 
-    environment = _environment(ScriptedLauncher(), VirtualClock())
+    # The probe reports an inherited count that never increases: the attempt
+    # must treat that as no cancellation of its own.
+    environment = dc.replace(
+        _environment(ScriptedLauncher(), VirtualClock()),
+        cancellations=ScriptedCancellations(counts=[1]),
+    )
 
     report = await run_supervised((spec(),), _config(), environment)
 
     assert report.is_complete
+
+
+@_async_test
+async def test_a_cancellation_during_settlement_is_re_raised() -> None:
+    """A count that grows during the attempt re-raises even without a join."""
+    from rust_prover_tools.unittests.supervision_doubles import (
+        ScriptedCancellations,
+    )
+
+    # Baseline 0, then a positive count once the attempt reaches its check.
+    environment = dc.replace(
+        _environment(ScriptedLauncher(), VirtualClock()),
+        cancellations=ScriptedCancellations(counts=[0, 1]),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_supervised((spec(),), _config(), environment)
 
 
 @_async_test

@@ -11,11 +11,13 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.supervision.report import write_report
+from rust_prover_tools.supervision.clock import TaskCancellations
+from rust_prover_tools.supervision.report_writer import write_report
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.launcher import CommandBuilder
     from rust_prover_tools.supervision.protocols import (
+        CancellationProbe,
         CgroupReader,
         Clock,
         HarnessAdapter,
@@ -58,6 +60,8 @@ class RunEnvironment:
     report_writer : ReportWriter
         Publishes the final report. Injected so a test can record the report
         without touching the filesystem.
+    cancellations : CancellationProbe
+        Reads the supervising task's cancellation count.
     """
 
     clock: Clock
@@ -70,3 +74,4 @@ class RunEnvironment:
     sleeper: Sleeper
     interrupts: InterruptSource | None = None
     report_writer: ReportWriter = write_report
+    cancellations: CancellationProbe = dc.field(default_factory=TaskCancellations)

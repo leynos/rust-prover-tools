@@ -50,7 +50,7 @@ from rust_prover_tools.unittests.supervision_doubles import spec
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+    from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
 
 
 class _NullObserver:

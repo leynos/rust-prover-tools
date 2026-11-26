@@ -13,7 +13,7 @@ import asyncio
 import datetime as dt
 import time
 
-__all__ = ("AsyncSleeper", "SystemClock")
+__all__ = ("AsyncSleeper", "SystemClock", "TaskCancellations")
 
 
 class SystemClock:
@@ -55,3 +55,19 @@ class AsyncSleeper:
             Non-negative delay.
         """
         await asyncio.sleep(max(0.0, seconds))
+
+
+class TaskCancellations:
+    """Read the running task's cancellation count.
+
+    The supervisor needs the count to tell a cancellation that arrived during
+    an attempt from one inherited from earlier work. Reading it through a
+    small object keeps that question injectable, so a test can supply a count
+    without driving real cancellation.
+    """
+
+    @staticmethod
+    def cancelling() -> int:
+        """Return how many cancellations the running task has absorbed."""
+        task = asyncio.current_task()
+        return 0 if task is None else task.cancelling()

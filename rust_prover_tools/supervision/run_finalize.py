@@ -30,7 +30,7 @@ from rust_prover_tools.supervision.results import (
 if typ.TYPE_CHECKING:
     import datetime as dt
 
-    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+    from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
     from rust_prover_tools.supervision.results import DiagnosticRef
 
 __all__ = (

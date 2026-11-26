@@ -57,7 +57,7 @@ from rust_prover_tools.supervision.models import (
 )
 
 if typ.TYPE_CHECKING:
-    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+    from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
     from rust_prover_tools.supervision.protocols import LineObserver
     from rust_prover_tools.supervision.results import HarnessClassification
 

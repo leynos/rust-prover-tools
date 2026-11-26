@@ -17,7 +17,7 @@ from rust_prover_tools.supervision import (
     ProofVerdict,
     StopReason,
 )
-from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
 from rust_prover_tools.supervision.kani import (
     KaniAdapter,
     KaniLiveFacts,

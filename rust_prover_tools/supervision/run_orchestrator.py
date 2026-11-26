@@ -51,7 +51,7 @@ from rust_prover_tools.supervision.run_finalize import (
 if typ.TYPE_CHECKING:
     import datetime as dt
 
-    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+    from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
     from rust_prover_tools.supervision.config import SupervisionConfig
     from rust_prover_tools.supervision.results import (
         DiagnosticRef,
@@ -270,6 +270,7 @@ class SupervisedRun:
             adapter=self.environment.adapter,
             sleeper=self.environment.sleeper,
             interrupts=self.environment.interrupts,
+            cancellations=self.environment.cancellations,
         )
         try:
             return await supervisor.run()

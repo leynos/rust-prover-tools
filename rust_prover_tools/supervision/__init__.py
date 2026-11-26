@@ -39,7 +39,7 @@ from rust_prover_tools.supervision.accounting import (
     identity_key,
 )
 from rust_prover_tools.supervision.attempt import AttemptSupervisor
-from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
 from rust_prover_tools.supervision.clock import AsyncSleeper, SystemClock
 from rust_prover_tools.supervision.config import (
     DEFAULT_HEARTBEAT_SECONDS,
@@ -90,8 +90,8 @@ from rust_prover_tools.supervision.report import (
     REPORT_SCHEMA_VERSION,
     render_table,
     report_document,
-    write_report,
 )
+from rust_prover_tools.supervision.report_writer import write_report
 from rust_prover_tools.supervision.resources import (
     CgroupV2Reader,
     ProcfsResourceProbe,

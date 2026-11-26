@@ -17,27 +17,26 @@ and resource evidence, and the adapter classifies it.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.supervision.attempt_state import (
+from rust_prover_tools.supervision.attempt_cgroup import (
+    finish_cgroup,
+    start_cgroup,
+)
+from rust_prover_tools.supervision.attempt_evidence import (
     AttemptEvidence,
     AttemptSettlement,
-    cancellation_baseline,
+)
+from rust_prover_tools.supervision.attempt_monitor import AttemptMonitor
+from rust_prover_tools.supervision.attempt_state import (
     cancellation_pending,
-    finish_cgroup,
-    idle_seconds,
     join_reporting_cancellation,
     resolved_reason,
-    start_cgroup,
     waiter_failed,
 )
-from rust_prover_tools.supervision.events import (
-    heartbeat_record,
-    output_record,
-    sample_record,
-)
+from rust_prover_tools.supervision.clock import TaskCancellations
+from rust_prover_tools.supervision.events import output_record
 from rust_prover_tools.supervision.models import (
     CgroupObservation,
     HarnessSpec,
@@ -45,11 +44,6 @@ from rust_prover_tools.supervision.models import (
     OutputLine,
     ResourceSample,
     StopReason,
-)
-from rust_prover_tools.supervision.watchdog import (
-    deadline_verdict,
-    first_stop,
-    watchdog_verdict,
 )
 
 if typ.TYPE_CHECKING:
@@ -61,6 +55,7 @@ if typ.TYPE_CHECKING:
         RunningHarness,
     )
     from rust_prover_tools.supervision.protocols import (
+        CancellationProbe,
         CgroupReader,
         Clock,
         HarnessAdapter,
@@ -108,6 +103,8 @@ class AttemptSupervisor:
         Pause between monitor ticks.
     interrupts : InterruptSource | None
         Signal source, when the caller installs one.
+    cancellations : CancellationProbe
+        Reader for the running task's cancellation count.
     """
 
     spec: HarnessSpec
@@ -122,13 +119,14 @@ class AttemptSupervisor:
     adapter: HarnessAdapter
     sleeper: Sleeper
     interrupts: InterruptSource | None = None
+    cancellations: CancellationProbe = dc.field(
+        default_factory=lambda: typ.cast("CancellationProbe", TaskCancellations())
+    )
     _samples: list[ResourceSample] = dc.field(default_factory=list)
     _last_output: str | None = None
     _last_output_elapsed: float | None = None
     _stop_reason: StopReason | None = None
     _stop_detail: str = ""
-    _next_sample: float = 0.0
-    _next_heartbeat: float = 0.0
     _observer: LineObserver | None = None
     _interrupted: tuple[AttemptEvidence, HarnessClassification] | None = None
     _settled: LaunchResult | None = None
@@ -143,8 +141,6 @@ class AttemptSupervisor:
         """
         started_at = self.clock.now()
         started_monotonic = self.clock.monotonic()
-        self._next_sample = self.config.sample_interval_seconds
-        self._next_heartbeat = self.config.heartbeat_interval_seconds
         self._observer = self.adapter.observer(self.spec)
         cgroup_start = start_cgroup(self.cgroup)
         running = typ.cast(
@@ -198,7 +194,7 @@ class AttemptSupervisor:
         failure: BaseException | None = None
         result: LaunchResult | None = None
         cancelled = False
-        baseline = cancellation_baseline()
+        baseline = self.cancellations.cancelling()
         try:
             await asyncio.wait({waiter, monitor}, return_when=asyncio.FIRST_COMPLETED)
             if monitor.done():
@@ -233,7 +229,12 @@ class AttemptSupervisor:
             cancelled = await join_reporting_cancellation(waiter) or cancelled
         if failure is not None:
             raise failure
-        if cancellation_pending(recorded=cancelled, baseline=baseline):
+        pending = cancellation_pending(
+            recorded=cancelled,
+            baseline=baseline,
+            current_count=self.cancellations.cancelling(),
+        )
+        if pending:
             # The caller stopped the attempt, so it is interrupted even when
             # the child happened to settle first.
             self._request_stop(running, "the supervisor stopped the run")
@@ -251,61 +252,6 @@ class AttemptSupervisor:
             output_record(run_id=self.run_id, spec=self.spec, line=typed)
         )
 
-    async def _monitor(
-        self,
-        running: RunningHarness,
-        started_at: dt.datetime,
-        started_monotonic: float,
-    ) -> None:
-        """Sample, heartbeat, and stop the child for the first reason."""
-        done = asyncio.get_running_loop().create_task(running.wait())
-        interrupt = (
-            None
-            if self.interrupts is None
-            else asyncio.get_running_loop().create_task(self.interrupts.wait())
-        )
-        try:
-            while not done.done():
-                elapsed = max(0.0, self.clock.monotonic() - started_monotonic)
-                remaining = min(
-                    self._next_sample - elapsed,
-                    self._next_heartbeat - elapsed,
-                    self.config.timeout_seconds - elapsed,
-                )
-                sleep = asyncio.get_running_loop().create_task(
-                    self.sleeper.sleep(max(0.0, remaining))
-                )
-                waiters = (
-                    {done, sleep} if interrupt is None else {done, sleep, interrupt}
-                )
-                try:
-                    await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
-                finally:
-                    sleep.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await sleep
-                if done.done():
-                    return
-                if interrupt is not None and interrupt.done():
-                    self._record_interruption(running)
-                    return
-                if self._tick(running, started_at, started_monotonic):
-                    return
-        finally:
-            done.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await done
-            if interrupt is not None:
-                interrupt.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await interrupt
-
-    def _record_interruption(self, running: RunningHarness) -> None:
-        """Record and deliver an interruption stop."""
-        self._stop_reason = StopReason.INTERRUPTED
-        self._stop_detail = "a signal interrupted the harness"
-        running.stop(StopReason.INTERRUPTED)
-
     def _request_stop(self, running: RunningHarness, detail: str) -> None:
         """Record the first stop reason and request it from the launcher.
 
@@ -319,63 +265,34 @@ class AttemptSupervisor:
             self._stop_detail = detail
         running.stop(StopReason.INTERRUPTED)
 
-    def _tick(
+    async def _monitor(
         self,
         running: RunningHarness,
         started_at: dt.datetime,
         started_monotonic: float,
-    ) -> bool:
-        """Take one sample, emit what is due, and apply the limits.
+    ) -> None:
+        """Run the attempt monitor until the child ends or a limit stops it."""
+        monitor = self._monitor_for()
+        await monitor.run(running, started_at, started_monotonic)
+        self._samples = monitor.samples
+        if monitor.stop_reason is not None and self._stop_reason is None:
+            self._stop_reason = monitor.stop_reason
+            self._stop_detail = monitor.stop_detail
 
-        Returns
-        -------
-        bool
-            `True` when a stop was requested.
-        """
-        if running.done:
-            return False
-        elapsed = max(0.0, self.clock.monotonic() - started_monotonic)
-        sample = self.probe.sample(
-            self.spec,
-            group_id=running.group_id,
-            started_at=started_at,
-            started_monotonic=started_monotonic,
+    def _monitor_for(self) -> AttemptMonitor:
+        """Build the monitor for this attempt."""
+        return AttemptMonitor(
+            spec=self.spec,
+            config=self.config,
+            clock=self.clock,
+            probe=self.probe,
+            sleeper=self.sleeper,
+            diagnostics=self.diagnostics,
+            run_id=self.run_id,
+            interrupts=self.interrupts,
+            observer=lambda: self._observer,
+            last_output_elapsed=lambda: self._last_output_elapsed,
         )
-        recorded = False
-        if elapsed >= self._next_sample:
-            self._next_sample += self.config.sample_interval_seconds
-            recorded = True
-        if elapsed >= self._next_heartbeat:
-            self._next_heartbeat += self.config.heartbeat_interval_seconds
-            self.diagnostics.emit(
-                heartbeat_record(
-                    run_id=self.run_id,
-                    sample=sample,
-                    idle_seconds=idle_seconds(self._last_output_elapsed, elapsed),
-                    last_progress=(
-                        None if self._observer is None else self._observer.last_progress
-                    ),
-                )
-            )
-        verdict = first_stop(
-            deadline_verdict(
-                elapsed_seconds=elapsed,
-                timeout_seconds=self.config.timeout_seconds,
-            ),
-            watchdog_verdict(
-                host_available=sample.host_available,
-                threshold_bytes=self.config.watchdog_threshold_bytes,
-            ),
-        )
-        self._samples.append(sample)
-        if recorded:
-            self.diagnostics.emit(sample_record(run_id=self.run_id, sample=sample))
-        if verdict.reason is None:
-            return False
-        self._stop_reason = verdict.reason
-        self._stop_detail = verdict.detail
-        running.stop(verdict.reason)
-        return True
 
     def _evidence(
         self,

@@ -18,7 +18,7 @@ from rust_prover_tools.supervision.models import (
 from rust_prover_tools.supervision.results import HarnessClassification
 
 if typ.TYPE_CHECKING:
-    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+    from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
     from rust_prover_tools.supervision.kani_observer import KaniLiveFacts
 
 __all__ = (
