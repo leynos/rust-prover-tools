@@ -205,34 +205,43 @@ class ScriptedLauncher:
         script = self.per_harness.get(spec.qualified, self.script)
         if self.ready is not None:
             self.ready.set()
-        task = asyncio.get_running_loop().create_task(self._run(script, on_line))
         recorder = _PidRecorder(4321, settled_exit_code=self.settled_exit_code)
+        task = asyncio.get_running_loop().create_task(
+            self._run(script, on_line, recorder)
+        )
         return _ScriptedRunningHarness(task, recorder, self.stops)
 
     async def _run(
         self,
         script: Script,
         on_line: cabc.Callable[[object], None],
+        recorder: _PidRecorder,
     ) -> LaunchResult:
         """Emit the scripted output and settle, or wait to be stopped."""
         started = self.clock.monotonic() if self.clock is not None else 0.0
-        for index, (stream, text) in enumerate(script.lines):
-            if self.clock is not None:
-                self.clock.advance(self.seconds_per_line)
-            on_line(
-                OutputLine(
-                    stream=stream,
-                    text=text,
-                    timestamp_utc=(
-                        self.clock.now() if self.clock is not None else _EPOCH
-                    ),
-                    elapsed_seconds=(
-                        self.clock.monotonic() - started
-                        if self.clock is not None
-                        else float(index)
-                    ),
+        try:
+            for index, (stream, text) in enumerate(script.lines):
+                if self.clock is not None:
+                    self.clock.advance(self.seconds_per_line)
+                on_line(
+                    OutputLine(
+                        stream=stream,
+                        text=text,
+                        timestamp_utc=(
+                            self.clock.now() if self.clock is not None else _EPOCH
+                        ),
+                        elapsed_seconds=(
+                            self.clock.monotonic() - started
+                            if self.clock is not None
+                            else float(index)
+                        ),
+                    )
                 )
-            )
+        except Exception as error:
+            # A real launcher records the relayed callback failure and stops
+            # the child from inside, so settle reports the failure first.
+            recorder.failure = error
+            raise
         if script.block:
             await asyncio.Event().wait()
         if script.launch_error is not None:

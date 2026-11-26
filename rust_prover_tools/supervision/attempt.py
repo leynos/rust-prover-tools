@@ -156,10 +156,8 @@ class AttemptSupervisor:
             evidence = self._evidence(
                 self._stopped_result, started_at, started_monotonic, cgroup_start
             )
-            self._interrupted = (
-                evidence,
-                self.adapter.classify(evidence, self._observer),
-            )
+            classified = self.adapter.classify(evidence, self._observer)
+            self._interrupted = (evidence, classified)
             raise
         evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
         return evidence, self.adapter.classify(evidence, self._observer)
@@ -220,7 +218,11 @@ class AttemptSupervisor:
                 self._request_stop(running, "the supervisor stopped the run")
             if not running.done and running.stop_reason is None:
                 self._request_stop(running, "the supervisor stopped the run")
-            joined = await running.settle()
+            try:
+                joined = await running.settle()
+            except BaseException:
+                self._settled = running.settled_status
+                raise
             self._settled = joined
             waiter.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -834,15 +834,83 @@ async def _monitor_fault_settled_scenario(tmp_path: Path) -> None:
     assert results[0]["signal_number"] == 15
 
 
+def test_a_callback_failure_keeps_the_settled_exit_evidence(
+    tmp_path: Path,
+) -> None:
+    """A recorder failure outranks the status but must not erase it."""
+    asyncio.run(_callback_failure_settled_scenario(tmp_path))
+
+
+async def _callback_failure_settled_scenario(tmp_path: Path) -> None:
+    """Fail a live observer, then inspect the stored settled status."""
+    from rust_prover_tools.supervision.kani import KaniAdapter, KaniObserver
+
+    class _FailingObserver(KaniObserver):
+        """A live observer that fails on the first selection record."""
+
+        def observe(self, line: OutputLine) -> None:
+            """Fail as a full spool would, before recording the line."""
+            if line.text.startswith("Checking harness "):
+                msg = "the spool is full"
+                raise OSError(msg)
+            super().observe(line)
+
+    class _FailingAdapter(KaniAdapter):
+        """The real Kani adapter with a failing live observer."""
+
+        def observer(self, spec: HarnessSpec) -> KaniObserver:
+            """Return the observer that fails on the selection record."""
+            del spec
+            return _FailingObserver()
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        ScriptedLauncher(
+            script=Script(
+                lines=(("stdout", "Checking harness harnesses::verified..."),),
+                block=True,
+            ),
+            settled_exit_code=-15,
+        ),
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=_FailingAdapter(version="0.67.0"),
+    )
+
+    with pytest.raises(OSError, match="the spool is full"):
+        await run_supervised((spec(),), config, environment)
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["exit_code"] == -15
+    assert finish["signal_number"] == 15
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert results[0]["status"] == "interrupted"
+    assert results[0]["exit_code"] == -15
+    assert results[0]["signal_number"] == 15
+
+
 def test_a_report_writer_failure_does_not_replace_a_cancellation(
     tmp_path: Path,
 ) -> None:
     """A publication failure while the cancellation unwinds is suppressed."""
     ready = asyncio.Event()
+    report_path = tmp_path / "report.json"
+    calls: list[tuple[Path, RunReport]] = []
 
     def writer(path: Path, report: RunReport) -> None:
-        """Fail as a full report destination would."""
-        del path, report
+        """Record the attempt, then fail as a full destination would."""
+        calls.append((path, report))
         msg = "report writer failed"
         raise OSError(msg)
 
@@ -855,7 +923,7 @@ def test_a_report_writer_failure_does_not_replace_a_cancellation(
     )
     config = dc.replace(
         _config(timeout_seconds=600.0),
-        sinks=DiagnosticSinks(report_path=tmp_path / "report.json"),
+        sinks=DiagnosticSinks(report_path=report_path),
     )
 
     async def scenario() -> None:
@@ -868,15 +936,25 @@ def test_a_report_writer_failure_does_not_replace_a_cancellation(
 
     asyncio.run(scenario())
 
+    # The writer still received the configured path and the report that
+    # existed when the cancellation unwound; the cancellation stayed primary.
+    ((path, report),) = calls
+    assert path == report_path
+    assert report.interrupted is True
+    assert [result.spec for result in report.results] == [spec()]
+    assert report.results[0].diagnostic is not None
+
 
 def test_a_report_writer_failure_does_not_replace_a_monitor_failure(
     tmp_path: Path,
 ) -> None:
     """A publication failure must not mask the monitor's own fault."""
+    report_path = tmp_path / "report.json"
+    calls: list[tuple[Path, RunReport]] = []
 
     def writer(path: Path, report: RunReport) -> None:
-        """Fail as a full report destination would."""
-        del path, report
+        """Record the attempt, then fail as a full destination would."""
+        calls.append((path, report))
         msg = "report writer failed"
         raise OSError(msg)
 
@@ -890,11 +968,16 @@ def test_a_report_writer_failure_does_not_replace_a_monitor_failure(
     )
     config = dc.replace(
         _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
-        sinks=DiagnosticSinks(report_path=tmp_path / "report.json"),
+        sinks=DiagnosticSinks(report_path=report_path),
     )
 
     with pytest.raises(RuntimeError, match="probe failed"):
         asyncio.run(run_supervised((spec(),), config, environment))
+
+    ((path, report),) = calls
+    assert path == report_path
+    assert report.interrupted is True
+    assert [result.spec for result in report.results] == [spec()]
 
 
 def _blocking_child(tmp_path: Path) -> tuple[Path, Path]:

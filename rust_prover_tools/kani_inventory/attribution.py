@@ -60,18 +60,20 @@ def verify_selected_test_targets(
     Kani 0.67.0 cannot select one integration-test target, so the check reads
     the same Cargo metadata the run will build from rather than trusting a
     possibly stale inventory. Packages without a selected test-target harness
-    are not inspected.
+    are neither rediscovered nor inspected: only a test-target identity needs
+    the fresh tree, so a run of library harnesses costs no extra scan.
     """
-    if not any(harness.target_kind == "test" for harness in selected):
+    packages_with_tests = tuple(
+        dict.fromkeys(
+            harness.package for harness in selected if harness.target_kind == "test"
+        )
+    )
+    if not packages_with_tests:
         return
     from rust_prover_tools.kani_inventory.discover import discover_inventory
 
     packages = tuple(metadata)
-    live = discover_inventory(
-        root,
-        tuple(dict.fromkeys(harness.package for harness in selected)),
-        metadata=packages,
-    )
+    live = discover_inventory(root, packages_with_tests, metadata=packages)
     verify_test_target_attribution(selected, live, packages)
 
 

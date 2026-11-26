@@ -23,6 +23,8 @@ from rust_prover_tools.kani_inventory import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
     from cmd_mox import CmdMox
 
 pytest_plugins = ("cmd_mox.pytest_plugin",)
@@ -445,6 +447,44 @@ def test_a_live_test_target_is_attributed_exactly() -> None:
     live, metadata = _live_beta()
 
     verify_test_target_attribution((_beta_integration(),), live, metadata)
+
+
+def test_only_packages_with_selected_test_harnesses_are_rediscovered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lib-only selection does not force its package through a fresh scan."""
+    from rust_prover_tools.kani_inventory import discover as discover_module
+    from rust_prover_tools.kani_inventory import verify_selected_test_targets
+
+    live, metadata = _live_beta()
+    beta_harness = _beta_integration()
+    alpha = discover_inventory(_WORKSPACE, ("alpha",), metadata=metadata)
+    lib_harness = next(
+        harness for harness in alpha.harnesses if harness.target_kind == "lib"
+    )
+    requested: list[tuple[str, ...]] = []
+
+    def recording_discover(
+        root: Path,
+        packages: cabc.Iterable[str],
+        *,
+        metadata: cabc.Iterable[typ.Any] | None = None,
+    ) -> HarnessInventory:
+        """Record the packages the attribution check thinks it needs."""
+        del root, metadata
+        requested.append(tuple(packages))
+        return live
+
+    monkeypatch.setattr(discover_module, "discover_inventory", recording_discover)
+
+    verify_selected_test_targets(
+        _WORKSPACE,
+        (lib_harness, beta_harness),
+        metadata,
+    )
+
+    assert requested == [("beta",)]
+    assert beta_harness.identity in live.identities()
 
 
 def test_a_pinned_test_harness_absent_from_the_live_tree_is_refused() -> None:

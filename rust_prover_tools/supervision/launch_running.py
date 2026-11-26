@@ -146,6 +146,25 @@ class RunningHarness:
                 continue
         return self._settled_result()
 
+    @property
+    def settled_status(self) -> LaunchResult:
+        """The status the group settled with, independent of any failure.
+
+        A lost evidence write outranks the status for reporting, but the
+        status is still the only termination evidence the attempt has. A
+        caller that sees `settle` raise can read this before letting the
+        failure continue, so the report keeps the exit code and signal.
+        """
+        task = self._task
+        # `exception()` raises on a cancelled task, so cancellation is ruled
+        # out first, and a failed or stopped run leaves only the status the
+        # recorder saw.
+        if not task.done() or task.cancelled():
+            return exit_status(self._recorder.settled_exit_code)
+        if task.exception() is not None:
+            return exit_status(self._recorder.settled_exit_code)
+        return task.result()
+
     def _settled_result(self) -> LaunchResult:
         """Return the evidence a finished launch task left behind."""
         if self._result is not None:
