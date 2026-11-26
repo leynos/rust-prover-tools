@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_diagnostics import open_diagnostics
@@ -75,7 +76,6 @@ from rust_prover_tools.supervision.kani import KaniAdapter
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     from rust_prover_tools.kani_inventory import CargoPackage
     from rust_prover_tools.supervision import HarnessSpec
@@ -247,7 +247,7 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         Raised when the route's Kani release has no registered grammar.
     """
     root = options.repo_root.resolve()
-    route_cwd = route_working_directory(options.route).resolve()
+    route_cwd = route_working_directory(options.route, process_cwd=Path.cwd()).resolve()
     if route_cwd != root:
         msg = (
             "the route working directory must be the repository root: "

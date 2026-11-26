@@ -27,11 +27,12 @@ from rust_prover_tools.kani_release import (
 )
 from rust_prover_tools.kani_snapshot.identity import validate_forwarded_args
 from rust_prover_tools.kani_snapshot.run import (
-    RunOptions as SnapshotRunOptions,
-)
-from rust_prover_tools.kani_snapshot.run import (
+    ProofContext,
     SnapshotOutput,
     prepare_snapshot_proof,
+)
+from rust_prover_tools.kani_snapshot.run import (
+    RunOptions as SnapshotRunOptions,
 )
 from rust_prover_tools.supervision import LaunchCommand, LaunchEnvironment
 
@@ -115,23 +116,26 @@ class PreparedRoute:
     build: cabc.Callable[[InventoryHarness], LaunchCommand]
 
 
-def route_working_directory(route: KaniRoute) -> Path:
+def route_working_directory(route: KaniRoute, *, process_cwd: Path) -> Path:
     """Return the working directory the route will actually use.
 
     Parameters
     ----------
     route : KaniRoute
         Selected legacy or snapshot route.
+    process_cwd : Path
+        Process working directory the caller resolved, used only when a
+        snapshot route names none.
 
     Returns
     -------
     Path
-        The proof working directory. A snapshot route that names none uses the
-        process working directory, which is what its preparation will use.
+        The proof working directory. This function never reads the process
+        working directory itself.
     """
     if isinstance(route, LegacyRoute):
         return route.cwd
-    return Path.cwd() if route.cwd is None else route.cwd
+    return process_cwd if route.cwd is None else route.cwd
 
 
 def _launch_environment(command: CommandSpec) -> LaunchEnvironment:
@@ -149,6 +153,7 @@ def prepare_route(
     route: KaniRoute,
     *,
     environ: cabc.Mapping[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> PreparedRoute:
     """Qualify the selected route once and return its per-harness builder.
 
@@ -157,14 +162,17 @@ def prepare_route(
     route : KaniRoute
         Route to qualify.
     environ : cabc.Mapping[str, str] | None
-        Process environment the caller supplies for a legacy route. `None`
-        reads the process environment at this call, which is the explicit
-        provider a caller can replace in a test.
+        Inherited environment. `None` reads the process environment at this
+        call, which is the explicit provider a caller can replace in a test.
+    cwd : Path | None
+        Process working directory a route without one inherits. `None` reads
+        the process working directory at this call.
     """
+    provider = os.environ if environ is None else environ
+    process_cwd = Path.cwd() if cwd is None else cwd
     if isinstance(route, LegacyRoute):
-        provider = os.environ if environ is None else environ
         return _prepare_legacy(route, provider)
-    return _prepare_snapshot(route)
+    return _prepare_snapshot(route, provider, process_cwd)
 
 
 def _prepare_legacy(
@@ -199,17 +207,27 @@ def _prepare_legacy(
     return PreparedRoute(grammar=grammar, kind="legacy", build=build)
 
 
-def _prepare_snapshot(route: SnapshotRoute) -> PreparedRoute:
-    """Qualify the snapshot generation, environment, and grammar once."""
+def _prepare_snapshot(
+    route: SnapshotRoute,
+    environ: cabc.Mapping[str, str],
+    process_cwd: Path,
+) -> PreparedRoute:
+    """Qualify the snapshot generation, environment, and grammar once.
+
+    The inherited environment and working directory come from the caller, so
+    this function never inspects the process itself.
+    """
     qualified = prepare_snapshot_proof(
         SnapshotRunOptions(
             pin=route.pin,
             args=(),
             cache_home=route.cache_home,
-            cwd=route.cwd,
         ),
         route.hooks,
-        environment=route.environment,
+        context=ProofContext(
+            cwd=route.cwd if route.cwd is not None else process_cwd,
+            environment=environ,
+        ),
         validate_arguments=False,
     )
     grammar = grammar_for(qualified.backend_version)

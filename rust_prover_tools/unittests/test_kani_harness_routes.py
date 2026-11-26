@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import typing as typ
 from unittest import mock
 
@@ -18,11 +19,12 @@ from rust_prover_tools.kani_release import (
     validate_kani_arguments,
 )
 from rust_prover_tools.kani_snapshot.run import (
-    RunOptions as SnapshotRunOptions,
-)
-from rust_prover_tools.kani_snapshot.run import (
+    ProofContext,
     SnapshotOutput,
     prepare_snapshot_proof,
+)
+from rust_prover_tools.kani_snapshot.run import (
+    RunOptions as SnapshotRunOptions,
 )
 from tests.kani_snapshot_install_fixtures import (
     install_hooks,
@@ -188,6 +190,7 @@ def installed_snapshot(tmp_path: Path) -> tuple[SnapshotRunOptions, InstallHooks
 
 def test_the_snapshot_route_resolves_one_generation(
     installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two harness commands share one activation read and one environment."""
@@ -208,6 +211,7 @@ def test_the_snapshot_route_resolves_one_generation(
             cache_home=options.cache_home,
         ),
         hooks,
+        context=ProofContext(cwd=tmp_path, environment=os.environ),
         validate_arguments=False,
     )
     first = prepared.command(
@@ -227,6 +231,58 @@ def test_the_snapshot_route_resolves_one_generation(
     assert first.env["RPT_FROZEN_HOST"] == "1"
     monkeypatch.setenv("RPT_LATER_HOST", "2")
     assert "RPT_LATER_HOST" not in first.env
+
+
+def test_the_snapshot_route_uses_only_the_supplied_environment(
+    installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supplied environment reaches snapshot qualification unchanged.
+
+    The process environment holds a conflicting marker; the supplied mapping
+    must win, and a supplied-only marker must survive into the composed
+    command.
+    """
+    from rust_prover_tools.kani_cli_grammar import KANI_067
+    from rust_prover_tools.kani_inventory import InventoryHarness
+    from rust_prover_tools.kani_routes import SnapshotRoute, prepare_route
+
+    options, hooks = installed_snapshot
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_routes.grammar_for",
+        lambda version: KANI_067,
+    )
+    monkeypatch.setenv("RPT_FROZEN_HOST", "from-the-process")
+    supplied = {
+        **os.environ,
+        "RPT_FROZEN_HOST": "supplied",
+        "RPT_SUPPLIED_ONLY": "1",
+    }
+
+    prepared = prepare_route(
+        SnapshotRoute(
+            pin=options.pin,
+            cache_home=options.cache_home,
+            hooks=hooks,
+        ),
+        environ=supplied,
+        cwd=tmp_path,
+    )
+    harness = InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness="harness",
+        source="src/lib.rs",
+        line=1,
+    )
+
+    command = prepared.build(harness)
+
+    assert command.env is not None
+    assert command.env.values["RPT_FROZEN_HOST"] == "supplied"
+    assert command.env.values["RPT_SUPPLIED_ONLY"] == "1"
 
 
 def test_an_explicit_empty_environment_is_not_replaced(

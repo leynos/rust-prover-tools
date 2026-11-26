@@ -53,6 +53,7 @@ if typ.TYPE_CHECKING:
     from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 __all__ = (
+    "ProofContext",
     "QualifiedSnapshotProof",
     "RunOptions",
     "SnapshotOutput",
@@ -84,6 +85,26 @@ class RunOptions:
     args: tuple[str, ...] = ()
     cache_home: Path | None = None
     cwd: Path | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class ProofContext:
+    """The caller-resolved working directory and environment for one proof.
+
+    Preparation never reads the process environment or working directory
+    itself: the composition root supplies both, so a route can be qualified
+    against exactly one mapping and one directory.
+
+    Attributes
+    ----------
+    cwd : Path
+        Proof working directory, already resolved by the caller.
+    environment : collections.abc.Mapping[str, str]
+        Inherited environment the caller selected.
+    """
+
+    cwd: Path
+    environment: cabc.Mapping[str, str]
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -168,7 +189,7 @@ def prepare_snapshot_proof(
     options: RunOptions,
     hooks: InstallHooks | None = None,
     *,
-    environment: cabc.Mapping[str, str] | None = None,
+    context: ProofContext,
     validate_arguments: bool = True,
 ) -> QualifiedSnapshotProof:
     """Validate the active generation and build the proof environment once.
@@ -179,8 +200,8 @@ def prepare_snapshot_proof(
         Snapshot pin, forwarded arguments and cache root.
     hooks : InstallHooks | None
         Probe operation used while revalidating the generation.
-    environment : Mapping[str, str] | None
-        Inherited environment, or `None` for `os.environ`.
+    context : ProofContext
+        Caller-resolved working directory and inherited environment.
     validate_arguments : bool
         Whether to validate the literal forwarded arguments. Supervised
         execution passes `False` and validates each composed vector instead.
@@ -218,8 +239,8 @@ def prepare_snapshot_proof(
         toolchain=identity.toolchain,
         backend_version=identity.backend_version,
     )
-    working_directory = (Path.cwd() if options.cwd is None else options.cwd).resolve()
-    base = os.environ if environment is None else environment
+    working_directory = context.cwd.resolve()
+    base = context.environment
     return QualifiedSnapshotProof(
         runtime=runtime,
         cwd=working_directory,
@@ -262,7 +283,14 @@ def run_snapshot(
         repository's Cargo routing cannot be proved safe.
     """
     with operation_span(_LOGGER, "kani.snapshot.run") as span:
-        qualified = prepare_snapshot_proof(options, hooks)
+        qualified = prepare_snapshot_proof(
+            options,
+            hooks,
+            context=ProofContext(
+                cwd=Path.cwd() if options.cwd is None else options.cwd,
+                environment=os.environ,
+            ),
+        )
         # `echo=True` mirrors each stream live, so the CLI must not replay the
         # result. Capture stays off because a proof log can be arbitrarily
         # large; the line hook keeps only the tail that explains an outcome.
