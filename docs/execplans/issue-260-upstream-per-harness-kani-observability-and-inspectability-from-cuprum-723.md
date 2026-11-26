@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,328 passed and 6
-skipped at code head `e5ece36`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,330 passed and 6
+skipped at code head `834612c`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passes at the final head: 2 passed in 742.15 s at `e5ece36`.
+passes at the final head: 2 passed in 234.13 s at `7b0e70e`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -582,9 +582,13 @@ Plain-language terms used in this plan:
   its five public surfaces, and generated properties cover mask idempotence,
   identifier reading, cfg_attr conditionality, first_stop order and watchdog
   decisions. Escaped cgroup mount-point discovery is also exercised without a
-  test root override. `make check-fmt`, `make all` (3,328 passed, 6 skipped),
-  `make markdownlint`, and `make nixie` pass at `e5ece36`; the opt-in live Kani
-  0.67.0 fixture passes at the same head: 2 passed in 742.15 s.
+  test root override. The same round restricted the attribution rescan to
+  packages holding a selected test harness, kept a settled exit code and signal
+  when a recorder failure wins, recorded the partial report in the writer
+  tests, bounded the real-process witness waits, and documented the grammar
+  registry and module boundaries. `make check-fmt`, `make all` (3,330 passed, 6
+  skipped), `make markdownlint`, and `make nixie` pass at `834612c`; the opt-in
+  live Kani 0.67.0 fixture passes at `7b0e70e`: 2 passed in 234.13 s.
 
 ## Surprises & discoveries
 
