@@ -605,7 +605,7 @@ Plain-language terms used in this plan:
   passes at the same head: 2 passed in 412.27 s. The review-repair rounds that
   followed restored the snapshot route's own environment precedence, split the
   JSONL offset query from the boundary repair, made one opener serve both entry
-  points, bounded the witness cleanup and synchronised its join, corrected the
+  points, bounded the witness cleanup and synchronized its join, corrected the
   layout document, threaded the supplied environment into the default snapshot
   probe, bound the checked working directory into qualification, gave the
   process witness an independent settlement deadline, and narrowed the
