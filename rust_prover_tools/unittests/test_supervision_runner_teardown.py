@@ -983,6 +983,59 @@ async def _callback_failure_settled_scenario(tmp_path: Path) -> None:
     assert results[0]["signal_number"] == 15
 
 
+@_async_test
+async def test_a_cancelled_run_keeps_the_samples_it_took() -> None:
+    """A cancelled monitor still contributes the samples it had taken."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class _SamplingSleeper:
+        """Advance the first sleep so a sample is due, then hold teardown."""
+
+        def __init__(self) -> None:
+            """Start before the first sleep."""
+            self._calls = 0
+
+        async def sleep(self, seconds: float) -> None:
+            """Let one tick happen, then block until the test releases it."""
+            self._calls += 1
+            if self._calls == 1:
+                clock.advance(max(0.0, seconds))
+                return
+            entered.set()
+            try:
+                await asyncio.wait_for(release.wait(), timeout=60)
+            except asyncio.CancelledError:
+                await release.wait()
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True)),
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        sleeper=_SamplingSleeper(),
+        statuses={spec().qualified: ExecutionStatus.INTERRUPTED},
+    )
+    task = asyncio.create_task(
+        run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    sample = typ.cast("dict[str, object]", finish["peak_group_rss"])
+    assert sample.get("value") is not None, (
+        "the cancelled monitor lost the sample it had taken"
+    )
+
+
 def test_a_report_writer_failure_does_not_replace_a_cancellation(
     tmp_path: Path,
 ) -> None:

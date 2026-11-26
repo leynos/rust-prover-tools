@@ -63,6 +63,7 @@ if typ.TYPE_CHECKING:
         InterruptSource,
         LineObserver,
         ResourceProbe,
+        RunningHarnessHandle,
         Sleeper,
     )
     from rust_prover_tools.supervision.results import HarnessClassification
@@ -181,7 +182,7 @@ class AttemptSupervisor:
 
     async def _drive(
         self,
-        running: RunningHarness,
+        running: RunningHarnessHandle,
         started_at: dt.datetime,
         started_monotonic: float,
     ) -> LaunchResult:
@@ -252,7 +253,7 @@ class AttemptSupervisor:
             output_record(run_id=self.run_id, spec=self.spec, line=typed)
         )
 
-    def _request_stop(self, running: RunningHarness, detail: str) -> None:
+    def _request_stop(self, running: RunningHarnessHandle, detail: str) -> None:
         """Record the first stop reason and request it from the launcher.
 
         A stop the supervisor initiates itself, because its monitor failed or
@@ -267,17 +268,21 @@ class AttemptSupervisor:
 
     async def _monitor(
         self,
-        running: RunningHarness,
+        running: RunningHarnessHandle,
         started_at: dt.datetime,
         started_monotonic: float,
     ) -> None:
         """Run the attempt monitor until the child ends or a limit stops it."""
         monitor = self._monitor_for()
-        await monitor.run(running, started_at, started_monotonic)
-        self._samples = monitor.samples
-        if monitor.stop_reason is not None and self._stop_reason is None:
-            self._stop_reason = monitor.stop_reason
-            self._stop_detail = monitor.stop_detail
+        try:
+            await monitor.run(running, started_at, started_monotonic)
+        finally:
+            # Samples and a decided stop are evidence even when the monitor
+            # was cancelled or raised, so they are copied whatever ended it.
+            self._samples = monitor.samples
+            if monitor.stop_reason is not None and self._stop_reason is None:
+                self._stop_reason = monitor.stop_reason
+                self._stop_detail = monitor.stop_detail
 
     def _monitor_for(self) -> AttemptMonitor:
         """Build the monitor for this attempt."""

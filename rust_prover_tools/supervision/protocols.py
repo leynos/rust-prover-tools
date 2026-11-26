@@ -142,6 +142,11 @@ class RunningHarnessHandle(typ.Protocol):
         """Join the child after a stop, whatever ended it."""
         ...
 
+    @property
+    def settled_status(self) -> LaunchResult:
+        """The status the group settled with, ignoring any recorder failure."""
+        ...
+
 
 class HarnessLauncher(typ.Protocol):
     """Starts one harness invocation and returns a handle to it.

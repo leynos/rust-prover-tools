@@ -34,13 +34,13 @@ if typ.TYPE_CHECKING:
     import datetime as dt
 
     from rust_prover_tools.supervision.config import SupervisionConfig
-    from rust_prover_tools.supervision.launch_running import RunningHarness
     from rust_prover_tools.supervision.models import HarnessSpec
     from rust_prover_tools.supervision.protocols import (
         Clock,
         InterruptSource,
         LineObserver,
         ResourceProbe,
+        RunningHarnessHandle,
         Sleeper,
     )
     from rust_prover_tools.supervision.sinks import Diagnostics
@@ -100,7 +100,7 @@ class AttemptMonitor:
 
     async def run(
         self,
-        running: RunningHarness,
+        running: RunningHarnessHandle,
         started_at: dt.datetime,
         started_monotonic: float,
     ) -> None:
@@ -149,7 +149,7 @@ class AttemptMonitor:
                 with contextlib.suppress(asyncio.CancelledError):
                     await interrupt
 
-    def _record_interruption(self, running: RunningHarness) -> None:
+    def _record_interruption(self, running: RunningHarnessHandle) -> None:
         """Record and deliver an interruption stop."""
         self.stop_reason = StopReason.INTERRUPTED
         self.stop_detail = "a signal interrupted the harness"
@@ -157,7 +157,7 @@ class AttemptMonitor:
 
     def _tick(
         self,
-        running: RunningHarness,
+        running: RunningHarnessHandle,
         started_at: dt.datetime,
         started_monotonic: float,
     ) -> bool:
