@@ -228,6 +228,7 @@ def prepare_snapshot_proof(
     identity = check_active_snapshot(
         InstallOptions(pin=options.pin, cache_home=options.cache_home),
         hooks,
+        environment=context.environment,
     )
     layout = snapshot_layout(
         options.pin,

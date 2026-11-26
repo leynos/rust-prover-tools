@@ -233,6 +233,54 @@ def test_the_snapshot_route_resolves_one_generation(
     assert "RPT_LATER_HOST" not in first.env
 
 
+def test_the_default_snapshot_probe_uses_the_supplied_environment(
+    installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default probe reads the supplied mapping, not the process one."""
+    from rust_prover_tools.kani_snapshot import check as snapshot_check
+    from rust_prover_tools.kani_snapshot.run import (
+        ProofContext,
+        prepare_snapshot_proof,
+    )
+
+    options, _hooks = installed_snapshot
+    seen: list[dict[str, str]] = []
+
+    class _ProbeSeenError(Exception):
+        """Stop the check once the probe has recorded its environment."""
+
+    def recording(
+        runtime: object,
+        timeout_seconds: float | None = None,
+        *,
+        environment: cabc.Mapping[str, str],
+    ) -> object:
+        """Record the probe's environment and stop the check."""
+        del runtime, timeout_seconds
+        seen.append(dict(environment))
+        raise _ProbeSeenError
+
+    monkeypatch.setattr(snapshot_check, "probe_generation", recording)
+    supplied = {**os.environ, "RUSTC_WRAPPER": "supplied-wrapper"}
+
+    with pytest.raises(_ProbeSeenError):
+        prepare_snapshot_proof(
+            SnapshotRunOptions(
+                pin=options.pin,
+                args=(),
+                cache_home=options.cache_home,
+            ),
+            None,
+            context=ProofContext(cwd=tmp_path, environment=supplied),
+            validate_arguments=False,
+        )
+
+    assert seen
+    assert seen[0]["RUSTC_WRAPPER"] == "supplied-wrapper"
+
+
 def test_the_snapshot_route_uses_only_the_supplied_environment(
     installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
     tmp_path: Path,

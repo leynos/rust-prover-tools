@@ -31,6 +31,7 @@ print(run.report.passed)
 from __future__ import annotations
 
 import dataclasses as dc
+import functools
 import typing as typ
 from pathlib import Path
 
@@ -263,7 +264,7 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         if metadata is None:
             metadata = tuple(provider(root))
         verify_selected_test_targets(root, selected, metadata)
-    qualifier = dependencies.prepare or prepare_route
+    qualifier = dependencies.prepare or functools.partial(prepare_route, cwd=route_cwd)
     prepared = qualifier(options.route)
     return KaniHarnessPreparation(
         inventory=inventory,

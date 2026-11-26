@@ -29,6 +29,10 @@ from rust_prover_tools.kani_snapshot.identity import (
     generation_layout,
     identity_layout,
 )
+from rust_prover_tools.kani_snapshot.install_defaults import (
+    probe_generation,
+    probe_host_generation,
+)
 from rust_prover_tools.kani_snapshot.install_model import (
     Deadline,
     InstallHooks,
@@ -89,6 +93,8 @@ def check_snapshot(options: InstallOptions) -> ValidatedGeneration:
 def check_active_snapshot(
     options: InstallOptions,
     hooks: InstallHooks | None = None,
+    *,
+    environment: cabc.Mapping[str, str] | None = None,
 ) -> SnapshotIdentity:
     """Validate the active generation and prove its effective compiler.
 
@@ -103,7 +109,11 @@ def check_active_snapshot(
         Reviewed pin, cache root and budgets.
     hooks : InstallHooks | None
         External operations; the probe is the only one used. `None` selects
-        the host defaults.
+        the host defaults, with `environment` when one is supplied so the
+        default probe reads the caller's mapping rather than `os.environ`.
+    environment : collections.abc.Mapping[str, str] | None
+        Environment the default probe must use. Ignored when `hooks` supplies
+        its own probe.
 
     Returns
     -------
@@ -118,7 +128,18 @@ def check_active_snapshot(
         tree check fails, or the effective compiler does not match the
         receipt and manifest.
     """
-    chosen = InstallHooks() if hooks is None else hooks
+    if hooks is None:
+        probe = (
+            probe_host_generation
+            if environment is None
+            else functools.partial(
+                probe_generation,
+                environment=environment,
+            )
+        )
+        chosen = InstallHooks(probe=probe)
+    else:
+        chosen = hooks
     with (
         operation_span(_LOGGER, "kani.snapshot.check") as span,
         _validated_under_lock(options) as (validated, deadline),

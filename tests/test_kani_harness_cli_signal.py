@@ -199,9 +199,14 @@ def test_a_signal_during_route_qualification_ends_the_cli(
     """Qualification interrupted by SIGINT ends the run before execution."""
     evidence = tmp_path / "evidence.jsonl"
 
-    def interrupted(route: object) -> object:
+    def interrupted(
+        route: object,
+        *,
+        environ: object = None,
+        cwd: object = None,
+    ) -> object:
         """Stand in for qualification interrupted by SIGINT."""
-        del route
+        del route, environ, cwd
         raise KeyboardInterrupt
 
     monkeypatch.setattr("rust_prover_tools.kani_harness_run.prepare_route", interrupted)

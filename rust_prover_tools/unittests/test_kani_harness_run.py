@@ -340,6 +340,39 @@ def test_the_report_document_names_the_measurement_limits(tmp_path: Path) -> Non
     assert any("sampled" in note or "sample" in note for note in document["notes"])
 
 
+def test_preparation_qualifies_with_the_checked_working_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The directory the run checked is the one qualification receives."""
+    from rust_prover_tools import kani_harness_run as run_module
+
+    seen: list[Path | None] = []
+
+    def recording(
+        route: object,
+        *,
+        environ: object = None,
+        cwd: Path | None = None,
+    ) -> PreparedRoute:
+        """Record the working directory qualification was given."""
+        del route, environ
+        seen.append(cwd)
+        return _prepared()
+
+    monkeypatch.setattr(run_module, "prepare_route", recording)
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+        inventory=_inventory("harnesses::a"),
+        config=_test_config(),
+    )
+
+    prepare_harnesses(options)
+
+    assert seen == [tmp_path.resolve()]
+
+
 def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
     """Discovery and qualification leave both destinations untouched."""
     human = tmp_path / "human.log"
