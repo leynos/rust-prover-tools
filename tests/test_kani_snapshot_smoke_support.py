@@ -10,8 +10,13 @@ from __future__ import annotations
 import typing as typ
 
 import pytest
+from _pytest.outcomes import Failed
 
-from tests import kani_snapshot_smoke_commands, kani_snapshot_smoke_evidence
+from tests import (
+    kani_snapshot_smoke_commands,
+    kani_snapshot_smoke_evidence,
+    kani_snapshot_smoke_runner,
+)
 from tests.kani_snapshot_smoke_commands import require_strace, strace_prefix
 from tests.kani_snapshot_smoke_evidence import generation_from_output, read_trace
 
@@ -60,6 +65,23 @@ def test_a_trace_over_the_ceiling_is_refused(
 
     with pytest.raises(AssertionError, match="ceiling"):
         read_trace(trace)
+
+
+def test_output_over_the_capture_ceiling_fails_the_smoke(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A truncated log is refused, because an incomplete transcript proves nothing.
+
+    Only a bound is loaded into memory, so the test asserts the refusal rather
+    than the captured text.
+    """
+    monkeypatch.setattr(kani_snapshot_smoke_runner, "MAX_CAPTURE_BYTES", 8)
+
+    with pytest.raises(Failed, match="incomplete transcript"):
+        kani_snapshot_smoke_runner.run(
+            ["/bin/sh", "-c", "printf '0123456789abcdef'"],
+            kani_snapshot_smoke_runner.SmokeContext(cwd=tmp_path),
+        )
 
 
 def test_the_strace_prefix_requests_complete_arguments(tmp_path: Path) -> None:

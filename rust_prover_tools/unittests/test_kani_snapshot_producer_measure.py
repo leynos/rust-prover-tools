@@ -346,3 +346,39 @@ def test_an_unreadable_components_file_is_reported(tmp_path: pathlib.Path) -> No
 
     with pytest.raises(ProverToolError, match="rustup components list"):
         measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
+
+
+def test_the_components_digest_is_over_the_canonical_names(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The measurement canonicalizes; a raw-bytes digest would fail here.
+
+    The record is unsorted and has no trailing newline, so its own SHA-256
+    differs from the digest of the sorted names. Only a measurement that reads
+    through `canonical_component_names` can produce the expected value.
+    """
+    sysroot = _sysroot(tmp_path)
+    record = sysroot / "lib" / "rustlib" / "components"
+    record.write_bytes(b"rustc\ncargo\nrust-std")
+
+    measured = measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
+    toolchain = measured.toolchain
+
+    assert toolchain.rustup_components_sha256 == components_digest(
+        b"cargo\nrust-std\nrustc\n"
+    )
+    assert toolchain.rustup_components_sha256 != sha256_file(record), (
+        "a raw-byte digest of the record must not satisfy the canonical value"
+    )
+
+
+def test_a_duplicated_component_is_refused_by_the_measurement(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A record listing one component twice is ambiguous, so measuring fails."""
+    sysroot = _sysroot(tmp_path)
+    record = sysroot / "lib" / "rustlib" / "components"
+    record.write_bytes(b"rustc\ncargo\nrustc\n")
+
+    with pytest.raises(ProverToolError, match="more than once"):
+        measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
