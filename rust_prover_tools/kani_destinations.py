@@ -12,14 +12,11 @@ import os
 import sys
 import typing as typ
 
+from rust_prover_tools.kani_diagnostics import open_destinations
 from rust_prover_tools.supervision import (
     Diagnostics,
     DiagnosticSinks,
-    HumanSink,
-    JsonlSink,
-    NullSink,
     SupervisionConfig,
-    jsonl_append_offset,
     require_distinct_destinations,
 )
 
@@ -101,26 +98,15 @@ def open_run_diagnostics(
     Diagnostics
         The sinks for this run.
     """
-    human = destinations.human
-    human_sink = HumanSink(sys.stdout, max_line_bytes=config.max_line_bytes)
-    if human is not None:
-        human.parent.mkdir(parents=True, exist_ok=True)
-        human_sink = HumanSink(
-            stack.enter_context(human.open("a", encoding="utf-8", newline="")),
-            max_line_bytes=config.max_line_bytes,
-        )
-    jsonl = destinations.jsonl
-    jsonl_sink: JsonlSink | NullSink = NullSink()
-    if jsonl is not None:
-        jsonl.parent.mkdir(parents=True, exist_ok=True)
-        existing = jsonl_append_offset(jsonl)
-        jsonl_sink = JsonlSink(
-            stack.enter_context(jsonl.open("a", encoding="utf-8", newline="")),
-            path=jsonl,
-            max_line_bytes=config.max_line_bytes,
-            start_offset=existing,
-        )
-    return Diagnostics(human=human_sink, jsonl=jsonl_sink)
+    return open_destinations(
+        stack,
+        DiagnosticSinks(
+            human_path=destinations.human,
+            jsonl_path=destinations.jsonl,
+        ),
+        human_stream=sys.stdout,
+        max_line_bytes=config.max_line_bytes,
+    )
 
 
 def require_stdout_free(path: Path | None, option: str) -> None:

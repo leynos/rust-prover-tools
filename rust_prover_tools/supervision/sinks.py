@@ -44,8 +44,9 @@ __all__ = (
     "Sink",
     "bounded_text",
     "fit_record",
-    "jsonl_append_offset",
+    "jsonl_next_offset",
     "render_human",
+    "repair_jsonl_boundary",
     "utc_text",
 )
 
@@ -68,12 +69,13 @@ class Sink(typ.Protocol):
         ...
 
 
-def jsonl_append_offset(path: Path) -> int:
-    """Return the append offset, adding a line boundary when one is missing.
+def jsonl_next_offset(path: Path) -> int:
+    """Return the byte offset at which the next JSONL record will begin.
 
-    A destination that does not end with a newline would make the next record
-    share its last line. The inserted byte is included in the returned offset
-    so diagnostic references still name the next record exactly.
+    This is a query: it neither creates the destination nor writes to it. A
+    file without a final newline would make the next record share its last
+    line, so the returned offset includes the boundary byte a repair will
+    insert.
 
     Parameters
     ----------
@@ -88,7 +90,7 @@ def jsonl_append_offset(path: Path) -> int:
     Raises
     ------
     OSError
-        The destination exists but cannot be read or repaired.
+        The destination exists but cannot be read.
     """
     if not path.exists():
         return 0
@@ -99,9 +101,36 @@ def jsonl_append_offset(path: Path) -> int:
         reader.seek(-1, os.SEEK_END)
         if reader.read(1) == b"\n":
             return size
-    with path.open("ab") as writer:
-        writer.write(b"\n")
     return size + 1
+
+
+def repair_jsonl_boundary(path: Path) -> int:
+    """Ensure the destination ends at a line boundary and return the offset.
+
+    This is the explicit write the query above never performs. A destination
+    that already ends at a boundary is left untouched.
+
+    Parameters
+    ----------
+    path : Path
+        JSONL destination to repair.
+
+    Returns
+    -------
+    int
+        Byte offset at which the next record begins.
+
+    Raises
+    ------
+    OSError
+        The destination cannot be read or repaired.
+    """
+    offset = jsonl_next_offset(path)
+    size = path.stat().st_size if path.exists() else 0
+    if offset > size:
+        with path.open("ab") as writer:
+            writer.write(b"\n")
+    return offset
 
 
 class JsonlSink:

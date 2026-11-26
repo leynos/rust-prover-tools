@@ -585,16 +585,24 @@ def test_a_non_utf8_jsonl_stream_is_refused() -> None:
         JsonlSink(handle)
 
 
-def test_jsonl_append_offset_adds_a_missing_newline(tmp_path: Path) -> None:
-    """A destination without a final newline gains one before appending."""
-    from rust_prover_tools.supervision import jsonl_append_offset
+def test_the_offset_query_does_not_repair_the_destination(
+    tmp_path: Path,
+) -> None:
+    """The query names the next offset; only the repair writes a boundary."""
+    from rust_prover_tools.supervision import (
+        jsonl_next_offset,
+        repair_jsonl_boundary,
+    )
 
     path = tmp_path / "evidence.jsonl"
     path.write_text("x", encoding="utf-8")
 
-    assert jsonl_append_offset(path) == 2
+    assert jsonl_next_offset(path) == 2
+    assert path.read_bytes() == b"x", "the query wrote to the destination"
+    assert repair_jsonl_boundary(path) == 2
     assert path.read_bytes() == b"x\n"
-    assert jsonl_append_offset(path) == 2
+    assert repair_jsonl_boundary(path) == 2
+    assert path.read_bytes() == b"x\n"
 
 
 def test_truncation_preserves_the_invocation_identity() -> None:
