@@ -408,21 +408,24 @@ async def test_a_cancellation_during_settlement_is_re_raised() -> None:
 @_async_test
 async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
     """A cancel swallowed while joining the monitor still stops the run."""
+    from unittest import mock
+
+    from rust_prover_tools.supervision import attempt as attempt_module
+
     sleeping = asyncio.Event()
     joining = asyncio.Event()
     release = asyncio.Event()
 
     class _StubbornSleeper:
-        """A sleeper that reports its cancellation and holds it until released."""
+        """A sleeper that holds its own cancellation until released."""
 
         async def sleep(self, seconds: float) -> None:
-            """Enter the tick, then report the join and wait to be released."""
+            """Enter the tick and wait to be released."""
             del seconds
             sleeping.set()
             try:
                 await asyncio.wait_for(release.wait(), timeout=60)
             except asyncio.CancelledError:
-                joining.set()
                 await release.wait()
 
     clock = VirtualClock()
@@ -435,18 +438,31 @@ async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
         sleeper=_StubbornSleeper(),
         statuses={spec().qualified: ExecutionStatus.INTERRUPTED},
     )
-    task = asyncio.create_task(
-        run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
-    )
-    # The monitor must be sleeping before the child settles, so the settle
-    # path is what cancels it and the test then cancels a run that is joining.
-    await asyncio.wait_for(sleeping.wait(), timeout=1)
-    child_done.set()
-    await asyncio.wait_for(joining.wait(), timeout=1)
-    task.cancel()
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    real_join = attempt_module.join_reporting_cancellation
+
+    async def recording_join(task: asyncio.Task[object]) -> bool:
+        """Report reaching the supervisor's join, then join for real."""
+        joining.set()
+        return await real_join(task)
+
+    with mock.patch.object(
+        attempt_module, "join_reporting_cancellation", recording_join
+    ):
+        task = asyncio.create_task(
+            run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
+        )
+        # The monitor must be sleeping before the child settles, so the
+        # supervisor's own join is what holds the run open.
+        await asyncio.wait_for(sleeping.wait(), timeout=1)
+        child_done.set()
+        await asyncio.wait_for(joining.wait(), timeout=1)
+        assert not task.done(), "the run returned before its join completed"
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "the run finished while cleanup was still held"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
     finish = next(
         record for record in jsonl.records if record["record"] == "harness-finish"

@@ -46,6 +46,7 @@ from rust_prover_tools.supervision import (
 )
 from rust_prover_tools.supervision.launcher import LaunchCommand
 from rust_prover_tools.unittests.supervision_doubles import spec
+from tests.supervision_witness_support import SETTLE_SECONDS, settle_within
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -280,10 +281,6 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
     assert forwarded[-1] == "after"
 
 
-#: Seconds a witness waits for one settle, so a regression fails promptly.
-_SETTLE_SECONDS = 30.0
-
-
 def _failing_callback_script(tmp_path: Path) -> Path:
     """Write a child that prints two lines and then blocks."""
     script = tmp_path / "blocking.py"
@@ -332,13 +329,13 @@ def test_an_output_callback_failure_stops_and_joins_the_child(
         running = launcher.start(spec(), build, refuse)
         try:
             with pytest.raises(OSError, match="the spool is full"):
-                await asyncio.wait_for(running.wait(), timeout=_SETTLE_SECONDS)
+                await asyncio.wait_for(running.wait(), timeout=SETTLE_SECONDS)
         finally:
             # A timed-out wait must not leave the blocking child running; the
             # cleanup join is bounded so the test fails rather than hangs.
             running.stop(StopReason.INTERRUPTED)
             with contextlib.suppress(OSError, asyncio.CancelledError):
-                await asyncio.wait_for(running.settle(), timeout=_SETTLE_SECONDS)
+                await settle_within(running)
         pid = int((tmp_path / "child.pid").read_text(encoding="utf-8"))
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
@@ -381,15 +378,15 @@ def test_a_cancelled_run_does_not_lose_a_callback_failure(
         running = launcher.start(spec(), build, refuse)
         ready.set()
         try:
-            await asyncio.wait_for(failure_seen.wait(), timeout=_SETTLE_SECONDS)
+            await asyncio.wait_for(failure_seen.wait(), timeout=SETTLE_SECONDS)
             running.stop(StopReason.INTERRUPTED)
             with pytest.raises(OSError, match="the spool is full"):
-                await asyncio.wait_for(running.settle(), timeout=_SETTLE_SECONDS)
+                await settle_within(running)
         finally:
-            # Both the wait and the settle are bounded, so a regression fails
+            # The stop and the join are both bounded, so a regression fails
             # promptly instead of leaving a blocking child behind.
             running.stop(StopReason.INTERRUPTED)
             with contextlib.suppress(OSError, asyncio.CancelledError):
-                await asyncio.wait_for(running.settle(), timeout=_SETTLE_SECONDS)
+                await settle_within(running)
 
     asyncio.run(scenario())
