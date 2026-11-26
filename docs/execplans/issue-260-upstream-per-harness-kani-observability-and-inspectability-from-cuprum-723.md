@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,345 passed and 6
-skipped at code head `dce1e70`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,349 passed and 6
+skipped at code head `a98fa95`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the final code head: 2 passed in 251.11 s at `dce1e70`.
+passed at the final code head: 2 passed in 574.33 s at `a98fa95`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -616,7 +616,12 @@ Plain-language terms used in this plan:
   supplied hooks, bound relative route directories to the checked base, and
   bounded the witness failure path. `make check-fmt`, `make all` (3,345 passed,
   6 skipped), `make markdownlint`, and `make nixie` pass at `dce1e70`; the
-  opt-in live Kani 0.67.0 fixture passes at the same head: 2 passed in 251.11 s.
+  opt-in live Kani 0.67.0 fixture passes at the same head: 2 passed in 251.11
+  s. A following pass passed the checked absolute directory through unchanged
+  and reaped a stuck child under phased deadlines. `make check-fmt`, `make all`
+  (3,349 passed, 6 skipped), `make markdownlint`, and `make nixie` pass at
+  `a98fa95`; the opt-in live Kani 0.67.0 fixture passes at the same head: 2
+  passed in 574.33 s.
 
 ## Surprises & discoveries
 
