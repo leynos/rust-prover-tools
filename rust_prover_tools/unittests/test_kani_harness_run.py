@@ -373,6 +373,72 @@ def test_preparation_qualifies_with_the_checked_working_directory(
     assert seen == [tmp_path.resolve()]
 
 
+class _PathSeenError(Exception):
+    """Stop preparation once qualification has recorded its directory."""
+
+
+@pytest.mark.parametrize("snapshot", [False, True])
+def test_preparation_qualifies_at_the_checked_directory_for_both_routes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    snapshot: bool,
+) -> None:
+    """A relative route directory resolves to the checked absolute directory."""
+    from rust_prover_tools.kani_routes import SnapshotRoute
+
+    seen: list[Path] = []
+
+    def record(context: Path) -> None:
+        """Record the directory qualification received."""
+        seen.append(context)
+        raise _PathSeenError
+
+    def legacy_qualification(options: object, environment: object) -> object:
+        """Record the legacy working directory."""
+        del environment
+        record(typ.cast("typ.Any", options).cwd)
+        return object()
+
+    def snapshot_qualification(
+        options: object,
+        hooks: object = None,
+        *,
+        context: object,
+        validate_arguments: bool = True,
+    ) -> object:
+        """Record the snapshot working directory."""
+        del options, hooks, validate_arguments
+        record(typ.cast("typ.Any", context).cwd)
+        return object()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_routes.qualify_kani_installation",
+        legacy_qualification,
+    )
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_routes.prepare_snapshot_proof",
+        snapshot_qualification,
+    )
+    route = (
+        SnapshotRoute(pin=typ.cast("typ.Any", object()), cwd=Path())
+        if snapshot
+        else LegacyRoute(installation=tmp_path, cwd=Path())
+    )
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=route,
+        inventory=_inventory("harnesses::a"),
+        config=_test_config(),
+    )
+
+    with pytest.raises(_PathSeenError):
+        prepare_harnesses(options)
+
+    assert seen == [tmp_path.resolve()]
+
+
 def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
     """Discovery and qualification leave both destinations untouched."""
     human = tmp_path / "human.log"

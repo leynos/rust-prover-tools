@@ -165,32 +165,40 @@ def prepare_route(
         Inherited environment. `None` reads the process environment at this
         call, which is the explicit provider a caller can replace in a test.
     cwd : Path | None
-        Process working directory a route without one inherits. `None` reads
-        the process working directory at this call.
+        The caller's already-checked working directory. It takes precedence
+        over a route's own directory; `None` resolves the route's directory
+        once here, or the process directory when the route names none.
     """
     provider = os.environ if environ is None else environ
-    process_cwd = (Path.cwd() if cwd is None else cwd).resolve()
+    checked = None if cwd is None else cwd.resolve()
     if isinstance(route, LegacyRoute):
-        return _prepare_legacy(route, provider, process_cwd)
-    return _prepare_snapshot(route, provider, process_cwd)
+        return _prepare_legacy(route, provider, checked)
+    return _prepare_snapshot(route, provider, checked)
 
 
-def _bound_working_directory(route_cwd: Path, checked_cwd: Path) -> Path:
-    """Return a working directory bound to the caller's checked base.
+def _legacy_working_directory(route: LegacyRoute, checked: Path | None) -> Path:
+    """Return the checked directory, or resolve the route's own once."""
+    if checked is not None:
+        return checked
+    return route.cwd.resolve()
 
-    A relative route directory must be resolved once, against the directory
-    the caller checked, so a later process-directory change cannot move
-    qualification somewhere else.
-    """
-    if route_cwd.is_absolute():
-        return route_cwd
-    return (checked_cwd / route_cwd).resolve()
+
+def _snapshot_working_directory(
+    route: SnapshotRoute,
+    checked: Path | None,
+) -> Path:
+    """Return the checked directory, or resolve the route's own once."""
+    if checked is not None:
+        return checked
+    if route.cwd is not None:
+        return route.cwd.resolve()
+    return Path.cwd().resolve()
 
 
 def _prepare_legacy(
     route: LegacyRoute,
     environ: cabc.Mapping[str, str],
-    checked_cwd: Path,
+    checked: Path | None,
 ) -> PreparedRoute:
     """Qualify the legacy release, its identities, and its environment.
 
@@ -203,7 +211,7 @@ def _prepare_legacy(
     qualified = qualify_kani_installation(
         KaniExecOptions(
             route.installation,
-            _bound_working_directory(route.cwd, checked_cwd),
+            _legacy_working_directory(route, checked),
             (),
         ),
         environment,
@@ -227,7 +235,7 @@ def _prepare_legacy(
 def _prepare_snapshot(
     route: SnapshotRoute,
     environ: cabc.Mapping[str, str],
-    process_cwd: Path,
+    checked: Path | None,
 ) -> PreparedRoute:
     """Qualify the snapshot generation, environment, and grammar once.
 
@@ -237,11 +245,7 @@ def _prepare_snapshot(
     one mapping.
     """
     inherited = route.environment if route.environment is not None else environ
-    working_directory = (
-        process_cwd
-        if route.cwd is None
-        else _bound_working_directory(route.cwd, process_cwd)
-    )
+    working_directory = _snapshot_working_directory(route, checked)
     qualified = prepare_snapshot_proof(
         SnapshotRunOptions(
             pin=route.pin,

@@ -337,11 +337,11 @@ def test_the_snapshot_route_uses_only_the_supplied_environment(
     assert command.env.values["RPT_SUPPLIED_ONLY"] == "1"
 
 
-def test_a_relative_snapshot_cwd_is_bound_to_the_checked_base(
+def test_the_checked_directory_is_passed_through_unchanged(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A checked directory wins over a process directory changed later."""
+    """A checked directory wins over the route's relative spelling."""
     from rust_prover_tools.kani_routes import SnapshotRoute, prepare_route
 
     checked = tmp_path / "checked"
@@ -378,7 +378,7 @@ def test_a_relative_snapshot_cwd_is_bound_to_the_checked_base(
             cwd=checked,
         )
 
-    assert [context.cwd for context in seen] == [(checked / "rel").resolve()]
+    assert [context.cwd for context in seen] == [checked.resolve()]
 
 
 def test_a_snapshot_route_environment_wins_over_the_provider(
