@@ -13,7 +13,11 @@ from rust_prover_tools.kani_inventory import (
     collect_proofs,
 )
 from rust_prover_tools.kani_inventory.attribute_values import cfg_attr_facts
-from rust_prover_tools.kani_inventory.masking import mask_source
+from rust_prover_tools.kani_inventory.masking import (
+    Identifier,
+    identifier,
+    mask_source,
+)
 
 _WORKSPACE = (
     Path(__file__).resolve().parents[2]
@@ -64,6 +68,63 @@ def test_masking_preserves_length_and_newline_positions(text: str) -> None:
     assert [index for index, char in enumerate(masked) if char == "\n"] == [
         index for index, char in enumerate(text) if char == "\n"
     ]
+
+
+@given(st.text())
+@settings(max_examples=100, deadline=None)
+def test_masking_is_idempotent(text: str) -> None:
+    """Masked source contains no comment or literal the scan would mask again."""
+    once = mask_source(text)
+
+    assert mask_source(once) == once
+
+
+@given(st.text(alphabet="abc_", min_size=1, max_size=12))
+@settings(max_examples=50, deadline=None)
+def test_an_identifier_is_read_whole_and_a_raw_prefix_is_normalized(
+    name: str,
+) -> None:
+    """Every generated identifier is read exactly, with or without ``r#``."""
+    plain = identifier(name, 0)
+
+    assert plain == Identifier(name, len(name), is_raw=False)
+    raw = identifier("r#" + name, 0)
+    assert raw is not None
+    assert raw.text == name
+    assert raw.end == len(name) + 2
+    assert raw.is_raw is True
+
+
+#: Nested attributes a ``cfg_attr`` can carry with their expected facts.
+_CFG_ATTR_NESTED = (
+    ("kani::proof", ("kani::proof",), False),
+    ("allow(dead_code)", (), False),
+    ('cfg(feature = "proofs")', (), True),
+    ("cfg(kani)", (), False),
+)
+
+
+@given(
+    predicate=st.sampled_from(("kani", 'feature = "proofs"', "not(kani)")),
+    nested=st.sampled_from(_CFG_ATTR_NESTED),
+)
+@settings(max_examples=50, deadline=None)
+def test_cfg_attr_conditionality_follows_its_nested_attribute(
+    predicate: str,
+    nested: tuple[str, tuple[str, ...], bool],
+) -> None:
+    """A generated cfg_attr folds to the facts its nested attribute carries."""
+    attribute, expected_proofs, gating = nested
+    source = f"cfg_attr({predicate}, {attribute})"
+
+    facts = cfg_attr_facts(source, source)
+
+    assert facts is not None
+    proofs, conditional, path = facts
+    assert proofs == list(expected_proofs)
+    assert path is None
+    is_proof = "kani::proof" in expected_proofs
+    assert conditional == (gating or (is_proof and predicate != "kani"))
 
 
 def test_masking_keeps_lifetimes_and_masks_character_literals() -> None:

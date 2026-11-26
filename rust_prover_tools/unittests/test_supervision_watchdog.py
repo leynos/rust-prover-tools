@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from rust_prover_tools.supervision import (
     Measurement,
@@ -10,7 +12,7 @@ from rust_prover_tools.supervision import (
     deadline_verdict,
     watchdog_verdict,
 )
-from rust_prover_tools.supervision.watchdog import first_stop
+from rust_prover_tools.supervision.watchdog import SampleVerdict, first_stop
 
 _MIB = 1024 * 1024
 
@@ -87,4 +89,67 @@ def test_the_first_stop_wins_in_the_given_order() -> None:
 def test_no_stop_before_any_limit(elapsed: float) -> None:
     """No limit is reported before one is crossed."""
     verdict = deadline_verdict(elapsed_seconds=elapsed, timeout_seconds=10.0)
+    assert verdict.reason is None
+
+
+_STOP_REASONS = (
+    StopReason.TIMEOUT,
+    StopReason.MEMORY_WATCHDOG,
+    StopReason.INTERRUPTED,
+)
+
+
+@given(st.lists(st.sampled_from((*_STOP_REASONS, None)), max_size=6))
+@settings(max_examples=50, deadline=None)
+def test_first_stop_returns_the_first_stopping_verdict(
+    reasons: list[StopReason | None],
+) -> None:
+    """Generated verdict sequences select the first stop in argument order."""
+    verdicts = [
+        SampleVerdict(reason, detail=f"verdict {index}")
+        for index, reason in enumerate(reasons)
+    ]
+
+    chosen = first_stop(*verdicts)
+
+    first = next(
+        (verdict for verdict in verdicts if verdict.reason is not None),
+        None,
+    )
+    if first is None:
+        assert chosen.reason is None
+        assert chosen.detail == ""
+    else:
+        assert chosen is first
+
+
+@given(
+    value=st.integers(min_value=0, max_value=1 << 40),
+    threshold=st.integers(min_value=0, max_value=1 << 40),
+)
+@settings(max_examples=50, deadline=None)
+def test_the_watchdog_fires_exactly_below_the_floor(
+    value: int,
+    threshold: int,
+) -> None:
+    """A generated measurement stops the harness exactly when below the floor."""
+    verdict = watchdog_verdict(
+        host_available=Measurement.available(value),
+        threshold_bytes=threshold,
+    )
+
+    assert (verdict.reason is StopReason.MEMORY_WATCHDOG) == (value < threshold)
+
+
+@given(st.integers(min_value=0, max_value=1 << 40))
+@settings(max_examples=50, deadline=None)
+def test_an_unavailable_measurement_never_fires_at_any_floor(
+    threshold: int,
+) -> None:
+    """A value that could not be read is not evidence at any configured floor."""
+    verdict = watchdog_verdict(
+        host_available=Measurement.unavailable("meminfo unreadable"),
+        threshold_bytes=threshold,
+    )
+
     assert verdict.reason is None

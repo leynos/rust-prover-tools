@@ -1,4 +1,26 @@
-"""rust-prover-tools package."""
+"""Prover tooling for Rust repositories, centred on Kani.
+
+The package exposes five public surfaces:
+
+- ``kani_inventory`` discovers, selects, and serialises exact Kani
+  harnesses, including package-qualified identities and ``#[path]`` and
+  inline modules.
+- ``kani_log`` parses Kani 0.67.0 reports with the one grammar the
+  supervision layer also reads.
+- ``supervision`` runs harnesses in owned process groups, streams live
+  evidence, samples resources, applies deadlines and a host-memory
+  watchdog, and publishes typed outcomes with a versioned report.
+- ``kani_harness_run`` composes those pieces behind one library entry
+  point; ``prepare_harnesses`` and ``execute_harnesses`` split discovery
+  from execution so a caller's handlers cover exactly the phase whose
+  children they can stop.
+- ``kani_routes`` and ``kani_snapshot`` pin, install, and qualify the Kani
+  release a run executes.
+
+The CLI in ``cli`` binds the same API for ``kani harnesses list`` and
+``kani harnesses run``. The package also hosts the Verus installation and
+trust-audit helpers used by the wider toolchain.
+"""
 
 from __future__ import annotations
 
