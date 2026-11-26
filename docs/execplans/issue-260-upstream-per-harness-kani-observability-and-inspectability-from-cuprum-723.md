@@ -6,8 +6,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,332 passed and 6
-skipped at code head `1e65b99`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,336 passed and 6
+skipped at code head `d2acc86`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
 passed at the last code head it was run on: 2 passed in 108.19 s at `3406f88`.
 No code changed after that revision; only this plan text and the
@@ -593,9 +593,13 @@ Plain-language terms used in this plan:
   `_drive` re-raise a cancellation swallowed during its joins, and added the
   matching regression. A final review round made the cancellation check compare
   against the attempt's own starting count, with a regression for an inherited
-  count. `make check-fmt`, `make all` (3,332 passed, 6 skipped),
-  `make markdownlint`, and `make nixie` pass at `1e65b99`; the opt-in live Kani
-  0.67.0 fixture passes at the same head: 2 passed in 279.61 s.
+  count. A Unit Architecture pass then split the attempt loop into records,
+  reductions, cgroup and monitor modules, made cgroup discovery report a read
+  failure separately from an absent hierarchy, injected the cancellation probe,
+  made the legacy route take its environment explicitly, and separated report
+  rendering from the writer. `make check-fmt`, `make all` (3,336 passed, 6
+  skipped), `make markdownlint`, and `make nixie` pass at `d2acc86`; the opt-in
+  live Kani 0.67.0 fixture passes at the same head: 2 passed in 161.94 s.
 
 ## Surprises & discoveries
 
