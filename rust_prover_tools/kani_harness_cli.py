@@ -32,14 +32,16 @@ from cyclopts import Parameter
 from rust_prover_tools.cli_support import repo_root as resolve_repo_root
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import print_lines
+from rust_prover_tools.kani_destinations import (
+    open_run_diagnostics,
+    supervision_policy,
+)
 from rust_prover_tools.kani_harness_cli_options import (
     DestinationFlags,
     PolicyFlags,
     RouteFlags,
     SelectionFlags,
-    open_run_diagnostics,
     resolve_route,
-    supervision_policy,
 )
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessDependencies,

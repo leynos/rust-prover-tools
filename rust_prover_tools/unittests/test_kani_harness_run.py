@@ -439,10 +439,10 @@ def test_the_configured_line_limit_reaches_the_launcher() -> None:
 
 def test_the_log_budget_reaches_the_policy() -> None:
     """A non-default retained-log budget is part of the run policy."""
+    from rust_prover_tools.kani_destinations import supervision_policy
     from rust_prover_tools.kani_harness_cli_options import (
         DestinationFlags,
         PolicyFlags,
-        supervision_policy,
     )
 
     config = supervision_policy(

@@ -10,11 +10,13 @@ from pathlib import Path
 import pytest
 
 from rust_prover_tools.cli import app
+from rust_prover_tools.kani_destinations import (
+    require_stdout_free,
+    supervision_policy,
+)
 from rust_prover_tools.kani_harness_cli_options import (
     DestinationFlags,
     PolicyFlags,
-    _require_stdout_free,
-    supervision_policy,
 )
 from tests.kani_harness_cli_support import inventory_file
 
@@ -181,7 +183,7 @@ def test_a_jsonl_alias_of_a_piped_stdout_is_refused() -> None:
     try:
         sys.stdout = typ.cast("typ.Any", _PipedStdout(write_fd))
         with pytest.raises(ValueError, match="standard output already names"):
-            _require_stdout_free(Path(f"/proc/self/fd/{write_fd}"), "--jsonl")
+            require_stdout_free(Path(f"/proc/self/fd/{write_fd}"), "--jsonl")
     finally:
         sys.stdout = original
         os.close(read_fd)
