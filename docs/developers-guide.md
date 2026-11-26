@@ -718,8 +718,13 @@ is asserted against that corpus.
 - The logs are corpus evidence: recapture them, never hand-edit them.
 - Capture the complete standard output followed by the complete standard
   error. Merging the streams can split a report block.
-- Add the version-named corpus directory before a release joins
-  `SUPPORTED_KANI_VERSIONS`, and delete it when the release leaves the set.
+- Register a new release in three places at once: add its `KaniGrammar` to
+  the registry in `rust_prover_tools/kani_cli_grammar.py` (with `KANI_067` as
+  the model), add the version-named corpus directory under
+  `tests/fixtures/kani_logs/`, and add the release to `SUPPORTED_KANI_VERSIONS`
+  in `rust_prover_tools/kani_log`. Delete all three when the release leaves the
+  supported set. The registry's import-time check refuses a process whose
+  registered set differs from `SUPPORTED_KANI_VERSIONS`.
 - `expected.json` records the facts each log must yield and the decision it
   must reach. `decision_table.json` holds the precedence table as data, and the
   manifest files declare the harnesses the corpus run selected.
@@ -998,6 +1003,12 @@ single-invocation execution: which exact harness is running, how much memory
 and time it is using, and why it stopped. Its modules divide that question by
 responsibility rather than by prover:
 
+- `rust_prover_tools.kani_cli_grammar` is the single registry of Kani
+  release grammars. `KANI_067` is the qualified 0.67.0 entry, `grammar_for`
+  resolves a release, `SUPPORTED_VERSIONS` lists the registered set, and
+  `UnsupportedKaniGrammarError` refuses an unregistered one. An import-time
+  check ties the registry to `SUPPORTED_KANI_VERSIONS` from `kani_log`, so a
+  release cannot be half-registered.
 - `rust_prover_tools.kani_log` is the shared 0.67.0 grammar, report model,
   reader, and reconciliation. Its grammar, model, reader, and corpus derive
   from Combobulate at commit `9dd6e3c`; see
@@ -1049,6 +1060,19 @@ responsibility rather than by prover:
   handle exists.
 - `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
   `kani harnesses list` and `kani harnesses run`.
+- `rust_prover_tools.supervision.launcher` owns the Cuprum boundary:
+  `CuprumHarnessLauncher` starts one child in an owned process group and
+  returns a `RunningHarness`. It alone imports Cuprum for launches, so the rest
+  of the supervision layer stays prover-neutral and Cuprum-free.
+- `rust_prover_tools.supervision.pipe_drain` borrows the child's pipe ends
+  through `StdioTarget.fd`, forwards decoded lines, and translates the neutral
+  `LaunchEnvironment` back to Cuprum's environment mode at that boundary.
+- `rust_prover_tools.supervision.stream_lines` is the bounded splitter shared
+  by the pipe drain and the streaming parser, so an unterminated line is capped
+  in one place.
+- `rust_prover_tools.supervision.cgroup` reads cgroup v2 membership and memory
+  evidence from procfs and the mount table, returning explained absences rather
+  than zeroes when the hierarchy is unavailable.
 
 The adapter seam is deliberately small. A prover adapter supplies an observer
 factory and a classifier:

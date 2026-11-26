@@ -606,10 +606,14 @@ through `RPT_LIVE_KANI=1`.
 ## Grammar qualification and qualify-once
 
 Each grammar is qualified against one exact release and captured as a corpus of
-a passing harness, a counterexample, a no-match run, and a truncated run. Only
-0.67.0 is registered. A banner naming another release raises
-`UnsupportedKaniGrammarError`; the parser never guesses at a release it was not
-written for. Adding a release requires all four captures.
+a passing harness, a counterexample, a no-match run, and a truncated run.
+`rust_prover_tools.kani_cli_grammar` is the single registry: `KANI_067` is the
+qualified entry, `grammar_for` resolves a release, and an import-time check
+requires the registry's `SUPPORTED_VERSIONS` to equal `SUPPORTED_KANI_VERSIONS`
+from `kani_log`. Only 0.67.0 is registered. A banner naming another release
+raises `UnsupportedKaniGrammarError`; the parser never guesses at a release it
+was not written for. Adding a release requires all four captures, an entry in
+the registry, and the version in `SUPPORTED_KANI_VERSIONS`.
 
 A run qualifies its route once: installation and Cargo routing validation, one
 child environment, and one rustc, compiler, and verifier identity probe
