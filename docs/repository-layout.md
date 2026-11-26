@@ -58,7 +58,7 @@ prover-specific work:
 - `kani_log/` is the shared Kani 0.67.0 grammar, report model, reader, and
   reconciliation, with its provenance in `ATTRIBUTION.md`.
 - `kani_inventory/` resolves Cargo packages and targets, scans Rust sources
-  lexically, follows modules and `#[path]`, and serialises the strict version-1
+  lexically, follows modules and `#[path]`, and serializes the strict version-1
   inventory document.
 - `kani_snapshot/` pins, installs, verifies, and publishes Kani releases.
 - `supervision/` is the prover-neutral supervisor: process groups, live
