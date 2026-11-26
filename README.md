@@ -194,6 +194,8 @@ ______________________________________________________________________
   construction, and test strategy.
 - [Developers' guide](docs/developers-guide.md) — adding prover workflows and
   writing command tests.
+- [Repository layout](docs/repository-layout.md) — where source, tests,
+  fixtures, and plans live, and which module owns each boundary.
 - [0.2.0 migration guide](docs/v0-2-0-migration-guide.md) — repeatable
   `--proof-file`, the single-file environment bindings, partial-run reporting,
   and the `VerusRunOptions.proof_files` API change.
