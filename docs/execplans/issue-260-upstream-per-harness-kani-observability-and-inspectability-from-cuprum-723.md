@@ -6,8 +6,8 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,331 passed and 6
-skipped at code head `fed1f5d`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,332 passed and 6
+skipped at code head `1e65b99`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
 passed at the last code head it was run on: 2 passed in 108.19 s at `3406f88`.
 No code changed after that revision; only this plan text and the
@@ -591,9 +591,11 @@ Plain-language terms used in this plan:
   registry and module boundaries. A later review round moved the
   module-responsibility descriptions into `docs/repository-layout.md`, made
   `_drive` re-raise a cancellation swallowed during its joins, and added the
-  matching regression. `make check-fmt`, `make all` (3,331 passed, 6 skipped),
-  `make markdownlint`, and `make nixie` pass at `fed1f5d`; the opt-in live Kani
-  0.67.0 fixture passed at `3406f88`: 2 passed in 108.19 s.
+  matching regression. A final review round made the cancellation check compare
+  against the attempt's own starting count, with a regression for an inherited
+  count. `make check-fmt`, `make all` (3,332 passed, 6 skipped),
+  `make markdownlint`, and `make nixie` pass at `1e65b99`; the opt-in live Kani
+  0.67.0 fixture passes at the same head: 2 passed in 279.61 s.
 
 ## Surprises & discoveries
 
