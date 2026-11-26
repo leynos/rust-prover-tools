@@ -26,13 +26,6 @@ import typing as typ
 import uuid
 
 from rust_prover_tools.supervision.attempt import AttemptSupervisor
-from rust_prover_tools.supervision.events import (
-    RunStart,
-    harness_finish_record,
-    harness_start_record,
-    run_finish_record,
-    run_start_record,
-)
 from rust_prover_tools.supervision.models import (
     HarnessSpec,
     StopReason,
@@ -41,12 +34,11 @@ from rust_prover_tools.supervision.run_finalize import (
     CANCELLED_DETAIL,
     INTERRUPTED_DETAIL,
     NOT_RUN_DETAIL,
-    ReportInput,
     RunLedger,
-    assemble_report,
     not_run_result,
     result_for,
 )
+from rust_prover_tools.supervision.run_journal import RunJournal
 
 if typ.TYPE_CHECKING:
     import datetime as dt
@@ -112,7 +104,7 @@ class SupervisedRun:
         if self.environment.interrupts is not None:
             self.environment.interrupts.bind(asyncio.get_running_loop())
         ledger = RunLedger(expected=self.expected)
-        self._emit_start(started_at, ledger)
+        self._journal_for().emit_start(self.expected, started_at, ledger)
         try:
             await self._run_all(ledger)
         except asyncio.CancelledError:
@@ -152,23 +144,19 @@ class SupervisedRun:
             not_run_result(spec, detail) for spec in self.expected[recorded:]
         )
 
-    def _emit_start(self, started_at: dt.datetime, ledger: RunLedger) -> None:
-        """Write the run's opening evidence record, retaining a sink failure."""
-        packages = tuple(dict.fromkeys(spec.package for spec in self.expected))
-        try:
-            self.environment.diagnostics.emit(
-                run_start_record(
-                    RunStart(
-                        run_id=self.run_id,
-                        timestamp=started_at,
-                        packages=packages,
-                        harness_count=len(self.expected),
-                        config=self.config,
-                    )
-                )
-            )
-        except (OSError, ValueError) as error:
-            ledger.diagnostic_error = error
+    def _journal_for(self) -> RunJournal:
+        """Build the evidence writer for this run."""
+        return RunJournal(
+            run_id=self.run_id,
+            config=self.config,
+            diagnostics=self.environment.diagnostics,
+            report_writer=self.environment.report_writer,
+            clock=self.environment.clock,
+        )
+
+    def _emit_finish(self, ledger: RunLedger, result: HarnessResult) -> None:
+        """Emit one harness-finish record, retaining a sink failure."""
+        self._journal_for().emit_finish(result, ledger)
 
     async def _run_all(self, ledger: RunLedger) -> None:
         """Run every expected identity, continuing past individual failures."""
@@ -182,17 +170,9 @@ class SupervisedRun:
 
     async def _run_one(self, spec: HarnessSpec, ledger: RunLedger) -> HarnessResult:
         """Run and record one harness invocation."""
-        reference = None
-        try:
-            reference = self.environment.diagnostics.emit(
-                harness_start_record(
-                    run_id=self.run_id,
-                    spec=spec,
-                    timestamp=self.environment.clock.now(),
-                )
-            )
-        except (OSError, ValueError) as error:
-            ledger.diagnostic_error = error
+        reference = self._journal_for().emit_harness_start(
+            spec, self.environment.clock.now(), ledger
+        )
         try:
             evidence, classification = await self._supervise(spec, ledger)
         except BaseException:
@@ -243,16 +223,6 @@ class SupervisedRun:
             ledger.interrupted = True
             ledger.interrupt_signal = self._signum()
 
-    def _emit_finish(self, ledger: RunLedger, result: HarnessResult) -> None:
-        """Emit one harness-finish record, retaining a sink failure."""
-        try:
-            self.environment.diagnostics.emit(
-                harness_finish_record(run_id=self.run_id, result=result)
-            )
-        except (OSError, ValueError) as error:
-            if ledger.diagnostic_error is None:
-                ledger.diagnostic_error = error
-
     async def _supervise(
         self, spec: HarnessSpec, ledger: RunLedger
     ) -> tuple[AttemptEvidence, HarnessClassification]:
@@ -298,48 +268,9 @@ class SupervisedRun:
 
     def _finalize(self, ledger: RunLedger, started_at: dt.datetime) -> RunReport:
         """Build, emit, and optionally write the run's final report."""
-        signum = self._signum()
-        if signum is not None:
-            ledger.interrupted = True
-            ledger.interrupt_signal = signum
-        ledger.finished_at = self.environment.clock.now()
-        report = assemble_report(
-            ReportInput(
-                expected=self.expected,
-                results=tuple(ledger.results),
-                executed=tuple(ledger.executed),
-                interrupted=ledger.interrupted,
-                interrupt_signal=ledger.interrupt_signal,
-                run_id=self.run_id,
-                started_at=started_at,
-                finished_at=ledger.finished_at,
-            )
+        return self._journal_for().finalize(
+            ledger,
+            started_at,
+            self.expected,
+            self._signum(),
         )
-        diagnostic_error = ledger.diagnostic_error or self.environment.diagnostics.error
-        try:
-            self.environment.diagnostics.emit(
-                run_finish_record(
-                    run_id=self.run_id,
-                    timestamp=ledger.finished_at,
-                    report=report,
-                )
-            )
-            self.environment.diagnostics.flush()
-        except (OSError, ValueError) as error:
-            # The report destination is independent of the live sinks. Publish
-            # the completed report first, then surface the first evidence
-            # failure, whether it happened during the run or at finalization.
-            if diagnostic_error is None:
-                diagnostic_error = error
-        if diagnostic_error is None:
-            diagnostic_error = self.environment.diagnostics.error
-        self._write_report(report)
-        if diagnostic_error is not None:
-            raise diagnostic_error
-        return report
-
-    def _write_report(self, report: RunReport) -> None:
-        """Write the JSON report when a destination is configured."""
-        path = self.config.sinks.report_path
-        if path is not None:
-            self.environment.report_writer(path, report)
