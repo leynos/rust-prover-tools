@@ -370,6 +370,23 @@ async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
 
 
 @_async_test
+async def test_an_earlier_cancellation_does_not_interrupt_a_later_attempt() -> None:
+    """A cancellation count inherited from earlier work is not this attempt's."""
+    task = asyncio.current_task()
+    assert task is not None
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.sleep(0)
+    assert task.cancelling() > 0
+
+    environment = _environment(ScriptedLauncher(), VirtualClock())
+
+    report = await run_supervised((spec(),), _config(), environment)
+
+    assert report.is_complete
+
+
+@_async_test
 async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
     """A cancel swallowed while joining the monitor still stops the run."""
     entered = asyncio.Event()

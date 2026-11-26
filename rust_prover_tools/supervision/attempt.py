@@ -24,6 +24,7 @@ import typing as typ
 from rust_prover_tools.supervision.attempt_state import (
     AttemptEvidence,
     AttemptSettlement,
+    cancellation_baseline,
     cancellation_pending,
     finish_cgroup,
     idle_seconds,
@@ -197,6 +198,7 @@ class AttemptSupervisor:
         failure: BaseException | None = None
         result: LaunchResult | None = None
         cancelled = False
+        baseline = cancellation_baseline()
         try:
             await asyncio.wait({waiter, monitor}, return_when=asyncio.FIRST_COMPLETED)
             if monitor.done():
@@ -215,10 +217,8 @@ class AttemptSupervisor:
             # arriving at either join is recorded and re-raised below, never
             # cleared, so the run still reports an interrupted attempt.
             cancelled = await join_reporting_cancellation(monitor) or cancelled
-            # A launcher that raised has already stopped the child from
-            # inside, because its evidence callback failed. Record that as the
-            # supervisor's own stop; otherwise the empty settled status would
-            # read as an ordinary exit.
+            # A launcher that raised stopped the child from inside because
+            # its callback failed; record that as the supervisor's own stop.
             if waiter_failed(waiter):
                 self._request_stop(running, "the supervisor stopped the run")
             if not running.done and running.stop_reason is None:
@@ -233,10 +233,9 @@ class AttemptSupervisor:
             cancelled = await join_reporting_cancellation(waiter) or cancelled
         if failure is not None:
             raise failure
-        if cancellation_pending(recorded=cancelled):
-            # The attempt was stopped by the caller, not by its own exit, so
-            # its classification is interrupted even when the child happened
-            # to settle first.
+        if cancellation_pending(recorded=cancelled, baseline=baseline):
+            # The caller stopped the attempt, so it is interrupted even when
+            # the child happened to settle first.
             self._request_stop(running, "the supervisor stopped the run")
             raise asyncio.CancelledError
         return joined if result is None else result

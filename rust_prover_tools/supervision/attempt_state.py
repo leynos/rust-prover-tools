@@ -29,6 +29,7 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "AttemptEvidence",
     "AttemptSettlement",
+    "cancellation_baseline",
     "cancellation_pending",
     "finish_cgroup",
     "idle_seconds",
@@ -227,18 +228,25 @@ def waiter_failed(waiter: asyncio.Task[LaunchResult]) -> bool:
     return waiter.exception() is not None
 
 
-def cancellation_pending(*, recorded: bool) -> bool:
-    """Whether a caller cancellation is recorded or still pending on this task.
+def cancellation_baseline() -> int:
+    """Return this task's cancellation count as the attempt starts."""
+    task = asyncio.current_task()
+    return 0 if task is None else task.cancelling()
+
+
+def cancellation_pending(*, recorded: bool, baseline: int) -> bool:
+    """Whether a caller cancellation arrived during this attempt.
 
     `RunningHarness.settle` deliberately keeps joining after a cancellation, so
     the request can be consumed without ever reaching the caller. The task's
-    own `cancelling()` count still reports it, and re-raising keeps a cancelled
-    run from continuing to the next harness.
+    own `cancelling()` count still reports it, but a count inherited from work
+    before the attempt must not turn a completed run into a cancelled one, so
+    only an increase over the attempt's baseline counts.
     """
     if recorded:
         return True
     task = asyncio.current_task()
-    return task is not None and task.cancelling() > 0
+    return task is not None and task.cancelling() > baseline
 
 
 async def join_reporting_cancellation(task: asyncio.Task[typ.Any]) -> bool:
