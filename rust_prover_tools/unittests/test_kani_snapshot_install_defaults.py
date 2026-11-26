@@ -163,14 +163,31 @@ def test_the_default_clock_is_the_monotonic_clock() -> None:
     )
 
 
-def test_the_rustup_configuration_step_is_named_and_documented() -> None:
-    """The side effect is its own function, so a reader can see what it changes."""
-    configure = getattr(install_defaults, "disable_rustup_self_update", None)
+def test_the_rustup_configuration_step_writes_into_the_private_homes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The named step runs exactly the setting change, in the setup environment.
 
-    assert configure is not None, (
-        "the rustup configuration step must be its own named function"
-    )
-    assert configure.__doc__, "the configuration step must state its side effect"
-    assert "self-update" in configure.__doc__, (
-        "the docstring must name the setting it changes"
-    )
+    This is the behavioural half of the contract: the function is the only
+    place that changes rustup's configuration, and it passes the generation's
+    private homes and its own share of the budget to that command.
+    """
+    seen = _record_commands(monkeypatch)
+    env = _homes_for(_runtime(tmp_path))
+
+    install_defaults.disable_rustup_self_update(env, timeout_seconds=4.0)
+
+    assert [spec.argv for spec in seen] == [
+        ("rustup", "set", "auto-self-update", "disable")
+    ]
+    assert seen[0].timeout_seconds == pytest.approx(4.0)
+    assert _homes(seen[0])["RUSTUP_HOME"] == env["RUSTUP_HOME"]
+
+
+def _homes_for(runtime: SnapshotRuntime) -> dict[str, str | UnsetType]:
+    """Return a setup-shaped environment naming the generation's private homes."""
+    return {
+        "RUSTUP_HOME": str(runtime.layout.rustup_home),
+        "CARGO_HOME": str(runtime.layout.cargo_home),
+    }

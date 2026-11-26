@@ -128,6 +128,49 @@ def test_a_solver_failure_is_not_a_verification_failure() -> None:
         parse_proof_report(_fixture("solver_failure.txt"))
 
 
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "CBMC failed with status 6",
+        "Failed to run cbmc: No such file or directory",
+        "CBMC timed out",
+        "CBMC appears to have run out of memory",
+    ],
+    ids=["failed", "not-run", "timed-out", "out-of-memory"],
+)
+def test_each_solver_failure_is_refused(diagnostic: str) -> None:
+    """Every CBMC failure shape is reported as the solver, not as a proof."""
+    transcript = f"Checking harness probe...\n{diagnostic}\n"
+
+    with pytest.raises(ProofSolverError, match=r"CBMC|solver"):
+        parse_proof_report(transcript)
+
+
+def test_a_duplicated_harness_start_is_refused() -> None:
+    """Two sections for one harness make its verdict depend on document order."""
+    transcript = (
+        _fixture("positive.txt")
+        + "\nChecking harness bounded_push_contents_are_exact...\n"
+    )
+
+    with pytest.raises(ProofTranscriptError, match="more than once"):
+        parse_proof_report(transcript)
+
+
+def test_more_than_one_manual_summary_is_refused() -> None:
+    """Two summaries leave the counts ambiguous, so the transcript is refused.
+
+    Each half names a different harness, so the duplicate-section guard cannot
+    be what refuses it.
+    """
+    transcript = _transcript(("first_harness",), ()) + _transcript(
+        ("second_harness",), ()
+    )
+
+    with pytest.raises(ProofTranscriptError, match="more than one manual harness"):
+        parse_proof_report(transcript)
+
+
 def test_a_zero_harness_run_is_refused() -> None:
     """A run that found no proof harnesses proves nothing."""
     with pytest.raises(ProofTranscriptError, match="no proof harnesses"):

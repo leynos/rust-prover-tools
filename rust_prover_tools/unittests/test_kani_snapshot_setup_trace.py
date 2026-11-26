@@ -16,6 +16,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from rust_prover_tools.kani_snapshot.producer import strace_records
 from rust_prover_tools.kani_snapshot.producer.setup_trace import (
     MAX_TRACE_BYTES,
     SetupTraceError,
@@ -452,6 +453,32 @@ def test_an_oversized_trace_is_refused_before_parsing() -> None:
     """The bounded reader refuses a trace larger than its ceiling."""
     with pytest.raises(SetupTraceError, match="ceiling"):
         parse_exec_trace("x" * (MAX_TRACE_BYTES + 1))
+
+
+def test_a_trace_over_the_record_ceiling_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A trace with more records than the ceiling is refused, not truncated.
+
+    The ceiling bounds memory, so a hostile trace cannot exhaust the process by
+    repeating one short record.
+    """
+    monkeypatch.setattr(strace_records, "MAX_EXEC_RECORDS", 2)
+    trace = _LAUNCHER + _ALLOWED_GH + _ALLOWED_TAR + _ALLOWED_RUSTUP
+
+    with pytest.raises(SetupTraceError, match="record ceiling"):
+        parse_exec_trace(trace)
+
+
+def test_a_record_falls_back_to_argv_zero_for_its_name() -> None:
+    """An empty executable path still names the program from `argv[0]`.
+
+    strace can report an empty `execve` path for a failed lookup; the argument
+    vector is then the only name the policy has.
+    """
+    record = strace_records.ExecRecord(executable="", argv=("cargo", "-vV"))
+
+    assert record.name == "cargo"
 
 
 @given(extra=st.lists(st.sampled_from(_ALLOWED), max_size=6))

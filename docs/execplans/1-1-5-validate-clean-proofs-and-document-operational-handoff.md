@@ -86,12 +86,12 @@ scheduled trigger stays disabled.
 ## Tolerances (exception triggers)
 
 - Files: more than 45 non-ExecPlan files changed: stop and escalate. Raised to
-  90 on 2026-11-24 under D7. Measured after the fourth-round repairs: 70
-  non-ExecPlan files, so 20 remain — 22 % of the limit.
+  90 on 2026-11-24 under D7. Measured after the seventh-round repairs: 71
+  non-ExecPlan files, so 19 remain — 21 % of the limit.
 - Code: more than 1,800 net lines of Python and Rust fixture code: stop and
   escalate. Raised to 3,800 on 2026-11-24 under D7 and to 4,600 on 2026-11-25
-  under D8. Measured after the sixth-round repairs: 4,219 net lines, so 381
-  remain — 8 % of the limit. The D7 limit of 3,800 was already exceeded when D8
+  under D8. Measured after the seventh-round repairs: 4,364 net lines, so 236
+  remain — 5 % of the limit. The D7 limit of 3,800 was already exceeded when D8
   raised it.
 - Configuration: more than 200 net lines across `Makefile`, `pyproject.toml`
   and `.github/workflows/`: stop and escalate. Measured: 94 net lines, so 106
@@ -268,6 +268,25 @@ only entries in scope.
         `canonical_component_names` and `components_digest` — and no filesystem
         access. D8's intent of one shared read is preserved.
       All eight gates pass: 2,900 passed, 19 skipped, 20 snapshots; Pylint
+      10.00/10; interrogate 100 %.
+- [x] (2026-11-26) Seventh-round pre-merge repairs, from CodeRabbit's review of
+      `e129dfa`. The Testing (Overall) check named six guards with no test; all
+      now have one, and each was confirmed to fail when its guard is removed
+      (eight failures across four mutations):
+      - the `MAX_EXEC_RECORDS` record ceiling, with the constant monkeypatched
+        to two and four records supplied;
+      - a duplicated `Checking harness` start;
+      - two `Complete - ...` manual summaries, built from two transcripts with
+        distinct harness names so the duplicate-section guard cannot be what
+        refuses it;
+      - `Failed to run cbmc`, `CBMC timed out` and the out-of-memory message,
+        parametrized beside the existing `CBMC failed with status 6` fixture;
+      - `ExecRecord.name` falling back to `argv[0]` when the executable path is
+        empty;
+      - `disable_rustup_self_update` is now exercised behaviourally — it runs
+        exactly the setting change, with the private homes and its own share of
+        the budget — replacing the docstring-only assertion.
+      All eight gates pass: 2,908 passed, 19 skipped, 20 snapshots; Pylint
       10.00/10; interrogate 100 %.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
