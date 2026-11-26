@@ -451,16 +451,20 @@ async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
         task = asyncio.create_task(
             run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
         )
-        # The monitor must be sleeping before the child settles, so the
-        # supervisor's own join is what holds the run open.
-        await asyncio.wait_for(sleeping.wait(), timeout=1)
-        child_done.set()
-        await asyncio.wait_for(joining.wait(), timeout=1)
-        assert not task.done(), "the run returned before its join completed"
-        task.cancel()
-        await asyncio.sleep(0)
-        assert not task.done(), "the run finished while cleanup was still held"
-        release.set()
+        try:
+            # The monitor must be sleeping before the child settles, so the
+            # supervisor's own join is what holds the run open.
+            await asyncio.wait_for(sleeping.wait(), timeout=1)
+            child_done.set()
+            await asyncio.wait_for(joining.wait(), timeout=1)
+            assert not task.done(), "the run returned before its join completed"
+            task.cancel()
+            await asyncio.sleep(0)
+            assert not task.done(), "the run finished while cleanup was still held"
+        finally:
+            # A failed assertion or setup error must not leave the sleeper
+            # blocked, or the loop shutdown would wait on it.
+            release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
 

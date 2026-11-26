@@ -12,11 +12,15 @@ import asyncio
 import contextlib
 import os
 import signal
+import threading
 import typing as typ
 
 from rust_prover_tools.supervision import StopReason
 
-__all__ = ("SETTLE_SECONDS", "settle_within")
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+__all__ = ("SETTLE_SECONDS", "run_bounded", "settle_within")
 
 #: Seconds a witness waits for one settle before failing.
 SETTLE_SECONDS = 30.0
@@ -66,3 +70,34 @@ async def _finished(task: asyncio.Task[object], deadline: float) -> bool:
         with contextlib.suppress(asyncio.CancelledError):
             await timer
     return task.done()
+
+
+def run_bounded(
+    scenario: cabc.Coroutine[typ.Any, typ.Any, None],
+    *,
+    deadline: float = SETTLE_SECONDS,
+) -> None:
+    """Run an async scenario, bounded including event-loop shutdown.
+
+    `asyncio.run` cancels and gathers pending tasks when the scenario returns
+    or raises, and a task that suppresses cancellation can keep it waiting.
+    A watchdog thread therefore exits the process with status 2 if the whole
+    scenario, shutdown included, has not finished within `deadline`. Use this
+    in a subprocess when the scenario is expected to fail; never in the test
+    process itself.
+    """
+    expired = threading.Event()
+
+    def expire() -> None:
+        """Exit the process once the deadline has passed."""
+        expired.set()
+        os._exit(2)
+
+    watchdog = threading.Timer(deadline, expire)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        asyncio.run(scenario)
+    finally:
+        watchdog.cancel()
+        watchdog.join()
