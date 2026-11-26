@@ -22,9 +22,10 @@ if typ.TYPE_CHECKING:
     import datetime as dt
     from pathlib import Path
 
-    from rust_prover_tools.supervision.attempt_state import AttemptEvidence
+    from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
     from rust_prover_tools.supervision.launcher import LaunchCommand
     from rust_prover_tools.supervision.models import (
+        CgroupMembership,
         CgroupMemory,
         HarnessSpec,
         LaunchResult,
@@ -38,6 +39,7 @@ if typ.TYPE_CHECKING:
     )
 
 __all__ = (
+    "CancellationProbe",
     "CgroupReader",
     "Clock",
     "EvidenceSink",
@@ -260,12 +262,20 @@ class ResourceProbe(typ.Protocol):
 class CgroupReader(typ.Protocol):
     """Reads the shared cgroup evidence at the start and finish of a harness."""
 
-    def discover(self) -> str | None:
-        """Return the applicable cgroup v2 path, or `None` when none exists."""
+    def discover(self) -> CgroupMembership:
+        """Return the applicable cgroup v2 path, or the reason none was found."""
         ...
 
     def read(self, path: str | None) -> CgroupMemory:
         """Return one instant of the cgroup's memory files."""
+        ...
+
+
+class CancellationProbe(typ.Protocol):
+    """Reports how many cancellations the running task has absorbed."""
+
+    def cancelling(self) -> int:
+        """Return the running task's cancellation count."""
         ...
 
 

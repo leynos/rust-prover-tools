@@ -28,6 +28,7 @@ from rust_prover_tools.supervision.launcher import (
     RunningHarness,
 )
 from rust_prover_tools.supervision.models import (
+    CgroupMembership,
     CgroupMemory,
     HarnessSpec,
     LaunchResult,
@@ -265,6 +266,28 @@ class _PidRecorder:
 
 
 @dc.dataclass(slots=True)
+class ScriptedCancellations:
+    """A cancellation probe that reports scripted counts.
+
+    Attributes
+    ----------
+    counts : list[int]
+        Counts returned per read; the last repeats.
+    reads : int
+        How many reads have been served.
+    """
+
+    counts: list[int] = dc.field(default_factory=lambda: [0])
+    reads: int = 0
+
+    def cancelling(self) -> int:
+        """Return the next scripted cancellation count."""
+        index = min(self.reads, len(self.counts) - 1)
+        self.reads += 1
+        return self.counts[index]
+
+
+@dc.dataclass(slots=True)
 class ScriptedProbe:
     """A resource probe returning scripted values in order.
 
@@ -351,9 +374,9 @@ class ScriptedCgroup:
     )
     read_count: int = 0
 
-    def discover(self) -> str | None:
-        """Return the scripted cgroup path."""
-        return self.path
+    def discover(self) -> CgroupMembership:
+        """Return the scripted cgroup membership."""
+        return CgroupMembership(path=self.path)
 
     def read(self, path: str | None) -> CgroupMemory:
         """Return the next scripted memory values."""

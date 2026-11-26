@@ -10,7 +10,11 @@ from __future__ import annotations
 import dataclasses as dc
 from pathlib import Path
 
-from rust_prover_tools.supervision.models import CgroupMemory, Measurement
+from rust_prover_tools.supervision.models import (
+    CgroupMembership,
+    CgroupMemory,
+    Measurement,
+)
 
 __all__ = ("CgroupV2Reader",)
 
@@ -73,23 +77,24 @@ class CgroupV2Reader:
     self_cgroup: Path | None = None
     mountinfo: Path | None = None
 
-    def discover(self) -> str | None:
-        """Return the applicable cgroup v2 directory, or `None` when none exists.
+    def discover(self) -> CgroupMembership:
+        """Return the applicable cgroup v2 directory or the reason for none.
 
         The membership path from ``/proc/self/cgroup`` is relative to the
         mounted superblock's root, not to the mount point. A host may mount the
         hierarchy with a non-root sub-tree, so the mount table is consulted
-        rather than assuming ``/sys/fs/cgroup``.
+        rather than assuming ``/sys/fs/cgroup``. A membership file that cannot
+        be read reports its own reason, so a read failure is never mistaken for
+        a host without cgroup v2.
 
         Returns
         -------
-        str | None
-            The resolved filesystem directory, or `None` when the host exposes
-            no cgroup v2 membership.
+        CgroupMembership
+            The resolved filesystem directory, or the reason none was found.
         """
         membership = self._membership()
         if membership is None:
-            return None
+            return self._absence()
         mounts = _cgroup2_mounts(
             self.mountinfo if self.mountinfo is not None else _mountinfo_path()
         )
@@ -97,7 +102,7 @@ class CgroupV2Reader:
             # Mountinfo itself is unreadable. The documented fallback is the
             # conventional mount point, used only here.
             base = self.root if self.root is not None else Path(_CGROUP_ROOT)
-            return str(base / membership.lstrip("/"))
+            return CgroupMembership(path=str(base / membership.lstrip("/")))
         # Several cgroup2 superblocks can be mounted. The applicable one is
         # the mount whose own root contains the membership; the longest
         # matching root wins when mounts nest.
@@ -108,8 +113,17 @@ class CgroupV2Reader:
             if relative is None:
                 continue
             base = self.root if self.root is not None else Path(mount_point)
-            return str(base / relative)
-        return None
+            return CgroupMembership(path=str(base / relative))
+        return CgroupMembership.absent()
+
+    def _absence(self) -> CgroupMembership:
+        """Report why no membership was resolved, keeping a read failure apart."""
+        source = self.self_cgroup if self.self_cgroup is not None else _self_path()
+        if _read_text(source) is None:
+            return CgroupMembership.unreadable(
+                f"{source.name} is unreadable, so cgroup v2 membership is unknown"
+            )
+        return CgroupMembership.absent()
 
     def _membership(self) -> str | None:
         """Return the ``0::`` cgroup v2 membership path, when one exists."""

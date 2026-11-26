@@ -26,6 +26,7 @@ if typ.TYPE_CHECKING:
     import datetime as dt
 
 __all__ = (
+    "CgroupMembership",
     "CgroupMemory",
     "CgroupObservation",
     "ExecutionStatus",
@@ -281,6 +282,37 @@ class CgroupMemory:
     oom_kill: Measurement
     oom: Measurement = _COUNTER_NOT_READ
     max_events: Measurement = _COUNTER_NOT_READ
+
+
+@dc.dataclass(frozen=True, slots=True)
+class CgroupMembership:
+    """The cgroup v2 directory a supervisor discovered, or why it found none.
+
+    A host with no cgroup v2 membership and a membership file that could not
+    be read are different facts: the first is ordinary, the second means the
+    evidence is missing for a reason worth reporting. Keeping them apart stops
+    a read failure from being reported as an absent hierarchy.
+
+    Attributes
+    ----------
+    path : str | None
+        The resolved cgroup directory, or `None` when none was found.
+    unavailable_reason : str | None
+        Why no path was found, or `None` when `path` is set.
+    """
+
+    path: str | None = None
+    unavailable_reason: str | None = None
+
+    @classmethod
+    def absent(cls) -> CgroupMembership:
+        """Report a host that exposes no cgroup v2 membership."""
+        return cls(unavailable_reason="no cgroup v2 membership was found")
+
+    @classmethod
+    def unreadable(cls, reason: str) -> CgroupMembership:
+        """Report a membership that could not be read, with the reason."""
+        return cls(unavailable_reason=reason)
 
 
 @dc.dataclass(frozen=True, slots=True)

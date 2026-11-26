@@ -173,15 +173,46 @@ def _cgroup(tmp_path: Path, *, peak: bool = True) -> tuple[Path, Path]:
     return mount, membership
 
 
+def test_an_unreadable_membership_reports_its_own_reason(tmp_path: Path) -> None:
+    """A read failure is evidence loss, not an absent cgroup v2 hierarchy."""
+    from rust_prover_tools.supervision.attempt_cgroup import start_cgroup
+
+    missing = tmp_path / "missing-membership"
+    reader = CgroupV2Reader(self_cgroup=missing)
+
+    membership = reader.discover()
+    observation = start_cgroup(reader)
+
+    assert membership.path is None
+    assert membership.unavailable_reason is not None
+    assert "unreadable" in membership.unavailable_reason
+    assert observation.path is None
+    assert observation.unavailable_reason == membership.unavailable_reason
+
+
+def test_an_absent_membership_is_not_reported_as_a_read_failure(
+    tmp_path: Path,
+) -> None:
+    """A readable file without a ``0::`` line is an ordinary absence."""
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("1:cpu:/user.slice\n", encoding="utf-8")
+    reader = CgroupV2Reader(self_cgroup=membership)
+
+    discovered = reader.discover()
+
+    assert discovered.path is None
+    assert discovered.unavailable_reason == "no cgroup v2 membership was found"
+
+
 def test_cgroup_discovery_and_memory_reads(tmp_path: Path) -> None:
     """A discovered path yields current, peak, and event counters."""
     mount, membership = _cgroup(tmp_path)
     reader = CgroupV2Reader(root=mount, self_cgroup=membership)
 
-    path = reader.discover()
-    memory = reader.read(path)
+    membership = reader.discover()
+    memory = reader.read(membership.path)
 
-    assert path == str(mount / "user.slice/job.scope")
+    assert membership.path == str(mount / "user.slice/job.scope")
     assert memory.current.value == 64 * 1024 * 1024
     assert memory.peak.value == 128 * 1024 * 1024
     assert memory.oom_kill.value == 3
@@ -194,7 +225,7 @@ def test_a_missing_peak_file_is_an_explicit_absence(tmp_path: Path) -> None:
     mount, membership = _cgroup(tmp_path, peak=False)
     reader = CgroupV2Reader(root=mount, self_cgroup=membership)
 
-    memory = reader.read(reader.discover())
+    memory = reader.read(reader.discover().path)
 
     assert memory.peak.value is None
     assert memory.peak.unavailable_reason is not None
@@ -208,7 +239,7 @@ def test_a_missing_cgroup_is_reported_without_raising(tmp_path: Path) -> None:
         self_cgroup=tmp_path / "missing-membership",
     )
 
-    memory = reader.read(reader.discover())
+    memory = reader.read(reader.discover().path)
 
     assert memory.current.value is None
     assert memory.peak.value is None
@@ -303,10 +334,10 @@ def test_the_cgroup2_mount_is_resolved_from_mountinfo(tmp_path: Path) -> None:
     )
     reader = CgroupV2Reader(root=mount, self_cgroup=membership, mountinfo=mountinfo)
 
-    path = reader.discover()
+    membership = reader.discover()
 
-    assert path == str(job)
-    assert reader.read(path).current.value == 1024
+    assert membership.path == str(job)
+    assert reader.read(membership.path).current.value == 1024
 
 
 def test_a_membership_outside_the_mount_root_is_unavailable(tmp_path: Path) -> None:
@@ -320,7 +351,7 @@ def test_a_membership_outside_the_mount_root_is_unavailable(tmp_path: Path) -> N
     )
     reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
 
-    assert reader.discover() is None
+    assert reader.discover().path is None
 
 
 def test_the_applicable_cgroup2_mount_is_chosen(tmp_path: Path) -> None:
@@ -341,10 +372,10 @@ def test_the_applicable_cgroup2_mount_is_chosen(tmp_path: Path) -> None:
     )
     reader = CgroupV2Reader(root=second, self_cgroup=membership, mountinfo=mountinfo)
 
-    path = reader.discover()
+    membership = reader.discover()
 
-    assert path == str(job)
-    assert reader.read(path).current.value == 2048
+    assert membership.path == str(job)
+    assert reader.read(membership.path).current.value == 2048
 
 
 def test_readable_mountinfo_without_cgroup2_is_unavailable(tmp_path: Path) -> None:
@@ -355,7 +386,7 @@ def test_readable_mountinfo_without_cgroup2_is_unavailable(tmp_path: Path) -> No
     mountinfo.write_text("24 1 8:1 / / rw - ext4 /dev/sda1 rw\n", encoding="utf-8")
     reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
 
-    assert reader.discover() is None
+    assert reader.discover().path is None
 
 
 def test_unreadable_mountinfo_uses_the_documented_fallback(tmp_path: Path) -> None:
@@ -368,7 +399,7 @@ def test_unreadable_mountinfo_uses_the_documented_fallback(tmp_path: Path) -> No
         root=tmp_path / "fallback",
     )
 
-    assert reader.discover() == str(tmp_path / "fallback" / "job.scope")
+    assert reader.discover().path == str(tmp_path / "fallback" / "job.scope")
 
 
 @pytest.mark.parametrize(
@@ -406,9 +437,9 @@ def test_an_escaped_cgroup2_mount_point_is_resolved(tmp_path: Path) -> None:
     )
     reader = CgroupV2Reader(root=mount, self_cgroup=membership, mountinfo=mountinfo)
 
-    path = reader.discover()
+    membership = reader.discover()
 
-    assert path == str(job)
+    assert membership.path == str(job)
 
 
 def test_an_escaped_mount_point_resolves_without_a_root_override(
@@ -429,7 +460,7 @@ def test_an_escaped_mount_point_resolves_without_a_root_override(
     )
     reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
 
-    assert reader.discover() == "/host/cg name/leaf"
+    assert reader.discover().path == "/host/cg name/leaf"
 
 
 def test_an_escaped_mount_root_matching_the_membership_is_resolved(
@@ -454,7 +485,7 @@ def test_an_escaped_mount_root_matching_the_membership_is_resolved(
     )
     reader = CgroupV2Reader(root=base, self_cgroup=membership, mountinfo=mountinfo)
 
-    path = reader.discover()
+    discovered = reader.discover()
 
-    assert path == str(job)
-    assert reader.read(path).current.value == 4096
+    assert discovered.path == str(job)
+    assert reader.read(discovered.path).current.value == 4096
