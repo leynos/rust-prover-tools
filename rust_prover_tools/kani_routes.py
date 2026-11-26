@@ -214,9 +214,12 @@ def _prepare_snapshot(
 ) -> PreparedRoute:
     """Qualify the snapshot generation, environment, and grammar once.
 
-    The inherited environment and working directory come from the caller, so
-    this function never inspects the process itself.
+    The route's own environment wins when it has one, exactly as the legacy
+    route's does; otherwise the caller's provider is used. Preparation never
+    inspects the process itself, so a route can be qualified against exactly
+    one mapping.
     """
+    inherited = route.environment if route.environment is not None else environ
     qualified = prepare_snapshot_proof(
         SnapshotRunOptions(
             pin=route.pin,
@@ -226,7 +229,7 @@ def _prepare_snapshot(
         route.hooks,
         context=ProofContext(
             cwd=route.cwd if route.cwd is not None else process_cwd,
-            environment=environ,
+            environment=inherited,
         ),
         validate_arguments=False,
     )

@@ -285,6 +285,89 @@ def test_the_snapshot_route_uses_only_the_supplied_environment(
     assert command.env.values["RPT_SUPPLIED_ONLY"] == "1"
 
 
+def test_a_snapshot_route_environment_wins_over_the_provider(
+    installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit route environment takes precedence over the provider."""
+    from rust_prover_tools.kani_cli_grammar import KANI_067
+    from rust_prover_tools.kani_inventory import InventoryHarness
+    from rust_prover_tools.kani_routes import SnapshotRoute, prepare_route
+
+    options, hooks = installed_snapshot
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_routes.grammar_for",
+        lambda version: KANI_067,
+    )
+    route_environment = {**os.environ, "RPT_FROZEN_HOST": "route"}
+
+    prepared = prepare_route(
+        SnapshotRoute(
+            pin=options.pin,
+            cache_home=options.cache_home,
+            hooks=hooks,
+            environment=route_environment,
+        ),
+        environ={**os.environ, "RPT_FROZEN_HOST": "provider"},
+        cwd=tmp_path,
+    )
+    harness = InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness="harness",
+        source="src/lib.rs",
+        line=1,
+    )
+
+    command = prepared.build(harness)
+
+    assert command.env is not None
+    assert command.env.values["RPT_FROZEN_HOST"] == "route"
+
+
+def test_an_explicit_empty_snapshot_route_environment_is_not_replaced(
+    installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicitly empty route environment is not swapped for the provider."""
+    from rust_prover_tools.kani_cli_grammar import KANI_067
+    from rust_prover_tools.kani_inventory import InventoryHarness
+    from rust_prover_tools.kani_routes import SnapshotRoute, prepare_route
+
+    options, hooks = installed_snapshot
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_routes.grammar_for",
+        lambda version: KANI_067,
+    )
+
+    prepared = prepare_route(
+        SnapshotRoute(
+            pin=options.pin,
+            cache_home=options.cache_home,
+            hooks=hooks,
+            environment={},
+        ),
+        environ={**os.environ, "RPT_PROVIDER_ONLY": "1"},
+        cwd=tmp_path,
+    )
+    harness = InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness="harness",
+        source="src/lib.rs",
+        line=1,
+    )
+
+    command = prepared.build(harness)
+
+    assert command.env is not None
+    assert "RPT_PROVIDER_ONLY" not in command.env.values
+
+
 def test_an_explicit_empty_environment_is_not_replaced(
     installed_release: Path,
     tmp_path: Path,
