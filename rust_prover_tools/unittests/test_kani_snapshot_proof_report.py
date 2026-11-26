@@ -235,6 +235,46 @@ def test_require_named_harnesses_refuses_the_wrong_status() -> None:
         )
 
 
+def test_an_expected_failure_that_verified_is_refused() -> None:
+    """A harness demanded as both verified and failed is refused by status.
+
+    The verified side consumes the name, so only the failed side's
+    opposite-status branch can report it. Without that branch a caller's
+    contradiction would be reported as a plain missing failure.
+    """
+    name = "solo_harness"
+    transcript = _transcript((name,), ())
+
+    with pytest.raises(ProofTranscriptError, match="verified but was expected to fail"):
+        require_named_harnesses(transcript, verified=(name,), failed=(name,))
+
+
+def test_a_failure_the_expectation_did_not_name_is_refused() -> None:
+    """An unexpected failed harness cannot be left over.
+
+    The verified side names every success, so only the failed-side leftover
+    branch can refuse this transcript.
+    """
+    transcript = _transcript(
+        ("raii_release_runs_once",), ("deliberately_false_assertion",)
+    )
+
+    with pytest.raises(ProofTranscriptError, match="unexpected harness"):
+        require_named_harnesses(
+            transcript, verified=("raii_release_runs_once",), failed=()
+        )
+
+
+def test_an_expected_failure_absent_from_the_transcript_is_refused() -> None:
+    """A required failure the transcript never mentions is refused by name."""
+    with pytest.raises(ProofTranscriptError, match="did not fail harness"):
+        require_named_harnesses(
+            _fixture("positive.txt"),
+            verified=("bounded_push_contents_are_exact", "raii_release_runs_once"),
+            failed=("absent_harness",),
+        )
+
+
 def test_a_crate_relative_expectation_matches_its_reported_name() -> None:
     """Kani strips the crate prefix but keeps the module path."""
     transcript = _transcript(

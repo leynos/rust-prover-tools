@@ -368,6 +368,21 @@ def test_an_octal_escaped_utf8_path_is_decoded() -> None:
     assert records[1].executable == "/home/café/toolchain/bin/rustc"
 
 
+def test_an_argument_that_is_not_utf8_is_refused() -> None:
+    r"""A byte that cannot begin a UTF-8 sequence is refused, not decoded.
+
+    `\377` is a single 0xFF byte. Decoding it with `errors="replace"` would
+    hand the policy a name the process never ran under, so the reader refuses
+    the argument instead.
+    """
+    trace = _LAUNCHER + (
+        '901  execve("/usr/bin/tar", ["tar", "bad\\377name"], 0x1) = 0\n'
+    )
+
+    with pytest.raises(SetupTraceError, match="not UTF-8"):
+        parse_exec_trace(trace)
+
+
 def test_a_c_escaped_control_character_is_decoded() -> None:
     r"""A named C escape such as `\t` is decoded to the character it denotes."""
     trace = _LAUNCHER + (

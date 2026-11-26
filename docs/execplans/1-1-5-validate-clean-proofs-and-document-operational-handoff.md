@@ -90,8 +90,8 @@ scheduled trigger stays disabled.
   non-ExecPlan files, so 19 remain — 21 % of the limit.
 - Code: more than 1,800 net lines of Python and Rust fixture code: stop and
   escalate. Raised to 3,800 on 2026-11-24 under D7 and to 4,600 on 2026-11-25
-  under D8. Measured after the seventh-round repairs: 4,364 net lines, so 236
-  remain — 5 % of the limit. The D7 limit of 3,800 was already exceeded when D8
+  under D8. Measured after the eighth-round repairs: 4,419 net lines, so 181
+  remain — 4 % of the limit. The D7 limit of 3,800 was already exceeded when D8
   raised it.
 - Configuration: more than 200 net lines across `Makefile`, `pyproject.toml`
   and `.github/workflows/`: stop and escalate. Measured: 94 net lines, so 106
@@ -287,6 +287,20 @@ only entries in scope.
         exactly the setting change, with the private homes and its own share of
         the budget — replacing the docstring-only assertion.
       All eight gates pass: 2,908 passed, 19 skipped, 20 snapshots; Pylint
+      10.00/10; interrogate 100 %.
+- [x] (2026-11-26) Eighth-round pre-merge repairs, from CodeRabbit's review of
+      `1463762`. The Testing (Overall) check named three failed-side guards and
+      the UTF-8 guard; all four now have a test, and each fails under its own
+      mutation:
+      - a harness demanded as both verified and failed, which only the
+        opposite-status branch can report;
+      - a failed harness the expectation did not name, which only the
+        failed-side leftover branch can report;
+      - a required failure absent from the transcript, which exercises the
+        missing-harness dispatch;
+      - an argument containing `\377`, a lone 0xFF byte that cannot be
+        decoded as UTF-8.
+      All eight gates pass: 2,912 passed, 19 skipped, 20 snapshots; Pylint
       10.00/10; interrogate 100 %.
 - [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
       after this branch merges.
