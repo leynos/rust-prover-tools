@@ -271,6 +271,59 @@ def test_an_empty_environment_is_not_replaced_by_the_host(
         )
 
 
+def test_the_legacy_route_uses_only_the_supplied_environment(
+    installed_release: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qualification consumes the supplied mapping, not the process environment.
+
+    The provider is passed explicitly, so a marker that exists only in the
+    process environment must not reach the composed command, while a marker in
+    the supplied mapping must.
+    """
+    from rust_prover_tools.kani_inventory import InventoryHarness
+    from rust_prover_tools.kani_routes import LegacyRoute, prepare_route
+
+    seen: list[str] = []
+
+    def probing_runner(spec: CommandSpec) -> CommandResult:
+        """Record the HOME the qualification probes received."""
+        environment = spec.env or {}
+        seen.append(str(environment.get("HOME", "")))
+        program = spec.argv[0]
+        if program.endswith("kani-driver"):
+            return CommandResult("kani 0.67.0\n", "", 0)
+        return CommandResult("rustc 1.93.0-nightly (53732d5e0 2025-11-20)\n", "", 0)
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_release.run_command",
+        probing_runner,
+    )
+    monkeypatch.setenv("HOME", "/from-the-process")
+    supplied = str(tmp_path / "supplied-home")
+
+    prepared = prepare_route(
+        LegacyRoute(installation=installed_release, cwd=tmp_path),
+        environ={"HOME": supplied, "PATH": "/usr/bin"},
+    )
+    harness = InventoryHarness(
+        package="alpha",
+        target="alpha",
+        target_kind="lib",
+        harness="harness",
+        source="src/lib.rs",
+        line=1,
+    )
+
+    command = prepared.build(harness)
+
+    assert seen
+    assert all(value == supplied for value in seen)
+    assert command.env is not None
+    assert command.env.values["HOME"] == supplied
+
+
 def test_the_supervised_legacy_build_freezes_replacement_environment(
     installed_release: Path,
     tmp_path: Path,

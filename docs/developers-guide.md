@@ -1033,6 +1033,16 @@ responsibility rather than by prover:
   binds them for one run, and `rust_prover_tools.kani_harness_models.py` holds
   the options and dependency overrides a consumer sets. The tests substitute
   each through those protocols rather than patching the runner.
+- `rust_prover_tools.supervision.attempt` drives one attempt: it starts the
+  child, joins the monitor, and settles. `attempt_monitor` owns the sampling,
+  heartbeat, deadline, watchdog and interrupt loop; `attempt_state` holds the
+  pure reductions and the cancellation decision; `attempt_evidence` holds the
+  evidence and settlement records; `attempt_cgroup` reads the shared cgroup
+  evidence through a supplied reader. Each module keeps its own contract and
+  the supervisor only composes them.
+- `rust_prover_tools.supervision.report` renders the table and the report
+  document purely; `report_writer` is the one module that writes a report to
+  the filesystem, so a caller can inject a recording or failing writer.
 - `rust_prover_tools.supervision.sinks` owns the human and JSONL sinks;
   `schema_fields`, `schema_values`, `schema_records`, and `schema` own the
   strict JSONL and report contracts; `report` publishes the final document.

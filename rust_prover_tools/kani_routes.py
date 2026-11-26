@@ -145,16 +145,40 @@ def _launch_environment(command: CommandSpec) -> LaunchEnvironment:
     )
 
 
-def prepare_route(route: KaniRoute) -> PreparedRoute:
-    """Qualify the selected route once and return its per-harness builder."""
+def prepare_route(
+    route: KaniRoute,
+    *,
+    environ: cabc.Mapping[str, str] | None = None,
+) -> PreparedRoute:
+    """Qualify the selected route once and return its per-harness builder.
+
+    Parameters
+    ----------
+    route : KaniRoute
+        Route to qualify.
+    environ : cabc.Mapping[str, str] | None
+        Process environment the caller supplies for a legacy route. `None`
+        reads the process environment at this call, which is the explicit
+        provider a caller can replace in a test.
+    """
     if isinstance(route, LegacyRoute):
-        return _prepare_legacy(route)
+        provider = os.environ if environ is None else environ
+        return _prepare_legacy(route, provider)
     return _prepare_snapshot(route)
 
 
-def _prepare_legacy(route: LegacyRoute) -> PreparedRoute:
-    """Qualify the legacy release, its identities, and its environment."""
-    environment = dict(os.environ if route.environment is None else route.environment)
+def _prepare_legacy(
+    route: LegacyRoute,
+    environ: cabc.Mapping[str, str],
+) -> PreparedRoute:
+    """Qualify the legacy release, its identities, and its environment.
+
+    The route carries its own environment when one was supplied; otherwise this
+    function uses the caller's provider, so qualification consumes exactly one
+    mapping and never reads the process environment itself.
+    """
+    inherited = route.environment if route.environment is not None else environ
+    environment = dict(inherited)
     qualified = qualify_kani_installation(
         KaniExecOptions(route.installation, route.cwd, ()),
         environment,

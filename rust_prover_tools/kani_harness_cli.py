@@ -43,6 +43,7 @@ from rust_prover_tools.kani_harness_cli_options import (
 )
 from rust_prover_tools.kani_harness_run import (
     KaniHarnessDependencies,
+    KaniHarnessRun,
     KaniHarnessRunOptions,
     execute_harnesses,
     prepare_harnesses,
@@ -258,6 +259,11 @@ def run_command_harnesses(
         if interrupt is not None and interrupt.signum is not None:
             return 128 + interrupt.signum
         return 1
+    return _present_run(run, interrupt)
+
+
+def _present_run(run: KaniHarnessRun, interrupt: SignalInterrupt) -> int:
+    """Print one completed run and return its process exit status."""
     print_lines(run.table)
     if interrupt.signum is not None:
         return 128 + interrupt.signum
