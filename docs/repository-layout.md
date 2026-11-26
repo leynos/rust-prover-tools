@@ -79,16 +79,18 @@ harness execution".
   `UnsupportedKaniGrammarError` refuses an unregistered one. An import-time
   check ties the registry to `SUPPORTED_KANI_VERSIONS` from `kani_log`, so a
   release cannot be half-registered.
-- `rust_prover_tools.supervision.launcher` owns the Cuprum boundary:
-  `CuprumHarnessLauncher` starts one child in an owned process group and
-  returns a `RunningHarness`. It alone imports Cuprum for launches, so the rest
-  of the supervision layer stays prover-neutral and Cuprum-free.
+- `rust_prover_tools.supervision.launcher` owns the launch boundary:
+  `CuprumHarnessLauncher` starts one child in an owned process group through
+  Cuprum and returns a `RunningHarness`. Cuprum types stop at the launcher,
+  `pipe_drain` and `launch_pid`; every other supervision module is
+  prover-neutral and Cuprum-free.
 - `rust_prover_tools.supervision.pipe_drain` borrows the child's pipe ends
   through `StdioTarget.fd`, forwards decoded lines, and translates the neutral
   `LaunchEnvironment` back to Cuprum's environment mode at that boundary.
-- `rust_prover_tools.supervision.stream_lines` is the bounded splitter shared
-  by the pipe drain and the streaming parser, so an unterminated line is capped
-  in one place.
+- `rust_prover_tools.supervision.stream_lines` is the bounded splitter the pipe
+  drain uses, so an unterminated child line is capped in one place. The Kani
+  parser has its own bounded line window in `kani_log.lines`, because it must
+  retain a few lines for description lookahead.
 - `rust_prover_tools.supervision.cgroup` reads cgroup v2 membership and memory
   evidence from procfs and the mount table, returning explained absences rather
   than zeroes when the hierarchy is unavailable.

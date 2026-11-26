@@ -194,6 +194,7 @@ class ScriptedLauncher:
     seconds_per_line: float = 0.0
     ready: asyncio.Event | None = None
     settled_exit_code: int | None = None
+    completion_gate: asyncio.Event | None = None
 
     def start(
         self,
@@ -245,6 +246,8 @@ class ScriptedLauncher:
             raise
         if script.block:
             await asyncio.Event().wait()
+        if self.completion_gate is not None:
+            await self.completion_gate.wait()
         if script.launch_error is not None:
             return LaunchResult(launch_error=script.launch_error)
         return LaunchResult(exit_code=script.exit_code)

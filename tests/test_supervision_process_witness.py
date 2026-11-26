@@ -334,10 +334,11 @@ def test_an_output_callback_failure_stops_and_joins_the_child(
             with pytest.raises(OSError, match="the spool is full"):
                 await asyncio.wait_for(running.wait(), timeout=_SETTLE_SECONDS)
         finally:
-            # A timed-out wait must not leave the blocking child running.
+            # A timed-out wait must not leave the blocking child running; the
+            # cleanup join is bounded so the test fails rather than hangs.
             running.stop(StopReason.INTERRUPTED)
             with contextlib.suppress(OSError, asyncio.CancelledError):
-                await running.settle()
+                await asyncio.wait_for(running.settle(), timeout=_SETTLE_SECONDS)
         pid = int((tmp_path / "child.pid").read_text(encoding="utf-8"))
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)

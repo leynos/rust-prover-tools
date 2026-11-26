@@ -408,25 +408,28 @@ async def test_a_cancellation_during_settlement_is_re_raised() -> None:
 @_async_test
 async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
     """A cancel swallowed while joining the monitor still stops the run."""
-    entered = asyncio.Event()
+    sleeping = asyncio.Event()
+    joining = asyncio.Event()
     release = asyncio.Event()
 
     class _StubbornSleeper:
-        """A sleeper that holds its own cancellation until released."""
+        """A sleeper that reports its cancellation and holds it until released."""
 
         async def sleep(self, seconds: float) -> None:
-            """Enter the monitor tick and wait to be released."""
+            """Enter the tick, then report the join and wait to be released."""
             del seconds
-            entered.set()
+            sleeping.set()
             try:
                 await asyncio.wait_for(release.wait(), timeout=60)
             except asyncio.CancelledError:
+                joining.set()
                 await release.wait()
 
     clock = VirtualClock()
     jsonl = MemorySink()
+    child_done = asyncio.Event()
     environment = _environment(
-        ScriptedLauncher(script=Script()),
+        ScriptedLauncher(script=Script(), completion_gate=child_done),
         clock,
         sinks=Diagnostics(jsonl=jsonl),
         sleeper=_StubbornSleeper(),
@@ -435,7 +438,11 @@ async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
     task = asyncio.create_task(
         run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
     )
-    await asyncio.wait_for(entered.wait(), timeout=1)
+    # The monitor must be sleeping before the child settles, so the settle
+    # path is what cancels it and the test then cancels a run that is joining.
+    await asyncio.wait_for(sleeping.wait(), timeout=1)
+    child_done.set()
+    await asyncio.wait_for(joining.wait(), timeout=1)
     task.cancel()
     release.set()
     with pytest.raises(asyncio.CancelledError):

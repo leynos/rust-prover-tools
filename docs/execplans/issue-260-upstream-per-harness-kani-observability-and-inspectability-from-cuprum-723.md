@@ -9,9 +9,7 @@ Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
 is layered on it. The final deterministic gate reports 3,339 passed and 6
 skipped at code head `a537673`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the last code head it was run on: 2 passed in 108.19 s at `3406f88`.
-No code changed after that revision; only this plan text and the
-repository-layout document did.
+passed at the final code head: 2 passed in 412.27 s at `a537673`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -1565,9 +1563,13 @@ No new dependencies. Authorized interfaces (names are prescriptive):
 def parse_kani_log(text: str) -> KaniLog: ...
 def parse_kani_log_lines(lines: Iterable[str]) -> KaniLog: ...
 
+
 # rust_prover_tools/kani_log/reader.py
 class Reader: ...
+
+
 class StreamingLines: ...
+
 
 # rust_prover_tools/supervision/runner.py
 async def run_supervised(
@@ -1575,6 +1577,7 @@ async def run_supervised(
     config: SupervisionConfig,
     environment: SupervisorEnvironment,
 ) -> RunReport: ...
+
 
 # rust_prover_tools/supervision/kani.py
 class KaniAdapter:
