@@ -7,6 +7,7 @@ absence stays an absence: a run with no samples reports why, never zero.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses as dc
 import typing as typ
 
@@ -20,7 +21,6 @@ from rust_prover_tools.supervision.models import (
 )
 
 if typ.TYPE_CHECKING:
-    import asyncio
     import collections.abc as cabc
     import datetime as dt
 
@@ -29,12 +29,15 @@ if typ.TYPE_CHECKING:
 __all__ = (
     "AttemptEvidence",
     "AttemptSettlement",
+    "cancellation_pending",
     "finish_cgroup",
     "idle_seconds",
+    "join_reporting_cancellation",
     "latest",
     "minimum",
     "peak",
     "resolved_reason",
+    "start_cgroup",
     "waiter_failed",
 )
 
@@ -222,6 +225,41 @@ def waiter_failed(waiter: asyncio.Task[LaunchResult]) -> bool:
     if not waiter.done() or waiter.cancelled():
         return False
     return waiter.exception() is not None
+
+
+def cancellation_pending(*, recorded: bool) -> bool:
+    """Whether a caller cancellation is recorded or still pending on this task.
+
+    `RunningHarness.settle` deliberately keeps joining after a cancellation, so
+    the request can be consumed without ever reaching the caller. The task's
+    own `cancelling()` count still reports it, and re-raising keeps a cancelled
+    run from continuing to the next harness.
+    """
+    if recorded:
+        return True
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
+
+
+async def join_reporting_cancellation(task: asyncio.Task[typ.Any]) -> bool:
+    """Join a task, reporting whether the caller was cancelled while joining.
+
+    Teardown must not abandon a child because a caller was cancelled, so the
+    cancellation is recorded here and re-raised by the caller once settlement
+    has finished. That keeps the attempt reportable as interrupted instead of
+    silently turning a cancelled run into a completed one.
+    """
+    try:
+        await asyncio.gather(task, return_exceptions=True)
+    except asyncio.CancelledError:
+        return True
+    return False
+
+
+def start_cgroup(reader: CgroupReader) -> CgroupObservation:
+    """Read the first cgroup observation before the child starts."""
+    path = reader.discover()
+    return CgroupObservation(path=path, start=reader.read(path), finish=None)
 
 
 def finish_cgroup(

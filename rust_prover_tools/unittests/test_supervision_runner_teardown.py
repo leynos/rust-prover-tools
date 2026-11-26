@@ -369,6 +369,53 @@ async def test_cancelling_the_run_stops_the_child_and_finalizes() -> None:
     assert accounting["unexpected"] == []
 
 
+@_async_test
+async def test_a_cancellation_during_the_monitor_join_is_re_raised() -> None:
+    """A cancel swallowed while joining the monitor still stops the run."""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class _StubbornSleeper:
+        """A sleeper that holds its own cancellation until released."""
+
+        async def sleep(self, seconds: float) -> None:
+            """Enter the monitor tick and wait to be released."""
+            del seconds
+            entered.set()
+            try:
+                await asyncio.wait_for(release.wait(), timeout=60)
+            except asyncio.CancelledError:
+                await release.wait()
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    environment = _environment(
+        ScriptedLauncher(script=Script()),
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        sleeper=_StubbornSleeper(),
+        statuses={spec().qualified: ExecutionStatus.INTERRUPTED},
+    )
+    task = asyncio.create_task(
+        run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
+    )
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    task.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["stop_reason"] == "interrupted"
+    run_finish = next(
+        record for record in jsonl.records if record["record"] == "run-finish"
+    )
+    assert run_finish["interrupted"] is True
+
+
 class _ReportingProbe:
     """A probe that fails after recording one sample, and captures the report."""
 

@@ -24,9 +24,12 @@ import typing as typ
 from rust_prover_tools.supervision.attempt_state import (
     AttemptEvidence,
     AttemptSettlement,
+    cancellation_pending,
     finish_cgroup,
     idle_seconds,
+    join_reporting_cancellation,
     resolved_reason,
+    start_cgroup,
     waiter_failed,
 )
 from rust_prover_tools.supervision.events import (
@@ -142,7 +145,7 @@ class AttemptSupervisor:
         self._next_sample = self.config.sample_interval_seconds
         self._next_heartbeat = self.config.heartbeat_interval_seconds
         self._observer = self.adapter.observer(self.spec)
-        cgroup_start = self._cgroup_start()
+        cgroup_start = start_cgroup(self.cgroup)
         running = typ.cast(
             "RunningHarness",
             self.launcher.start(self.spec, self.build, self._on_line),
@@ -193,6 +196,7 @@ class AttemptSupervisor:
         )
         failure: BaseException | None = None
         result: LaunchResult | None = None
+        cancelled = False
         try:
             await asyncio.wait({waiter, monitor}, return_when=asyncio.FIRST_COMPLETED)
             if monitor.done():
@@ -207,9 +211,10 @@ class AttemptSupervisor:
             monitor.cancel()
             # Await the retained failure without re-raising it here: it is
             # re-raised after settlement so the child's exit evidence and
-            # cleanup are not lost to the monitor's exception.
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.gather(monitor, return_exceptions=True)
+            # cleanup are not lost to the monitor's exception. A cancellation
+            # arriving at either join is recorded and re-raised below, never
+            # cleared, so the run still reports an interrupted attempt.
+            cancelled = await join_reporting_cancellation(monitor) or cancelled
             # A launcher that raised has already stopped the child from
             # inside, because its evidence callback failed. Record that as the
             # supervisor's own stop; otherwise the empty settled status would
@@ -225,20 +230,16 @@ class AttemptSupervisor:
                 raise
             self._settled = joined
             waiter.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await asyncio.gather(waiter, return_exceptions=True)
+            cancelled = await join_reporting_cancellation(waiter) or cancelled
         if failure is not None:
             raise failure
+        if cancellation_pending(recorded=cancelled):
+            # The attempt was stopped by the caller, not by its own exit, so
+            # its classification is interrupted even when the child happened
+            # to settle first.
+            self._request_stop(running, "the supervisor stopped the run")
+            raise asyncio.CancelledError
         return joined if result is None else result
-
-    def _cgroup_start(self) -> CgroupObservation:
-        """Read the cgroup evidence once, before the child starts."""
-        path = self.cgroup.discover()
-        return CgroupObservation(
-            path=path,
-            start=self.cgroup.read(path),
-            finish=None,
-        )
 
     def _on_line(self, line: object) -> None:
         """Forward one decoded line to the sinks and remember it."""
