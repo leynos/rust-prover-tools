@@ -411,6 +411,27 @@ def test_an_escaped_cgroup2_mount_point_is_resolved(tmp_path: Path) -> None:
     assert path == str(job)
 
 
+def test_an_escaped_mount_point_resolves_without_a_root_override(
+    tmp_path: Path,
+) -> None:
+    """The decoded mount point is the base when the caller supplies no root.
+
+    Discovery only concatenates the membership under the mount table's own
+    point, so this exercises the escaped spelling without touching the real
+    hierarchy and without a test override.
+    """
+    membership = tmp_path / "self-cgroup"
+    membership.write_text("0::/job.scope/leaf\n", encoding="utf-8")
+    mountinfo = tmp_path / "mountinfo"
+    mountinfo.write_text(
+        "36 24 0:32 /job.scope /host/cg\\040name rw - cgroup2 cgroup2 rw\n",
+        encoding="utf-8",
+    )
+    reader = CgroupV2Reader(self_cgroup=membership, mountinfo=mountinfo)
+
+    assert reader.discover() == "/host/cg name/leaf"
+
+
 def test_an_escaped_mount_root_matching_the_membership_is_resolved(
     tmp_path: Path,
 ) -> None:
