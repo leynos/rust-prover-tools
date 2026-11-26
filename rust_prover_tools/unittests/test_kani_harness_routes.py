@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import typing as typ
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -18,6 +19,7 @@ from rust_prover_tools.kani_release import (
     exec_kani,
     validate_kani_arguments,
 )
+from rust_prover_tools.kani_snapshot.install_model import InstallHooks
 from rust_prover_tools.kani_snapshot.run import (
     ProofContext,
     SnapshotOutput,
@@ -34,10 +36,8 @@ from tests.kani_snapshot_install_fixtures import (
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     from rust_prover_tools.commands import CommandSpec
-    from rust_prover_tools.kani_snapshot.install_model import InstallHooks
 
 
 @pytest.fixture
@@ -233,10 +233,13 @@ def test_the_snapshot_route_resolves_one_generation(
     assert "RPT_LATER_HOST" not in first.env
 
 
+@pytest.mark.parametrize("supplied_hooks", [False, True])
 def test_the_default_snapshot_probe_uses_the_supplied_environment(
     installed_snapshot: tuple[SnapshotRunOptions, InstallHooks],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    supplied_hooks: bool,
 ) -> None:
     """The default probe reads the supplied mapping, not the process one."""
     from rust_prover_tools.kani_snapshot import check as snapshot_check
@@ -264,6 +267,7 @@ def test_the_default_snapshot_probe_uses_the_supplied_environment(
 
     monkeypatch.setattr(snapshot_check, "probe_generation", recording)
     supplied = {**os.environ, "RUSTC_WRAPPER": "supplied-wrapper"}
+    hooks = InstallHooks() if supplied_hooks else None
 
     with pytest.raises(_ProbeSeenError):
         prepare_snapshot_proof(
@@ -272,7 +276,7 @@ def test_the_default_snapshot_probe_uses_the_supplied_environment(
                 args=(),
                 cache_home=options.cache_home,
             ),
-            None,
+            hooks,
             context=ProofContext(cwd=tmp_path, environment=supplied),
             validate_arguments=False,
         )
@@ -331,6 +335,50 @@ def test_the_snapshot_route_uses_only_the_supplied_environment(
     assert command.env is not None
     assert command.env.values["RPT_FROZEN_HOST"] == "supplied"
     assert command.env.values["RPT_SUPPLIED_ONLY"] == "1"
+
+
+def test_a_relative_snapshot_cwd_is_bound_to_the_checked_base(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checked directory wins over a process directory changed later."""
+    from rust_prover_tools.kani_routes import SnapshotRoute, prepare_route
+
+    checked = tmp_path / "checked"
+    elsewhere = tmp_path / "elsewhere"
+    checked.mkdir()
+    elsewhere.mkdir()
+    seen: list[ProofContext] = []
+
+    class _StopError(Exception):
+        """Stop the route once the context is recorded."""
+
+    def recording(
+        options: object,
+        hooks: object = None,
+        *,
+        context: ProofContext,
+        validate_arguments: bool = True,
+    ) -> object:
+        """Record the context and stop before qualification."""
+        del options, hooks, validate_arguments
+        seen.append(context)
+        raise _StopError
+
+    monkeypatch.setattr(
+        "rust_prover_tools.kani_routes.prepare_snapshot_proof",
+        recording,
+    )
+    monkeypatch.chdir(elsewhere)
+
+    with pytest.raises(_StopError):
+        prepare_route(
+            SnapshotRoute(pin=typ.cast("typ.Any", object()), cwd=Path("rel")),
+            environ={},
+            cwd=checked,
+        )
+
+    assert [context.cwd for context in seen] == [(checked / "rel").resolve()]
 
 
 def test_a_snapshot_route_environment_wins_over_the_provider(

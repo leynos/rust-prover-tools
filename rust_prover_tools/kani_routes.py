@@ -169,15 +169,28 @@ def prepare_route(
         the process working directory at this call.
     """
     provider = os.environ if environ is None else environ
-    process_cwd = Path.cwd() if cwd is None else cwd
+    process_cwd = (Path.cwd() if cwd is None else cwd).resolve()
     if isinstance(route, LegacyRoute):
-        return _prepare_legacy(route, provider)
+        return _prepare_legacy(route, provider, process_cwd)
     return _prepare_snapshot(route, provider, process_cwd)
+
+
+def _bound_working_directory(route_cwd: Path, checked_cwd: Path) -> Path:
+    """Return a working directory bound to the caller's checked base.
+
+    A relative route directory must be resolved once, against the directory
+    the caller checked, so a later process-directory change cannot move
+    qualification somewhere else.
+    """
+    if route_cwd.is_absolute():
+        return route_cwd
+    return (checked_cwd / route_cwd).resolve()
 
 
 def _prepare_legacy(
     route: LegacyRoute,
     environ: cabc.Mapping[str, str],
+    checked_cwd: Path,
 ) -> PreparedRoute:
     """Qualify the legacy release, its identities, and its environment.
 
@@ -188,7 +201,11 @@ def _prepare_legacy(
     inherited = route.environment if route.environment is not None else environ
     environment = dict(inherited)
     qualified = qualify_kani_installation(
-        KaniExecOptions(route.installation, route.cwd, ()),
+        KaniExecOptions(
+            route.installation,
+            _bound_working_directory(route.cwd, checked_cwd),
+            (),
+        ),
         environment,
     )
     grammar = grammar_for(KANI_RELEASE_VERSION)
@@ -220,6 +237,11 @@ def _prepare_snapshot(
     one mapping.
     """
     inherited = route.environment if route.environment is not None else environ
+    working_directory = (
+        process_cwd
+        if route.cwd is None
+        else _bound_working_directory(route.cwd, process_cwd)
+    )
     qualified = prepare_snapshot_proof(
         SnapshotRunOptions(
             pin=route.pin,
@@ -228,7 +250,7 @@ def _prepare_snapshot(
         ),
         route.hooks,
         context=ProofContext(
-            cwd=route.cwd if route.cwd is not None else process_cwd,
+            cwd=working_directory,
             environment=inherited,
         ),
         validate_arguments=False,

@@ -30,9 +30,19 @@ async def settle_within(running: object) -> None:
     with contextlib.suppress(asyncio.CancelledError):
         await limit
     if settle not in done:
+        # Stop the child, then allow one more bounded window for the join.
+        # The settle task is cancelled and never awaited without a deadline:
+        # it suppresses cancellation, so an unbounded await could hang.
         handle.stop(StopReason.INTERRUPTED)
-        with contextlib.suppress(Exception):
-            await settle
-        msg = "the child was not joined within the settlement deadline"
-        raise AssertionError(msg)
+        second = asyncio.create_task(asyncio.sleep(SETTLE_SECONDS))
+        try:
+            await asyncio.wait({settle, second}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            second.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await second
+        if not settle.done():
+            settle.cancel()
+            msg = "the child did not stop within the settlement deadline"
+            raise AssertionError(msg)
     await settle

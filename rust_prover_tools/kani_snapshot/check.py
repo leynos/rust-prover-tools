@@ -19,6 +19,7 @@ it runs.
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import functools
 import logging
 import time
@@ -128,18 +129,15 @@ def check_active_snapshot(
         tree check fails, or the effective compiler does not match the
         receipt and manifest.
     """
-    if hooks is None:
-        probe = (
-            probe_host_generation
-            if environment is None
-            else functools.partial(
-                probe_generation,
-                environment=environment,
-            )
+    chosen = InstallHooks() if hooks is None else hooks
+    if environment is not None and chosen.probe is probe_host_generation:
+        # The default probe reads the host environment; bind the caller's
+        # mapping so the identities checked are the ones the proof will use.
+        # A caller-supplied custom probe is left untouched.
+        chosen = dc.replace(
+            chosen,
+            probe=functools.partial(probe_generation, environment=environment),
         )
-        chosen = InstallHooks(probe=probe)
-    else:
-        chosen = hooks
     with (
         operation_span(_LOGGER, "kani.snapshot.check") as span,
         _validated_under_lock(options) as (validated, deadline),
