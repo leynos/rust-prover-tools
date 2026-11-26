@@ -28,9 +28,10 @@ def require_distinct_destinations(
     Paths are resolved first, and existing paths are compared by inode, so a
     relative spelling, a symlink, a symlinked parent, or a hard link cannot
     disguise an alias. A path whose identity cannot be determined because
-    ``stat`` fails is not reported as an alias here; the adapter that opens the
-    destination surfaces the `OSError` from creating its parent directory or
-    opening it. Call this from the adapter before the first handle is created.
+    ``stat`` fails is not reported as an alias here: a missing file or a
+    transient failure may still open successfully, so the adapter simply
+    attempts the open and lets any real `OSError` surface there. Call this from
+    the adapter before the first handle is created.
 
     Parameters
     ----------
