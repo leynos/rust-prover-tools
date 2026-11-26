@@ -6,11 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,327 passed and 6
-skipped at code head `2cb49d9`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,328 passed and 6
+skipped at code head `e5ece36`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passes at the review-repair head: 2 passed in 1,103.94 s at `49fcabd`, whose
-runtime code is unchanged since.
+passes at the final head: 2 passed in 742.15 s at `e5ece36`.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -582,10 +581,10 @@ Plain-language terms used in this plan:
   contracts and the short-option cluster scan. The package docstring now names
   its five public surfaces, and generated properties cover mask idempotence,
   identifier reading, cfg_attr conditionality, first_stop order and watchdog
-  decisions. `make check-fmt`, `make all` (3,327 passed, 6 skipped),
-  `make markdownlint`, and `make nixie` pass at `2cb49d9`; the opt-in live Kani
-  0.67.0 fixture passes at `49fcabd`, which has the same runtime code: 2 passed
-  in 1,103.94 s.
+  decisions. Escaped cgroup mount-point discovery is also exercised without a
+  test root override. `make check-fmt`, `make all` (3,328 passed, 6 skipped),
+  `make markdownlint`, and `make nixie` pass at `e5ece36`; the opt-in live Kani
+  0.67.0 fixture passes at the same head: 2 passed in 742.15 s.
 
 ## Surprises & discoveries
 
