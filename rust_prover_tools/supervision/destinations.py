@@ -27,7 +27,9 @@ def require_distinct_destinations(
 
     Paths are resolved first, and existing paths are compared by inode, so a
     relative spelling, a symlink, a symlinked parent, or a hard link cannot
-    disguise an alias. Call this from the adapter that opens the destinations,
+    disguise an alias. A path whose identity cannot be determined because
+    ``stat`` fails is not reported here: the adapter that opens the destination
+    reports that `OSError` from the open itself. Call this from the adapter
     before the first handle is created.
 
     Parameters

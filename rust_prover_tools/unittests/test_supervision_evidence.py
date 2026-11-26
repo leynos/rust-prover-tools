@@ -479,6 +479,31 @@ def test_a_hard_link_alias_is_refused_before_a_handle_is_opened(
     assert first.read_text(encoding="utf-8") == ""
 
 
+def test_an_unstatable_destination_is_not_reported_as_an_alias(
+    tmp_path: Path,
+) -> None:
+    """A stat failure is not a collision; the open that follows reports it."""
+    from rust_prover_tools.kani_diagnostics import open_diagnostics
+    from rust_prover_tools.supervision.destinations import (
+        require_distinct_destinations,
+    )
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    broken = blocker / "evidence.jsonl"
+    report = tmp_path / "report.json"
+
+    # The identity check cannot stat through a file, so it reports no alias.
+    require_distinct_destinations(jsonl_path=broken, report_path=report)
+
+    config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=broken))
+    with (
+        pytest.raises(OSError, match="File exists"),
+        open_diagnostics(config, None),
+    ):
+        pass
+
+
 def test_a_run_finish_record_with_malformed_accounting_is_refused() -> None:
     """The nested accounting object obeys its documented key set."""
     sink = MemorySink()
