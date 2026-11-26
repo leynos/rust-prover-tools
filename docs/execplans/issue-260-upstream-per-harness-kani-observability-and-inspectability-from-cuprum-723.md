@@ -611,7 +611,12 @@ Plain-language terms used in this plan:
   process witness an independent settlement deadline, and narrowed the
   destination stat-failure wording. `make check-fmt`, `make all` (3,343 passed,
   6 skipped), `make markdownlint`, and `make nixie` pass at `2ac8bbc`; the
-  opt-in live Kani 0.67.0 fixture passes at the same head: 2 passed in 283.33 s.
+  opt-in live Kani 0.67.0 fixture passes at the same head: 2 passed in 283.33
+  s. A final pass bound the supplied environment for a default probe inside
+  supplied hooks, bound relative route directories to the checked base, and
+  bounded the witness failure path. `make check-fmt`, `make all` (3,345 passed,
+  6 skipped), `make markdownlint`, and `make nixie` pass at `dce1e70`; the
+  opt-in live Kani 0.67.0 fixture passes at the same head: 2 passed in 251.11 s.
 
 ## Surprises & discoveries
 
