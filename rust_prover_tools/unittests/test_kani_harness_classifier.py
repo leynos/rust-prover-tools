@@ -1234,3 +1234,62 @@ def test_a_synthetic_parse_refusal_classifies_as_malformed_output() -> None:
     assert classification.status is ExecutionStatus.ERROR
     assert classification.detail.startswith("malformed verifier output:")
     assert "does not begin with a Kani banner" in classification.detail
+
+
+def test_results_inside_a_description_cannot_credit_a_fake_selection() -> None:
+    """A results marker is description content and cannot close the frame.
+
+    Kani escapes nothing inside a description, so ``RESULTS:`` followed by a
+    selection-shaped line can be prose. A stopped log never reaches the parse,
+    which makes the live facts decisive: the fake name must not appear at all,
+    and the real selection recorded before the description must survive.
+    """
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        "RESULTS:",
+        "Checking harness fake...",
+        'last"',
+    ]
+    observer = KaniObserver()
+    clock = VirtualClock()
+    for line in log:
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+
+    assert "fake" not in observer.facts.selection_records
+    assert "harnesses::verified" in observer.facts.selection_records
+
+
+def test_a_stopped_run_does_not_credit_a_fake_selection_after_results() -> None:
+    """A stopped attempt credits only the real selection, not quoted prose."""
+    log = _log("verified", "harnesses::verified")
+    description = next(
+        index for index, line in enumerate(log) if "Description:" in line
+    )
+    log[description : description + 1] = [
+        '\t - Description: "first',
+        "RESULTS:",
+        "Checking harness fake...",
+        'last"',
+    ]
+    observer = _observed_log(log)
+    adapter = KaniAdapter()
+
+    classification = adapter.classify(
+        _evidence("harnesses::verified", stop=StopReason.TIMEOUT),
+        _finish(observer),
+    )
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert classification.observed is not None
+    assert "fake" not in classification.observed

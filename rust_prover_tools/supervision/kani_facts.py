@@ -18,7 +18,7 @@ from rust_prover_tools.kani_log import (
     LIST_WRITTEN,
     NOISE_PREFIXES,
 )
-from rust_prover_tools.kani_log.syntax import CHECK, FIELD, NO_HARNESS_MATCH
+from rust_prover_tools.kani_log.syntax import FIELD, NO_HARNESS_MATCH
 
 __all__ = (
     "MAX_LIVE_RECORDS",
@@ -39,23 +39,17 @@ class _Candidate:
     text: str
 
 
-#: Report markers that can only follow a finished description.
-_MARKERS: typ.Final[tuple[str, ...]] = (
-    "RESULTS:",
-    "SUMMARY:",
-    "Manual Harness Summary:",
-)
+def _closes_description(text: str) -> bool:
+    """Whether a line ends a quoted description.
 
-
-def _is_structural(text: str) -> bool:
-    """Whether a line is a report structure that cannot be description content.
-
-    Report-shaped candidates are excluded on purpose: a verdict, selection or
-    banner printed inside a description looks exactly like the real one.
+    Kani closes the quotation on its own line and follows it with a field such
+    as ``Location``. A results marker or a check-shaped line, by contrast, can
+    be description text: Kani escapes nothing, so ``RESULTS:`` followed by
+    ``Checking harness ...`` can be prose. Neither closes the frame here.
+    A complete log is parsed authoritatively; a stopped log that never reaches
+    a closing line loses its live selection rather than crediting prose.
     """
-    if FIELD.match(text) is not None:
-        return True
-    return text in _MARKERS or CHECK.match(text) is not None
+    return FIELD.match(text) is not None or text.rstrip().endswith('"')
 
 
 def _is_notable(text: str) -> bool:
@@ -145,19 +139,23 @@ class KaniFactScanner:
         nothing inside them, so description content can contain a line that
         looks like a banner, a selection, a verdict, or the closing quote
         itself. The scanner therefore keeps the frame open from a
-        ``Description`` field until a report structure that cannot be content
-        follows - a field such as ``Location``, a results or summary marker, or
-        a fresh check entry. Everything between is description content and is
-        never recorded, which fails closed: an unresolved frame loses its live
-        facts rather than crediting prose, and a complete log is parsed
-        authoritatively.
+        ``Description`` field until the quotation closes or a field such as
+        ``Location`` follows. A results marker or a check-shaped line can be
+        description content, so neither ends the frame. Everything between is
+        description content and is never recorded, which fails closed: an
+        unresolved frame loses its live facts rather than crediting prose, and
+        a complete log is parsed authoritatively.
         """
         if self._in_description:
-            if not _is_structural(text):
+            if not _closes_description(text):
                 if _is_notable(text):
                     self.last_progress = text
                 return
             self._in_description = False
+            # The closing line ends the description; it is never a candidate
+            # in its own right, so a quoted value cannot credit a selection.
+            if not FIELD.match(text):
+                return
         if self._opens_description(text):
             return
         candidate = self._candidate(text)
