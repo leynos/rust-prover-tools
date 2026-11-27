@@ -1447,11 +1447,13 @@ async def _cancellation_with_failing_close_scenario(tmp_path: Path) -> None:
 
 
 def test_an_orphaned_close_failure_is_not_swallowed(tmp_path: Path) -> None:
-    """On an otherwise successful attempt, a close failure is reported."""
-    asyncio.run(_orphaned_close_failure_scenario())
+    """A close failure is reported and the completed attempt still recorded."""
+    asyncio.run(_orphaned_close_failure_scenario(tmp_path))
 
 
-async def _orphaned_close_failure_scenario() -> None:
+async def _orphaned_close_failure_scenario(
+    tmp_path: Path,
+) -> None:
     """Run an attempt that settles cleanly but cannot close its observer."""
     clock = VirtualClock()
     launcher = ScriptedLauncher(
@@ -1462,15 +1464,29 @@ async def _orphaned_close_failure_scenario() -> None:
     )
     (identity,) = (spec("harnesses::a"),)
     config = dc.replace(_config(timeout_seconds=60.0), sinks=DiagnosticSinks())
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=60.0), sinks=DiagnosticSinks(report_path=report_path)
+    )
     environment = _environment(
         launcher,
         clock,
-        sinks=Diagnostics(jsonl=MemorySink()),
+        sinks=Diagnostics(jsonl=jsonl),
         adapter=_UnclosableAdapter(),
     )
 
     with pytest.raises(RuntimeError, match="could not be closed"):
         await run_supervised((identity,), config, environment)
+
+    finish = [
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    ]
+    assert finish, "the completed attempt was erased by the close failure"
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert results, "the report has no results"
+    assert results[0]["status"] == "interrupted"
 
 
 def test_a_monitor_fault_survives_an_unreadable_spool(tmp_path: Path) -> None:

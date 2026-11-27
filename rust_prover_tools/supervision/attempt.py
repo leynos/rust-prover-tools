@@ -130,6 +130,7 @@ class AttemptSupervisor:
     _stop_detail: str = ""
     _observer: LineObserver | None = None
     _interrupted: tuple[AttemptEvidence, HarnessClassification] | None = None
+    _completed: tuple[AttemptEvidence, HarnessClassification] | None = None
     _settled: LaunchResult | None = None
 
     async def run(self) -> tuple[AttemptEvidence, HarnessClassification]:
@@ -167,7 +168,10 @@ class AttemptSupervisor:
             evidence = self._evidence(
                 result, started_at, started_monotonic, cgroup_start
             )
-            return evidence, self._classify(evidence)
+            # Keep the completed pair before the observer is released: a
+            # cleanup failure must not erase evidence the attempt produced.
+            self._completed = (evidence, self._classify(evidence))
+            return self._completed
         finally:
             # `classify` no longer owns the spool, so the boundary that opened
             # the observer releases it. `failure` is the exception escaping
@@ -196,6 +200,23 @@ class AttemptSupervisor:
             if failure is None:
                 raise
             failure.add_note(f"closing the verifier log spool also failed: {error}")
+
+    @property
+    def attempt(self) -> tuple[AttemptEvidence, HarnessClassification] | None:
+        """The attempt's evidence and classification, however it ended.
+
+        A completed pair is recorded before the observer is released, so a
+        cleanup failure cannot erase it; an interrupted pair is recorded
+        before the original failure is re-raised.
+
+        Returns
+        -------
+        tuple[AttemptEvidence, HarnessClassification] | None
+            The pair to record, or `None` when no attempt produced evidence.
+        """
+        if self._completed is not None:
+            return self._completed
+        return self._interrupted
 
     @property
     def interrupted(self) -> tuple[AttemptEvidence, HarnessClassification] | None:

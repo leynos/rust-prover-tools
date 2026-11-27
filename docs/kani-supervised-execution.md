@@ -504,8 +504,8 @@ raise SystemExit(run.exit_status)
 documented compatibility alias) loads or discovers the inventory, selects exact
 harnesses, qualifies one route, runs the generic supervisor, and returns a
 `KaniHarnessRun` with the typed `report`, the `inventory`, the `selected`
-harnesses, the `backend_version`, and a `table`. Async callers may use
-`run_supervised` with a `RunEnvironment` instead.
+harnesses, and the `backend_version`. Async callers may use `run_supervised`
+with a `RunEnvironment` instead.
 
 An application that owns its signal policy can split the two phases.
 `qualify_harnesses(options, dependencies=None)` performs discovery, selection,

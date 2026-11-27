@@ -253,7 +253,7 @@ class SupervisedRun:
             # re-raising. Keep the evidence of the attempt that was in flight
             # so the caller can report an interrupted attempt with its timing,
             # stop reason, and diagnostic reference.
-            ledger.interrupted_attempt = supervisor.interrupted
+            ledger.interrupted_attempt = supervisor.attempt
             raise
 
     def _interrupted(self) -> bool:
