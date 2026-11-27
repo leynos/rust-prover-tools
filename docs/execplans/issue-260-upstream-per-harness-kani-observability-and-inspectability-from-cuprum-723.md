@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,381 passed and 6
-skipped at code head `d0219fc`; `make all` counts collected outcomes, so a
-passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the same head: 2 passed in 8.81 s.
+is layered on it and main is merged in. The final deterministic gate reports
+3,512 passed and 20 skipped at code head `245d047`; `make all` counts collected
+outcomes, so a passing run and its skips are separate. The opt-in live Kani
+0.67.0 fixture passed at the same head: 2 passed in 110.74 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -709,35 +709,16 @@ Plain-language terms used in this plan:
   skipped), `make markdownlint`, and `make nixie` pass at `1476458`; the opt-in
   live Kani 0.67.0 fixture passes at the same head: 2 passed in 218.01 s.
 
-## Open review round at handoff
+## Review round after the merge
 
-The branch is green and pushed at `40aa1c5`. The latest CodeRabbit review
-(2026-11-27T09:33:13Z, review `6086091313`) requests one inline typing change
-and six further Unit Architecture items, none of which is implemented yet:
-
-1. `rust_prover_tools/__init__.py`: add type-only declarations for the names
-   resolved by `__getattr__`, preserving runtime laziness.
-2. `kani_destinations.py`: move `require_stdout_free` out of
-   `supervision_policy`, stop swallowing its errors silently, and document the
-   behaviour in `Raises`.
-3. `kani_harness_cli_options.py`: move `load_pin` out of `resolve_route` and
-   update the `kani_destinations.py` docstring only if the boundary changes.
-4. Keep one destination-opening function across `kani_diagnostics.py` and
-   `kani_destinations.py`, with one name that states its write.
-5. `kani_harness_run.py`: keep one injection channel for caller-owned
-   diagnostics (`execute_harnesses(diagnostics=...)` or
-   `KaniHarnessDependencies.diagnostics`).
-6. `kani_harness_cli.py`: use `write_inventory` from
-   `kani_inventory/document.py` in `list_harnesses`, and test that `list`
-   without `--output` writes nothing.
-7. Keep one Cargo metadata seam (`KaniHarnessRunOptions.metadata` or
-   `KaniHarnessDependencies.metadata`), and test the stdout-alias and pin-load
-   failures at their new seams.
-
-Resume by applying those seven items, then run the four gates, commit, push,
-post the reconciliation, and request a review. The reconciliation comment for
-the previous round is `RPT-266-REVIEW-R19` (issue comment 7214620749); the
-review request that produced this round is issue comment 7215036397.
+The branch merged `origin/main` (13 commits, including the snapshot producer) at
+`893d620`, which resolved the PR's conflict. The review at
+2026-11-27T09:33:13Z is implemented at `245d047`: type-only declarations for
+the lazy package exports, one `prepare_and_open_diagnostics` opener, an explicit
+`StdoutIdentityError`, `load_pin` moved to the command, one diagnostics
+channel, `write_inventory` in `list_harnesses`, and one Cargo metadata seam.
+`make check-fmt`, `make all` (3,512 passed, 20 skipped), `make markdownlint` and
+`make nixie` pass.
 
 ## Surprises & discoveries
 
