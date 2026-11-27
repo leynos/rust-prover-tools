@@ -1,0 +1,14 @@
+Kani Rust Verifier 0.68.0 (standalone)
+Checking harness deliberately_false_assertion...
+
+SUMMARY:
+ ** 1 of 3 failed
+Failed Checks: deliberately false
+ File: "src/lib.rs", line 14, in deliberately_false_assertion
+
+VERIFICATION:- FAILED
+Verification Time: 0.22000000s
+
+Manual Harness Summary:
+Verification failed for - deliberately_false_assertion
+Complete - 0 successfully verified harnesses, 1 failures, 1 total.

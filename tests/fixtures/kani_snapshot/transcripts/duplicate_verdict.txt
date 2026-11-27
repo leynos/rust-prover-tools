@@ -1,0 +1,9 @@
+Kani Rust Verifier 0.68.0 (standalone)
+Checking harness bounded_push_contents_are_exact...
+
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.41000000s
+VERIFICATION:- FAILED
+
+Manual Harness Summary:
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.

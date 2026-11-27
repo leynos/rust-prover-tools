@@ -1,0 +1,418 @@
+"""Tests for strict readings of Kani proof transcripts.
+
+A process exit status cannot tell a failed assertion from a compile error, a
+solver crash or a run that discovered no harnesses. The validator therefore
+reads the named harness starts, their individual verdicts and the manual
+summary, and refuses any transcript that does not state one consistent result
+for the exact harness set the smoke expects.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import typing as typ
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from rust_prover_tools.kani_snapshot.producer.proof_rendering import (
+    render_proof_report,
+)
+from rust_prover_tools.kani_snapshot.producer.proof_report import (
+    MAX_TRANSCRIPT_BYTES,
+    HarnessOutcome,
+    ProofCompileError,
+    ProofSolverError,
+    ProofTranscriptError,
+    parse_proof_report,
+    require_named_harnesses,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from syrupy.assertion import SnapshotAssertion
+
+FIXTURES: typ.Final[pathlib.Path] = (
+    pathlib.Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "kani_snapshot"
+    / "transcripts"
+)
+
+_NAMES = st.from_regex(r"[a-z][a-z0-9_]{0,12}", fullmatch=True)
+
+
+def _fixture(name: str) -> str:
+    """Return one captured transcript as text."""
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def _block(name: str, *, verified: bool) -> str:
+    """Render one harness block in the shape the pinned Kani writes."""
+    if verified:
+        result = " ** 0 of 4 failed\n\nVERIFICATION:- SUCCESSFUL"
+    else:
+        result = " ** 1 of 4 failed\nFailed Checks: expected\n\nVERIFICATION:- FAILED"
+    return (
+        f"Checking harness {name}...\n\nSUMMARY:\n{result}\nVerification Time: 0.1s\n"
+    )
+
+
+def _transcript(verified: cabc.Iterable[str], failed: cabc.Iterable[str]) -> str:
+    """Build one transcript in the shape the pinned Kani writes."""
+    verified_names = list(verified)
+    failed_names = list(failed)
+    blocks = [_block(name, verified=True) for name in verified_names]
+    blocks.extend(_block(name, verified=False) for name in failed_names)
+    summary = [
+        "\nManual Harness Summary:\n",
+        *(f"Verification failed for - {name}\n" for name in failed_names),
+        (
+            f"Complete - {len(verified_names)} successfully verified harnesses, "
+            f"{len(failed_names)} failures, "
+            f"{len(verified_names) + len(failed_names)} total.\n"
+        ),
+    ]
+    return (
+        "Kani Rust Verifier 0.68.0 (standalone)\n"
+        + "\n".join(blocks)
+        + "".join(summary)
+    )
+
+
+def test_the_positive_transcript_reports_the_exact_named_harnesses() -> None:
+    """Both named positive harnesses are reported as verified."""
+    report = parse_proof_report(_fixture("positive.txt"))
+
+    assert report.outcomes == (
+        HarnessOutcome("bounded_push_contents_are_exact", verified=True),
+        HarnessOutcome("raii_release_runs_once", verified=True),
+    )
+    assert (report.verified_count, report.failed_count, report.total_count) == (2, 0, 2)
+
+
+def test_the_threaded_positive_transcript_is_accepted() -> None:
+    """A parallel run prefixes some lines with a thread marker."""
+    report = parse_proof_report(_fixture("threaded_positive.txt"))
+
+    assert report.verified_names == {
+        "bounded_push_contents_are_exact",
+        "raii_release_runs_once",
+    }
+
+
+def test_the_false_assertion_is_a_verification_failure() -> None:
+    """The negative fixture must be a failed proof, not a failed compile."""
+    report = require_named_harnesses(
+        _fixture("false_assertion.txt"),
+        verified=(),
+        failed=("deliberately_false_assertion",),
+    )
+
+    assert report.failed_names == {"deliberately_false_assertion"}
+    assert report.verified_names == frozenset()
+
+
+def test_a_compile_error_is_not_a_verification_failure() -> None:
+    """A build failure must not be accepted as the deliberately false proof."""
+    with pytest.raises(ProofCompileError, match="compile"):
+        parse_proof_report(_fixture("compile_error.txt"))
+
+
+def test_a_solver_failure_is_not_a_verification_failure() -> None:
+    """A CBMC failure must not be accepted as the deliberately false proof."""
+    with pytest.raises(ProofSolverError, match="CBMC"):
+        parse_proof_report(_fixture("solver_failure.txt"))
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "CBMC failed with status 6",
+        "Failed to run cbmc: No such file or directory",
+        "CBMC timed out",
+        "CBMC appears to have run out of memory",
+    ],
+    ids=["failed", "not-run", "timed-out", "out-of-memory"],
+)
+def test_each_solver_failure_is_refused(diagnostic: str) -> None:
+    """Every CBMC failure shape is reported as the solver, not as a proof."""
+    transcript = f"Checking harness probe...\n{diagnostic}\n"
+
+    with pytest.raises(ProofSolverError, match=r"CBMC|solver"):
+        parse_proof_report(transcript)
+
+
+def test_a_duplicated_harness_start_is_refused() -> None:
+    """Two sections for one harness make its verdict depend on document order."""
+    transcript = (
+        _fixture("positive.txt")
+        + "\nChecking harness bounded_push_contents_are_exact...\n"
+    )
+
+    with pytest.raises(ProofTranscriptError, match="more than once"):
+        parse_proof_report(transcript)
+
+
+def test_more_than_one_manual_summary_is_refused() -> None:
+    """Two summaries leave the counts ambiguous, so the transcript is refused.
+
+    Each half names a different harness, so the duplicate-section guard cannot
+    be what refuses it.
+    """
+    transcript = _transcript(("first_harness",), ()) + _transcript(
+        ("second_harness",), ()
+    )
+
+    with pytest.raises(ProofTranscriptError, match="more than one manual harness"):
+        parse_proof_report(transcript)
+
+
+def test_a_zero_harness_run_is_refused() -> None:
+    """A run that found no proof harnesses proves nothing."""
+    with pytest.raises(ProofTranscriptError, match="no proof harnesses"):
+        parse_proof_report(_fixture("zero_harnesses.txt"))
+
+
+def test_a_truncated_transcript_is_refused() -> None:
+    """A harness start with no verdict is not a result."""
+    with pytest.raises(ProofTranscriptError, match="verdict"):
+        parse_proof_report(_fixture("truncated.txt"))
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [
+        ("contradictory.txt", "summary"),
+        ("duplicate_verdict.txt", "verdict"),
+        ("no_summary.txt", "summary"),
+    ],
+)
+def test_inconsistent_transcripts_are_refused(name: str, message: str) -> None:
+    """Each malformed shape fails for its own stated reason."""
+    with pytest.raises(ProofTranscriptError, match=message):
+        parse_proof_report(_fixture(name))
+
+
+def test_an_oversized_transcript_is_refused_before_parsing() -> None:
+    """A bounded reader does not load an unbounded tool log."""
+    transcript = "x" * (MAX_TRANSCRIPT_BYTES + 1)
+
+    with pytest.raises(ProofTranscriptError, match="ceiling"):
+        parse_proof_report(transcript)
+
+
+def test_require_named_harnesses_refuses_a_missing_harness() -> None:
+    """A set that omits one required harness is not the expected set."""
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(
+            _fixture("positive.txt"),
+            verified=("bounded_push_contents_are_exact", "absent_harness"),
+            failed=(),
+        )
+
+
+def test_require_named_harnesses_refuses_an_extra_harness() -> None:
+    """An unexpected successful harness is refused rather than ignored."""
+    with pytest.raises(ProofTranscriptError, match="unexpected"):
+        require_named_harnesses(
+            _fixture("positive.txt"),
+            verified=("bounded_push_contents_are_exact",),
+            failed=(),
+        )
+
+
+def test_require_named_harnesses_refuses_the_wrong_status() -> None:
+    """A harness that failed cannot satisfy an expectation that it verified."""
+    with pytest.raises(ProofTranscriptError, match="expected to verify"):
+        require_named_harnesses(
+            _fixture("false_assertion.txt"),
+            verified=("deliberately_false_assertion",),
+            failed=(),
+        )
+
+
+def test_an_expected_failure_that_verified_is_refused() -> None:
+    """A harness demanded as both verified and failed is refused by status.
+
+    The verified side consumes the name, so only the failed side's
+    opposite-status branch can report it. Without that branch a caller's
+    contradiction would be reported as a plain missing failure.
+    """
+    name = "solo_harness"
+    transcript = _transcript((name,), ())
+
+    with pytest.raises(ProofTranscriptError, match="verified but was expected to fail"):
+        require_named_harnesses(transcript, verified=(name,), failed=(name,))
+
+
+def test_a_failure_the_expectation_did_not_name_is_refused() -> None:
+    """An unexpected failed harness cannot be left over.
+
+    The verified side names every success, so only the failed-side leftover
+    branch can refuse this transcript.
+    """
+    transcript = _transcript(
+        ("raii_release_runs_once",), ("deliberately_false_assertion",)
+    )
+
+    with pytest.raises(ProofTranscriptError, match="unexpected harness"):
+        require_named_harnesses(
+            transcript, verified=("raii_release_runs_once",), failed=()
+        )
+
+
+def test_an_expected_failure_absent_from_the_transcript_is_refused() -> None:
+    """A required failure the transcript never mentions is refused by name."""
+    with pytest.raises(ProofTranscriptError, match="did not fail harness"):
+        require_named_harnesses(
+            _fixture("positive.txt"),
+            verified=("bounded_push_contents_are_exact", "raii_release_runs_once"),
+            failed=("absent_harness",),
+        )
+
+
+def test_a_crate_relative_expectation_matches_its_reported_name() -> None:
+    """Kani strips the crate prefix but keeps the module path."""
+    transcript = _transcript(
+        ("kani_tests::test_sum", "pair::kani_tests::test_one_plus_two"), ()
+    )
+
+    require_named_harnesses(
+        transcript,
+        verified=("kani_tests::test_sum", "pair::kani_tests::test_one_plus_two"),
+        failed=(),
+    )
+
+
+def test_an_extra_module_prefix_does_not_satisfy_an_expectation() -> None:
+    """A harness in another module is a different harness, not a match."""
+    transcript = _transcript(("other::kani_tests::test_sum",), ())
+
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(
+            transcript, verified=("kani_tests::test_sum",), failed=()
+        )
+
+
+def test_default_mode_compares_the_exact_reported_name() -> None:
+    """A bare expectation does not match a module-qualified print."""
+    transcript = _transcript(("other::bounded_push_contents_are_exact",), ())
+
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(
+            transcript, verified=("bounded_push_contents_are_exact",), failed=()
+        )
+
+
+def test_a_no_harness_diagnostic_is_refused_beside_successful_sections() -> None:
+    """Stale successful output cannot hide a later zero-harness result."""
+    transcript = _fixture("positive.txt") + _fixture("zero_harnesses.txt")
+
+    with pytest.raises(ProofTranscriptError, match="no proof harnesses"):
+        parse_proof_report(transcript)
+
+
+def test_a_successful_unwinding_description_is_accepted() -> None:
+    """Regular output prints every description, including a passing one.
+
+    The parse path performs this check itself, so a transcript that parses is
+    also a transcript whose unwinding descriptions all succeeded.
+    """
+    transcript = _fixture("positive.txt").replace(
+        " ** 0 of 12 failed",
+        '\t - Status: SUCCESS\n\t - Description: "unwinding assertion"\n'
+        " ** 0 of 12 failed",
+        1,
+    )
+
+    report = parse_proof_report(transcript)
+
+    assert report.verified_names == {
+        "bounded_push_contents_are_exact",
+        "raii_release_runs_once",
+    }
+
+
+def test_a_failed_unwinding_check_is_refused_by_parsing() -> None:
+    """A failed unwinding check is not a proof result.
+
+    A caller cannot admit this transcript by forgetting a second call: the
+    parse path refuses it.
+    """
+    transcript = _fixture("positive.txt").replace(
+        " ** 0 of 12 failed",
+        '\t - Status: FAILURE\n\t - Description: "unwinding assertion"\n'
+        " ** 0 of 12 failed",
+        1,
+    )
+
+    with pytest.raises(ProofTranscriptError, match="unwinding"):
+        parse_proof_report(transcript)
+
+
+def test_the_rendered_report_is_stable(snapshot: SnapshotAssertion) -> None:
+    """The rendered multivariant output is pinned by a Syrupy snapshot."""
+    assert render_proof_report(parse_proof_report(_fixture("positive.txt"))) == snapshot
+
+
+def test_the_rendered_failure_is_stable(snapshot: SnapshotAssertion) -> None:
+    """The failure rendering is pinned separately from the success form."""
+    assert (
+        render_proof_report(parse_proof_report(_fixture("false_assertion.txt")))
+        == snapshot
+    )
+
+
+@given(
+    verified=st.sets(_NAMES, max_size=4),
+    failed=st.sets(_NAMES, max_size=4),
+)
+@settings(max_examples=30, deadline=None)
+def test_generated_transcripts_round_trip_through_the_validator(
+    verified: set[str], failed: set[str]
+) -> None:
+    """The parser agrees with an independent model of a well-formed run.
+
+    A run with no harness at all is excluded here because it is refused
+    separately: no verified and no failed harness is the zero-harness shape.
+    """
+    failed = failed.difference(verified)
+    if not verified and not failed:
+        return
+    report = require_named_harnesses(
+        _transcript(sorted(verified), sorted(failed)),
+        verified=verified,
+        failed=failed,
+    )
+
+    assert report.verified_names == verified
+    assert report.failed_names == failed
+    assert report.total_count == len(verified) + len(failed)
+
+
+@given(verified=st.sets(_NAMES, min_size=1, max_size=4))
+@settings(max_examples=20, deadline=None)
+def test_a_dropped_harness_is_refused(verified: set[str]) -> None:
+    """A harness missing from the transcript is detected, not ignored.
+
+    One harness is always retained, so the refusal names the missing harness
+    rather than reporting the separate zero-harness shape.
+    """
+    missing = min(verified)
+    retained = sorted(verified - {missing})[:1] or ["retained-harness"]
+    transcript = _transcript(retained, ())
+    expectation = frozenset(retained) | {missing}
+
+    with pytest.raises(ProofTranscriptError, match="did not verify"):
+        require_named_harnesses(transcript, verified=expectation, failed=())
+
+
+def test_the_false_transcript_names_the_deliberately_false_check() -> None:
+    """The negative control must fail for its own assertion, not another one."""
+    transcript = _fixture("false_assertion.txt")
+
+    assert "Failed Checks: deliberately false" in transcript

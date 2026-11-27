@@ -1,0 +1,13 @@
+# Copyright Kani Contributors
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+# Upstream: tests/cargo-kani/simple-lib at
+# 0d2328a93f0e0ff66132d6bfa1a7d884877cf862. `lib.rs` and `pair.rs` are copies of
+# the pinned upstream files; this manifest is upstream's.
+[package]
+name = "simple-lib"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+
+[workspace]

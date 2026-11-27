@@ -24,7 +24,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MAKE = shutil.which("make")
 NEEDS_MAKE = pytest.mark.skipif(MAKE is None, reason="GNU make is required")
 _SHA = "a" * 40
-_TAG = "kani-snapshot-2026-12-0123456789ab-r1"
+# The tag's 12-hex field is the upstream commit's prefix, not a free label.
+_TAG = "kani-snapshot-2026-12-aaaaaaaaaaaa-r1"
 _GH_STUB = '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$GH_ARGS_FILE"\n'
 #: A `gh` the sandboxed home provides. It must never run: the Makefile
 #: prepends `$(HOME)/.local/bin` to PATH, so a real `gh` there would shadow the
@@ -34,7 +35,7 @@ _USERS_GUIDE = REPO_ROOT / "docs" / "users-guide.md"
 #: The identifier the guide gives its smoke-dispatch example.
 _SMOKE_EXAMPLE = "kani-snapshot-smoke"
 #: The placeholders the example shows, with representative values substituted.
-_SUBSTITUTIONS = {"<full upstream commit>": _SHA, "<12 hex>": "0123456789ab"}
+_SUBSTITUTIONS = {"<full upstream commit>": _SHA, "<12 hex>": "a" * 12}
 #: Variables through which a parent make turns an inherited environment into
 #: command-line assignments. GNU make gives those precedence over the
 #: Makefile's own `export UV :=`, so a child that must see only this test's
@@ -170,6 +171,30 @@ def test_the_smoke_target_validates_its_inputs_and_dispatches_as_data(
         "workflow\nrun\nkani-monthly.yml\n--ref\nmain\n-f\n"
         f"upstream_commit={_SHA}\n-f\npublication_id={_TAG}\n-f\npublish=false\n"
     )
+
+
+@NEEDS_MAKE
+def test_the_smoke_target_refuses_a_tag_bound_to_another_commit(
+    tmp_path: Path,
+) -> None:
+    """A tag's 12-hex prefix must be the commit's, checked before dispatch.
+
+    The producer refuses this mismatch, but only after a hosted run has started:
+    the operator sees a red resolve job for an identity the local command could
+    have rejected in a second. The recipe therefore compares the prefix itself.
+    """
+    environment, log, _ = _gh_stub(tmp_path)
+    foreign = "kani-snapshot-2026-12-ffffffffffff-r1"
+    refused = _make(
+        "kani-snapshot-smoke",
+        f"KANI_SNAPSHOT_UPSTREAM_COMMIT={_SHA}",
+        f"KANI_SNAPSHOT_PUBLICATION_ID={foreign}",
+        env=environment,
+    )
+
+    assert refused.returncode != 0
+    assert "12 hex" in refused.stderr
+    assert not log.exists(), "gh ran before the tag's upstream prefix was checked"
 
 
 def _documented_command() -> str:

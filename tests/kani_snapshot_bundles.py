@@ -31,6 +31,7 @@ from rust_prover_tools.kani_snapshot.models import (
     ToolchainIdentity,
     WorkflowIdentity,
 )
+from rust_prover_tools.kani_snapshot.toolchain_model import components_digest
 
 if typ.TYPE_CHECKING:
     from pathlib import Path
@@ -286,7 +287,7 @@ def manifest_for(assets: tuple[Payload, ...]) -> SnapshotManifest:
                 ),
             ),
             rustc_sha256=sha256_hex(RUSTC_BYTES),
-            rustup_components_sha256=sha256_hex(RUSTUP_COMPONENTS),
+            rustup_components_sha256=components_digest(RUSTUP_COMPONENTS),
             libraries=(
                 FileRecord(path=LIBRARY_PATH, sha256=sha256_hex(LIBRARY_BYTES)),
             ),

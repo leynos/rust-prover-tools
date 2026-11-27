@@ -4,10 +4,18 @@ Status: Partly implemented. The consumer milestones EP-M2 (authenticated
 pin/manifest contracts) and EP-M3 (isolated installation, identity checking and
 execution) are implemented: snapshot install, snapshot check and `kani run`
 exist. EP-M1 (upstream feasibility) is implemented as a tested producer recipe
-with pinned evidence; nothing is published. EP-M4 (publication automation) and
-EP-M5 (monitoring and recovery) remain proposed and require explicit plan
-approval before implementation. Revision: 7, 2026-11-15. Scope:
-`leynos/rust-prover-tools` only.
+with pinned evidence. EP-M4 (publication automation) is implemented and merged
+at builder commit `6be9e71`. EP-M5 (clean proof evidence and the operations
+handoff) is implemented in this branch: the transcript and setup-trace
+validators, the named proof fixtures, the opt-in consumer smoke and the
+operations runbook exist and pass their offline gates. A hosted non-publishing
+run completed its build, assembly and validation, but the consumer smoke found
+three real defects, recorded under D6. The third, the component-record digest,
+was approved as D6a and implemented: the record now digests the canonical
+sorted component names. Corrected hosted evidence remains outstanding until the
+corrected builder is merged and dispatched. Nothing is published. EP-O1
+(operational bootstrap) remains separately authorized. Revision: 9, 2026-11-23.
+Scope: `leynos/rust-prover-tools` only.
 
 ## Purpose and boundaries
 
@@ -1014,6 +1022,43 @@ compile fixtures.
 Real attested EP-M5 validation requires approved builder code merged to trusted
 `main`, with scheduling still disabled. Keep EP-M5 open until that hosted
 non-publishing evidence exists; merging code alone does not satisfy it.
+
+Implementation note (2026-11-22). Two pure producer modules own the evidence
+policy. `proof_report` requires an exact named harness set, one verdict per
+harness, and a manual summary whose counts and named failures agree with the
+verdicts; it separates a failed assertion from a compile error, a CBMC failure,
+a zero-harness run and a malformed or contradictory transcript. `setup_trace`
+reads a bounded `strace -f -e trace=execve` trace and refuses source
+compilation during setup while permitting version probes, extraction and the
+prebuilt toolchain install. The named fixtures under
+`tests/fixtures/kani_snapshot/proofs/` supply the positive bounded-collection
+and cleanup harnesses, the deliberately false harness and the Rust 1.94 floor
+harness. `make kani-snapshot-verify` runs
+`tests/integration/test_kani_snapshot_smoke.py` against a downloaded release in
+a throwaway environment; it is opt-in and never part of `all`.
+
+The first hosted non-publishing run (45067145476) succeeded through assembly
+and validation, and its release was then installed through the public consumer
+path. That install found two defects the fixtures could not expose. First,
+rustup's automatic self-update expected its binary under the generation-private
+`CARGO_HOME`, so setup failed after the toolchain was installed; setup now runs
+`rustup set auto-self-update disable` with the same private homes. Second, the
+manifest recorded the builder's minimal-plus-`rustc-dev` toolchain, while
+upstream setup installs rustup's default profile; the recorded component digest
+and `rustc-dev` shared libraries therefore could not exist on any consumer. The
+build now installs that default profile under a private rustup home and
+measures it, so the record describes what a consumer receives. Third, the
+recorded `lib/rustlib/components` digest covered the file's raw bytes, but
+rustup writes that file in nondeterministic component-completion order: three
+default-profile installs of one channel produced three digests with identical
+sorted component sets. No consumer could ever accept a hosted manifest while
+that contract stood. The approved D6a amendment keeps the field and schema but
+digests the canonical sorted component names, so order is irrelevant while an
+added, removed or renamed component is still refused. `toolchain_model` defines
+that canonical form once for both measurement and verification. The schema, pin
+grammar and every other verification check are unchanged. Corrected hosted
+evidence requires a new non-publishing dispatch from trusted `main` after this
+branch merges, so EP-M5 and roadmap 1.1.5 stay open until that evidence exists.
 
 After implementation, write `docs/kani-snapshot-operations.md` with exact
 settings, permission checks, default-disabled schedule, dispatch examples,

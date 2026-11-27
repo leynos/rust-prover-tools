@@ -12,7 +12,10 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
 from rust_prover_tools.kani_snapshot.toolchain_binding import verify_toolchain
-from rust_prover_tools.kani_snapshot.toolchain_model import FileRecord
+from rust_prover_tools.kani_snapshot.toolchain_model import (
+    FileRecord,
+    components_digest,
+)
 from tests.kani_snapshot_bundles import (
     LIBRARY_BYTES,
     LIBRARY_PATH,
@@ -105,6 +108,17 @@ def test_verify_toolchain_rejects_a_modified_component_record(
 
     with pytest.raises(ProverToolError, match=r"component records.*does not match"):
         verify_toolchain(runtime, _manifest())
+
+
+def test_verify_toolchain_accepts_a_reordered_component_record(
+    tmp_path: Path,
+) -> None:
+    """Rustup's write order is irrelevant; the component set is the invariant."""
+    runtime = _runtime(tmp_path)
+    components = _toolchain_root(runtime) / "lib" / "rustlib" / "components"
+    components.write_bytes(b"\n".join(reversed(RUSTUP_COMPONENTS.splitlines())) + b"\n")
+
+    verify_toolchain(runtime, _manifest())
 
 
 def test_verify_toolchain_rejects_a_missing_compiler(tmp_path: Path) -> None:
@@ -221,7 +235,7 @@ def test_manifest_declares_the_fixture_digests() -> None:
     """The fixture manifest describes the bytes the fixture setup installs."""
     toolchain = manifest_for(payloads()).toolchain
     assert toolchain.rustc_sha256 == sha256_hex(RUSTC_BYTES)
-    assert toolchain.rustup_components_sha256 == sha256_hex(RUSTUP_COMPONENTS)
+    assert toolchain.rustup_components_sha256 == components_digest(RUSTUP_COMPONENTS)
     assert [(library.path, library.sha256) for library in toolchain.libraries] == [
         (LIBRARY_PATH, sha256_hex(LIBRARY_BYTES))
     ]

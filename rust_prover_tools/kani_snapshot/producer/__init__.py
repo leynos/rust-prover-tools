@@ -8,6 +8,12 @@ network call is made — so everything here is testable from literal values.
 
 - `compiler_floor` owns the supported Rust floor and the transcript checks that
   demonstrate it.
+- `proof_report` reads one Kani transcript's named harness verdicts and manual
+  summary, so a failed assertion, a compile error, a solver failure and a
+  zero-harness run are distinguishable.
+- `setup_trace` reads a bounded `execve` trace and refuses source compilation
+  during clean setup while permitting version probes and prebuilt toolchain
+  installation.
 - `recipe_model` holds the frozen records; `recipe_rules` owns their
   invariants; `recipe` fixes the EP-M1 values and their canonical JSON;
   `recipe_parse` reads that JSON back strictly.

@@ -1,0 +1,2 @@
+1821  execve("/usr/bin/gh", ["gh", "attestation", "verify", "/tmp/assets/manifest.json"], 0x7ffd2c1a4b30) = 0
+1822  execve("/home/runner/.rustup/toolchains/nightly/bin/rustup", ["rustup", "toolchain", "install", "nightly-2026-08-21-x86_64-unknown-linux-gnu"], 0x7ffd2c1a4b30) = 0

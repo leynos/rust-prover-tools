@@ -61,7 +61,7 @@ PYLINT = $(UV_GATE) tool --managed-python --python $(PYLINT_PYTHON) --from 'pyli
 
 .PHONY: prepare help all clean build build-release lint lint-python interrogate fmt check-fmt \
         markdownlint nixie spelling test typecheck $(TOOLS) $(VENV_TOOLS) test-workflow-contracts \
-        workflow-check actionlint kani-snapshot-smoke
+        workflow-check actionlint kani-snapshot-smoke kani-snapshot-verify
 
 prepare: ## Install the locked development environment, offline first
 	$(UV_GATE) prepare --group dev
@@ -96,6 +96,12 @@ workflow-check: build actionlint ## Lint workflows and check their contracts
 
 # Opt-in: dispatches a real, non-publishing snapshot run. It builds on a hosted
 # runner and creates an attestation, so it is never part of `all`.
+#
+# The producer refuses a tag whose 12-hex prefix is not the upstream commit's,
+# but only once a hosted run has started. The tag grammar validated by the
+# recipe makes the fifth dash-separated field exactly that prefix, so the
+# recipe compares it locally and the operator sees the mistake without a red
+# resolve job.
 KANI_SNAPSHOT_UPSTREAM_COMMIT ?=
 KANI_SNAPSHOT_PUBLICATION_ID ?=
 # Exported, never interpolated: each value is data for the recipe's shell,
@@ -121,10 +127,65 @@ kani-snapshot-smoke: ## Dispatch a non-publishing snapshot run (opt-in)
 	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must match kani-snapshot-YYYY-MM-<12 hex>-rN\n' >&2; \
 	  exit 1; \
 	}
+	@test "$$(printf '%s\n' "$$KANI_SNAPSHOT_PUBLICATION_ID" | cut -d- -f5)" = \
+	      "$$(printf '%s\n' "$$KANI_SNAPSHOT_UPSTREAM_COMMIT" | cut -c1-12)" || { \
+	  printf 'Error: KANI_SNAPSHOT_PUBLICATION_ID must carry the upstream commit prefix (12 hex)\n' >&2; \
+	  exit 1; \
+	}
 	gh workflow run kani-monthly.yml --ref main \
 	  -f upstream_commit="$$KANI_SNAPSHOT_UPSTREAM_COMMIT" \
 	  -f publication_id="$$KANI_SNAPSHOT_PUBLICATION_ID" \
 	  -f publish=false
+
+# Opt-in: verifies a produced release through the public consumer commands in a
+# fresh virtual environment. It installs the pinned toolchain, runs setup and
+# executes real proofs, so it is never part of `all`. The release directory is
+# what `gh run download` fetched from a non-publishing run; nothing here
+# publishes.
+KANI_SNAPSHOT_ASSET_DIR ?=
+KANI_SNAPSHOT_WHEEL ?=
+KANI_SNAPSHOT_RUSTC_1_93 ?=
+# Exported, never interpolated: each value is data for the recipe's shell.
+export KANI_SNAPSHOT_ASSET_DIR KANI_SNAPSHOT_WHEEL KANI_SNAPSHOT_RUSTC_1_93
+
+# The throwaway environment is created inside a private `mktemp -d` tree the
+# recipe owns, so its cleanup can never name a path the caller chose. `build/`
+# is gitignored, and the tree is removed on success and on failure.
+KANI_SNAPSHOT_SMOKE_PARENT := $(CURDIR)/build
+
+kani-snapshot-verify: ## Verify a produced snapshot through the consumer path
+	$(call ensure_uv)
+	@test -n "$$KANI_SNAPSHOT_ASSET_DIR" || { \
+	  printf 'Error: set KANI_SNAPSHOT_ASSET_DIR to the downloaded release directory\n' >&2; \
+	  exit 1; \
+	}
+	@test -d "$$KANI_SNAPSHOT_ASSET_DIR" || { \
+	  printf 'Error: KANI_SNAPSHOT_ASSET_DIR is not a directory: %s\n' "$$KANI_SNAPSHOT_ASSET_DIR" >&2; \
+	  exit 1; \
+	}
+	@if [ -z "$$KANI_SNAPSHOT_WHEEL" ]; then \
+	  printf 'Error: set KANI_SNAPSHOT_WHEEL to a built wheel\n' >&2; \
+	  exit 1; \
+	fi
+	@test -f "$$KANI_SNAPSHOT_WHEEL" || { \
+	  printf 'Error: KANI_SNAPSHOT_WHEEL is not a file: %s\n' "$$KANI_SNAPSHOT_WHEEL" >&2; \
+	  exit 1; \
+	}
+	@if [ -n "$$KANI_SNAPSHOT_RUSTC_1_93" ] && [ ! -x "$$KANI_SNAPSHOT_RUSTC_1_93" ]; then \
+	  printf 'Error: KANI_SNAPSHOT_RUSTC_1_93 is not executable: %s\n' "$$KANI_SNAPSHOT_RUSTC_1_93" >&2; \
+	  exit 1; \
+	fi
+	@mkdir -p "$(KANI_SNAPSHOT_SMOKE_PARENT)"
+	@smoke_dir=$$(mktemp -d "$(KANI_SNAPSHOT_SMOKE_PARENT)/kani-snapshot-smoke.XXXXXX"); \
+	trap 'rm -rf "$$smoke_dir"' EXIT INT TERM; \
+	$(UV_GATE) run -- uv venv "$$smoke_dir/venv" --python 3.14 && \
+	$(UV_GATE) run -- uv pip install --python "$$smoke_dir/venv/bin/python" \
+	  "$$KANI_SNAPSHOT_WHEEL" && \
+	KANI_SNAPSHOT_SMOKE=1 \
+	  KANI_SNAPSHOT_SMOKE_ASSET_DIR="$$KANI_SNAPSHOT_ASSET_DIR" \
+	  KANI_SNAPSHOT_SMOKE_PROVER_TOOLS="$$smoke_dir/venv/bin/prover-tools" \
+	  KANI_SNAPSHOT_SMOKE_RUSTC_1_93="$$KANI_SNAPSHOT_RUSTC_1_93" \
+	  $(UV_GATE) run -- pytest -q tests/integration/test_kani_snapshot_smoke.py
 
 all: build check-fmt lint typecheck test spelling test-workflow-contracts actionlint
 

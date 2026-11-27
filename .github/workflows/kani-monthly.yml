@@ -106,7 +106,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false
@@ -228,7 +228,7 @@ jobs:
           name: kani-snapshot-resolution-${{ github.run_id }}-${{ github.run_attempt }}
           path: producer
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false
@@ -282,6 +282,23 @@ jobs:
           curl -fsSL --proto '=https' --tlsv1.2 \
             -o "$manifest" \
             "https://static.rust-lang.org/dist/${TOOLCHAIN_CHANNEL#nightly-}/channel-rust-nightly.toml"
+      # Upstream setup runs `rustup toolchain install <identifier>` with
+      # rustup's default profile, so a consumer's toolchain is that profile.
+      # The builder's own toolchain is not: it may carry extra components and
+      # a different component record. Measuring the builder's sysroot would
+      # record compiler-development libraries no consumer has, and the
+      # consumer's two-way coverage check would then refuse a correct install.
+      # This installs the same identifier under a private home so the
+      # evidence describes what a consumer really receives.
+      - name: Install the consumer toolchain profile
+        env:
+          TOOLCHAIN_CHANNEL: nightly-2026-08-21
+          CONSUMER_RUSTUP_HOME: ${{ runner.temp }}/consumer-rustup
+        run: |
+          set -euo pipefail
+          mkdir -p "$CONSUMER_RUSTUP_HOME"
+          RUSTUP_HOME="$CONSUMER_RUSTUP_HOME" \
+            rustup toolchain install "$TOOLCHAIN_CHANNEL"
       - name: Build the upstream payloads
         working-directory: upstream
         env:
@@ -463,9 +480,18 @@ jobs:
       - name: Measure the build evidence
         env:
           TOOLCHAIN_CHANNEL: nightly-2026-08-21
+          CONSUMER_RUSTUP_HOME: ${{ runner.temp }}/consumer-rustup
         run: |
           set -euo pipefail
-          sysroot="$(rustup run "$TOOLCHAIN_CHANNEL" rustc --print sysroot)"
+          # The sysroot must be the one a consumer's setup produces, so it is
+          # read from the consumer-profile toolchain installed above rather
+          # than from the builder's own toolchain.
+          consumer_rustc="$CONSUMER_RUSTUP_HOME/toolchains/${TOOLCHAIN_CHANNEL}-x86_64-unknown-linux-gnu/bin/rustc"
+          test -x "$consumer_rustc" || {
+            echo "the consumer-profile toolchain carries no rustc at $consumer_rustc" >&2
+            exit 1
+          }
+          CONSUMER_SYSROOT="$("$consumer_rustc" --print sysroot)"
           version="$(
             cd upstream
             cargo metadata --no-deps --format-version 1 |
@@ -483,7 +509,7 @@ jobs:
           mapfile -t submodule_args < "$RUNNER_TEMP/submodule-args"
           uv --directory "$GITHUB_WORKSPACE/builder" run --frozen --no-dev python -m \
             rust_prover_tools.kani_snapshot.orchestrator.measure_build \
-            --sysroot "$sysroot" \
+            --sysroot "$CONSUMER_SYSROOT" \
             --channel-manifest "$RUNNER_TEMP/channel-rust-nightly.toml" \
             --kani-compiler "$GITHUB_WORKSPACE/upstream/target/release/kani-compiler" \
             --backend-version "$version" \
@@ -614,7 +640,7 @@ jobs:
           name: kani-snapshot-resolution-${{ github.run_id }}-${{ github.run_attempt }}
           path: resolution
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false
@@ -686,7 +712,7 @@ jobs:
           name: kani-snapshot-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: release
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false
@@ -743,7 +769,7 @@ jobs:
           name: kani-snapshot-validation-${{ github.run_id }}-${{ github.run_attempt }}
           path: validation
       - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: false

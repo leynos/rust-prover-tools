@@ -543,7 +543,35 @@ make kani-snapshot-smoke \
 ```
 
 The target is opt-in and never part of `all`, because it builds on a hosted
-runner and creates an attestation.
+runner and creates an attestation. The tag's 12-hex field is the first 12
+characters of the upstream commit, not a free label. The target refuses a tag
+that carries another prefix before it reaches `gh`, because the producer can
+only refuse it after a hosted run has started.
+
+A produced release is verified through the same public commands a consumer
+uses. Download the release artefact from the run, build a wheel, and run the
+opt-in verification target:
+
+<!-- tested-example: kani-snapshot-verify -->
+```sh
+rustup toolchain install 1.93.0
+KANI_SNAPSHOT_ASSET_DIR="$HOME/kani-validation/release" \
+KANI_SNAPSHOT_WHEEL="$HOME/kani-validation/dist/rust_prover_tools-0.1.0-py3-none-any.whl" \
+KANI_SNAPSHOT_RUSTC_1_93="$(rustup which --toolchain 1.93.0 rustc)" \
+make kani-snapshot-verify
+```
+
+The target installs the wheel into a throwaway virtual environment and runs
+only the opt-in integration module. Verification requires a cold install that
+names the pinned tag and the effective compiler, the compiler at or above Rust
+1.94, the named positive harnesses verifying, a deliberately false harness
+failing verification rather than compilation, the compiler-floor harness
+verifying, the Rust 1.93 control rejecting `array_windows` with `E0658`, a warm
+repeat reusing the generation, and a corrupted payload and a changed identity
+refused before execution. When `strace` is available it also requires a clean
+setup trace with no `cargo`, code-generating `rustc`, compiler, linker or build
+driver. See the [operations runbook](kani-snapshot-operations.md) for the full
+procedure, prerequisites and troubleshooting.
 
 Ordinary Python releases are unaffected by the snapshot schedule. Pushing a
 `v*.*.*` tag creates a draft release, uploads the wheel, verifies that the

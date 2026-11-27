@@ -31,6 +31,7 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "AdmissionResolver",
+    "disable_rustup_self_update",
     "probe_generation",
     "probe_host_generation",
     "run_local_bundle_setup",
@@ -42,13 +43,72 @@ type AdmissionResolver = cabc.Callable[[cabc.Mapping[str, str]], tuple[str, ...]
 #: Setup must not let an inherited `TAR_OPTIONS` change extraction.
 _INHERITED_EXTRACTION_VARIABLES: typ.Final[tuple[str, ...]] = ("TAR_OPTIONS",)
 
+#: Rustup's config command, run before the launcher starts.
+_DISABLE_SELF_UPDATE: typ.Final[tuple[str, ...]] = (
+    "rustup",
+    "set",
+    "auto-self-update",
+    "disable",
+)
+
+
+def disable_rustup_self_update(
+    env: cabc.Mapping[str, str | UnsetType],
+    *,
+    timeout_seconds: float | None = None,
+) -> None:
+    """Turn rustup's automatic self-update off in the generation's own home.
+
+    This writes rustup's `auto-self-update = disable` setting into the private
+    rustup home that `env` names. Rustup's self-update expects its own binary
+    under `CARGO_HOME`. This generation's cargo home is private and holds no
+    rustup, so the update attempt fails after the toolchain has already been
+    installed. Disabling it with the same private homes is version-agnostic and
+    keeps setup deterministic; an inherited or user-level setting could
+    otherwise re-enable it.
+
+    Parameters
+    ----------
+    env : collections.abc.Mapping
+        The setup environment, including the private `RUSTUP_HOME` and
+        `CARGO_HOME`.
+    timeout_seconds : float | None
+        Budget for the configuration command alone.
+
+    Raises
+    ------
+    CommandFailedError
+        Raised when `rustup` itself fails.
+    """
+    run_checked(
+        CommandSpec(
+            _DISABLE_SELF_UPDATE,
+            env=env,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+
 
 def run_local_bundle_setup(
     runtime: SnapshotRuntime,
     bundle: Path,
     timeout_seconds: float | None = None,
+    *,
+    clock: cabc.Callable[[], float] = time.monotonic,
 ) -> None:
-    """Run the packaged launcher's setup against the verified bundle.
+    """Configure the private homes, then run the packaged launcher's setup.
+
+    Two processes run, in order:
+
+    1. `disable_rustup_self_update` writes the `auto-self-update = disable`
+       setting into the generation's private rustup home. Without it a consumer
+       install fails after the toolchain has been installed.
+    2. The packaged `cargo-kani setup --use-local-bundle` installs the verified
+       prebuilt bundle.
+
+    Both share one installation budget: the launcher receives only what the
+    configuration step left, so a slow `rustup` cannot push setup past the
+    caller's deadline.
 
     Parameters
     ----------
@@ -57,15 +117,20 @@ def run_local_bundle_setup(
     bundle : Path
         Verified backend archive inside the identity's downloads directory.
     timeout_seconds : float | None
-        Remaining installation budget. `None` leaves setup unbounded; a
-        bounded setup is terminated with its whole process group on expiry.
+        Remaining installation budget, shared by both processes. `None` leaves
+        setup unbounded; a bounded setup is terminated with its whole process
+        group on expiry.
+    clock : collections.abc.Callable
+        Reads elapsed time, defaulting to `time.monotonic`. Injected so the
+        budget arithmetic is testable without patching the module's clock.
 
     Raises
     ------
     CommandFailedError
-        Raised when setup exits non-zero.
+        Raised when either process exits non-zero.
     ProverToolError
-        Raised when setup exceeds the remaining budget.
+        Raised when the shared budget is already spent when the launcher would
+        start.
     """
     launcher = runtime.layout.launcher_dir / "bin" / "cargo-kani"
     env = execution_environment(runtime, os.environ)
@@ -73,6 +138,8 @@ def run_local_bundle_setup(
         # The environment is an overlay, so removal must be spelled as a
         # Cuprum `UNSET` marker rather than by deleting a copied key.
         env[name] = UNSET
+    started = clock()
+    disable_rustup_self_update(env, timeout_seconds=timeout_seconds)
     run_checked(
         CommandSpec(
             (
@@ -82,9 +149,24 @@ def run_local_bundle_setup(
                 str(bundle),
             ),
             env=env,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=_remaining_budget(timeout_seconds, started, clock),
         )
     )
+
+
+def _remaining_budget(
+    timeout_seconds: float | None,
+    started: float,
+    clock: cabc.Callable[[], float] = time.monotonic,
+) -> float | None:
+    """Return the seconds left of the setup budget, refusing an expired one."""
+    if timeout_seconds is None:
+        return None
+    remaining = timeout_seconds - (clock() - started)
+    if remaining <= 0:
+        msg = "snapshot setup exceeded the installation budget"
+        raise ProverToolError(msg)
+    return remaining
 
 
 def probe_generation(
