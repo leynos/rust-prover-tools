@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,378 passed and 6
-skipped at code head `42252a7`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,381 passed and 6
+skipped at code head `d0219fc`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the same head: 2 passed in 6.33 s.
+passed at the same head: 2 passed in 8.81 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -165,6 +165,16 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-27 14:00Z) Seventeenth review round. A stopped attempt adopts a
+  retained log's verdict only when its block names the requested harness.
+  `prepare_and_open_diagnostics` and `prepare_and_open_run_diagnostics` now say
+  that they write, `kani_harness_signal` owns interruption, the package
+  `__init__` resolves public names lazily so import runs no grammar check, and
+  route qualification resolves one working directory for both route kinds.
+  `make check-fmt`, `make all` (3,381 passed, 6 skipped), `make markdownlint`,
+  and `make nixie` pass at `d0219fc`; the opt-in live Kani 0.67.0 fixture
+  passes at the same head: 2 passed in 8.81 s.
 
 - [x] (2026-11-27 12:00Z) Sixteenth review round. A stopped attempt now keeps
   the verdict its retained log states while its status still records the stop;
