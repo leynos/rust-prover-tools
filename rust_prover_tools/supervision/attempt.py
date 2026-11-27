@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses as dc
-import sys
 import typing as typ
 
 from rust_prover_tools.supervision.attempt_cgroup import (
@@ -145,6 +144,7 @@ class AttemptSupervisor:
         started_at = self.clock.now()
         started_monotonic = self.clock.monotonic()
         self._observer = self.adapter.observer(self.spec)
+        failure: BaseException | None = None
         try:
             cgroup_start = start_cgroup(self.cgroup)
             running = typ.cast(
@@ -153,7 +153,7 @@ class AttemptSupervisor:
             )
             try:
                 result = await self._drive(running, started_at, started_monotonic)
-            except BaseException:
+            except BaseException as error:
                 # The child has already been stopped and joined by `_drive`.
                 # Keep the evidence it produced so a cancelled or faulted run
                 # can report an interrupted attempt instead of pretending it
@@ -162,6 +162,7 @@ class AttemptSupervisor:
                     self._stopped_result, started_at, started_monotonic, cgroup_start
                 )
                 self._interrupted = (evidence, self._classify(evidence))
+                failure = error
                 raise
             evidence = self._evidence(
                 result, started_at, started_monotonic, cgroup_start
@@ -169,32 +170,32 @@ class AttemptSupervisor:
             return evidence, self._classify(evidence)
         finally:
             # `classify` no longer owns the spool, so the boundary that opened
-            # the observer releases it.
-            self._release_observer()
+            # the observer releases it. `failure` is the exception escaping
+            # `run`, if any, so cleanup never has to infer it.
+            self._release_observer(failure)
 
     def _classify(self, evidence: AttemptEvidence) -> HarnessClassification:
         """Finish the observer and classify the attempt from its observation."""
         observation = typ.cast("LineObserver[typ.Any]", self._observer).finish()
         return self.adapter.classify(evidence, observation)
 
-    def _release_observer(self) -> None:
+    def _release_observer(self, failure: BaseException | None) -> None:
         """Close the observer, preserving any failure already unwinding.
 
         A close failure while a cancellation or monitor fault is propagating
-        is attached to that exception as a note rather than raised, so the
-        original failure remains the one the caller sees. On an otherwise
-        successful attempt the same failure propagates: losing the evidence
-        file is a real error, not a benign cleanup detail.
+        is attached to `failure` as a note rather than raised, so the original
+        failure remains the one the caller sees. On an otherwise successful
+        attempt the same failure propagates: losing the evidence file is a
+        real error, not a benign cleanup detail.
         """
         if self._observer is None:
             return
-        active = sys.exc_info()[1]
         try:
             self._observer.close()
         except Exception as error:
-            if active is None:
+            if failure is None:
                 raise
-            active.add_note(f"closing the verifier log spool also failed: {error}")
+            failure.add_note(f"closing the verifier log spool also failed: {error}")
 
     @property
     def interrupted(self) -> tuple[AttemptEvidence, HarnessClassification] | None:
