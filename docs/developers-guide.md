@@ -359,12 +359,14 @@ a user-facing `CommandFailedError`. Use `run_command` when the workflow needs
 to inspect the exit code, such as `rustup which` or `verus --version`.
 
 A command that exceeds its wall-clock budget is terminated, process group and
-all, and `run_command` raises `rust_prover_tools.commands.CommandTimeoutError`.
-That class subclasses `ProverToolError`, so existing handling keeps working,
-but a caller that may retry a timeout should catch the narrower type, because a
-genuine command failure is not worth repeating. The release path does this at
-two boundaries: `gh_transport` catches `CommandTimeoutError` and wraps it once
-in `ReleaseTransientError`, and the publication loop catches that wrapper. A
+all, and `run_command` raises `CommandTimedOutError`, a subclass of
+`CommandTimeoutError` and therefore of `ProverToolError`. It carries the
+effective `timeout_seconds`, the human-readable `command_line`, and the executed
+`argv`. Catching `CommandTimeoutError` still handles it, but a caller that may
+retry a timeout should catch the narrower type, because a genuine command
+failure is not worth repeating. The release path does this at two boundaries:
+`gh_transport` catches `CommandTimeoutError` and wraps it once in
+`ReleaseTransientError`, and the publication loop catches that wrapper. A
 caller adding retry handling to the release path therefore catches
 `ReleaseTransientError`, not the timeout type, which never reaches it.
 
@@ -1033,6 +1035,41 @@ responsibility rather than by prover:
   binds them for one run, and `rust_prover_tools.kani_harness_models.py` holds
   the options and dependency overrides a consumer sets. The tests substitute
   each through those protocols rather than patching the runner.
+- `rust_prover_tools.supervision.run_environment` names the injected
+  dependencies of one run: clock, launcher, resource probe, cgroup reader,
+  evidence sinks, command builder, adapter, sleeper, and an optional interrupt
+  source. The composition root supplies one, and a test replaces any single
+  member without reaching into the loop.
+- `rust_prover_tools.supervision.run_orchestrator` runs the expected inventory
+  in selection order through `SupervisedRun.execute`. It continues past a
+  prover failure, reports the attempt a signal or cancellation interrupted, and
+  records the remainder as `not-run`; accounting compares expected and observed
+  identities as multisets.
+- `rust_prover_tools.supervision.run_finalize` maps the accumulated
+  `RunLedger` to the typed `RunReport`: completeness, aggregate outcome, and the
+  `not-run` representation. It performs no I/O, so those rules are readable
+  without the orchestration that produced them.
+- `rust_prover_tools.supervision.run_journal` is the one collaborator that
+  writes a run's live records and publishes its final report. It retains the
+  first sink failure, publishes the completed report, and only then surfaces
+  that failure.
+- `rust_prover_tools.supervision.launch_command` describes the composed
+  invocation (`LaunchCommand`) and its environment in prover-neutral terms; a
+  `None` value removes an inherited variable, and `replace` selects replacement
+  over overlay.
+- `rust_prover_tools.supervision.launch_running` owns the `RunningHarness`
+  handle: it records only the first stop request, joins the child before
+  reporting, and turns the settled status into the typed launch result. It is
+  separate from the launcher that creates it.
+- `rust_prover_tools.supervision.memory_sink` is an in-memory JSONL sink that
+  renders exactly the records the file sink writes, for tests and programmatic
+  consumers.
+- `rust_prover_tools.supervision.formatting` bounds every emitted line and
+  keeps a shortened JSONL record valid JSON; it also renders the timestamps and
+  measurements a human and a machine both read.
+- `rust_prover_tools.supervision.resources` reads process-group and host memory
+  evidence from procfs and cgroupfs. Every read is best-effort and returns an
+  explained absence rather than raising or reporting a zero.
 - `rust_prover_tools.supervision.attempt` drives one attempt: it starts the
   child, joins the monitor, and settles. `attempt_monitor` owns the sampling,
   heartbeat, deadline, watchdog and interrupt loop; `attempt_state` holds the
@@ -1065,9 +1102,18 @@ responsibility rather than by prover:
   and never inside the policy value object.
 - `rust_prover_tools.kani_diagnostics` opens the configured human, JSONL, and
   report destinations for a library run, applying that rule before the first
-  handle exists.
+  handle exists. It closes only the handles it opened; a caller-supplied
+  `Diagnostics` stays caller-owned.
 - `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
   `kani harnesses list` and `kani harnesses run`.
+
+The Cuprum boundary is deliberately narrow. Only
+`rust_prover_tools.supervision.launcher`, `supervision.launch_pid`, and
+`supervision.pipe_drain` import Cuprum; `pipe_drain.command_for` is the single
+translation from the neutral `LaunchCommand` and `LaunchEnvironment` to
+`SafeCmd`, `ExecutionContext`, and an environment mode. Every other supervision
+module stays prover-neutral and Cuprum-free, so a second prover, or a different
+process backend, replaces the launcher without touching the loop.
 
 The adapter seam is deliberately small. A prover adapter supplies an observer
 factory and a classifier:
