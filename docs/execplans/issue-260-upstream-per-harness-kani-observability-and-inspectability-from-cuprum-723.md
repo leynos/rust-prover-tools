@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,370 passed and 6
-skipped at code head `00042b1`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,378 passed and 6
+skipped at code head `42252a7`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the same head: 2 passed in 15.74 s.
+passed at the same head: 2 passed in 6.33 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -165,6 +165,21 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-27 12:00Z) Sixteenth review round. A stopped attempt now keeps
+  the verdict its retained log states while its status still records the stop;
+  a truncated or refused log still reports `UNKNOWN`. The attempt boundary
+  passes the escaping exception to `_release_observer` explicitly instead of
+  reading `sys.exc_info()`. JSONL boundary repair became the named
+  `prepare_jsonl_destination`, called explicitly by both entry points, so
+  opening no longer writes. `KaniHarnessDependencies` gained `adapter` and
+  `process_cwd` overrides, the CLI run path split into resolve, prepare,
+  execute and present, interrupt installation separated from awaiting, and
+  `KaniHarnessRun.table` moved to the CLI. The witness parent now also cleans
+  up when its runner-group record cannot be written. `make check-fmt`,
+  `make all` (3,378 passed, 6 skipped), `make markdownlint`, and `make nixie`
+  pass at `42252a7`; the opt-in live Kani 0.67.0 fixture passes at the same
+  head: 2 passed in 6.33 s.
 
 - [x] (2026-11-27 08:30Z) Fifteenth review round, from the formal review at
   03:39Z. The Kani observation seam is split: `kani_facts` holds the pure
