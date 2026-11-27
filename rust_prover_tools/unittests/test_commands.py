@@ -23,11 +23,21 @@ from rust_prover_tools.commands import (
     run_command,
     split_command,
 )
-from rust_prover_tools.errors import CommandFailedError, ProverToolError
+from rust_prover_tools.errors import (
+    CommandFailedError,
+    CommandTimedOutError,
+    ProverToolError,
+)
 
 if typ.TYPE_CHECKING:
     from cmd_mox import CmdMox
 
+pytest_plugins = ("cmd_mox.pytest_plugin",)
+
+
+"""Tests for Cuprum-backed command helpers."""
+if typ.TYPE_CHECKING:
+    from cmd_mox import CmdMox
 pytest_plugins = ("cmd_mox.pytest_plugin",)
 
 
@@ -225,6 +235,31 @@ def test_run_command_raises_a_distinct_command_timeout_error() -> None:
                 timeout_seconds=0.1,
             )
         )
+
+
+def test_run_command_reports_a_typed_timeout() -> None:
+    """A timeout carries its effective budget and argv without parsing a message."""
+    argv = (sys.executable, "-I", "-c", "import time; time.sleep(30)")
+    with pytest.raises(CommandTimedOutError) as raised:
+        run_command(CommandSpec(argv, timeout_seconds=0.2))
+    assert raised.value.timeout_seconds == pytest.approx(0.2)
+    assert raised.value.argv == argv
+    assert "timed out after 0.2 seconds" in str(raised.value)
+    assert isinstance(raised.value.__cause__, cuprum.TimeoutExpired), (
+        "the Cuprum timeout must remain the chained cause"
+    )
+
+
+def test_run_command_reports_a_scope_supplied_timeout() -> None:
+    """The typed error names the budget an enclosing scope really applied."""
+    argv = (sys.executable, "-I", "-c", "import time; time.sleep(30)")
+    with (
+        cuprum.scoped(cuprum.ScopeConfig(timeout=0.2)),
+        pytest.raises(CommandTimedOutError) as raised,
+    ):
+        run_command(CommandSpec(argv))
+    assert raised.value.timeout_seconds == pytest.approx(0.2)
+    assert raised.value.argv == argv
 
 
 def _run_with_budget(

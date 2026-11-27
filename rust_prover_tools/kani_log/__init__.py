@@ -43,6 +43,7 @@ from rust_prover_tools.kani_log.decide import (
 )
 from rust_prover_tools.kani_log.extract import (
     parse_kani_log,
+    parse_kani_log_lines,
     unwinding_checks_enabled,
 )
 from rust_prover_tools.kani_log.manifest import (
@@ -57,7 +58,15 @@ from rust_prover_tools.kani_log.manifest import (
 )
 from rust_prover_tools.kani_log.model import HarnessBlock, KaniLog, ManualSummary
 from rust_prover_tools.kani_log.syntax import (
+    ASSERTION_KIND,
+    BANNER,
+    COMPLETE,
+    HARNESS_START,
+    LIST_WRITTEN,
+    NO_HARNESS_MATCH,
+    NOISE_PREFIXES,
     SUPPORTED_KANI_VERSIONS,
+    VERIFICATION,
     FailedCheck,
     KaniLogError,
     PropertyResult,
@@ -65,17 +74,25 @@ from rust_prover_tools.kani_log.syntax import (
 
 __all__ = (
     "ACCEPTED",
+    "ASSERTION_KIND",
+    "BANNER",
     "CLAIM",
+    "COMPLETE",
     "CONTROL",
     "FOCUSED",
     "FULL_PROFILE",
+    "HARNESS_START",
+    "LIST_WRITTEN",
     "MANIFEST_SCHEMA_VERSION",
+    "NOISE_PREFIXES",
     "NOT_RUN",
+    "NO_HARNESS_MATCH",
     "REJECTED_AS_INTENDED",
     "REJECTED_OTHERWISE",
     "SATISFIED",
     "SUPPORTED_KANI_VERSIONS",
     "UNSATISFIED",
+    "VERIFICATION",
     "FailedCheck",
     "Harness",
     "HarnessBlock",
@@ -91,6 +108,7 @@ __all__ = (
     "from_kani_log_error",
     "manifest_from_document",
     "parse_kani_log",
+    "parse_kani_log_lines",
     "parse_manifest",
     "unwinding_checks_enabled",
 )

@@ -6,10 +6,15 @@ import os
 import typing as typ
 
 import pytest
+from cuprum.context import EnvMode
 
 from rust_prover_tools.commands import CommandResult, run_command
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_release import KaniExecOptions, prepare_kani_command
+from rust_prover_tools.kani_release import (
+    KaniExecOptions,
+    prepare_kani_command,
+    prepare_kani_installation,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -609,3 +614,43 @@ def test_public_cli_preserves_optional_compiler_wrappers(
         assert spec.env is not None
         for variable, value in selected.items():
             assert spec.env.get(variable) == value
+
+
+def test_the_legacy_route_still_overlays_the_ambient_environment(
+    installed_release: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A variable absent from the injected mapping must still reach the child.
+
+    `kani exec` inherited the ambient environment before supervision existed.
+    A mapping the caller built for one purpose must not silently narrow that:
+    only the supervised route freezes its environment, because it derives many
+    commands from one qualification.
+    """
+    driver = installed_release / "bin/kani-driver"
+    driver.write_text(
+        '#!/bin/sh\nprintf "ambient=%s\\n" "$KANI_LEGACY_ONLY"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KANI_LEGACY_ONLY", "inherited")
+    spec = prepare_kani_command(
+        KaniExecOptions(installed_release, tmp_path, ("list",)),
+        {"CARGO_HOME": str(tmp_path / "cargo-home")},
+    )
+
+    assert spec.env_mode is EnvMode.OVERLAY
+    result = run_command(spec)
+    assert result.stdout.strip() == "ambient=inherited"
+
+
+def test_the_supervised_route_freezes_its_environment(
+    installed_release: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A derived harness command must not observe a later host change."""
+    monkeypatch.setenv("KANI_LEGACY_ONLY", "inherited")
+    spec, _root = prepare_kani_installation(
+        KaniExecOptions(installed_release, tmp_path, ()),
+        {"CARGO_HOME": str(tmp_path / "cargo-home")},
+    )
+
+    assert spec.env_mode is EnvMode.REPLACE
+    assert "KANI_LEGACY_ONLY" not in typ.cast("cabc.Mapping[str, str]", spec.env)

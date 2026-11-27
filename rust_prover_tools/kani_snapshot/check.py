@@ -19,6 +19,7 @@ it runs.
 from __future__ import annotations
 
 import contextlib
+import dataclasses as dc
 import functools
 import logging
 import time
@@ -28,6 +29,10 @@ from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import (
     generation_layout,
     identity_layout,
+)
+from rust_prover_tools.kani_snapshot.install_defaults import (
+    probe_generation,
+    probe_host_generation,
 )
 from rust_prover_tools.kani_snapshot.install_model import (
     Deadline,
@@ -89,6 +94,8 @@ def check_snapshot(options: InstallOptions) -> ValidatedGeneration:
 def check_active_snapshot(
     options: InstallOptions,
     hooks: InstallHooks | None = None,
+    *,
+    environment: cabc.Mapping[str, str] | None = None,
 ) -> SnapshotIdentity:
     """Validate the active generation and prove its effective compiler.
 
@@ -103,7 +110,11 @@ def check_active_snapshot(
         Reviewed pin, cache root and budgets.
     hooks : InstallHooks | None
         External operations; the probe is the only one used. `None` selects
-        the host defaults.
+        the host defaults, with `environment` when one is supplied so the
+        default probe reads the caller's mapping rather than `os.environ`.
+    environment : collections.abc.Mapping[str, str] | None
+        Environment the default probe must use. Ignored when `hooks` supplies
+        its own probe.
 
     Returns
     -------
@@ -119,6 +130,14 @@ def check_active_snapshot(
         receipt and manifest.
     """
     chosen = InstallHooks() if hooks is None else hooks
+    if environment is not None and chosen.probe is probe_host_generation:
+        # The default probe reads the host environment; bind the caller's
+        # mapping so the identities checked are the ones the proof will use.
+        # A caller-supplied custom probe is left untouched.
+        chosen = dc.replace(
+            chosen,
+            probe=functools.partial(probe_generation, environment=environment),
+        )
     with (
         operation_span(_LOGGER, "kani.snapshot.check") as span,
         _validated_under_lock(options) as (validated, deadline),

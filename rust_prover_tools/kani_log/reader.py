@@ -13,7 +13,8 @@ from __future__ import annotations
 import dataclasses as dc
 import typing as typ
 
-from rust_prover_tools.kani_log import reconcile, reports
+from rust_prover_tools.kani_log import reconcile, reports, unsupported
+from rust_prover_tools.kani_log.lines import LineSource, ListLines, StreamingLines
 from rust_prover_tools.kani_log.model import HarnessBlock, ManualSummary
 from rust_prover_tools.kani_log.syntax import (
     BANNER,
@@ -32,9 +33,10 @@ from rust_prover_tools.kani_log.syntax import (
 )
 
 if typ.TYPE_CHECKING:
+    import collections.abc as cabc
     import re
 
-__all__ = ("Reader",)
+__all__ = ("Reader", "StreamingLines")
 
 
 @dc.dataclass(slots=True)
@@ -98,18 +100,28 @@ class _BlockBuilder:
         )
 
 
+def _is_source(lines: object) -> typ.TypeGuard[LineSource]:
+    """Whether `lines` is already a random-access line source."""
+    return hasattr(lines, "at")
+
+
 class Reader:
     """Walk the log once, keeping the cursor position for error messages."""
 
-    def __init__(self, lines: list[str]) -> None:
-        """Start at the first line of a log already split into lines."""
-        self._lines = lines
+    def __init__(self, lines: cabc.Iterable[str] | LineSource) -> None:
+        """Start at the first line of a log, list-backed or streaming."""
+        source: LineSource = (
+            lines
+            if _is_source(lines)
+            else ListLines(typ.cast("cabc.Iterable[str]", lines))
+        )
+        self._lines = source
         self._index = 0
 
     @property
     def exhausted(self) -> bool:
         """Report whether every line has been consumed."""
-        return self._index >= len(self._lines)
+        return self._lines.at(self._index) is None
 
     def where(self) -> str:
         """Describe the current position as a one-based line number."""
@@ -130,7 +142,10 @@ class Reader:
             `exhausted` first; `peek_at` is the EOF-safe lookahead.
 
         """
-        return self._lines[self._index]
+        line = self._lines.at(self._index)
+        if line is None:
+            raise IndexError(self._index)
+        return line
 
     def peek_at(self, offset: int) -> str | None:
         """Return the line ``offset`` lines ahead, or ``None`` past the end.
@@ -150,10 +165,7 @@ class Reader:
         str | None
             The line at that offset, or ``None`` when the log ends first.
         """
-        position = self._index + offset
-        if position >= len(self._lines):
-            return None
-        return self._lines[position]
+        return self._lines.at(self._index + offset)
 
     def take(self) -> str:
         """Consume and return the current line, or refuse a truncated log.
@@ -172,15 +184,22 @@ class Reader:
         if self.exhausted:
             msg = f"{self.where()}: the log ends where more output was required"
             raise KaniLogError(msg)
-        line = self._lines[self._index]
+        line = self._lines.at(self._index)
+        if line is None:
+            msg = f"{self.where()}: the log ends where more output was required"
+            raise KaniLogError(msg)
         self._index += 1
+        self._lines.release(self._index)
         return line
 
     def banner(self) -> tuple[str, str] | None:
         """Consume the version banner if the log opens with one."""
         if self.exhausted:
             return None
-        match = BANNER.match(self._lines[0])
+        first = self._lines.at(0)
+        if first is None:
+            return None
+        match = BANNER.match(first)
         if match is None:
             return None
         self.take()
@@ -208,7 +227,7 @@ class Reader:
 
     def unsupported_constructs(self) -> list[str]:
         """Consume Kani's pre-flight list of constructs it cannot model."""
-        return reports.unsupported_constructs(self)
+        return unsupported.unsupported_constructs(self)
 
     def block(self, match: re.Match[str]) -> HarnessBlock:
         """Consume one ``Checking harness`` block through its verification time.

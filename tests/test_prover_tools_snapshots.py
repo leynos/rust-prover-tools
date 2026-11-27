@@ -101,6 +101,36 @@ def test_kani_run_help_snapshot(
     assert captured.out == snapshot, "Kani run help does not match snapshot"
 
 
+def test_kani_harnesses_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Supervised harness commands expose stable list and run entry points."""
+    app(["kani", "harnesses", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Harnesses help does not match snapshot"
+
+
+def test_kani_harnesses_list_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Inventory inspection exposes the selection and output options."""
+    app(["kani", "harnesses", "list", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Harnesses list help does not match snapshot"
+
+
+def test_kani_harnesses_run_help_snapshot(
+    capsys: pytest.CaptureFixture[str],
+    snapshot: SnapshotAssertion,
+) -> None:
+    """Supervised execution exposes the route, budget, and evidence options."""
+    app(["kani", "harnesses", "run", "--help"], exit_on_error=False)
+    captured = capsys.readouterr()
+    assert captured.out == snapshot, "Harnesses run help does not match snapshot"
+
+
 def test_verus_help_snapshot(
     capsys: pytest.CaptureFixture[str],
     snapshot: SnapshotAssertion,

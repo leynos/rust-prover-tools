@@ -11,24 +11,32 @@ unrecognised line inside a report block.
 from __future__ import annotations
 
 import dataclasses as dc
+import typing as typ
 
 from rust_prover_tools.kani_log.model import HarnessBlock, KaniLog, ManualSummary
-from rust_prover_tools.kani_log.reader import Reader
+from rust_prover_tools.kani_log.reader import Reader, StreamingLines
 from rust_prover_tools.kani_log.syntax import (
     BANNER,
     CHECK,
     FIELD,
     HARNESS_START,
     LIST_WRITTEN,
-    NO_UNWINDING_ASSERTIONS_FLAG,
-    SOLVER_FRAME,
     SUPPORTED_KANI_VERSIONS,
     UNSUPPORTED_PRELUDE,
     VERIFICATION,
     KaniLogError,
 )
 
-__all__ = ("parse_kani_log", "unwinding_checks_enabled")
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+    import re
+
+from rust_prover_tools.kani_log.unwinding import unwinding_checks_enabled
+
+#: Largest number of harness blocks or unsupported constructs one log retains.
+MAX_PARSER_RECORDS: typ.Final[int] = 10_000
+
+__all__ = ("parse_kani_log", "parse_kani_log_lines", "unwinding_checks_enabled")
 
 
 def parse_kani_log(text: str) -> KaniLog:
@@ -59,7 +67,34 @@ def parse_kani_log(text: str) -> KaniLog:
     banner``.
 
     """
-    reader = Reader(_physical_lines(text))
+    return parse_kani_log_lines(_physical_lines(text))
+
+
+def parse_kani_log_lines(lines: cabc.Iterable[str]) -> KaniLog:
+    """Read a log supplied one line at a time, without holding it all.
+
+    The parser still needs a small lookahead, so the source keeps a window
+    rather than the whole log. A supervisor that spools a child's output can
+    therefore parse an arbitrarily long log in bounded memory.
+
+    Parameters
+    ----------
+    lines : cabc.Iterable[str]
+        The log's physical lines, without terminators.
+
+    Returns
+    -------
+    KaniLog
+        The banner, output format, harness blocks, manual summary, and the
+        unsupported constructs Kani named.
+
+    Raises
+    ------
+    KaniLogError
+        If the log is truncated, duplicated, interleaved, count-inconsistent,
+        from an unsupported version, or otherwise not a complete Kani report.
+    """
+    reader = Reader(StreamingLines(lines))
     version = _require_supported_banner(reader)
     return _reconcile(version, _scan(reader))
 
@@ -119,13 +154,12 @@ def _scan(reader: Reader) -> _ObservedLog:
                 raise KaniLogError(msg)
             manual = reader.manual()
         elif line == UNSUPPORTED_PRELUDE:
-            unsupported.extend(reader.unsupported_constructs())
+            _extend_unsupported(reader, unsupported)
         elif line.startswith(LIST_WRITTEN):
             is_list = True
             reader.take()
         elif header := HARNESS_START.match(line):
-            _refuse_harness_after_manual(reader, manual)
-            blocks.append(reader.block(header))
+            _append_block(reader, blocks, manual, header)
         elif BANNER.match(line) is not None:
             # A second banner means the capture is two invocations
             # concatenated.  The first run's facts describe only itself, so
@@ -145,6 +179,34 @@ def _scan(reader: Reader) -> _ObservedLog:
         is_list,
         tuple(unsupported),
     )
+
+
+def _append_block(
+    reader: Reader,
+    blocks: list[HarnessBlock],
+    manual: ManualSummary | None,
+    header: re.Match[str],
+) -> None:
+    """Append one block, refusing a log beyond the block budget."""
+    if len(blocks) >= MAX_PARSER_RECORDS:
+        msg = (
+            f"{reader.where()}: the log reports more than "
+            f"{MAX_PARSER_RECORDS} harness blocks"
+        )
+        raise KaniLogError(msg)
+    _refuse_harness_after_manual(reader, manual)
+    blocks.append(reader.block(header))
+
+
+def _extend_unsupported(reader: Reader, unsupported: list[str]) -> None:
+    """Append one unsupported list, refusing a log beyond the budget."""
+    unsupported.extend(reader.unsupported_constructs())
+    if len(unsupported) > MAX_PARSER_RECORDS:
+        msg = (
+            f"{reader.where()}: the log names more than "
+            f"{MAX_PARSER_RECORDS} unsupported constructs"
+        )
+        raise KaniLogError(msg)
 
 
 def _refuse_orphan_report_line(reader: Reader, line: str) -> None:
@@ -257,129 +319,3 @@ def _fail_fast_counts(
     """
     verified, failures, total = counts
     return verified == 0 and len(failed) == 1 and failures == 1 and total == 1
-
-
-def unwinding_checks_enabled(block: HarnessBlock) -> bool | None:
-    """Report whether the solver was asked to generate unwinding assertions.
-
-    Parameters
-    ----------
-    block : HarnessBlock
-        One parsed harness block.
-
-    Returns
-    -------
-    bool | None
-        ``False`` when the echoed command disables the assertions, ``True``
-        otherwise, and ``None`` when no solver command was echoed or its
-        arguments cannot be read.  An unreadable command may still carry the
-        disabling flag, so it must not be read as evidence that the checks
-        were generated.
-
-    Notes
-    -----
-    The rule is Kani's, read from the pinned driver rather than guessed: the
-    driver passes ``--no-unwinding-assertions`` when the checks are off and
-    otherwise passes only ``--no-self-loops-to-assumptions``, relying on
-    CBMC's own default.  So the echoed command decides with one flag, and a
-    missing bound says nothing about whether the assertions were generated.
-
-    """
-    if block.solver_command is None:
-        return None
-    arguments = _solver_arguments(block.solver_command)
-    if arguments is None:
-        return None
-    return NO_UNWINDING_ASSERTIONS_FLAG not in arguments
-
-
-def _solver_arguments(command: str) -> frozenset[str] | None:
-    """Split the echoed ``cbmc`` command into its arguments and their options.
-
-    The echo is read at Kani's own boundaries rather than as shell text.  Kani
-    wraps an argument in double quotes when, and only when, it holds a space,
-    and escapes nothing: an apostrophe is an ordinary character.  Splitting it
-    as shell words would let one apostrophe open a quoted region spanning the
-    arguments that follow, which hides a flag such as
-    ``--no-unwinding-assertions`` from the membership test and reports checks
-    that were disabled as enabled.
-
-    Each argument contributes itself and, when written ``--option=value``, the
-    option alone; the flags read here are written as separate words, so
-    matching whole arguments is enough.
-
-    The echo's own framing is removed first.  A closing backtick would
-    otherwise join the last argument and hide a trailing flag.
-
-    A wrapped argument is only recoverable when it ends the echo.  Because
-    Kani escapes nothing inside it, a quote followed by more text can close
-    the argument or be a quote the value contains; no fact in the rendering
-    says which.  Reading it as a boundary would let one rendering stand for
-    two argument lists, and the flag the other reading contains would go
-    unread.
-
-    Returns
-    -------
-    frozenset[str] | None
-        The arguments and their option names, or ``None`` when the rendering
-        cannot be split.  An unterminated wrap, text after a closing quote, or
-        a wrapped argument followed by more arguments means the boundaries
-        cannot be recovered; none of those shapes may be read as evidence that
-        the checks were generated.
-    """
-    if not command.startswith(SOLVER_FRAME) or not command.endswith("`"):
-        # A capture that cut the echo mid-argument leaves a flag that is
-        # not a whole word, so none of its options can be read as fact.
-        return None
-    framed = command[len(SOLVER_FRAME) : -1]
-    words = _rendered_words(framed)
-    if words is None:
-        return None
-    return frozenset(word for item in words for word in (item, item.partition("=")[0]))
-
-
-def _rendered_words(rendered: str) -> list[str] | None:
-    """Split a command echo at the boundaries Kani rendered it with.
-
-    Parameters
-    ----------
-    rendered : str
-        The echoed command without its framing backticks.
-
-    Returns
-    -------
-    list[str] | None
-        The words Kani passed, or ``None`` when a quote leaves them ambiguous.
-
-    """
-    words: list[str] = []
-    index = 0
-    end_of_rendering = len(rendered)
-    while index < end_of_rendering:
-        if rendered[index] == " ":
-            index += 1
-            continue
-        if rendered[index] == '"':
-            closing = rendered.find('"', index + 1)
-            if closing == -1:
-                return None
-            words.append(rendered[index + 1 : closing])
-            following = closing + 1
-            while following < end_of_rendering and rendered[following] == " ":
-                following += 1
-            if following < end_of_rendering:
-                # Kani escapes nothing inside a wrapped argument, so a quote
-                # followed by more text is ambiguous: it can close the
-                # argument, or it can be a quote the value itself contains
-                # with the rest of the value continuing after the space.  No
-                # fact in the rendering distinguishes the two reads, so the
-                # boundary is unknown rather than assumed.
-                return None
-            index = following
-            continue
-        end = rendered.find(" ", index)
-        if end == -1:
-            end = end_of_rendering
-        words.append(rendered[index:end])
-        index = end
-    return words

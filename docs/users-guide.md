@@ -9,6 +9,9 @@ Verus workflows that were previously handled by repository shell scripts.
 ```bash
 prover-tools kani install
 prover-tools kani check-version
+prover-tools kani harnesses list --repo-root . --package cuprum-native-io
+prover-tools kani harnesses run --repo-root . --package cuprum-native-io \
+  --installation "$HOME/.kani/kani-0.67.0" --cwd .
 prover-tools verus install
 prover-tools z3 install
 prover-tools verus run --proof-file verus/edge_harvest_proofs.rs
@@ -577,6 +580,91 @@ afterwards. A rerun resumes an existing draft. A rerun against a published
 release is a no-op when the served assets match the expected wheel set and
 bytes. A published release whose assets differ is refused as a collision
 because its assets can no longer be changed.
+
+### Supervised Kani harness execution
+
+`prover-tools kani harnesses list` prints the resolved inventory as strict
+version-1 JSON: every discovered harness, package-qualified, with its target,
+source path, line, conditional flag, and registered attributes. `--package` is
+repeatable; `--inventory PATH` loads an authoritative inventory and bypasses
+discovery; and `--output PATH` writes the JSON to a file instead of standard
+output.
+
+`prover-tools kani harnesses run` executes one exact invocation per selected
+harness. Select exactly one route: `--installation PATH` with the required
+`--cwd PATH`, for a qualified Kani release root, or `--snapshot-pin PATH` with
+an optional `--cache-dir PATH`, for a reviewed snapshot. The snapshot route
+accepts only a snapshot that reports Kani 0.67.0, the single registered
+grammar; the current snapshot recipe builds 0.68.0, whose banner the supervised
+run refuses until a 0.68.0 grammar is registered. Every harness runs as its own
+`--package PACKAGE --harness NAME --exact` invocation in an owned process
+group. A failed, timed-out, or watchdog-stopped harness does not prevent later
+harnesses from running. The command exits zero only for a complete passing run,
+one for any other completed run or expected error, and `128 + signal` when a
+signal interrupted the run. An execution-phase interruption still finalizes the
+report; preparation ends immediately because no supervised child exists yet.
+
+The defaults below are policy, and every one is configurable:
+
+| Option                        | Default                               |
+| ----------------------------- | ------------------------------------- |
+| `--timeout-seconds N`         | 1,200 seconds per harness             |
+| `--sample-interval-seconds N` | 5-second resource sampling            |
+| `--heartbeat-seconds N`       | 15-second heartbeat                   |
+| `--watchdog-mib N`            | 1,024 MiB host available-memory floor |
+| `--no-watchdog`               | Disable the memory watchdog           |
+| `--human PATH`                | Standard output                       |
+| `--jsonl PATH`                | No JSONL evidence                     |
+| `--report PATH`               | No final report                       |
+
+_Table 1: Supervised harness defaults._
+
+Live human records are flushed per line to standard output, or to
+`--human PATH`. Versioned JSONL evidence is written to `--jsonl PATH`, and the
+final JSON report is written atomically to `--report PATH`. When JSONL evidence
+is enabled, each harness result carries a diagnostic reference to the byte
+offset where its records begin; with the default disabled JSONL sink, the
+reference is absent.
+
+Every harness result has one status: `passed`, `failed`, `no-match`,
+`multiple-match`, `timed-out`, `memory-exhausted`, `interrupted`,
+`exit-nonzero`, `error`, or `not-run`. A watchdog stop is a policy
+intervention, not evidence that the kernel killed the process for memory.
+
+The measurements are sampled, with deliberate limits: a peak is the largest
+periodic sample, so a spike between samples can be missed; summed resident set
+size (RSS) counts a shared page once per process, so it is an upper bound on
+unique resident memory; samples bracket the whole invocation and therefore
+include compilation; and cgroup values belong to the supervisor's cgroup, which
+is normally shared with the rest of the job, so they are not exclusive
+per-harness peaks.
+
+The CLI installs SIGINT and SIGTERM handlers only for the duration of the
+execution phase and restores the previous handlers afterwards. Discovery and
+route qualification run before those handlers exist, so a signal during
+preparation ends the run immediately instead of being recorded for a phase that
+has not started. The library installs no handlers, so an embedding application
+keeps its own signal policy; `qualify_harnesses` (also exported as
+`prepare_harnesses`) and `execute_harnesses` expose the same phase boundary to
+that application.
+
+`--extra-arg` is repeatable and passes proof-affecting verifier arguments
+verbatim, such as `--unwind` or `-Z`. An argument that would override selection
+or output is refused, including `--harness`, `--exact`, `--tests`, `--package`,
+`--output-format`, `--output-into-files`, `--quiet`, `--workspace`, `--jobs`,
+and their short spellings `-q`, `-j`, and `-p`, whether written as a separate
+value, a joined value, or a short option, on either side of `--`.
+
+A harness that lives in an integration-test target is run only when its package
+declares exactly one such target. Kani 0.67.0 has no flag that selects a single
+test target: its `--tests` option also builds the library and every binary, so
+a harness name alone cannot attribute a record to one test target. With two or
+more test targets the run refuses the selection rather than risk crediting a
+same-named proof to the wrong one. Lib and bin harnesses are unaffected.
+
+See [Kani supervised harness execution](kani-supervised-execution.md) for the
+inventory, JSONL, and report schemas, the adapter contract, and the discovery
+rules.
 
 ### Verus commands
 

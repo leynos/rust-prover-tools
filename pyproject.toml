@@ -96,9 +96,12 @@ extend-ignore = [
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["non-empty-init-module"]
 "rust_prover_tools/cli.py" = ["too-many-arguments", "too-many-positional-arguments"]
-"**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "magic-value-comparison", "no-self-use"]
-# Shared test doubles: test code that pytest does not collect by name.
-"rust_prover_tools/unittests/*_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments"]
+"rust_prover_tools/kani_harness_cli.py" = ["too-many-arguments", "too-many-positional-arguments"]
+"**/test_*.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "too-many-locals", "magic-value-comparison", "no-self-use"]
+# Test support modules hold assertions and fixtures on behalf of test modules,
+# so they need the same test-only relaxations.
+"rust_prover_tools/unittests/*_support.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "too-many-locals", "magic-value-comparison", "no-self-use"]
+"tests/*_support.py" = ["assert", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "too-many-arguments", "too-many-positional-arguments", "too-many-locals", "magic-value-comparison", "no-self-use"]
 # The smoke's shared runner deliberately starts the public console script, and
 # its manifest check is a test-support invariant rather than a CLI decision.
 "tests/kani_snapshot_smoke_support.py" = ["assert", "too-many-arguments", "too-many-positional-arguments"]

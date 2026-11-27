@@ -210,11 +210,15 @@ def validate_forwarded_args(args: cabc.Sequence[str]) -> None:
     if _is_setup_command(args):
         msg = "snapshot execution refuses the upstream setup command"
         raise ProverToolError(msg)
+    routing = ("--manifest-path", "--config", "--profile")
     for index, arg in enumerate(args):
         if arg in _SETUP_FLAGS or arg.startswith(
             tuple(f"{flag}=" for flag in _SETUP_FLAGS)
         ):
             msg = f"snapshot execution refuses upstream setup flag: {arg}"
+            raise ProverToolError(msg)
+        if any(arg == flag or arg.startswith(f"{flag}=") for flag in routing):
+            msg = f"snapshot execution refuses a Cargo routing override: {arg}"
             raise ProverToolError(msg)
         if _selects_lean(args, index):
             msg = "snapshot execution refuses the Lean backend selection"

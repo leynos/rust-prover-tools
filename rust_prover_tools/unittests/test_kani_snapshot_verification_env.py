@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import collections.abc as cabc
 import typing as typ
 
 import pytest
@@ -9,7 +10,10 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_snapshot.identity import snapshot_layout
 from rust_prover_tools.kani_snapshot.snapshot_layout import SnapshotRuntime
-from rust_prover_tools.kani_snapshot.verification_env import proof_environment
+from rust_prover_tools.kani_snapshot.verification_env import (
+    frozen_proof_environment,
+    proof_environment,
+)
 from tests.kani_snapshot_bundles import TOOLCHAIN, VERSION
 from tests.kani_snapshot_fixtures import make_pin
 
@@ -148,3 +152,64 @@ def test_proof_environment_rejects_a_malformed_admission_wrapper(
         proof_environment(
             _runtime(tmp_path), _base(tmp_path, RUSTC_WRAPPER=""), cwd=cwd
         )
+
+
+def test_a_frozen_environment_keeps_host_values_and_drops_markers(
+    tmp_path: Path,
+) -> None:
+    """The launch mapping is complete, so no host value arrives later."""
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    base = _base(
+        tmp_path,
+        RPT_HOST_ONLY="kept",
+        RUSTC="/host/rustc",
+        RUSTC_WRAPPER="/usr/bin/build-limits-rustc",
+    )
+
+    env = frozen_proof_environment(_runtime(tmp_path), base, cwd=cwd)
+
+    assert env["RPT_HOST_ONLY"] == "kept"
+    assert env["RUSTC_WRAPPER"] == "/usr/bin/build-limits-rustc"
+    assert "RUSTC" not in env, "a removal marker leaked into the launch mapping"
+    assert all(isinstance(value, str) for value in env.values())
+
+
+class _ChangingEnvironment(cabc.Mapping[str, str]):
+    """An inherited environment whose contents change between reads."""
+
+    def __init__(self) -> None:
+        """Start with one advertised codegen backend."""
+        self.reads = 0
+
+    def __getitem__(self, key: str) -> str:
+        """Answer only for the advertised key, and only once."""
+        if key != "CARGO_PROFILE_DEV_CODEGEN_BACKEND":
+            raise KeyError(key)
+        self.reads += 1
+        if self.reads == 1:
+            return "llvm"
+        raise KeyError(key)
+
+    def __iter__(self) -> cabc.Iterator[str]:
+        """Iterate the one advertised key."""
+        yield "CARGO_PROFILE_DEV_CODEGEN_BACKEND"
+
+    def __len__(self) -> int:
+        """Report one key."""
+        return 1
+
+
+def test_a_changing_environment_is_validated_from_one_snapshot(
+    tmp_path: Path,
+) -> None:
+    """A value cannot be copied from a read other than the validated one.
+
+    The mapping answers once. Reading it twice let the copy keep a codegen
+    backend that the validation read no longer saw; one snapshot refuses it.
+    """
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+
+    with pytest.raises(ProverToolError, match="codegen backend"):
+        frozen_proof_environment(_runtime(tmp_path), _ChangingEnvironment(), cwd=cwd)

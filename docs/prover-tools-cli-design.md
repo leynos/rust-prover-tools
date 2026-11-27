@@ -583,10 +583,54 @@ Both transports run the same verification; only the byte source changes. The
 [execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
 implementation acceptance from a separately authorized first publication.
 
-The command surface is unchanged by the producer work.
-`make kani-snapshot-verify` is an operator-facing verification of a produced
-release, not a CLI command: it installs the wheel into a temporary environment
-and runs the public commands against the downloaded assets. The
+## Kani supervised harness execution
+
+The supervised harness commands are a third Kani route, distinct from both
+`kani exec` and `kani run`:
+
+- `kani harnesses list` prints the resolved inventory as strict version-1 JSON.
+- `kani harnesses run` executes one exact invocation per selected harness.
+
+`harnesses` is a sub-application with `config=()`, so the generic `INPUT_*`
+binding cannot redirect an inventory path, package, route, or budget. The
+commands live in `rust_prover_tools.kani_harness_cli`; the composition root is
+`rust_prover_tools.kani_harness_run`.
+
+`run` requires exactly one route. `--installation` selects a qualified legacy
+release and requires `--cwd`; `--snapshot-pin` selects an immutable snapshot
+and accepts `--cache-dir`. Supplying both, or neither, is an expected error.
+The command composes `--package`, `--harness`, `--exact`, and the registry's
+regular-output argument before the caller's repeated `--extra-arg` values, and
+refuses a caller argument that would override selection or output.
+
+Live human records go to standard output unless `--human PATH` names a file;
+the final table always goes to standard output. Versioned JSONL goes to
+`--jsonl PATH`, and the final JSON report to `--report PATH`. Errors go to
+standard error. A missing or unwritable destination is an expected error with
+exit status one.
+
+Exit status is a report property, not a process-status guess:
+
+- zero only for a complete run in which every expected harness passed;
+- one for any other completed run, and for expected usage, discovery,
+  selection, and route errors;
+- `128 + signal` when a signal interrupted the run, after the report has been
+  finalized.
+
+Signal handling is the CLI's responsibility. The command installs SIGINT and
+SIGTERM for the duration of one run and restores the previous handlers
+afterwards; the library installs none. A signal stops the active process group,
+reports it as interrupted, marks every unexecuted harness as `not-run`,
+finalizes the available report, and returns the signal status.
+
+The CLI contract tests inject the composition root, so they cover route
+exclusivity, selection conflicts, drift, interruption, exit mapping, and a
+closed standard output without a live prover. Help output is snapshotted. An
+opt-in live fixture test exercises the real 0.67.0 driver. The command surface
+is unchanged by the producer work. `make kani-snapshot-verify` is an
+operator-facing verification of a produced release, not a CLI command: it
+installs the wheel into a temporary environment and runs the public commands
+against the downloaded assets. The
 [operations runbook](kani-snapshot-operations.md) owns that procedure and the
 evidence it requires.
 

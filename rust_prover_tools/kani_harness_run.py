@@ -1,0 +1,397 @@
+"""Run a Kani harness inventory under supervision, through one qualified route.
+
+This module is the composition root: it joins the inventory, the exact
+selector, one qualified Kani route, the Kani log adapter, and the generic
+supervision layer into a typed report. Timing, measurement, evidence, and
+classification belong to the layer it composes.
+
+The route is qualified once, and every harness invocation is derived from that
+one validated installation, generation, environment, and grammar, so a run
+cannot observe one identity while launching another.
+
+Example
+-------
+```python
+run = run_harnesses(
+    KaniHarnessRunOptions(
+        repo_root=Path("."),
+        route=LegacyRoute(
+            installation=Path.home() / ".kani" / "kani-0.67.0",
+            cwd=Path("."),
+        ),
+    ),
+    SupervisionConfig(),
+)
+print(run.report.passed)
+```
+"""
+
+from __future__ import annotations
+
+import dataclasses as dc
+import functools
+import os
+import typing as typ
+from pathlib import Path
+
+from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
+from rust_prover_tools.kani_harness_models import (
+    KaniExecutionDependencies,
+    KaniHarnessPreparation,
+    KaniHarnessRunOptions,
+    KaniPreparationDependencies,
+)
+from rust_prover_tools.kani_inventory import (
+    HarnessInventory,
+    InventoryHarness,
+    cargo_metadata,
+    discover_inventory,
+    load_inventory,
+    restrict_inventory,
+    select_harnesses,
+    verify_selected_test_targets,
+)
+from rust_prover_tools.kani_routes import (
+    KaniRoute,
+    LegacyRoute,
+    SnapshotRoute,
+    prepare_route,
+    route_working_directory,
+)
+from rust_prover_tools.supervision import (
+    AsyncSleeper,
+    CgroupV2Reader,
+    CuprumHarnessLauncher,
+    Diagnostics,
+    LaunchCommand,
+    ProcfsResourceProbe,
+    RunReport,
+    SupervisionConfig,
+    SystemClock,
+    run_supervised_sync,
+)
+from rust_prover_tools.supervision.kani import KaniAdapter
+from rust_prover_tools.supervision.run_environment import (
+    EvidenceEnvironment,
+    ExecutionEnvironment,
+    RunEnvironment,
+    RunPolicyEnvironment,
+)
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from rust_prover_tools.kani_inventory import CargoPackage
+    from rust_prover_tools.supervision import HarnessSpec
+
+__all__ = (
+    "KaniExecutionDependencies",
+    "KaniHarnessPreparation",
+    "KaniHarnessRun",
+    "KaniHarnessRunOptions",
+    "KaniPreparationDependencies",
+    "KaniRoute",
+    "LegacyRoute",
+    "SnapshotRoute",
+    "execute_harnesses",
+    "prepare_harnesses",
+    "qualify_harnesses",
+    "run_harnesses",
+    "run_kani_harnesses",
+)
+
+
+@dc.dataclass(frozen=True, slots=True)
+class KaniHarnessRun:
+    """One completed supervised Kani run.
+
+    Attributes
+    ----------
+    report : RunReport
+        Typed per-harness results and aggregate accounting.
+    inventory : HarnessInventory
+        Inventory the run was selected from.
+    selected : tuple[InventoryHarness, ...]
+        Harnesses the run intended to execute.
+    backend_version : str
+        Kani release the route was qualified against.
+    route_kind : str
+        ``legacy`` or ``snapshot``.
+    """
+
+    report: RunReport
+    inventory: HarnessInventory
+    selected: tuple[InventoryHarness, ...]
+    backend_version: str
+    route_kind: str
+
+    @property
+    def exit_status(self) -> int:
+        """The CLI status this run implies.
+
+        Returns
+        -------
+        int
+            ``128 + signal`` for an interrupted run, zero only for a complete
+            passing run, and one otherwise.
+        """
+        if self.report.interrupt_signal is not None:
+            return 128 + self.report.interrupt_signal
+        return 0 if self.report.passed else 1
+
+
+def run_harnesses(
+    options: KaniHarnessRunOptions,
+    config: SupervisionConfig,
+    execution_dependencies: KaniExecutionDependencies | None = None,
+    preparation_dependencies: KaniPreparationDependencies | None = None,
+) -> KaniHarnessRun:
+    """Discover or load, select, and supervise Kani harnesses.
+
+    This is qualification followed by execution, with no suspension point in
+    between. An application that installs its own signal handlers should call
+    `qualify_harnesses` and `execute_harnesses` separately, so the handlers
+    cover only the phase whose in-flight children they can stop.
+
+    Parameters
+    ----------
+    options : KaniHarnessRunOptions
+        Repository, selection, and route.
+    config : SupervisionConfig
+        Per-harness policy and report destination.
+    execution_dependencies : KaniExecutionDependencies | None
+        Overridden supervision seams. `None` uses the defaults.
+    preparation_dependencies : KaniPreparationDependencies | None
+        Overridden discovery and qualification seams. `None` uses the
+        defaults.
+
+    Returns
+    -------
+    KaniHarnessRun
+        The typed report and the inventory it was selected from.
+
+    Raises
+    ------
+    ValueError
+        Raised when discovery, selection, or grammar qualification refuses
+        the request; `qualify_harnesses` names each exact failure.
+    ProverToolError
+        Raised when route qualification or execution cannot complete.
+    """
+    return execute_harnesses(
+        qualify_harnesses(options, preparation_dependencies),
+        config,
+        execution_dependencies,
+    )
+
+
+def qualify_harnesses(
+    options: KaniHarnessRunOptions,
+    dependencies: KaniPreparationDependencies | None = None,
+) -> KaniHarnessPreparation:
+    """Discover or load, select, and qualify one route without running it.
+
+    Two steps run subprocesses: `KaniPreparationDependencies.metadata` (by
+    default `cargo_metadata`) reads Cargo metadata, and route qualification
+    probes the release or snapshot identities once. Supplying `metadata` or
+    `prepare` replaces those process boundaries. The inherited environment and
+    the process working directory are resolved here, at the composition root,
+    and passed explicitly to `prepare_route`; `dependencies.environ` and
+    `dependencies.process_cwd` replace them when supplied.
+
+    Parameters
+    ----------
+    options : KaniHarnessRunOptions
+        Repository, selection, and route. The policy is not used.
+    dependencies : KaniPreparationDependencies | None
+        Overridden discovery and qualification seams. `None` uses the
+        defaults.
+
+    Returns
+    -------
+    KaniHarnessPreparation
+        The inventory, selection, qualified route, and exact commands.
+
+    Raises
+    ------
+    InventoryDiscoveryError
+        Raised when discovery cannot produce a complete inventory, Cargo
+        metadata cannot be read, or a test-target harness cannot be
+        attributed to the live tree.
+    InventoryFormatError
+        Raised when a supplied inventory document is invalid.
+    SelectionError
+        Raised when the harness selection is ambiguous or overridden.
+    ProverToolError
+        Raised when the route cannot be qualified or its identity probes
+        disagree.
+    UnsupportedKaniGrammarError
+        Raised when the route's Kani release has no registered grammar.
+    """
+    dependencies = dependencies or KaniPreparationDependencies()
+    root = options.repo_root.resolve()
+    route_cwd = route_working_directory(
+        options.route,
+        process_cwd=_process_working_directory(dependencies.process_cwd),
+    ).resolve()
+    if route_cwd != root:
+        msg = (
+            "the route working directory must be the repository root: "
+            f"{route_cwd} is not {root}"
+        )
+        raise ProverToolError(msg)
+    metadata = _metadata_for(options, dependencies.metadata or cargo_metadata, root)
+    inventory = _inventory(options, metadata)
+    selected = select_harnesses(inventory, options.harnesses)
+    if any(harness.target_kind == "test" for harness in selected):
+        if metadata is None:
+            metadata = tuple((dependencies.metadata or cargo_metadata)(root))
+        verify_selected_test_targets(root, selected, metadata)
+    qualifier = dependencies.prepare or functools.partial(
+        prepare_route,
+        environ=os.environ if dependencies.environ is None else dependencies.environ,
+        cwd=route_cwd,
+    )
+    prepared = qualifier(options.route)
+    return KaniHarnessPreparation(
+        inventory=inventory,
+        selected=selected,
+        prepared=prepared,
+        commands=_command_map(selected, prepared.build),
+    )
+
+
+#: Compatibility aliases the guides name; each is the canonical operation's
+#: own object, owned by `qualify_harnesses` and `run_harnesses`.
+prepare_harnesses = qualify_harnesses
+run_kani_harnesses = run_harnesses
+
+
+def _process_working_directory(process_cwd: Path | None) -> Path:
+    """Return the caller's checked directory, or the process directory."""
+    return Path.cwd() if process_cwd is None else process_cwd
+
+
+def execute_harnesses(
+    preparation: KaniHarnessPreparation,
+    config: SupervisionConfig,
+    dependencies: KaniExecutionDependencies | None = None,
+) -> KaniHarnessRun:
+    """Supervise the harnesses selected by `qualify_harnesses`.
+
+    Parameters
+    ----------
+    preparation : KaniHarnessPreparation
+        Completed discovery, selection, and route qualification.
+    config : SupervisionConfig
+        Per-harness policy and configured evidence destinations.
+    dependencies : KaniExecutionDependencies | None
+        Overridden supervision seams. `None` uses the defaults.
+
+    Returns
+    -------
+    KaniHarnessRun
+        The typed report and the inventory it was selected from.
+    """
+    dependencies = dependencies or KaniExecutionDependencies()
+    with prepare_and_open_diagnostics(config, dependencies.diagnostics) as opened:
+        environment = _environment(
+            preparation,
+            dependencies,
+            opened,
+            limits=(config.max_line_bytes, config.max_log_bytes),
+        )
+        report = run_supervised_sync(
+            tuple(harness.to_spec() for harness in preparation.selected),
+            config,
+            environment,
+        )
+    return KaniHarnessRun(
+        report=report,
+        inventory=preparation.inventory,
+        selected=preparation.selected,
+        backend_version=preparation.prepared.grammar.version,
+        route_kind=preparation.prepared.kind,
+    )
+
+
+def _metadata_for(
+    options: KaniHarnessRunOptions,
+    provider: cabc.Callable[[Path], cabc.Sequence[CargoPackage]],
+    root: Path,
+) -> tuple[CargoPackage, ...] | None:
+    """Resolve the metadata discovery needs, or `None` when it needs none.
+
+    `KaniPreparationDependencies.metadata` is the only metadata seam: a caller
+    with pre-read metadata supplies a provider that returns it, so discovery
+    and test-target revalidation always read one source.
+    """
+    discovering = not any((options.inventory, options.inventory_path))
+    return tuple(provider(root)) if discovering else None
+
+
+def _inventory(
+    options: KaniHarnessRunOptions,
+    metadata: cabc.Sequence[CargoPackage] | None,
+) -> HarnessInventory:
+    """Load, discover, or narrow the inventory."""
+    if options.inventory is not None:
+        inventory = options.inventory
+    elif options.inventory_path is not None:
+        inventory = load_inventory(options.inventory_path)
+    else:
+        inventory = discover_inventory(
+            options.repo_root,
+            options.packages,
+            metadata=metadata,
+        )
+    if not options.packages:
+        return inventory
+    return restrict_inventory(inventory, options.packages)
+
+
+def _command_map(
+    selected: cabc.Sequence[InventoryHarness],
+    build: cabc.Callable[[InventoryHarness], LaunchCommand],
+) -> dict[str, LaunchCommand]:
+    """Compose one exact command per selected harness."""
+    return {harness.identity: build(harness) for harness in selected}
+
+
+def _environment(
+    preparation: KaniHarnessPreparation,
+    dependencies: KaniExecutionDependencies,
+    diagnostics: Diagnostics,
+    *,
+    limits: tuple[int, int],
+) -> RunEnvironment:
+    """Build the supervision environment around the prepared route."""
+    clock = dependencies.clock or SystemClock()
+    launcher = dependencies.launcher or CuprumHarnessLauncher(
+        clock=clock.now,
+        monotonic=clock.monotonic,
+        max_line_bytes=limits[0],
+    )
+    adapter = dependencies.adapter or KaniAdapter(
+        version=preparation.prepared.grammar.version,
+        max_log_bytes=limits[1],
+    )
+
+    def build(spec: HarnessSpec) -> LaunchCommand:
+        """Return the command composed for this exact identity."""
+        return preparation.commands[spec.qualified]
+
+    return RunEnvironment(
+        execution=ExecutionEnvironment(
+            launcher=launcher,
+            probe=dependencies.probe or ProcfsResourceProbe(clock=clock),
+            cgroup=dependencies.cgroup or CgroupV2Reader(),
+            sleeper=dependencies.sleeper or AsyncSleeper(),
+            adapter=adapter,
+            build=build,
+            clock=clock,
+        ),
+        evidence=EvidenceEnvironment(diagnostics=diagnostics),
+        policy=RunPolicyEnvironment(interrupts=dependencies.interrupts),
+    )

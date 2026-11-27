@@ -40,7 +40,12 @@ from cuprum import (
 )
 from cuprum.context import EnvMode, UnsetType
 
-from rust_prover_tools.errors import CommandFailedError, ProverToolError
+from rust_prover_tools.errors import (
+    CommandFailedError,
+    CommandTimedOutError,
+    CommandTimeoutError,
+    ProverToolError,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -136,16 +141,6 @@ class TailCapture:
         if not lines:
             return ""
         return "\n".join(text for _, text in lines) + "\n"
-
-
-class CommandTimeoutError(ProverToolError):
-    """Raised when a command exceeds its wall-clock budget.
-
-    A timed-out command's whole process group has already been terminated
-    before this is raised. Callers that may retry a timeout, such as the
-    release publication loop, catch this type rather than the broader base
-    class so a genuine command failure is never mistaken for one.
-    """
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -266,10 +261,12 @@ def run_command(spec: CommandSpec) -> CommandResult:
     ------
     ProverToolError
         Raised when `spec.argv` is empty.
-    CommandTimeoutError
-        Raised when the command exceeds its timeout. The whole process group
-        is terminated first, so a setup tool cannot outlive the caller's
-        budget by leaving descendants.
+    CommandTimedOutError
+        Raised when the command exceeds its effective timeout. Its
+        `timeout_seconds` and `argv` attributes carry the termination evidence
+        typed, so a supervisor need not parse the message. A timed-out
+        command's whole process group is terminated first, so a setup tool
+        cannot outlive the caller's budget by leaving descendants.
     """
     if not spec.argv:
         msg = "command is empty"
@@ -319,12 +316,14 @@ def run_command(spec: CommandSpec) -> CommandResult:
         result = cmd.run_sync(output=output, context=context)
     except TimeoutExpired as exc:
         # `exc.timeout` is always the effective budget, so a timeout supplied
-        # by an enclosing scope is reported correctly too.
-        msg = (
-            f"command timed out after {exc.timeout:g} seconds: "
-            f"{command_line(spec.argv)}"
-        )
-        raise CommandTimeoutError(msg) from exc
+        # by an enclosing scope is reported correctly too. The typed error
+        # keeps the message stable for existing callers while giving a
+        # supervisor the effective budget and argv without message parsing.
+        raise CommandTimedOutError(
+            command_line(spec.argv),
+            exc.timeout,
+            spec.argv,
+        ) from exc
     return CommandResult(
         stdout=result.stdout or "",
         stderr=result.stderr or "",

@@ -49,6 +49,9 @@ BANNER = re.compile(
 # The harness name is whatever Kani printed, which may contain non-ASCII
 # characters.  Only the trailing ellipsis is fixed.
 HARNESS_START = re.compile(r"^Checking harness (?P<name>.+?)\.\.\.$")
+NO_HARNESS_MATCH = re.compile(
+    r"^[+*]?no harnesses matched the harness filters?: (?P<filters>.*)$"
+)
 VERIFICATION = re.compile(
     r"^VERIFICATION:- (?P<verdict>SUCCESSFUL|FAILED)(?: (?P<note>\(.*\)))?$",
 )

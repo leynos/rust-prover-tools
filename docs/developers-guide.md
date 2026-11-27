@@ -359,12 +359,14 @@ a user-facing `CommandFailedError`. Use `run_command` when the workflow needs
 to inspect the exit code, such as `rustup which` or `verus --version`.
 
 A command that exceeds its wall-clock budget is terminated, process group and
-all, and `run_command` raises `rust_prover_tools.commands.CommandTimeoutError`.
-That class subclasses `ProverToolError`, so existing handling keeps working,
-but a caller that may retry a timeout should catch the narrower type, because a
-genuine command failure is not worth repeating. The release path does this at
-two boundaries: `gh_transport` catches `CommandTimeoutError` and wraps it once
-in `ReleaseTransientError`, and the publication loop catches that wrapper. A
+all, and `run_command` raises `CommandTimedOutError`, a subclass of
+`CommandTimeoutError` and therefore of `ProverToolError`. It carries the
+effective `timeout_seconds`, the human-readable `command_line`, and the executed
+`argv`. Catching `CommandTimeoutError` still handles it, but a caller that may
+retry a timeout should catch the narrower type, because a genuine command
+failure is not worth repeating. The release path does this at two boundaries:
+`gh_transport` catches `CommandTimeoutError` and wraps it once in
+`ReleaseTransientError`, and the publication loop catches that wrapper. A
 caller adding retry handling to the release path therefore catches
 `ReleaseTransientError`, not the timeout type, which never reaches it.
 
@@ -597,6 +599,29 @@ files, and both abort the run before any mutant is scored:
 predicate directly, so a lost guard fails an ordinary pull request rather than
 waiting for the next scheduled mutation run.
 
+## Kani corpus and lint exceptions
+
+The Kani parser corpus lives under versioned directories such as
+`tests/fixtures/kani_logs/0.67.0/`. The repository's global `*.log` ignore
+would otherwise drop it, so `.gitignore` carries an explicit
+`!tests/fixtures/kani_logs/**/*.log` exception (and the matching one for
+`verus_logs`). A new capture must be added under a version directory, or the
+exception extended, before its test can rely on it. A capture that exists only
+in a working tree passes locally and fails a clean CI checkout.
+
+`pyproject.toml` relaxes two per-file lint rules for this capability, and both
+are narrower than they look:
+
+- `rust_prover_tools/kani_harness_cli.py` keeps
+  `too-many-arguments` and `too-many-positional-arguments` disabled because
+  Cyclopts evaluates its command annotations; the option groups themselves live
+  in `rust_prover_tools/kani_harness_cli_options.py`, which is not exempt.
+- `rust_prover_tools/unittests/*_support.py` and `tests/*_support.py` keep the
+  test-only relaxations for assertions, subprocess use, argument counts, local
+  counts, magic values and `no-self-use`. A new shared test helper belongs in
+  one of those directories with the `_support.py` suffix; a production module
+  named `*_support.py` gains none of these relaxations.
+
 ## Docstring coverage
 
 `make lint-python` depends on `build` and on `make interrogate`, which needs
@@ -695,8 +720,13 @@ is asserted against that corpus.
 - The logs are corpus evidence: recapture them, never hand-edit them.
 - Capture the complete standard output followed by the complete standard
   error. Merging the streams can split a report block.
-- Add the version-named corpus directory before a release joins
-  `SUPPORTED_KANI_VERSIONS`, and delete it when the release leaves the set.
+- Register a new release in three places at once: add its `KaniGrammar` to
+  the registry in `rust_prover_tools/kani_cli_grammar.py` (with `KANI_067` as
+  the model), add the version-named corpus directory under
+  `tests/fixtures/kani_logs/`, and add the release to `SUPPORTED_KANI_VERSIONS`
+  in `rust_prover_tools/kani_log`. Delete all three when the release leaves the
+  supported set. The registry's import-time check refuses a process whose
+  registered set differs from `SUPPORTED_KANI_VERSIONS`.
 - `expected.json` records the facts each log must yield and the decision it
   must reach. `decision_table.json` holds the precedence table as data, and the
   manifest files declare the harnesses the corpus run selected.
@@ -967,6 +997,196 @@ shared gates. Controlled child tests establish invocation and failure
 contracts, not full verifier compatibility. Linux x86_64 Kani 0.67.0 is the
 bounded initial qualification target; an upstream release that drops wrappers
 is unsupported.
+
+## Kani supervised harness execution
+
+The supervised layer answers a different question from installation and
+single-invocation execution: which exact harness is running, how much memory
+and time it is using, and why it stopped. Its modules divide that question by
+responsibility rather than by prover:
+
+- `rust_prover_tools.kani_cli_grammar` is the single registry of Kani
+  release grammars; see
+  [repository layout](repository-layout.md#module-responsibilities) for the
+  registry's contract and its import-time tie to `SUPPORTED_KANI_VERSIONS`.
+- `rust_prover_tools.kani_log` is the shared 0.67.0 grammar, report model,
+  reader, and reconciliation. Its grammar, model, reader, and corpus derive
+  from Combobulate at commit `9dd6e3c`; see
+  `rust_prover_tools/kani_log/ATTRIBUTION.md`. `parse_kani_log` parses whole
+  text and `parse_kani_log_lines` drives the same engine from a bounded line
+  source, so the live and offline paths cannot drift.
+- `rust_prover_tools.kani_inventory` resolves Cargo packages and targets,
+  scans Rust sources lexically for proofs, follows module declarations and
+  `#[path]`, and reads or writes the strict version-1 inventory document.
+  `select` chooses exact harnesses and composes the verifier argv.
+- `rust_prover_tools.kani_routes` defines `LegacyRoute`, `SnapshotRoute`, and
+  the `PreparedRoute` seam. Every harness command is derived from one prepared
+  route, so identity probes and the environment are not rebuilt per harness.
+- `rust_prover_tools.kani_qualification` validates one release installation,
+  builds its child environment, probes the compiler and verifier identities
+  once, and derives every harness command from that base. The legacy
+  `exec_kani` entry point keeps its stage order and delegates here.
+- `rust_prover_tools.kani_snapshot.run` exposes `prepare_snapshot_proof` and
+  `QualifiedSnapshotProof` so a supervised snapshot run reads one activation
+  and builds one proof environment.
+- `rust_prover_tools.supervision` is prover-neutral. Its protocols module
+  names every injectable seam: clocks, launchers, resource probes, cgroup
+  readers, interrupt sources, sleepers, and evidence sinks. `RunEnvironment`
+  composes the three values below, and
+  `rust_prover_tools.kani_harness_models.py` holds the request plus the
+  per-phase overrides a consumer passes explicitly
+  (`KaniPreparationDependencies` and `KaniExecutionDependencies`). The tests
+  substitute each through those protocols rather than patching the runner.
+- `rust_prover_tools.supervision.run_environment` names the injected
+  dependencies of one run in three purpose-shaped values:
+  `ExecutionEnvironment` holds the clock, launcher, resource probe, cgroup
+  reader, sleeper, adapter, and command builder; `EvidenceEnvironment` holds
+  the live sinks and the report writer; and `RunPolicyEnvironment` holds the
+  run-ID source, the optional interrupt source, and the cancellation probe. The
+  composition root supplies one of each, and a test replaces the value that
+  owns the seam it needs without reaching into the loop.
+- `rust_prover_tools.supervision.run_orchestrator` runs the expected inventory
+  in selection order through `SupervisedRun.execute`. It continues past a
+  prover failure, reports the attempt a signal or cancellation interrupted, and
+  records the remainder as `not-run`; accounting compares expected and observed
+  identities as multisets.
+- `rust_prover_tools.supervision.run_finalize` maps the accumulated
+  `RunLedger` to the typed `RunReport`: completeness, aggregate outcome, and the
+  `not-run` representation. It performs no I/O, so those rules are readable
+  without the orchestration that produced them.
+- `rust_prover_tools.supervision.run_journal` is the one collaborator that
+  writes a run's live records and publishes its final report. It retains the
+  first sink failure, publishes the completed report, and only then surfaces
+  that failure.
+- `rust_prover_tools.supervision.launch_command` describes the composed
+  invocation (`LaunchCommand`) and its environment in prover-neutral terms; a
+  `None` value removes an inherited variable, and `replace` selects replacement
+  over overlay.
+- `rust_prover_tools.supervision.launch_running` owns the `RunningHarness`
+  handle: it records only the first stop request, joins the child before
+  reporting, and turns the settled status into the typed launch result. It is
+  separate from the launcher that creates it.
+- `rust_prover_tools.supervision.memory_sink` is an in-memory JSONL sink that
+  renders exactly the records the file sink writes, for tests and programmatic
+  consumers.
+- `rust_prover_tools.supervision.formatting` bounds every emitted line and
+  keeps a shortened JSONL record valid JSON; it also renders the timestamps and
+  measurements a human and a machine both read.
+- `rust_prover_tools.supervision.resources` reads process-group and host memory
+  evidence from procfs and cgroupfs. Every read is best-effort and returns an
+  explained absence rather than raising or reporting a zero.
+- `rust_prover_tools.supervision.attempt` drives one attempt: it starts the
+  child, joins the monitor, and settles. `attempt_monitor` owns the sampling,
+  heartbeat, deadline, watchdog and interrupt loop; `attempt_state` holds the
+  pure reductions and the cancellation decision; `attempt_evidence` holds the
+  evidence and settlement records; `attempt_cgroup` reads the shared cgroup
+  evidence through a supplied reader. Each module keeps its own contract and
+  the supervisor only composes them.
+- `rust_prover_tools.supervision.report` renders the table and the report
+  document purely; `report_writer` is the one module that writes a report to
+  the filesystem, so a caller can inject a recording or failing writer.
+- `rust_prover_tools.supervision.sinks` owns the human and JSONL sinks;
+  `schema_fields`, `schema_values`, `schema_records`, and `schema` own the
+  strict JSONL and report contracts; `report` publishes the final document.
+- `rust_prover_tools.supervision.kani` and
+  `rust_prover_tools.supervision.kani_outcome` are the Kani adapter and its
+  outcome construction. They live in the supervision package because the
+  adapter seam is small and prover-neutral; a second prover adds a sibling
+  module rather than another package.
+- `rust_prover_tools.supervision.kani_facts` is `KaniLiveFacts` and
+  `KaniFactScanner`, the pure half of the observation seam. The scanner reads
+  the same grammar as the parser and never attributes a proof verdict, because
+  description prose can contain a verdict-shaped line; the parse supplies the
+  verdict.
+- `rust_prover_tools.supervision.kani_spool` is the I/O half: the `KaniSpool`
+  protocol and `TemporaryKaniSpool`, which owns one temporary log and releases
+  it on `close`.
+- `rust_prover_tools.supervision.kani_observer` composes the two. `observe()`
+  updates the scanner and writes only to an already-open spool; `finish()`
+  parses once and returns an immutable `KaniObservation` holding the facts, the
+  parsed log or the refusal reason, and the truncation flags. It never closes
+  the spool. `KaniAdapter.classify` reads only that observation, so it parses
+  nothing and owns no resources, and `AttemptSupervisor` closes the spool in a
+  `finally` at the attempt boundary. A spool that cannot be opened becomes an
+  explicit `ERROR` classification rather than an undeclared `OSError`.
+- `rust_prover_tools.kani_harness_run` is the composition root. It loads or
+  discovers the inventory, selects exact identities, qualifies one route,
+  composes and validates each argv, runs the supervisor, and returns a
+  `KaniHarnessRun`.
+- `rust_prover_tools.supervision.destinations` resolves evidence destinations
+  and refuses two roles that name one file, including symlink and hard-link
+  aliases. The rule needs filesystem identity, so it lives beside the adapters
+  and never inside the policy value object.
+- `rust_prover_tools.kani_destinations` is the CLI adapter between the
+  destination and policy flags and the filesystem: it validates the policy,
+  refuses two roles that name one file, refuses a JSONL or report destination
+  that is standard output, and opens the run's human and JSONL sinks on the
+  caller's `ExitStack`. It opens no report destination.
+- `rust_prover_tools.kani_diagnostics` is the library opener the CLI adapter
+  builds on. `prepare_jsonl_destination` is the explicit preparation step: it
+  completes a partial trailing record and returns the offset the sink starts at.
+  `open_destinations` only opens, taking that offset. The entry point is named
+  for what it does, `prepare_and_open_diagnostics`: it applies the alias rule,
+  prepares the JSONL destination, opens the sinks, and yields a caller-supplied
+  `Diagnostics` untouched, closing only what it opened. None of them opens the
+  report destination: `RunJournal` writes that through the injected
+  `ReportWriter` when `sinks.report_path` is set.
+- `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
+  `kani harnesses list` and `kani harnesses run`. `kani_harness_signal` owns
+  `SignalInterrupt` and handler installation, so the CLI module is only
+  registration and command flow.
+
+The Cuprum boundary is deliberately narrow. Only
+`rust_prover_tools.supervision.launcher`, `supervision.launch_pid`, and
+`supervision.pipe_drain` import Cuprum; `pipe_drain.command_for` is the single
+translation from the neutral `LaunchCommand` and `LaunchEnvironment` to
+`SafeCmd`, `ExecutionContext`, and an environment mode. Every other supervision
+module stays prover-neutral and Cuprum-free, so a second prover, or a different
+process backend, replaces the launcher without touching the loop.
+
+The adapter seam is deliberately small. A prover adapter supplies an observer
+factory and a classifier:
+
+```python
+class HarnessAdapter(Protocol[ObservationT]):
+    def observer(self, spec: HarnessSpec) -> LineObserver[ObservationT]: ...
+    def classify(
+        self, evidence: AttemptEvidence, observation: ObservationT
+    ) -> HarnessClassification: ...
+```
+
+The observer accumulates facts while output streams and its `finish()` returns
+the immutable observation; the classifier receives the supervisor's termination
+evidence and that observation, and nothing else. Neither reimplements timing,
+measurement, evidence, or accounting, and the classifier owns no resource.
+
+### Deterministic tests
+
+The supervision suite uses a virtual clock, a virtual sleeper that advances it,
+a scripted launcher, scripted resource and cgroup probes, and an in-memory
+JSONL sink. No supervision test outside the real-process witness sleeps. The
+launcher's scripted child emits its lines synchronously and then either settles
+or waits to be stopped, so an immediate completion cannot race a monitor tick.
+
+The real-process witness proves two properties doubles cannot: a stop reaches
+the whole owned process group, and a silent child still produces heartbeats.
+Each witness runs in its own interpreter under an independent deadline, because
+a settlement that suppresses cancellation can otherwise block interpreter
+shutdown. The parent kills the recorded process group and requires the child's
+process entry to disappear, so the host must provide an init or subreaper that
+reaps orphans. The live 0.67.0 fixture test is opt-in through `RPT_LIVE_KANI=1`
+and exercises one passing proof, one `#[path]` proof, and one deliberately
+failing proof.
+
+### Qualify-once rationale
+
+A run must not observe one installation, generation, environment, or grammar
+while launching another. `qualify_kani_installation` and
+`prepare_snapshot_proof` therefore perform their validation, identity probes,
+activation read, and environment construction once; every harness command is
+derived from the result. A pointer switch after preparation cannot move the run
+to another generation, and a concurrent snapshot repair cannot change the
+launcher between harnesses.
 
 ## Kani snapshot producer recipe
 

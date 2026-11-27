@@ -46,6 +46,7 @@ from rust_prover_tools.kani import (
     install_kani,
 )
 from rust_prover_tools.kani_exec_cli import kani_exec
+from rust_prover_tools.kani_harness_cli import harnesses_app
 from rust_prover_tools.kani_log_cli import kani_analyse_log
 from rust_prover_tools.kani_snapshot_cli import run_app, snapshot_app
 from rust_prover_tools.trust_audit_cli import audit_trust
@@ -75,13 +76,9 @@ verus_app: cyclopts.App = App(
     "verus",
     help="Manage Verus verifier installation and proof execution",
 )
-z3_app: cyclopts.App = App(
-    "z3",
-    help="Install the pinned Z3 solver used by Verus",
-)
+z3_app: cyclopts.App = App("z3", help="Install the pinned Z3 solver used by Verus")
 audit_app: cyclopts.App = App(
-    "audit",
-    help="Report what the sources of a proof ask a verifier to accept",
+    "audit", help="Report what a proof's sources ask a verifier to accept"
 )
 
 
@@ -366,6 +363,7 @@ def install_solver(
 
 
 kani_app.command(kani_exec, name="exec")
+kani_app.command(harnesses_app, name="harnesses")
 kani_app.command(kani_analyse_log, name="analyse-log", config=())
 kani_app.command(run_app, name="run")
 kani_app.command(snapshot_app, name="snapshot")
