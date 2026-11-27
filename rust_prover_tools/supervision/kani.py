@@ -50,6 +50,7 @@ from rust_prover_tools.supervision.kani_outcome import (
     classification,
     classify_log,
     observe,
+    proof_verdict,
 )
 from rust_prover_tools.supervision.models import (
     ExecutionStatus,
@@ -119,10 +120,18 @@ class KaniAdapter:
         spool.
         """
         observed = observe(evidence, observation.facts)
-        if observation.facts_truncated:
-            # A dropped live record makes the retained verdicts ambiguous, and
-            # a stop returns before the parse, so this must precede the stop.
+        if observation.facts_truncated or observation.log_truncated:
+            # A dropped live record or a shortened log makes the retained
+            # verdict ambiguous. This precedes the stop so a truncated stop
+            # reports UNKNOWN as well.
             observed = dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
+        elif observation.log is not None and len(observation.log.blocks) == 1:
+            # A stop outranks the status but not a verdict the retained log
+            # states. `finish` parses before classification, so a stopped
+            # attempt can carry one.
+            observed = dc.replace(
+                observed, verdict=proof_verdict(observation.log.blocks[0])
+            )
         stopped = _stop_status(evidence, observed)
         if stopped is not None:
             return stopped

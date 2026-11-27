@@ -346,12 +346,13 @@ def test_an_unregistered_banner_becomes_typed_evidence() -> None:
     assert "0.68.0" in classification.detail
 
 
-def test_a_stopped_harness_does_not_claim_an_unparsed_verdict() -> None:
-    """A timeout reports its own status and leaves the verdict unknown.
+def test_a_stopped_harness_reports_the_verdict_its_log_states() -> None:
+    """A timeout reports its own status but keeps the parsed verdict.
 
     Kani escapes nothing inside a description, so a live verdict can be prose.
-    The verdict is therefore attributed only from a parsed log, and a stopped
-    attempt reports `UNKNOWN` rather than a claim the supervisor cannot check.
+    The verdict is therefore attributed only from a parsed log: a stopped
+    attempt whose log was retained reports the verdict that log states, and
+    one whose log was truncated or unparsed reports `UNKNOWN`.
     """
     identity = "harnesses::verified"
     evidence = _evidence(identity, stop=StopReason.TIMEOUT, exit_code=None)
@@ -360,7 +361,7 @@ def test_a_stopped_harness_does_not_claim_an_unparsed_verdict() -> None:
     classification = adapter.classify(evidence, _finish(_observer(identity)))
 
     assert classification.status is ExecutionStatus.TIMED_OUT
-    assert classification.proof_verdict is ProofVerdict.UNKNOWN
+    assert classification.proof_verdict is ProofVerdict.PASSED
 
 
 def test_a_nonzero_exit_with_no_output_is_not_a_selection_diagnosis() -> None:
@@ -1291,5 +1292,28 @@ def test_a_stopped_run_does_not_credit_a_fake_selection_after_results() -> None:
     )
 
     assert classification.status is ExecutionStatus.TIMED_OUT
-    assert classification.observed is not None
-    assert "fake" not in classification.observed
+    assert classification.observed == ("alpha::harnesses::verified",)
+
+
+def test_a_truncated_stopped_attempt_reports_no_verdict() -> None:
+    """A shortened log supplies no verdict, even though the stop still wins."""
+    log = _log("verified", "harnesses::verified")
+    observer = KaniObserver(max_log_bytes=64)
+    clock = VirtualClock()
+    for line in log:
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=line,
+                timestamp_utc=clock.now(),
+                elapsed_seconds=0.0,
+            )
+        )
+
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::verified", stop=StopReason.TIMEOUT, exit_code=None),
+        _finish(observer),
+    )
+
+    assert classification.status is ExecutionStatus.TIMED_OUT
+    assert classification.proof_verdict is ProofVerdict.UNKNOWN
