@@ -109,7 +109,7 @@ def test_the_offset_query_never_writes(tmp_path: Path) -> None:
 def test_a_jsonl_destination_may_not_alias_the_human_stream(
     tmp_path: Path,
 ) -> None:
-    """The fallback human stream and the JSONL file cannot be one handle."""
+    """The effective human stream and the JSONL file cannot be one handle."""
     path = tmp_path / "evidence.jsonl"
     path.touch()
     config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
@@ -120,6 +120,42 @@ def test_a_jsonl_destination_may_not_alias_the_human_stream(
         prepare_and_open_diagnostics(config, None, human_stream=handle),
     ):
         pass
+
+
+def test_a_report_destination_may_not_alias_the_human_stream(
+    tmp_path: Path,
+) -> None:
+    """The effective human stream and the report file cannot be one handle."""
+    path = tmp_path / "report.json"
+    path.touch()
+    config = SupervisionConfig(sinks=DiagnosticSinks(report_path=path))
+
+    with (
+        path.open("a", encoding="utf-8") as handle,
+        pytest.raises(ValueError, match="report destination"),
+        prepare_and_open_diagnostics(config, None, human_stream=handle),
+    ):
+        pass
+
+
+def test_a_configured_human_path_replaces_the_fallback_stream(
+    tmp_path: Path,
+) -> None:
+    """A human path wins, so an aliased fallback stream is never used."""
+    path = tmp_path / "report.json"
+    path.touch()
+    config = SupervisionConfig(
+        sinks=DiagnosticSinks(
+            human_path=tmp_path / "human.log",
+            report_path=path,
+        )
+    )
+
+    with (
+        path.open("a", encoding="utf-8") as handle,
+        prepare_and_open_diagnostics(config, None, human_stream=handle) as opened,
+    ):
+        assert opened.human is not None
 
 
 def test_a_provided_diagnostics_still_validates_the_configured_sinks(

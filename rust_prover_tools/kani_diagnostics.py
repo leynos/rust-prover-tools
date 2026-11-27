@@ -75,8 +75,9 @@ def prepare_and_open_diagnostics(
     Raises
     ------
     ValueError
-        Two configured destinations name one file, or the fallback human
-        stream and the JSONL destination are the same file.
+        Two configured destinations name one file, or the effective human
+        stream (used only when no human path is configured) and the JSONL or
+        report destination are the same file.
     OSError
         The JSONL destination cannot be read or repaired.
     """
@@ -88,9 +89,16 @@ def prepare_and_open_diagnostics(
     if provided is not None:
         yield provided
         return
+    if human_stream is not None and config.sinks.human_path is None:
+        # The stream is the human sink only when no path replaces it. It may
+        # not also carry another role's output in the same handle.
+        for path, role in (
+            (config.sinks.jsonl_path, "JSONL"),
+            (config.sinks.report_path, "report"),
+        ):
+            if path is not None:
+                _refuse_stream_alias(human_stream, path, role)
     jsonl_path = config.sinks.jsonl_path
-    if human_stream is not None and jsonl_path is not None:
-        _refuse_stream_alias(human_stream, jsonl_path)
     jsonl_start_offset = (
         0 if jsonl_path is None else prepare_jsonl_destination(jsonl_path)
     )
@@ -113,7 +121,7 @@ _NO_STREAM_IDENTITY: typ.Final[tuple[type[BaseException], ...]] = (
 )
 
 
-def _refuse_stream_alias(stream: typ.TextIO, path: Path) -> None:
+def _refuse_stream_alias(stream: typ.TextIO, path: Path, role: str) -> None:
     """Refuse a JSONL destination that is also the human fallback stream.
 
     A caller that passes its standard output as the human fallback and the
@@ -136,7 +144,7 @@ def _refuse_stream_alias(stream: typ.TextIO, path: Path) -> None:
     except OSError:
         return
     if (stream_stat.st_dev, stream_stat.st_ino) == (target.st_dev, target.st_ino):
-        msg = f"the human stream already names the JSONL destination: {path}"
+        msg = f"the human stream already names the {role} destination: {path}"
         raise ValueError(msg)
 
 
