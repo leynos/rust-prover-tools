@@ -27,8 +27,18 @@ _RUNNER = Path(__file__).with_name("supervision_witness_runner.py")
 
 
 def _start_case(name: str, tmp_path: Path) -> subprocess.Popen[str]:
-    """Start one witness case in its own interpreter and session."""
-    return subprocess.Popen(
+    """Start one witness case in its own session and record that session.
+
+    The runner is the session leader, so its pid is a group the parent owns
+    from the instant the process exists. Writing it before the runner has
+    published anything closes the window in which a setup failure would leave
+    nothing for `_reap_recorded_group` to kill.
+    """
+    # The caller owns the handle and its pipes; closing them is the cleanup
+    # path's job, not a context manager's, because a failed case may still be
+    # draining output when the test decides to abandon it.
+    # pylint: disable-next=consider-using-with
+    process = subprocess.Popen(
         [sys.executable, "-I", str(_RUNNER), name, str(tmp_path)],
         cwd=str(tmp_path),
         stdout=subprocess.PIPE,
@@ -36,6 +46,15 @@ def _start_case(name: str, tmp_path: Path) -> subprocess.Popen[str]:
         text=True,
         start_new_session=True,
     )
+    _write_atomically(tmp_path / "runner.pgid", process.pid)
+    return process
+
+
+def _write_atomically(path: Path, value: int) -> None:
+    """Publish one identifier without ever exposing a partial value."""
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(str(value), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _run_case(
@@ -95,16 +114,29 @@ def _abandon_if_running(process: subprocess.Popen[str], tmp_path: Path) -> None:
 
 
 def _reap_recorded_group(tmp_path: Path) -> None:
-    """Kill and confirm the process group a failed case recorded."""
-    pgid_file = tmp_path / "pgid"
-    if not pgid_file.exists():
-        return
-    pgid = int(pgid_file.read_text(encoding="utf-8"))
-    if pgid <= 0:
-        return
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(pgid, signal.SIGKILL)
-    _assert_gone(pgid, "the failed case's child still has a process entry")
+    """Kill and confirm every process group a case recorded.
+
+    A case records its own child's group once that child exists. The parent
+    additionally records the runner's session before the case can publish
+    anything, so a failure during setup still has a group to kill.
+    """
+    for name in ("pgid", "runner.pgid"):
+        path = tmp_path / name
+        if not path.exists():
+            continue
+        pgid = int(path.read_text(encoding="utf-8"))
+        if pgid <= 0:
+            continue
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pgid, signal.SIGKILL)
+        _assert_gone(pgid, f"the failed case's {name} still has a process entry")
+    for name in ("child.pid", "grandchild.pid", "stuck.pid"):
+        path = tmp_path / name
+        if path.exists():
+            _assert_gone(
+                int(path.read_text(encoding="utf-8")),
+                f"the failed case's {name} still has a process entry",
+            )
 
 
 def _recorded_pid(tmp_path: Path, name: str) -> int:
@@ -251,6 +283,23 @@ def test_a_stuck_settlement_cannot_outlive_the_parent_deadline(
     assert process.returncode is not None, "the parent did not reap the runner"
 
 
+def test_a_setup_failure_leaves_no_child_behind(tmp_path: Path) -> None:
+    """A case that dies before recording its group still cannot orphan a child.
+
+    The case starts a real SIGTERM-ignoring child in its own session and then
+    fails outright, so the only record of that child is the file it wrote. The
+    parent must kill the runner's session, find the child through its PID file,
+    and leave nothing alive.
+    """
+    result = _run_case("setup_failure", tmp_path)
+
+    assert result.returncode != 0, "the case was supposed to fail"
+    _assert_gone(
+        _recorded_pid(tmp_path, "stuck.pid"),
+        "the failed case's child survived the parent's cleanup",
+    )
+
+
 def test_a_child_left_running_by_a_hung_witness_is_stopped_and_reaped(
     tmp_path: Path,
 ) -> None:
@@ -265,7 +314,7 @@ def test_a_child_left_running_by_a_hung_witness_is_stopped_and_reaped(
     """
     process = _start_case("deadline_reap", tmp_path)
     try:
-        pid = _wait_for_pid(tmp_path / "pgid")
+        pid = _wait_for_pid(tmp_path / "stuck.pid")
         assert is_running(pid), "the child exited before the parent acted"
         with pytest.raises(subprocess.TimeoutExpired):
             _collect(process, tmp_path, timeout=5.0)

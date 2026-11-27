@@ -282,12 +282,14 @@ presented as proof that the kernel killed the process for memory. When the
 cgroup evidence provides an `oom_kill` counter delta, the delta is recorded
 separately in the report and in the detail text.
 
-A stop outranks the status, but not evidence the verifier already produced: a
-harness that reported a verdict before the supervisor ended it keeps that
-verdict in `proof_verdict` while its status records the stop. A stop the
-supervisor itself causes, because its monitor failed or its caller cancelled
-it, is recorded as `interrupted`, and that attempt keeps its diagnostic
-reference and emits its own finish record.
+A stop outranks the status. A stopped harness keeps the verdict the parser
+attributes from its retained log, but the live scanner never supplies one:
+description prose can contain a verdict-shaped line, so only the parse decides
+a verdict. A complete log parsed before the stop therefore reports its verdict
+in `proof_verdict`, and a log that was truncated or never parsed reports
+`UNKNOWN`. A stop the supervisor itself causes, because its monitor failed or
+its caller cancelled it, is recorded as `interrupted`, and that attempt keeps
+its diagnostic reference and emits its own finish record.
 
 A child that exits nonzero without selection evidence is classified
 `exit-nonzero`, not `no-match`: a banner proves only that the verifier started.
@@ -533,17 +535,19 @@ live prover, real sleeps, or a real installation.
 A prover adapter implements two methods:
 
 ```python
-class HarnessAdapter(Protocol):
-    def observer(self, spec: HarnessSpec) -> LineObserver: ...
+class HarnessAdapter(Protocol[ObservationT]):
+    def observer(self, spec: HarnessSpec) -> LineObserver[ObservationT]: ...
     def classify(
-        self, evidence: AttemptEvidence, observer: LineObserver
+        self, evidence: AttemptEvidence, observation: ObservationT
     ) -> HarnessClassification: ...
 ```
 
 The observer receives every decoded line as it arrives and accumulates whatever
-facts the classifier needs, bounded by the adapter. The classifier receives the
-supervisor's termination evidence and returns a status, a proof verdict, a
-bounded detail, and the last recognized progress line.
+facts the classifier needs, bounded by the adapter; its `finish()` returns the
+immutable observation. The classifier receives the supervisor's termination
+evidence and that observation, and returns a status, a proof verdict, a bounded
+detail, and the last recognized progress line. It parses nothing and owns no
+resource.
 
 `KaniAdapter` is the reference implementation. It checks the registered grammar
 before observation, feeds the shared 0.67.0 reader, and applies the precedence

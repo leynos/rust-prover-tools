@@ -26,7 +26,6 @@ from rust_prover_tools.unittests.supervision_doubles import spec
 from tests.supervision_witness_cases_support import (
     _case,
     _failing_callback_script,
-    _write_pgid,
     record_group,
 )
 from tests.supervision_witness_support import SETTLE_SECONDS, settle_within
@@ -150,7 +149,12 @@ async def _case_sigterm_reap(tmp_path: Path) -> None:
 
 
 def _start_stubborn_child(tmp_path: Path) -> subprocess.Popen[bytes]:
-    """Start a SIGTERM-ignoring child in its own session and record its group."""
+    """Start a SIGTERM-ignoring child inside the runner's own session.
+
+    The child deliberately does not create a session of its own. The parent
+    records the runner's session before the case runs, so it can kill this
+    child even if the case dies before publishing anything about it.
+    """
     pid_file = tmp_path / "stuck.pid"
     script = tmp_path / "stubborn.py"
     script.write_text(
@@ -166,19 +170,18 @@ def _start_stubborn_child(tmp_path: Path) -> subprocess.Popen[bytes]:
     # The child must outlive this call so the parent's deadline has something
     # real to stop, so the handle is deliberately not closed here. It gets no
     # inherited stdout or stderr: holding the runner's pipe would keep the
-    # parent's read waiting for EOF after the runner itself is gone.
+    # parent's read waiting for EOF after the runner itself is gone. It stays
+    # in the runner's session, which the parent records before any case runs.
     # pylint: disable-next=consider-using-with
     child = subprocess.Popen(
         [sys.executable, "-I", str(script)],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
     )
     deadline = time.monotonic() + 10
     while not pid_file.exists() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert pid_file.exists(), "the stubborn child never started"
-    _write_pgid(tmp_path / "pgid", child.pid)
     return child
 
 
@@ -234,3 +237,46 @@ async def _case_deadline_reap(tmp_path: Path) -> None:
     """
     _start_stubborn_child(tmp_path)
     await asyncio.Event().wait()
+
+
+@_case("setup_failure")
+def _case_setup_failure(tmp_path: Path) -> None:
+    """Start a real child and then fail before publishing its group.
+
+    This is the setup window a hung parent deadline must survive: a child
+    exists, in its own session, but no case-recorded group does. The parent's
+    own runner-session record is the only thing that can clean it up.
+    """
+    _start_stubborn_child_without_group(tmp_path)
+    msg = "the case failed during setup"
+    raise AssertionError(msg)
+
+
+def _start_stubborn_child_without_group(tmp_path: Path) -> subprocess.Popen[bytes]:
+    """Start the stubborn child, deliberately recording no group for it."""
+    pid_file = tmp_path / "stuck.pid"
+    script = tmp_path / "stubborn.py"
+    script.write_text(
+        "import os, pathlib, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"p = pathlib.Path({str(pid_file)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    # The child stays in the runner's session, which the parent recorded
+    # before this case started, so the parent can kill it even though this
+    # case never publishes a group of its own.
+    # pylint: disable-next=consider-using-with
+    child = subprocess.Popen(
+        [sys.executable, "-I", str(script)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 10
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert pid_file.exists(), "the stubborn child never started"
+    return child

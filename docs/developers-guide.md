@@ -1138,16 +1138,17 @@ The adapter seam is deliberately small. A prover adapter supplies an observer
 factory and a classifier:
 
 ```python
-class HarnessAdapter(Protocol):
-    def observer(self, spec: HarnessSpec) -> LineObserver: ...
+class HarnessAdapter(Protocol[ObservationT]):
+    def observer(self, spec: HarnessSpec) -> LineObserver[ObservationT]: ...
     def classify(
-        self, evidence: AttemptEvidence, observer: LineObserver
+        self, evidence: AttemptEvidence, observation: ObservationT
     ) -> HarnessClassification: ...
 ```
 
-The observer accumulates facts while output streams; the classifier receives
-the supervisor's termination evidence. Neither reimplements timing,
-measurement, evidence, or accounting.
+The observer accumulates facts while output streams and its `finish()` returns
+the immutable observation; the classifier receives the supervisor's termination
+evidence and that observation, and nothing else. Neither reimplements timing,
+measurement, evidence, or accounting, and the classifier owns no resource.
 
 ### Deterministic tests
 
