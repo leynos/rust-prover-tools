@@ -1088,10 +1088,22 @@ responsibility rather than by prover:
   outcome construction. They live in the supervision package because the
   adapter seam is small and prover-neutral; a second prover adds a sibling
   module rather than another package.
-- `rust_prover_tools.supervision.kani_observer` is `KaniObserver` and
-  `KaniLiveFacts`. The observer records live selection and progress facts and
-  spools the report; it never attributes a proof verdict, because description
-  prose can contain a verdict-shaped line. The parse supplies the verdict.
+- `rust_prover_tools.supervision.kani_facts` is `KaniLiveFacts` and
+  `KaniFactScanner`, the pure half of the observation seam. The scanner reads
+  the same grammar as the parser and never attributes a proof verdict, because
+  description prose can contain a verdict-shaped line; the parse supplies the
+  verdict.
+- `rust_prover_tools.supervision.kani_spool` is the I/O half: the `KaniSpool`
+  protocol and `TemporaryKaniSpool`, which owns one temporary log and releases
+  it on `close`.
+- `rust_prover_tools.supervision.kani_observer` composes the two. `observe()`
+  updates the scanner and writes only to an already-open spool; `finish()`
+  parses once and returns an immutable `KaniObservation` holding the facts, the
+  parsed log or the refusal reason, and the truncation flags. It never closes
+  the spool. `KaniAdapter.classify` reads only that observation, so it parses
+  nothing and owns no resources, and `AttemptSupervisor` closes the spool in a
+  `finally` at the attempt boundary. A spool that cannot be opened becomes an
+  explicit `ERROR` classification rather than an undeclared `OSError`.
 - `rust_prover_tools.kani_harness_run` is the composition root. It loads or
   discovers the inventory, selects exact identities, qualifies one route,
   composes and validates each argv, runs the supervisor, and returns a
@@ -1147,8 +1159,13 @@ or waits to be stopped, so an immediate completion cannot race a monitor tick.
 
 The real-process witness proves two properties doubles cannot: a stop reaches
 the whole owned process group, and a silent child still produces heartbeats.
-The live 0.67.0 fixture test is opt-in through `RPT_LIVE_KANI=1` and exercises
-one passing proof, one `#[path]` proof, and one deliberately failing proof.
+Each witness runs in its own interpreter under an independent deadline, because
+a settlement that suppresses cancellation can otherwise block interpreter
+shutdown. The parent kills the recorded process group and requires the child's
+process entry to disappear, so the host must provide an init or subreaper that
+reaps orphans. The live 0.67.0 fixture test is opt-in through `RPT_LIVE_KANI=1`
+and exercises one passing proof, one `#[path]` proof, and one deliberately
+failing proof.
 
 ### Qualify-once rationale
 

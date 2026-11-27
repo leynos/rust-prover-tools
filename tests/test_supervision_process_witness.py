@@ -102,11 +102,38 @@ def _recorded_pid(tmp_path: Path, name: str) -> int:
 
 
 def _assert_gone(pid: int, reason: str) -> None:
-    """Require a process entry to disappear, a zombie included."""
+    """Require a process entry to disappear, a zombie included.
+
+    A zombie still has a `/proc` entry, so requiring its absence proves the
+    entry was waited for rather than merely signalled. The runner is reaped by
+    this process, which started it; a child the runner left behind is reaped
+    by whatever adopted it, so the host must provide an init or subreaper that
+    reaps orphans. A zombie that outlives the whole deadline means no such
+    reaper exists, and the failure says so rather than passing a weaker
+    liveness check. A zombie seen earlier is only transient: an orphan is a
+    zombie for the moment between exiting and its adopter's `wait`.
+    """
     deadline = time.monotonic() + 10
+    last_state = ""
     while time.monotonic() < deadline and Path("/proc", str(pid)).exists():
+        try:
+            last_state = (
+                Path("/proc", str(pid), "stat")
+                .read_text(encoding="utf-8")
+                .rsplit(")", 1)[-1]
+                .strip()[:1]
+            )
+        except OSError:
+            return
         time.sleep(0.02)
-    assert not Path("/proc", str(pid)).exists(), reason
+    if Path("/proc", str(pid)).exists():
+        suffix = (
+            " (an unreaped zombie: no adopter is reaping orphans)"
+            if (last_state == "Z")
+            else ""
+        )
+        msg = f"{reason}{suffix}"
+        raise AssertionError(msg)
 
 
 def _wait_for_pid(path: Path, *, timeout: float = 10.0) -> int:
@@ -116,6 +143,14 @@ def _wait_for_pid(path: Path, *, timeout: float = 10.0) -> int:
         time.sleep(0.02)
     assert path.exists(), "the case never recorded a child"
     return int(path.read_text(encoding="utf-8"))
+
+
+def _wait_for_path(path: Path, *, timeout: float = 10.0) -> None:
+    """Require a case to publish a marker shortly after it is started."""
+    deadline = time.monotonic() + timeout
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert path.exists(), f"the case never published {path.name}"
 
 
 def test_a_real_stop_reaches_the_whole_group_and_heartbeats_fire(
@@ -186,6 +221,7 @@ def test_a_stuck_settlement_cannot_outlive_the_parent_deadline(
     proved separately below.
     """
     process = _start_case("stuck_settlement", tmp_path)
+    _wait_for_path(tmp_path / "settled.marker")
     with pytest.raises(subprocess.TimeoutExpired):
         _collect(process, tmp_path, timeout=5.0)
 

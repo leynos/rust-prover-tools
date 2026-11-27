@@ -154,9 +154,12 @@ def _start_stubborn_child(tmp_path: Path) -> subprocess.Popen[bytes]:
     pid_file = tmp_path / "stuck.pid"
     script = tmp_path / "stubborn.py"
     script.write_text(
-        "import os, signal, time\n"
+        "import os, pathlib, signal, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        f"p = pathlib.Path({str(pid_file)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
         "time.sleep(120)\n",
         encoding="utf-8",
     )
@@ -187,7 +190,6 @@ async def _case_stuck_settlement(tmp_path: Path) -> None:
     condition the helper must bound. This case proves the helper's own
     deadline; the parent's cleanup is proved separately by `deadline_reap`.
     """
-    del tmp_path
 
     class _StuckHandle:
         """A handle whose settlement suppresses cancellation forever."""
@@ -206,8 +208,18 @@ async def _case_stuck_settlement(tmp_path: Path) -> None:
                 except asyncio.CancelledError:
                     continue
 
-    with contextlib.suppress(AssertionError):
+    try:
         await settle_within(_StuckHandle(), deadline=0.5)
+    except AssertionError:
+        # The helper has now refused to settle and escalated; publish that
+        # fact so the parent can distinguish this path from an early crash.
+        marker = tmp_path / "settled.marker"
+        temporary = marker.with_name(f"{marker.name}.tmp")
+        temporary.write_text("settled", encoding="utf-8")
+        temporary.replace(marker)
+    else:
+        msg = "settle_within returned without reporting the stuck settlement"
+        raise AssertionError(msg)
     # Keep the interpreter alive so the runner's own watchdog must end it.
     await asyncio.Event().wait()
 
