@@ -105,6 +105,9 @@ scheduled trigger stays disabled.
   job: stop and diagnose rather than weakening a gate.
 - Hosted budget: at most one non-publishing hosted build and one warm-cache
   repeat for this milestone. A second full build needs a recorded decision.
+  Spending it, as D10 records: run `45067145476` predates D6a, so its manifest
+  carries a raw-byte component digest no consumer can satisfy, and its release
+  artefacts cannot become the corrected evidence EP-M5-D requires.
 - Ambiguity: if the planned `kani-snapshot-smoke` Makefile target name
   conflicts with the shipped dispatch target, record the conflict and use a
   distinct consumer target rather than silently renaming shipped behaviour.
@@ -431,6 +434,16 @@ only entries in scope.
   total plus about 10 percent, and no milestone, requirement or acceptance
   criterion changes. Date/Author: 2026-11-26, agent; recorded for the user's
   review in this draft.
+- D10. Decision: spend the recorded second hosted build on a fresh
+  non-publishing dispatch from trusted `main` (`85421417`), then verify it with
+  `make kani-snapshot-verify`. Rationale: EP-M5-D needs a release whose
+  manifest a consumer can accept, and the only hosted artefacts that exist come
+  from run `45067145476`, which predates D6a and therefore records a raw-byte
+  component digest no install can satisfy. That build also predates the
+  consumer-profile measurement fix, so re-verifying it would prove nothing
+  about the code now on `main`. The dispatch uses `publish=false`, so it
+  creates no tag and no release; the artefacts are evidence only. Date/Author:
+  2026-11-26, agent; recorded for the user's review in this draft.
 - D6. **Approved 2026-11-23 as D6a. Implemented.** The design's
   D4 and manifest schema v1 bind a toolchain to `rustup_components_sha256`, a
   SHA-256 of the exact bytes of `<toolchain>/lib/rustlib/components`. Rustup
