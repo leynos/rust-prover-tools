@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
-import typing as typ
+from pathlib import Path  # ruff: ignore[typing-only-standard-library-import]
+
+import pytest
 
 from rust_prover_tools.kani_diagnostics import (
     open_destinations,
@@ -11,15 +13,14 @@ from rust_prover_tools.kani_diagnostics import (
     prepare_jsonl_destination,
 )
 from rust_prover_tools.supervision import (
+    Diagnostics,
     DiagnosticSinks,
     JsonlSink,
+    MemorySink,
     SupervisionConfig,
     jsonl_next_offset,
 )
 from rust_prover_tools.unittests.supervision_doubles import unwritten
-
-if typ.TYPE_CHECKING:
-    from pathlib import Path
 
 #: A JSONL record whose last byte is not a line boundary.
 _PARTIAL = b'{"record": "output"}'
@@ -103,3 +104,37 @@ def test_the_offset_query_never_writes(tmp_path: Path) -> None:
     assert path.read_bytes() == _PARTIAL
     assert jsonl_next_offset(missing) == 0
     assert unwritten(missing), "the query created the destination"
+
+
+def test_a_jsonl_destination_may_not_alias_the_human_stream(
+    tmp_path: Path,
+) -> None:
+    """The fallback human stream and the JSONL file cannot be one handle."""
+    path = tmp_path / "evidence.jsonl"
+    path.touch()
+    config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
+
+    with (
+        path.open("a", encoding="utf-8") as handle,
+        pytest.raises(ValueError, match="human stream"),
+        prepare_and_open_diagnostics(config, None, human_stream=handle),
+    ):
+        pass
+
+
+def test_a_provided_diagnostics_still_validates_the_configured_sinks(
+    tmp_path: Path,
+) -> None:
+    """An override cannot hide two configured roles naming one file."""
+    shared = tmp_path / "evidence.jsonl"
+    shared.touch()
+    config = SupervisionConfig(
+        sinks=DiagnosticSinks(jsonl_path=shared, report_path=shared)
+    )
+    provided = Diagnostics(jsonl=MemorySink())
+
+    with (
+        pytest.raises(ValueError, match="distinct"),
+        prepare_and_open_diagnostics(config, provided),
+    ):
+        pass

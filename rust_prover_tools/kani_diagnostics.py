@@ -15,6 +15,7 @@ file, and this module neither closes nor flushes what it did not open.
 from __future__ import annotations
 
 import contextlib
+import os
 import typing as typ
 
 from rust_prover_tools.supervision import (
@@ -74,19 +75,22 @@ def prepare_and_open_diagnostics(
     Raises
     ------
     ValueError
-        Two configured destinations name one file.
+        Two configured destinations name one file, or the fallback human
+        stream and the JSONL destination are the same file.
     OSError
         The JSONL destination cannot be read or repaired.
     """
-    if provided is not None:
-        yield provided
-        return
     require_distinct_destinations(
         human_path=config.sinks.human_path,
         jsonl_path=config.sinks.jsonl_path,
         report_path=config.sinks.report_path,
     )
+    if provided is not None:
+        yield provided
+        return
     jsonl_path = config.sinks.jsonl_path
+    if human_stream is not None and jsonl_path is not None:
+        _refuse_stream_alias(human_stream, jsonl_path)
     jsonl_start_offset = (
         0 if jsonl_path is None else prepare_jsonl_destination(jsonl_path)
     )
@@ -98,6 +102,33 @@ def prepare_and_open_diagnostics(
             max_line_bytes=config.max_line_bytes,
             jsonl_start_offset=jsonl_start_offset,
         )
+
+
+def _refuse_stream_alias(stream: typ.TextIO, path: Path) -> None:
+    """Refuse a JSONL destination that is also the human fallback stream.
+
+    A caller that passes its standard output as the human fallback and the
+    same file as the JSONL destination would interleave two grammars in one
+    handle. A stream with no descriptor, such as a capture object, has no
+    identity to compare and is left alone.
+    """
+    try:
+        fileno = stream.fileno()
+    except (AttributeError, ValueError):
+        return
+    try:
+        stream_stat = os.fstat(fileno)
+    except OSError:
+        return
+    try:
+        target = path.stat()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+    if (stream_stat.st_dev, stream_stat.st_ino) == (target.st_dev, target.st_ino):
+        msg = f"the human stream already names the JSONL destination: {path}"
+        raise ValueError(msg)
 
 
 def prepare_jsonl_destination(path: Path) -> int:

@@ -16,7 +16,10 @@ run = run_harnesses(
     KaniHarnessRunOptions(
         repo_root=Path("."),
         packages=("cuprum-native-io",),
-        route=LegacyRoute(installation=Path.home() / ".kani" / "kani-0.67.0"),
+        route=LegacyRoute(
+            installation=Path.home() / ".kani" / "kani-0.67.0",
+            cwd=Path("."),
+        ),
     )
 )
 print(run.report.passed)
