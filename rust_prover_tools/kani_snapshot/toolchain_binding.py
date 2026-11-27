@@ -7,6 +7,9 @@ records the digest of the installed compiler, of the extracted libraries the
 binary loads, and of the rustup component list. This module compares the
 installed tree with those records before the probe runs.
 
+Rustup writes `lib/rustlib/components` in nondeterministic component-completion
+order, so the recorded digest is of the canonical sorted names, not the file's
+raw bytes. Any change to the set is still detected; a reordering is not.
 Rustup component artifacts are recorded with their URLs, sizes and digests for
 audit and reproducibility. They are not re-derived here: installation never
 re-downloads a component, so there are no downloaded bytes to compare. The
@@ -22,6 +25,9 @@ import typing as typ
 
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.components_file import (
+    components_digest_of_file,
+)
 from rust_prover_tools.kani_snapshot.progress import Progress, as_checkpoint
 from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
 from rust_prover_tools.kani_snapshot.toolchain_name import is_safe_toolchain_name
@@ -69,24 +75,39 @@ def toolchain_root(runtime: SnapshotRuntime) -> Path:
         rustup home escapes the generation, or the resolved toolchain escapes
         the private rustup home.
     """
-    name = runtime.toolchain
+    name = _require_safe_name(runtime.toolchain)
+    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
+    home = _require_private_home(runtime, generation)
+    root = home / "toolchains" / name
+    _require_contained_toolchain(root, home)
+    return root
+
+
+def _require_safe_name(name: str) -> str:
+    """Require one plain toolchain name and return it."""
     if not is_safe_toolchain_name(name):
         msg = f"snapshot toolchain identifier must be one plain name: {name!r}"
         raise ProverToolError(msg)
-    toolchains = runtime.layout.rustup_home / "toolchains"
-    root = toolchains / name
-    generation = _resolve(runtime.layout.generation_dir, "snapshot generation")
+    return name
+
+
+def _require_private_home(runtime: SnapshotRuntime, generation: Path) -> Path:
+    """Require the rustup home to resolve inside the generation."""
     home = _resolve(runtime.layout.rustup_home, "private rustup home")
     if not home.is_relative_to(generation):
         msg = (
             f"snapshot rustup home escapes its generation: {runtime.layout.rustup_home}"
         )
         raise ProverToolError(msg)
+    return home
+
+
+def _require_contained_toolchain(root: Path, home: Path) -> None:
+    """Require the toolchain to resolve inside the private rustup home."""
     resolved = _resolve(root, "private toolchain")
     if not resolved.is_relative_to(home):
         msg = f"snapshot toolchain escapes the private rustup home: {root}"
         raise ProverToolError(msg)
-    return root
 
 
 def verify_toolchain(
@@ -124,9 +145,9 @@ def verify_toolchain(
         progress=as_checkpoint(checkpoint),
     )
     toolchain = manifest.toolchain
+    _require_components(tree, toolchain.rustup_components_sha256)
     checks = (
         ("compiler", _RUSTC, toolchain.rustc_sha256),
-        ("component records", _RUSTUP_COMPONENTS, toolchain.rustup_components_sha256),
         *(
             (f"library '{library.path}'", library.path, library.sha256)
             for library in toolchain.libraries
@@ -153,13 +174,12 @@ def _resolve(path: Path, description: str) -> Path:
         raise ProverToolError(msg) from exc
 
 
-def _require_matching(
+def _require_regular(
     tree: _ToolchainTree,
     relative: str,
-    expected: str,
     description: str,
-) -> None:
-    """Require one contained toolchain file to match its recorded digest."""
+) -> Path:
+    """Require one contained, regular toolchain file and return its path."""
     if not is_contained_relative_path(relative):
         msg = f"snapshot toolchain {description} is not a contained relative path"
         raise ProverToolError(msg)
@@ -173,7 +193,38 @@ def _require_matching(
         msg = f"snapshot toolchain {description} is not a regular file: {path}"
         raise ProverToolError(msg)
     _require_contained(path, tree, description)
+    return path
+
+
+def _require_matching(
+    tree: _ToolchainTree,
+    relative: str,
+    expected: str,
+    description: str,
+) -> None:
+    """Require one contained toolchain file to match its recorded digest."""
+    path = _require_regular(tree, relative, description)
     actual = sha256_file(path, checkpoint=tree.progress)
+    if actual != expected:
+        msg = (
+            f"snapshot toolchain {description} does not match the manifest: "
+            f"expected {expected}, got {actual}"
+        )
+        raise ProverToolError(msg)
+
+
+def _require_components(tree: _ToolchainTree, expected: str) -> None:
+    """Require the installed component names to match their recorded set.
+
+    The digest covers the canonical sorted names rather than the file's raw
+    bytes, because rustup's write order is not deterministic. The bounded read
+    is `components_file.components_digest_of_file`, the same query the producer
+    measures with, so both sides share one ceiling and one failure text.
+    """
+    description = "component records"
+    path = _require_regular(tree, _RUSTUP_COMPONENTS, description)
+    tree.progress()
+    actual = components_digest_of_file(path)
     if actual != expected:
         msg = (
             f"snapshot toolchain {description} does not match the manifest: "

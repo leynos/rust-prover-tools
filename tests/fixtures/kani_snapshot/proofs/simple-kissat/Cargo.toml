@@ -1,0 +1,19 @@
+# Copyright Kani Contributors
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+# Upstream: tests/cargo-kani/simple-kissat at
+# 0d2328a93f0e0ff66132d6bfa1a7d884877cf862, with a `[workspace]` entry added so
+# the fixture is self-contained. The `[kani.flags]` entry is upstream's and is
+# what selects Kissat.
+[package]
+name = "simple-kissat"
+version = "0.1.0"
+edition = "2021"
+description = "Tests that Kani can be invoked with Kissat"
+
+[dependencies]
+
+[kani.flags]
+cbmc-args = ["--external-sat-solver", "kissat" ]
+
+[package.metadata.kani]
+unstable = { unstable-options = true }

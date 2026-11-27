@@ -583,6 +583,13 @@ Both transports run the same verification; only the byte source changes. The
 [execution plan](execplans/kani-monthly-snapshot-distribution.md) separates
 implementation acceptance from a separately authorized first publication.
 
+The command surface is unchanged by the producer work.
+`make kani-snapshot-verify` is an operator-facing verification of a produced
+release, not a CLI command: it installs the wheel into a temporary environment
+and runs the public commands against the downloaded assets. The
+[operations runbook](kani-snapshot-operations.md) owns that procedure and the
+evidence it requires.
+
 ## Log analysis and trust audit adoption
 
 The Kani log parser, Kani outcome analysis, Rust trust audit and Verus run

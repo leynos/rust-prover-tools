@@ -1,0 +1,13 @@
+# Copyright Kani Contributors
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+# Upstream: tests/cargo-kani/build-rs-works at
+# 0d2328a93f0e0ff66132d6bfa1a7d884877cf862. The manifest adds `[workspace]` so the
+# fixture is self-contained; nothing else differs.
+[package]
+name = "build-rs-works"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+[workspace]

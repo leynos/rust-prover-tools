@@ -961,6 +961,39 @@ name verified provenance rather than the verifier command.
     no-op recovery, draft binding, the adapter's draft-visible observation and
     the workflow hand-offs. Full suite: see the gate record below.
 - [ ] EP-M5: non-publishing smoke evidence and operations documentation.
+  Implementation, runbook and offline gates are complete; the component-record
+  deviation was approved as D6a and implemented. Corrected hosted evidence from
+  trusted `main` remains.
+  - [x] (2026-11-22) Added the pure proof-transcript and setup-trace
+    validators, the four named proof fixtures, the transcript and trace
+    controls, and their unit, property and Syrupy tests.
+  - [x] (2026-11-22) Added the opt-in consumer smoke,
+    `make kani-snapshot-verify`, the operations runbook and the synchronized
+    guides.
+  - [x] (2026-11-22) Dispatched non-publishing run 45067145476 with identity
+    `kani-snapshot-2026-11-0d2328a93f0e-r1`. Build, assembly, attestation and
+    validation succeeded; the publish job was skipped. The first dispatch was
+    refused because its tag prefix did not match the upstream commit; the
+    Makefile now checks that binding locally.
+  - [x] (2026-11-22) Installed the produced release through the public consumer
+    path. The install found two real defects: rustup's automatic self-update
+    failed against the generation-private cargo home, and the manifest
+    recorded the builder's toolchain instead of the default profile a consumer
+    installs. Both are repaired with tests and recorded in the decision log.
+  - [x] (2026-11-22) Found a third consumer-blocking defect in the trust
+    policy, and proposed a deviation rather than working around it. The
+    manifest's `rustup_components_sha256` was a byte digest of
+    `<toolchain>/lib/rustlib/components`, and rustup writes that file in
+    nondeterministic order: three default-profile installs of the same channel
+    produced three different digests with identical sorted component sets.
+  - [x] (2026-11-23) The deviation was approved as D6a and implemented. The
+    manifest keeps the field and schema, but the digest now covers the
+    canonical sorted component names, produced and checked by one shared pure
+    helper. Order independence is proved by a permutation property; added,
+    removed and renamed components still fail.
+  - [ ] Corrected hosted non-publishing run and consumer smoke from trusted
+    `main`, after this branch merges. Until then EP-M5 and roadmap 1.1.5 stay
+    open.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
 
 ## Surprises & discoveries
@@ -1055,7 +1088,68 @@ probe put `<toolchain>/lib` first on `LD_LIBRARY_PATH`, so any unrecorded
 shared object there is loadable. Verification therefore walks that directory,
 follows only contained links and rejects every shared object the manifest omits.
 
+A builder's toolchain is not the toolchain a consumer gets. Upstream setup runs
+`rustup toolchain install <identifier>` with rustup's default profile, while
+the builder installed the minimal profile plus `rustc-dev`, `rust-src`,
+`llvm-tools` and `rustfmt`. The manifest therefore recorded a component digest
+and `rustc-dev` shared libraries a consumer can never have, and the consumer's
+two-way coverage check refused the install. Measuring a second, private,
+default-profile toolchain is what makes the record describe the consumer's
+tree; installing extra components on the builder is not a substitute.
+
+Rustup's automatic self-update expects its own binary under `CARGO_HOME`. The
+snapshot installer sets `CARGO_HOME` to a generation-private directory that
+holds no rustup, so setup failed after installing the toolchain:
+`error: rustup is not installed at '.../cargo-home'`. Running
+`rustup set auto-self-update disable` with the same private homes before the
+launcher starts is rustup's documented configuration command and avoids the
+failure without depending on the rustup version.
+
 ## Decision log
+
+2026-11-22, implemented D6 evidence and handoff. Two pure producer modules own
+the evidence policy: `proof_report` requires an exact named harness set, one
+verdict per harness and a manual summary that agrees with them, and
+`setup_trace` refuses source compilation in a bounded `execve` trace while
+requiring the packaged setup record. A non-zero Kani exit status alone cannot
+distinguish a failed assertion from a compile error, a solver failure or a
+zero-harness run, which is what V8 requires. The consumer smoke is opt-in
+(`make kani-snapshot-verify`) because it installs a pinned toolchain and runs
+real proofs; `docs/kani-snapshot-operations.md` carries the bootstrap,
+recovery, rollback, retention and monitoring handoff.
+
+2026-11-23, D6a approved: the manifest's `rustup_components_sha256` now digests
+the canonical sorted component names rather than the raw file bytes. Rustup's
+write order is nondeterministic, so the raw digest could never match between
+two installs. `toolchain_model.components_digest` is the single pure definition
+used by both the producer measurement and the consumer check; the field, schema
+version, pin grammar and every other check are unchanged. A permutation
+property proves order independence, and added, removed or renamed components
+are still refused.
+
+2026-11-22, D6 target reconciliation: the plan's proposed
+`make kani-snapshot-smoke` name with `SNAPSHOT_PIN`, `SNAPSHOT_ASSET_DIR` and
+`SNAPSHOT_FIXTURE_ROOT` was written before EP-M4 shipped that name for the
+hosted non-publishing dispatch. The dispatch keeps its shipped name and
+arguments; the consumer verification is `kani-snapshot-verify` with
+`KANI_SNAPSHOT_ASSET_DIR`, `KANI_SNAPSHOT_WHEEL` and
+`KANI_SNAPSHOT_RUSTC_1_93`. Renaming the shipped target would break the
+documented operator command and its contract tests for no functional gain.
+
+2026-11-22, first hosted evidence and two consumer defects. Non-publishing run
+45067145476 built, attested and validated a release under identity
+`kani-snapshot-2026-11-0d2328a93f0e-r1`; the publish job was skipped. The
+consumer install of that release found two defects a fixture could not expose.
+Setup ran the launcher with a generation-private `CARGO_HOME`, and rustup's
+automatic self-update expects its own binary there, so setup failed after the
+toolchain was installed; setup now runs `rustup set auto-self-update disable`
+first with the same homes. Separately, the manifest recorded the builder's
+minimal-plus-`rustc-dev` toolchain, while upstream setup installs rustup's
+default profile, so the component digest and `rustc-dev` libraries it named
+could not exist on any consumer; the build now installs that default profile
+under a private rustup home and measures it. Neither repair changes the schema,
+the pin grammar or a verification check. A corrected hosted run must follow
+this branch's merge, so EP-M5 and roadmap 1.1.5 remain open until then.
 
 2026-09-27, proposed D1: use a separate `kani snapshot` command group plus
 `kani run --snapshot-pin`, avoiding overloaded legacy semantic-version flags.
@@ -1659,24 +1753,29 @@ manifest's own run and attempt, and V2 wrong-signer, wrong-source and wrong-ref
 refusal evidence at the verifier and installation boundaries, modelled as a
 bundle identity that a matching command accepts and a wrong one is refused
 before launcher extraction and setup. All are repaired with tests recorded in
-Progress. EP-M1 completed on 2026-11-15; EP-M4 is implemented and in review in
-pull request 258; EP-M5 and EP-O1, and all publication, have not started. The
-consumer `install` command now downloads the release its pin names, using
-`--asset-dir` only as an offline override. Independent reviews covered all five
-requested specialities, with amendments recorded in the design and checked by a
-final testing/consistency review. Planning validation passed `make fmt`,
-`make markdownlint` (including spelling and three spelling-helper tests),
-`make nixie`, and both working/staged `git diff --check`. Earlier
-dependency-network and document spelling/line-wrap failures were resolved
-without weakening gates. Only four Markdown files changed during initial
-planning. The later requested rebase validation ran the full gate stack, as
-recorded below; implementation gates still apply to each future milestone. The
-associated draft PR records the commit, branch, upstream tracking and delivery
-link. Add red/green, smoke and conformance evidence only after approval. Only
-mark implementation roadmap entries complete when their actual acceptance
-criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
-Before status `COMPLETE`, reconcile discoveries with the approved design,
-requirements and every evidence link; do not conceal an unresolved deviation.
+Progress. EP-M1 completed on 2026-11-15; EP-M4 is implemented and merged in
+pull request
+258. EP-M5's implementation, runbook and offline gates are complete, and a
+hosted non-publishing run succeeded through validation, but its consumer smoke
+found two real defects that required a corrected builder. Corrected hosted
+evidence remains outstanding, so EP-M5 and roadmap 1.1.5 stay open. EP-O1 and
+all publication have not started. The consumer `install` command now downloads
+the release its pin names, using `--asset-dir` only as an offline override.
+Independent reviews covered all five requested specialities, with amendments
+recorded in the design and checked by a final testing/consistency review.
+Planning validation passed `make fmt`, `make markdownlint` (including spelling
+and three spelling-helper tests), `make nixie`, and both working/staged
+`git diff --check`. Earlier dependency-network and document spelling/line-wrap
+failures were resolved without weakening gates. Only four Markdown files
+changed during initial planning. The later requested rebase validation ran the
+full gate stack, as recorded below; implementation gates still apply to each
+future milestone. The associated draft PR records the commit, branch, upstream
+tracking and delivery link. Add red/green, smoke and conformance evidence only
+after approval. Only mark implementation roadmap entries complete when their
+actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
+operational work. Before status `COMPLETE`, reconcile discoveries with the
+approved design, requirements and every evidence link; do not conceal an
+unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired

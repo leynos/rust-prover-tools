@@ -26,6 +26,7 @@ from rust_prover_tools.kani_snapshot.orchestrator.measure_build import (
     measure,
 )
 from rust_prover_tools.kani_snapshot.shared_libraries import shared_libraries
+from rust_prover_tools.kani_snapshot.toolchain_model import components_digest
 
 RUSTC_VV = """\
 rustc 1.95.0-nightly (0d2328a93 2026-08-21)
@@ -121,8 +122,8 @@ def test_the_measurement_records_what_it_observed(tmp_path: pathlib.Path) -> Non
     assert toolchain.rustc_vv == RUSTC_VV.strip()
     assert toolchain.kani_compiler == "kani-compiler 0.68.0 (rustc 1.95.0-nightly)"
     assert toolchain.rustc_sha256 == sha256_file(sysroot / "bin" / "rustc")
-    assert toolchain.rustup_components_sha256 == sha256_file(
-        sysroot / "lib" / "rustlib" / "components"
+    assert toolchain.rustup_components_sha256 == components_digest(
+        (sysroot / "lib" / "rustlib" / "components").read_bytes()
     )
     assert toolchain.channel_metadata_sha256 == sha256_file(
         tmp_path / "channel-rust-nightly.toml"
@@ -336,3 +337,48 @@ def test_a_zero_wall_measurement_is_valid(tmp_path: pathlib.Path) -> None:
 
     measured = parse_build_evidence((tmp_path / "evidence.json").read_bytes())
     assert measured.wall_seconds == pytest.approx(0.0)
+
+
+def test_an_unreadable_components_file_is_reported(tmp_path: pathlib.Path) -> None:
+    """A missing components file fails with a clear error, not a bare OSError."""
+    sysroot = _sysroot(tmp_path)
+    (sysroot / "lib" / "rustlib" / "components").unlink()
+
+    with pytest.raises(ProverToolError, match="rustup components list"):
+        measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
+
+
+def test_the_components_digest_is_over_the_canonical_names(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The measurement canonicalizes; a raw-bytes digest would fail here.
+
+    The record is unsorted and has no trailing newline, so its own SHA-256
+    differs from the digest of the sorted names. Only a measurement that reads
+    through `canonical_component_names` can produce the expected value.
+    """
+    sysroot = _sysroot(tmp_path)
+    record = sysroot / "lib" / "rustlib" / "components"
+    record.write_bytes(b"rustc\ncargo\nrust-std")
+
+    measured = measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))
+    toolchain = measured.toolchain
+
+    assert toolchain.rustup_components_sha256 == components_digest(
+        b"cargo\nrust-std\nrustc\n"
+    )
+    assert toolchain.rustup_components_sha256 != sha256_file(record), (
+        "a raw-byte digest of the record must not satisfy the canonical value"
+    )
+
+
+def test_a_duplicated_component_is_refused_by_the_measurement(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A record listing one component twice is ambiguous, so measuring fails."""
+    sysroot = _sysroot(tmp_path)
+    record = sysroot / "lib" / "rustlib" / "components"
+    record.write_bytes(b"rustc\ncargo\nrustc\n")
+
+    with pytest.raises(ProverToolError, match="more than once"):
+        measure(build_parser().parse_args(_arguments(tmp_path, sysroot)))

@@ -10,7 +10,11 @@ edit to either the example or the recipe breaks the contract they share.
 
 from __future__ import annotations
 
+import os
 import pathlib
+import shutil
+import subprocess
+import typing as typ
 
 import pytest
 
@@ -28,11 +32,27 @@ _MAKEFILE = _REPO_ROOT / "Makefile"
 #: The identifier the guide gives its smoke-dispatch example.
 _SMOKE_EXAMPLE = "kani-snapshot-smoke"
 
+#: The identifier the guide gives its consumer verification example.
+_VERIFY_EXAMPLE = "kani-snapshot-verify"
+
+#: The inputs the verification example assigns, which the test must not inherit.
+_VERIFY_INPUTS: typ.Final[tuple[str, ...]] = (
+    "KANI_SNAPSHOT_ASSET_DIR",
+    "KANI_SNAPSHOT_WHEEL",
+    "KANI_SNAPSHOT_RUSTC_1_93",
+)
+
 #: The identifier the migration guide gives its snapshot consumer example.
 _SNAPSHOT_EXAMPLE = "migration-snapshot-consumer"
 
 #: The documents whose examples this project registers and tests.
+if typ.TYPE_CHECKING:
+    from pathlib import Path
+
 _DOCUMENTS = (_USERS_GUIDE, _MIGRATION_GUIDE)
+
+MAKE = shutil.which("make")
+NEEDS_MAKE = pytest.mark.skipif(MAKE is None, reason="GNU make is required")
 
 
 def _examples(document: pathlib.Path) -> dict[str, DocumentedExample]:
@@ -203,6 +223,109 @@ def test_the_smoke_example_names_the_target_and_its_inputs() -> None:
     )
     assert "KANI_SNAPSHOT_PUBLICATION_ID=" in example.body, (
         "the example omits the publication identity the target requires"
+    )
+
+
+def test_the_verify_example_names_the_target_and_its_inputs() -> None:
+    """The documented consumer verification runs the shipped target."""
+    example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
+
+    assert example.language == "sh", "the verification example must be shell"
+    assert "make kani-snapshot-verify" in example.body, (
+        "the example does not invoke the verification target"
+    )
+    for variable in (
+        "KANI_SNAPSHOT_ASSET_DIR=",
+        "KANI_SNAPSHOT_WHEEL=",
+        "KANI_SNAPSHOT_RUSTC_1_93=",
+    ):
+        assert variable in example.body, f"the example omits {variable}"
+    assert _target_recipe("kani-snapshot-verify"), (
+        "the Makefile has no verification target"
+    )
+
+
+def _stub_environment(tmp_path: Path) -> tuple[Path, Path]:
+    """Write the example's stubs and return the stub directory and its log.
+
+    The `make` stub records its environment as well as its arguments, so a test
+    can show the three assignments reached it as values. The `rustup` stub
+    answers `which` so the example can be run without a real toolchain.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "make-args"
+    make_body = (
+        "#!/bin/sh\n"
+        'printf "ARGS:%s\\n" "$@" > "$MAKE_ARGS_FILE"\n'
+        'printf "ASSET_DIR:%s\\n" "$KANI_SNAPSHOT_ASSET_DIR" >> "$MAKE_ARGS_FILE"\n'
+        'printf "WHEEL:%s\\n" "$KANI_SNAPSHOT_WHEEL" >> "$MAKE_ARGS_FILE"\n'
+        'printf "RUSTC_1_93:%s\\n" "$KANI_SNAPSHOT_RUSTC_1_93" >> "$MAKE_ARGS_FILE"\n'
+    )
+    for name, body in (
+        ("make", make_body),
+        ("rustup", "#!/bin/sh\nprintf '/fake/toolchains/1.93.0/bin/rustc\\n'\n"),
+    ):
+        stub = bin_dir / name
+        stub.write_text(body, encoding="utf-8")
+        stub.chmod(0o755)
+    return bin_dir, log
+
+
+@NEEDS_MAKE
+def test_the_verify_example_executes_and_passes_all_three_inputs(
+    tmp_path: Path,
+) -> None:
+    """The guide's example runs in a shell and reaches `make` with its inputs.
+
+    `make` and `rustup` are stubbed first on `PATH`, so the example's shell
+    syntax is exercised without installing a toolchain or running a proof. The
+    stub records its arguments *and* the three variables. The three names are
+    cleared from the inherited environment first, and each recorded value is
+    then compared with the exact value the example must have assigned, so a
+    host that already exports one of them cannot make a removed assignment
+    look correct.
+    """
+    shell = shutil.which("sh")
+    assert shell is not None, "a POSIX shell is required to run the example"
+    bin_dir, log = _stub_environment(tmp_path)
+    example = _examples(_USERS_GUIDE)[_VERIFY_EXAMPLE]
+    inherited = {
+        name: value for name, value in os.environ.items() if name not in _VERIFY_INPUTS
+    }
+
+    completed = subprocess.run(
+        [shell, "-eu", "-c", example.body],
+        cwd=tmp_path,
+        env={
+            **inherited,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "HOME": str(tmp_path),
+            "MAKE_ARGS_FILE": str(log),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    recorded = log.read_text(encoding="utf-8").splitlines()
+    assert "ARGS:kani-snapshot-verify" in recorded, (
+        "the example did not invoke the verification target with make"
+    )
+    values = dict(line.split(":", 1) for line in recorded if ":" in line)
+    assert values["ASSET_DIR"] == str(tmp_path / "kani-validation" / "release"), (
+        "the asset directory the example assigns did not reach make"
+    )
+    assert values["WHEEL"] == str(
+        tmp_path
+        / "kani-validation"
+        / "dist"
+        / "rust_prover_tools-0.1.0-py3-none-any.whl"
+    ), "the wheel path the example assigns did not reach make"
+    assert values["RUSTC_1_93"] == "/fake/toolchains/1.93.0/bin/rustc", (
+        "the 1.93 compiler path did not reach make"
     )
 
 

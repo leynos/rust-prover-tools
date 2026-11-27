@@ -1,0 +1,2 @@
+1821  execve("/home/runner/.cache/kani/bin/cargo-kani", ["cargo-kani", "setup", "--use-local-bundle", "/tmp/staging/bundle.tar.gz"], 0x7ffd2c1a4b30) = 0
+1822  execve("/home/runner/.cargo/bin/cargo", ["cargo", "build", "--release"], 0x7ffd2c1a4b30) = 0

@@ -21,6 +21,9 @@ import typing as typ
 from rust_prover_tools.commands import CommandSpec, run_command
 from rust_prover_tools.downloads import sha256_file
 from rust_prover_tools.errors import ProverToolError
+from rust_prover_tools.kani_snapshot.components_file import (
+    components_digest_of_file,
+)
 from rust_prover_tools.kani_snapshot.models import (
     BackendIdentity,
     CacheObservation,
@@ -188,7 +191,7 @@ def measure(namespace: argparse.Namespace) -> BuildEvidence:
         ),
         components=(),
         rustc_sha256=sha256_file(rustc),
-        rustup_components_sha256=sha256_file(
+        rustup_components_sha256=components_digest_of_file(
             _require_file(sysroot / _COMPONENTS, "rustup components list")
         ),
         libraries=_library_records(sysroot),

@@ -1,0 +1,3 @@
+Kani Rust Verifier 0.68.0 (standalone)
+Manual Harness Summary:
+No proof harnesses (functions with #[kani::proof]) were found to verify.
