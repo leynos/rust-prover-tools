@@ -30,18 +30,20 @@ termination.
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses as dc
 import typing as typ
 
 from rust_prover_tools.kani_cli_grammar import UnsupportedKaniGrammarError
 from rust_prover_tools.kani_log import SUPPORTED_KANI_VERSIONS, KaniLog
 from rust_prover_tools.kani_release import KANI_RELEASE_VERSION
+from rust_prover_tools.supervision.kani_facts import KaniLiveFacts
 from rust_prover_tools.supervision.kani_observer import (
     DEFAULT_MAX_LOG_BYTES,
     MAX_LIVE_RECORDS,
-    KaniLiveFacts,
+    KaniObservation,
     KaniObserver,
+    SpoolFactory,
+    TemporaryKaniSpool,
 )
 from rust_prover_tools.supervision.kani_outcome import (
     Observed,
@@ -58,13 +60,13 @@ from rust_prover_tools.supervision.models import (
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
-    from rust_prover_tools.supervision.protocols import LineObserver
     from rust_prover_tools.supervision.results import HarnessClassification
 
 __all__ = (
     "DEFAULT_MAX_LOG_BYTES",
     "KaniAdapter",
     "KaniLiveFacts",
+    "KaniObservation",
     "KaniObserver",
 )
 
@@ -80,10 +82,13 @@ class KaniAdapter:
         refuses an unregistered release before any proof runs.
     max_log_bytes : int
         Largest log retained for the final parse.
+    spool_factory : SpoolFactory
+        Opens the per-attempt spool the observer writes its log to.
     """
 
     version: str = KANI_RELEASE_VERSION
     max_log_bytes: int = DEFAULT_MAX_LOG_BYTES
+    spool_factory: SpoolFactory = TemporaryKaniSpool
 
     def observer(self, spec: HarnessSpec) -> KaniObserver:
         """Return a fresh observer for one attempt.
@@ -97,77 +102,101 @@ class KaniAdapter:
         del spec
         if self.version not in SUPPORTED_KANI_VERSIONS:
             raise UnsupportedKaniGrammarError(self.version, SUPPORTED_KANI_VERSIONS)
-        return KaniObserver(max_log_bytes=self.max_log_bytes)
+        return KaniObserver(
+            max_log_bytes=self.max_log_bytes,
+            spool_factory=self.spool_factory,
+        )
 
     def classify(
         self,
         evidence: AttemptEvidence,
-        observer: LineObserver,
+        observation: KaniObservation,
     ) -> HarnessClassification:
-        """Classify one settled attempt under the documented precedence."""
-        kani = typ.cast("KaniObserver", observer)
-        observed = observe(evidence, kani.facts)
-        if kani.facts_truncated:
+        """Classify one settled attempt under the documented precedence.
+
+        The observation is the immutable result of the attempt's observer:
+        this method only reads it, so it never parses the log or owns the
+        spool.
+        """
+        observed = observe(evidence, observation.facts)
+        if observation.facts_truncated:
             # A dropped live record makes the retained verdicts ambiguous, and
             # a stop returns before the parse, so this must precede the stop.
             observed = dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
-        try:
-            stopped = _stop_status(evidence, kani, observed)
-            if stopped is not None:
-                return stopped
-            if evidence.launch_error is not None:
-                return classification(
-                    ExecutionStatus.ERROR,
-                    detail=f"launch failed: {evidence.launch_error}",
-                    observed=observed,
-                )
-            if kani.banner_version is not None and kani.banner_version != self.version:
-                return classification(
-                    ExecutionStatus.ERROR,
-                    detail=(
-                        f"the log names Kani {kani.banner_version}, but this "
-                        f"adapter is qualified for {self.version}"
-                    ),
-                    observed=observed,
-                )
-            log = kani.finish(evidence.exit_code or 0)
-            if log is not None:
-                # The parse is authoritative for selection and verdicts, so a
-                # live verdict cannot survive a different parsed outcome.
-                observed = dc.replace(
-                    observed,
-                    identities=tuple(
-                        f"{evidence.spec.package}::{block.name}" for block in log.blocks
-                    ),
-                    verdict=ProofVerdict.UNKNOWN,
-                )
-            if log is None and kani.facts_truncated:
-                return classification(
-                    ExecutionStatus.ERROR,
-                    detail="the verifier produced more selection records than "
-                    f"the supervisor retains ({MAX_LIVE_RECORDS})",
-                    observed=observed,
-                )
-            selection = _selection_status(evidence, kani, observed, log)
-            if selection is not None:
-                return selection
-            return classify_log(evidence, log, observed, kani.failure_reason)
-        finally:
-            # A cleanup failure must not replace an active cancellation or
-            # monitor failure; the spool's own errors still surface through
-            # the parse above.
-            with contextlib.suppress(OSError, ValueError):
-                kani.close()
+        stopped = _stop_status(evidence, observed)
+        if stopped is not None:
+            return stopped
+        refused = _refusal_status(evidence, observation, observed, self.version)
+        if refused is not None:
+            return refused
+        log = observation.log
+        if log is not None:
+            # The parse is authoritative for selection and verdicts, so a
+            # live verdict cannot survive a different parsed outcome.
+            observed = dc.replace(
+                observed,
+                identities=tuple(
+                    f"{evidence.spec.package}::{block.name}" for block in log.blocks
+                ),
+                verdict=ProofVerdict.UNKNOWN,
+            )
+        if log is None and observation.facts_truncated:
+            return classification(
+                ExecutionStatus.ERROR,
+                detail="the verifier produced more selection records than "
+                f"the supervisor retains ({MAX_LIVE_RECORDS})",
+                observed=observed,
+            )
+        selection = _selection_status(evidence, observation.facts, observed, log)
+        if selection is not None:
+            return selection
+        return classify_log(evidence, log, observed, observation.failure_reason)
 
 
-def _verifier_ran(observer: KaniObserver) -> bool:
+def _refusal_status(
+    evidence: AttemptEvidence,
+    observation: KaniObservation,
+    observed: Observed,
+    version: str,
+) -> HarnessClassification | None:
+    """Return the classification a launch, spool, or banner refusal implies.
+
+    These refusals precede the banner check in the documented precedence: a
+    child that never launched has no log to check, and an attempt whose spool
+    could not be opened has no log to retain, whatever its banner said.
+    """
+    if evidence.launch_error is not None:
+        return classification(
+            ExecutionStatus.ERROR,
+            detail=f"launch failed: {evidence.launch_error}",
+            observed=observed,
+        )
+    if observation.spool_error is not None:
+        return classification(
+            ExecutionStatus.ERROR,
+            detail=f"cannot retain the verifier log: {observation.spool_error}",
+            observed=observed,
+        )
+    banner = observation.banner_version
+    if banner is not None and banner != version:
+        return classification(
+            ExecutionStatus.ERROR,
+            detail=(
+                f"the log names Kani {banner}, but this adapter is qualified "
+                f"for {version}"
+            ),
+            observed=observed,
+        )
+    return None
+
+
+def _verifier_ran(facts: KaniLiveFacts) -> bool:
     """Whether the attempt produced any evidence the verifier itself ran.
 
     A child that exits nonzero without printing a selection record, a verdict,
     or a completion line may never have reached the verifier. Calling that
     "no match" asserts a selection diagnosis the output does not support.
     """
-    facts = observer.facts
     return bool(
         facts.selection_records
         or facts.verdicts
@@ -178,7 +207,6 @@ def _verifier_ran(observer: KaniObserver) -> bool:
 
 def _stop_status(
     evidence: AttemptEvidence,
-    observer: KaniObserver,
     observed: Observed,
 ) -> HarnessClassification | None:
     """Return the classification a supervisor stop implies, if any."""
@@ -192,13 +220,12 @@ def _stop_status(
     detail = evidence.stop_detail or evidence.stop_reason.value
     if evidence.os_reported_oom_kill is not None:
         detail = f"{detail}; oom_kill_delta={evidence.os_reported_oom_kill}"
-    del observer
     return classification(status, detail=detail, observed=observed)
 
 
 def _selection_status(
     evidence: AttemptEvidence,
-    observer: KaniObserver,
+    facts: KaniLiveFacts,
     observed: Observed,
     log: KaniLog | None,
 ) -> HarnessClassification | None:
@@ -208,7 +235,6 @@ def _selection_status(
     ``Checking harness`` line as content, and only the parser tracks those
     frames. The live facts are the fallback for a log that could not be parsed.
     """
-    facts = observer.facts
     records = (
         tuple(block.name for block in log.blocks)
         if log is not None and log.blocks
@@ -217,7 +243,7 @@ def _selection_status(
     expected = evidence.spec.harness
     matching = [name for name in records if name == expected]
     if not records:
-        return _no_selection_status(evidence, observer, observed, log)
+        return _no_selection_status(evidence, facts, observed, log)
     if len(records) > 1:
         return classification(
             ExecutionStatus.MULTIPLE_MATCH,
@@ -235,19 +261,18 @@ def _selection_status(
 
 def _no_selection_status(
     evidence: AttemptEvidence,
-    observer: KaniObserver,
+    facts: KaniLiveFacts,
     observed: Observed,
     log: KaniLog | None,
 ) -> HarnessClassification:
     """Classify an attempt that produced no selection record."""
-    facts = observer.facts
     if facts.no_match_reason is not None:
         return classification(
             ExecutionStatus.NO_MATCH,
             detail=facts.no_match_reason,
             observed=observed,
         )
-    if log is None and not _verifier_ran(observer):
+    if log is None and not _verifier_ran(facts):
         # Nothing parsed and nothing live, so the selection is unknown. The
         # raw termination is the only evidence, and inventing a selection
         # diagnosis would name a cause the output never showed. Without a

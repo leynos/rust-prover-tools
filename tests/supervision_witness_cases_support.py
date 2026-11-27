@@ -80,6 +80,14 @@ class _NullObserver:
     def observe(self, line: object) -> None:
         """Discard one line."""
 
+    def finish(self) -> None:
+        """Return a trivial observation; the witness classifier ignores it."""
+        return
+
+    def close(self) -> None:
+        """Release nothing; the null observer owns no resource."""
+        return
+
 
 @dc.dataclass(frozen=True, slots=True)
 class _WitnessAdapter:
@@ -95,10 +103,10 @@ class _WitnessAdapter:
     def classify(
         self,
         evidence: AttemptEvidence,
-        observer: object,
+        observation: object,
     ) -> HarnessClassification:
         """Classify the attempt with the configured function."""
-        del observer
+        del observation
         return self.classify_evidence(evidence)
 
 
@@ -116,14 +124,20 @@ def _script(tmp_path: Path) -> str:
     group_path = tmp_path / "pgid"
     grandchild = (
         "import os, pathlib, time; "
-        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); "
+        f"p = pathlib.Path({str(pid_path)!r}); "
+        "t = p.with_name(p.name + '.tmp'); "
+        "t.write_text(str(os.getpid())); "
+        "os.replace(t, p); "
         "time.sleep(60)"
     )
     return (
         "import os, pathlib, subprocess, sys, time\n"
         # The launcher spawns this child as its group leader, so its pid is
         # the group the parent must kill if this case ever hangs.
-        f"pathlib.Path({str(group_path)!r}).write_text(str(os.getpid()))\n"
+        f"p = pathlib.Path({str(group_path)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
         f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}])\n"
         "limit = time.monotonic() + 10\n"
         f"while not pathlib.Path({str(pid_path)!r}).exists()"
@@ -153,8 +167,11 @@ def _failing_callback_script(tmp_path: Path) -> Path:
     script = tmp_path / "blocking.py"
     pid_file = tmp_path / "child.pid"
     script.write_text(
-        "import os, sys, time\n"
-        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "import os, pathlib, sys, time\n"
+        f"p = pathlib.Path({str(pid_file)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
         "sys.stdout.write('first\\n')\n"
         "sys.stdout.flush()\n"
         "sys.stdout.write('second\\n')\n"
@@ -166,8 +183,15 @@ def _failing_callback_script(tmp_path: Path) -> Path:
 
 
 def _write_pgid(path: Path, pid: int) -> None:
-    """Record a child's process-group identifier for the parent to reap."""
-    path.write_text(str(pid), encoding="utf-8")
+    """Publish a group identifier only once its value is fully written.
+
+    The parent polls these files while the case runs, so a reader must never
+    see a truncated or empty value: write a sibling and rename it into place,
+    which is atomic within one directory.
+    """
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(str(pid), encoding="utf-8")
+    temporary.replace(path)
 
 
 async def record_group(tmp_path: Path, pid_file: Path) -> int:
@@ -244,7 +268,10 @@ def _case_sinks(tmp_path: Path) -> None:
     group_path = tmp_path / "pgid"
     child = (
         "import os, pathlib\n"
-        f"pathlib.Path({str(group_path)!r}).write_text(str(os.getpid()))\n"
+        f"p = pathlib.Path({str(group_path)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
         "print('hello from the child', flush=True)\n"
     )
     clock = SystemClock()
@@ -288,7 +315,10 @@ async def _case_newline(tmp_path: Path) -> None:
     group_path = tmp_path / "pgid"
     line.write_text(
         "import os, pathlib, sys\n"
-        f"pathlib.Path({str(group_path)!r}).write_text(str(os.getpid()))\n"
+        f"p = pathlib.Path({str(group_path)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
         "sys.stdout.write('x' * (8 * 1024 * 1024))\n"
         "sys.stdout.write('\\n')\n"
         "sys.stdout.write('after\\n')\n",

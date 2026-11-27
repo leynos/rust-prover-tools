@@ -30,10 +30,7 @@ from rust_prover_tools.unittests.supervision_doubles import (
 )
 
 if typ.TYPE_CHECKING:
-    from rust_prover_tools.supervision import (
-        AttemptEvidence,
-        LineObserver,
-    )
+    from rust_prover_tools.supervision import AttemptEvidence
 
 from rust_prover_tools.unittests.supervision_runner_support import (
     async_test as _async_test,
@@ -380,6 +377,14 @@ class _ProgressObserver:
         if line.text.startswith("VERIFICATION:"):
             self.last_progress = line.text
 
+    def finish(self) -> None:
+        """Return a trivial observation; the classifier reads the evidence."""
+        return
+
+    def close(self) -> None:
+        """Release nothing; the observer owns no resource."""
+        return
+
 
 @dc.dataclass(frozen=True, slots=True)
 class _ProgressAdapter:
@@ -395,10 +400,10 @@ class _ProgressAdapter:
     def classify(
         self,
         evidence: AttemptEvidence,
-        observer: LineObserver,
+        observation: object,
     ) -> HarnessClassification:
         """Classify the stopped attempt as a timeout."""
-        del evidence, observer
+        del evidence, observation
         return _classify(ExecutionStatus.TIMED_OUT)
 
 

@@ -1,109 +1,85 @@
 """Record live Kani facts and spool the report for the shared parser.
 
-The observer is the supervision layer's streaming half. It reads the same
-grammar the parser uses, so a banner, a selection record, and a verdict have
-one definition, and it keeps only bounded facts on the heap. The log itself is
-spooled to a temporary file and parsed once the child settles; a log beyond the
+The observation seam has two independent halves. `KaniFactScanner` is a pure
+accumulator: it reads the same grammar the parser uses, so a banner, a
+selection record, and a verdict have one definition, and it keeps only bounded
+facts on the heap. `KaniObserver` adds the spool: it writes each line to a
+temporary file and parses that file once the child settles. A log beyond the
 configured budget is reported as truncated evidence instead of being retained
-without bound.
+without bound. `KaniObservation` is the immutable value the classifier reads,
+so classification neither parses the log nor owns the spool.
+
+The pure accumulator and the spool live in `kani_facts` and `kani_spool`; they
+are re-exported here so the observation seam has one import path.
 """
 
 from __future__ import annotations
 
-import contextlib
 import dataclasses as dc
-import tempfile
 import typing as typ
-from pathlib import Path
 
-from rust_prover_tools.kani_log import (
-    BANNER,
-    COMPLETE,
-    HARNESS_START,
-    LIST_WRITTEN,
-    NOISE_PREFIXES,
-    KaniLog,
-    KaniLogError,
-    parse_kani_log_lines,
+from rust_prover_tools.kani_log import KaniLog, KaniLogError, parse_kani_log_lines
+from rust_prover_tools.supervision.kani_facts import (
+    MAX_LIVE_RECORDS,
+    KaniFactScanner,
+    KaniLiveFacts,
 )
-from rust_prover_tools.kani_log.syntax import CHECK, FIELD, NO_HARNESS_MATCH
+from rust_prover_tools.supervision.kani_spool import (
+    KaniSpool,
+    SpoolFactory,
+    TemporaryKaniSpool,
+)
 
 if typ.TYPE_CHECKING:
     from rust_prover_tools.supervision.models import OutputLine
 
 __all__ = (
     "DEFAULT_MAX_LOG_BYTES",
+    "MAX_LIVE_RECORDS",
+    "KaniFactScanner",
     "KaniLiveFacts",
+    "KaniObservation",
     "KaniObserver",
+    "KaniSpool",
+    "SpoolFactory",
+    "TemporaryKaniSpool",
 )
 
 #: Bytes of one log the observer spools for the parser by default.
 DEFAULT_MAX_LOG_BYTES: typ.Final[int] = 64 * 1024 * 1024
 
-#: Live selection and verdict records retained before the facts fail closed.
-MAX_LIVE_RECORDS: typ.Final[int] = 256
-
 
 @dc.dataclass(frozen=True, slots=True)
-class _Candidate:
-    """One report fact this scanner read, before it is known to be real."""
-
-    kind: str
-    value: str | None
-    text: str
-
-
-#: Report markers that can only follow a finished description.
-_MARKERS: typ.Final[tuple[str, ...]] = (
-    "RESULTS:",
-    "SUMMARY:",
-    "Manual Harness Summary:",
-)
-
-
-def _is_structural(text: str) -> bool:
-    """Whether a line is a report structure that cannot be description content.
-
-    Report-shaped candidates are excluded on purpose: a verdict, selection or
-    banner printed inside a description looks exactly like the real one.
-    """
-    if FIELD.match(text) is not None:
-        return True
-    return text in _MARKERS or CHECK.match(text) is not None
-
-
-def _is_notable(text: str) -> bool:
-    """Whether a non-report line is worth remembering as progress."""
-    return bool(text.strip()) and not text.startswith(NOISE_PREFIXES)
-
-
-@dc.dataclass(frozen=True, slots=True)
-class KaniLiveFacts:
-    """The facts a live attempt has produced so far.
+class KaniObservation:
+    """The settled facts of one attempt, immutable for classification.
 
     Attributes
     ----------
-    banner_version : str | None
-        Release named by the opening banner, when one was seen.
-    selection_records : tuple[str, ...]
-        Harness names from ``Checking harness`` lines, in arrival order.
-    verdicts : tuple[tuple[str, str], ...]
-        Always empty in the live facts: a verdict is attributed only from the
-        parsed log, because description prose can contain a verdict line.
-    last_progress : str | None
-        Last line that carried report structure, bounded by the caller.
-    completed : bool
-        Whether the log declared a completed run or an inventory.
-    no_match_reason : str | None
-        Kani's own "no harnesses matched" diagnostic, when it printed one.
+    facts : KaniLiveFacts
+        The live facts the scanner accumulated from the streamed lines.
+    log : KaniLog | None
+        The parsed report, or `None` when the log was truncated or refused.
+    failure_reason : str | None
+        Why the shared parser refused the completed log, when it did.
+    log_truncated : bool
+        Whether the log exceeded the observer's retained budget.
+    facts_truncated : bool
+        Whether the live record budget was exceeded.
+    spool_error : str | None
+        Why the spool could not be opened, when its factory failed.
     """
 
-    banner_version: str | None
-    selection_records: tuple[str, ...]
-    verdicts: tuple[tuple[str, str], ...]
-    last_progress: str | None
-    completed: bool
-    no_match_reason: str | None
+    facts: KaniLiveFacts
+    log: KaniLog | None
+    failure_reason: str | None = None
+    log_truncated: bool = False
+    facts_truncated: bool = False
+    spool_error: str | None = None
+
+    @property
+    def banner_version(self) -> str | None:
+        """Release named by the opening banner, delegated to the facts."""
+        return self.facts.banner_version
 
 
 @dc.dataclass(slots=True)
@@ -115,228 +91,161 @@ class KaniObserver:
     max_log_bytes : int
         Largest log retained for the final parse. A longer log is reported as
         truncated evidence instead of being held without bound.
-    banner_version : str | None
-        Release named by the opening banner, when one was seen.
-    selection_records : list[str]
-        Harness names from ``Checking harness`` lines, in arrival order.
-    verdicts : list[tuple[str, str]]
-        Never appended to: see the class note. Kept so ``facts`` has a stable
-        shape for callers that read it.
-    last_progress : str | None
-        Last line that carried report structure.
-    completed : bool
-        Whether the log declared a completed run or an inventory.
-    no_match_reason : str | None
-        Kani's own "no harnesses matched" diagnostic, when it printed one.
-    failure_reason : str | None
-        Why the shared parser refused the completed log, when it did.
-    log_truncated : bool
-        Whether the log exceeded `max_log_bytes`.
-    facts_truncated : bool
-        Whether the live record budget was exceeded. The attempt is then
-        classified as an error rather than reported against partial facts.
+    spool_factory : SpoolFactory
+        Opens the spool the attempt keeps until the supervisor closes it. An
+        `OSError` from the factory is recorded as the observation's
+        `spool_error` instead of ending the attempt.
     """
 
     max_log_bytes: int = DEFAULT_MAX_LOG_BYTES
-    banner_version: str | None = None
-    selection_records: list[str] = dc.field(default_factory=list)
-    verdicts: list[tuple[str, str]] = dc.field(default_factory=list)
-    last_progress: str | None = None
-    completed: bool = False
-    no_match_reason: str | None = None
-    failure_reason: str | None = None
-    log_truncated: bool = False
-    facts_truncated: bool = False
-    _current: str | None = dc.field(default=None, init=False)
-    _in_description: bool = dc.field(default=False, init=False)
-    _spool: typ.IO[str] | None = dc.field(default=None, init=False)
-    _path: Path | None = dc.field(default=None, init=False)
-    _stack: contextlib.ExitStack | None = dc.field(default=None, init=False)
+    spool_factory: SpoolFactory = TemporaryKaniSpool
+    _scanner: KaniFactScanner = dc.field(default_factory=KaniFactScanner, init=False)
+    _spool: KaniSpool | None = dc.field(default=None, init=False)
+    _spool_error: str | None = dc.field(default=None, init=False)
+    _log_truncated: bool = dc.field(default=False, init=False)
     _written: int = dc.field(default=0, init=False)
+    _observation: KaniObservation | None = dc.field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        """Open the spool the attempt keeps until it settles."""
+        try:
+            self._spool = self.spool_factory()
+        except OSError as error:
+            # The run must still report what the verifier printed before the
+            # spool failed, so the observation names the failure instead.
+            self._spool_error = f"{type(error).__name__}: {error}"
 
     @property
     def facts(self) -> KaniLiveFacts:
         """The facts accumulated so far, without parsing the log."""
-        return KaniLiveFacts(
-            banner_version=self.banner_version,
-            selection_records=tuple(self.selection_records),
-            verdicts=tuple(self.verdicts),
-            last_progress=self.last_progress,
-            completed=self.completed,
-            no_match_reason=self.no_match_reason,
-        )
+        return self._scanner.facts
+
+    @property
+    def banner_version(self) -> str | None:
+        """Release named by the opening banner, when one was seen."""
+        return self._scanner.banner_version
+
+    @property
+    def selection_records(self) -> list[str]:
+        """Harness names from ``Checking harness`` lines, in arrival order."""
+        return self._scanner.selection_records
+
+    @property
+    def verdicts(self) -> list[tuple[str, str]]:
+        """Always empty: a verdict is attributed only from the parsed log."""
+        return self._scanner.verdicts
+
+    @property
+    def last_progress(self) -> str | None:
+        """Last line that carried report structure."""
+        return self._scanner.last_progress
+
+    @property
+    def completed(self) -> bool:
+        """Whether the log declared a completed run or an inventory."""
+        return self._scanner.completed
+
+    @property
+    def no_match_reason(self) -> str | None:
+        """Kani's own "no harnesses matched" diagnostic, when printed."""
+        return self._scanner.no_match_reason
+
+    @property
+    def facts_truncated(self) -> bool:
+        """Whether the live record budget was exceeded."""
+        return self._scanner.facts_truncated
+
+    @property
+    def log_truncated(self) -> bool:
+        """Whether the log exceeded `max_log_bytes`."""
+        return self._log_truncated
 
     def observe(self, line: OutputLine) -> None:
         """Record one decoded line's facts and spool it for the final parse."""
         text = line.text
-        self._observe_facts(text)
+        self._scanner.observe(text)
         self._spool_line(text)
 
-    def _observe_facts(self, text: str) -> None:
-        """Update the live facts from one line.
-
-        Kani prints check descriptions without escaping newlines and escapes
-        nothing inside them, so description content can contain a line that
-        looks like a banner, a selection, a verdict, or the closing quote
-        itself. The scanner therefore keeps the frame open from a
-        ``Description`` field until a report structure that cannot be content
-        follows - a field such as ``Location``, a results or summary marker, or
-        a fresh check entry. Everything between is description content and is
-        never recorded, which fails closed: an unresolved frame loses its live
-        facts rather than crediting prose, and a complete log is parsed
-        authoritatively.
-        """
-        if self._in_description:
-            if not _is_structural(text):
-                if _is_notable(text):
-                    self.last_progress = text
-                return
-            self._in_description = False
-        if self._opens_description(text):
-            return
-        candidate = self._candidate(text)
-        if candidate is not None:
-            self._commit(candidate)
-            self.last_progress = text
-        elif _is_notable(text):
-            self.last_progress = text
-
-    def _opens_description(self, text: str) -> bool:
-        """Enter a description frame when a field value begins a quotation."""
-        field = FIELD.match(text)
-        if field is None or field["key"] != "Description":
-            return False
-        if not field["value"].startswith('"'):
-            return False
-        self._in_description = True
-        return True
-
-    @staticmethod
-    def _candidate(text: str) -> _Candidate | None:
-        """Return the fact `text` reports, or `None` for an ordinary line."""
-        if (match := BANNER.match(text)) is not None:
-            return _Candidate("banner", match["version"], text)
-        if (match := HARNESS_START.match(text)) is not None:
-            return _Candidate("selection", match["name"], text)
-        if NO_HARNESS_MATCH.match(text) is not None:
-            return _Candidate("no-match", None, text)
-        if COMPLETE.match(text) is not None or text.startswith(LIST_WRITTEN):
-            return _Candidate("complete", None, text)
-        return None
-
-    def _commit(self, candidate: _Candidate) -> None:
-        """Record one fact this scanner read from a report line.
-
-        A verdict is never attributed live. Kani escapes nothing inside a
-        description, so a resolved line can still be prose; the attempt's
-        parsed log supplies the verdict instead.
-        """
-        if candidate.kind == "banner":
-            if self.banner_version is None:
-                self.banner_version = candidate.value
-        elif candidate.kind == "selection":
-            self._current = candidate.value
-            self._record(self.selection_records, typ.cast("str", candidate.value))
-        elif candidate.kind == "no-match":
-            self.no_match_reason = candidate.text
-        elif candidate.kind == "complete":
-            self.completed = True
-
-    def _record[T](self, records: list[T], value: T) -> None:
-        """Retain one live record, failing closed when the budget is spent."""
-        if len(records) >= MAX_LIVE_RECORDS:
-            self.facts_truncated = True
-            return
-        records.append(value)
-
     def _spool_line(self, text: str) -> None:
-        """Write one line to the spool while it fits the configured budget."""
-        if self.log_truncated:
+        """Write one line to the open spool while it fits the configured budget.
+
+        Once the budget is spent the spool can never be parsed, so it is
+        released immediately; the live facts continue under their own cap.
+        """
+        if self._log_truncated or self._spool is None:
             return
         encoded = len(text.encode("utf-8")) + 1
         if self._written + encoded > self.max_log_bytes:
-            self.log_truncated = True
-            self._close_spool()
+            self._log_truncated = True
+            self.close()
             return
-        spool = self._spool if self._spool is not None else self._open_spool()
-        spool.write(text)
-        spool.write("\n")
+        self._spool.write(text)
+        self._spool.write("\n")
         self._written += encoded
 
-    def finish(self, exit_code: int) -> KaniLog | None:
-        """Parse the spooled log with the shared parser, or record its refusal.
-
-        Parameters
-        ----------
-        exit_code : int
-            Raw child status, recorded by the parser in its facts.
+    def finish(self) -> KaniObservation:
+        """Return the immutable observation, parsing the spool once at most.
 
         Returns
         -------
-        KaniLog | None
-            The parsed log, or `None` when the log was truncated or refused.
+        KaniObservation
+            The live facts, the parsed log when one was retained, and why it
+            was not when the budget or the parser refused it. The spool stays
+            open: the attempt boundary that owns the observer releases it.
         """
-        del exit_code
-        if self.log_truncated:
-            self.failure_reason = (
-                f"the log exceeded the retained budget of {self.max_log_bytes} bytes"
-            )
-            return None
-        try:
-            return self._parse_spool()
-        except KaniLogError as error:
-            self.failure_reason = error.reason
-            return None
+        if self._observation is None:
+            self._observation = self._settle()
+        return self._observation
 
-    def _open_spool(self) -> typ.IO[str]:
-        """Open and remember the spool the attempt keeps until it settles."""
-        self._stack = contextlib.ExitStack()
-        # pylint: disable-next=consider-using-with
-        directory = self._stack.enter_context(tempfile.TemporaryDirectory())
-        # The stack owns the handle; `finish` or the overflow path closes it.
-        # pylint: disable-next=consider-using-with
-        self._path = Path(directory) / "kani.log"
-        handle = self._path.open("w+", encoding="utf-8", errors="replace")
-        self._spool = self._stack.enter_context(handle)
-        return self._spool
+    def _settle(self) -> KaniObservation:
+        """Build the observation without closing or reopening the spool."""
+        facts = self._scanner.facts
+        if self._log_truncated:
+            budget = self.max_log_bytes
+            return self._observed(
+                facts,
+                failure_reason=(
+                    f"the log exceeded the retained budget of {budget} bytes"
+                ),
+            )
+        try:
+            log = self._parse_spool()
+        except KaniLogError as error:
+            return self._observed(facts, failure_reason=error.reason)
+        return self._observed(facts, log=log)
+
+    def _observed(
+        self,
+        facts: KaniLiveFacts,
+        *,
+        log: KaniLog | None = None,
+        failure_reason: str | None = None,
+    ) -> KaniObservation:
+        """Compose the observation from the facts and the spool's outcome."""
+        return KaniObservation(
+            facts=facts,
+            log=log,
+            failure_reason=failure_reason,
+            log_truncated=self._log_truncated,
+            facts_truncated=self._scanner.facts_truncated,
+            spool_error=self._spool_error,
+        )
 
     def _parse_spool(self) -> KaniLog:
-        """Parse the spooled log one line at a time, then release the spool."""
-        if self._spool is None or self._path is None:
+        """Parse the spooled log one line at a time, without releasing it."""
+        if self._spool is None:
             msg = "the log does not begin with a Kani banner"
             raise KaniLogError(msg)
-        try:
-            self._spool.flush()
-            with self._path.open("r", encoding="utf-8", errors="replace") as handle:
-                log = parse_kani_log_lines(line.removesuffix("\n") for line in handle)
-        except BaseException:
-            # The flush or parse failure is the primary one; a cleanup failure
-            # while it unwinds must not replace it.
-            with contextlib.suppress(Exception):
-                self._close_spool()
-            raise
-        self._close_spool()
-        return log
+        return parse_kani_log_lines(self._spool.lines())
 
     def close(self) -> None:
         """Release the spool, tolerating a repeated or never-opened call.
 
-        The spool is only opened when the child produces output, so a caller
-        that classifies a stopped attempt without parsing still owns the
-        handle. `close` is idempotent and safe on every classification path.
+        The observation is unaffected: a caller may close the observer and
+        still classify the value `finish` already returned. A cleanup failure
+        propagates to the caller that observed it, which the attempt boundary
+        suppresses so it cannot replace an active failure.
         """
-        self._close_spool()
-
-    def _close_spool(self) -> None:
-        """Close the spool if one is open, tolerating a repeated call.
-
-        The fields are cleared even when closing raises, so a cleanup failure
-        cannot leave the observer holding a half-closed spool; the cleanup
-        error itself propagates to the caller that observed it.
-        """
-        if self._stack is None:
-            return
-        stack, self._stack = self._stack, None
-        self._spool = None
-        self._path = None
-        stack.close()
+        spool, self._spool = self._spool, None
+        if spool is not None:
+            spool.close()

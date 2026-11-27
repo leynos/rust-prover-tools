@@ -49,12 +49,20 @@ __all__ = (
     "Launcher",
     "LineConsumer",
     "LineObserver",
+    "ObservationT",
+    "ObservationT_co",
     "ReportWriter",
     "ResourceProbe",
     "RunningHarnessHandle",
     "Sleeper",
     "Stopper",
 )
+
+#: The finished observation one adapter classifies.
+ObservationT = typ.TypeVar("ObservationT")
+
+#: The observation type an observer produces, used where only the return matters.
+ObservationT_co = typ.TypeVar("ObservationT_co", covariant=True)
 
 
 class Clock(typ.Protocol):
@@ -77,30 +85,40 @@ class Sleeper(typ.Protocol):
         ...
 
 
-class LineObserver(typ.Protocol):
+class LineObserver(typ.Protocol[ObservationT_co]):
     """A per-attempt observer that accumulates prover evidence as it streams."""
 
-    last_progress: str | None
-    """Last recognised prover progress line, or `None` before one is seen."""
+    @property
+    def last_progress(self) -> str | None:
+        """Last recognised prover progress line, or `None` before one is seen."""
+        ...
 
     def observe(self, line: OutputLine) -> None:
         """Consume one decoded child output line."""
         ...
 
+    def finish(self) -> ObservationT_co:
+        """Return the immutable observation of everything the attempt showed."""
+        ...
 
-class HarnessAdapter(typ.Protocol):
+    def close(self) -> None:
+        """Release any resource the observer holds, tolerating a repeat."""
+        ...
+
+
+class HarnessAdapter(typ.Protocol[ObservationT]):
     """A prover adapter: live observation plus outcome classification."""
 
-    def observer(self, spec: HarnessSpec) -> LineObserver:
+    def observer(self, spec: HarnessSpec) -> LineObserver[ObservationT]:
         """Return a fresh observer for one attempt of `spec`."""
         ...
 
     def classify(
         self,
         evidence: AttemptEvidence,
-        observer: LineObserver,
+        observation: ObservationT,
     ) -> HarnessClassification:
-        """Classify one settled attempt from its evidence."""
+        """Classify one settled attempt from its evidence and observation."""
         ...
 
 

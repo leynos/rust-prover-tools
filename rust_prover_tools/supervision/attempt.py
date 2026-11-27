@@ -17,6 +17,7 @@ and resource evidence, and the adapter classifies it.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import typing as typ
 
@@ -138,30 +139,45 @@ class AttemptSupervisor:
         The attempt owns the child until it has settled. A monitor failure, a
         stop, or a cancellation of this coroutine all leave through the same
         cleanup: stop the child when nothing else has, then join the owned
-        process group before reporting or re-raising.
+        process group before reporting or re-raising. The observer is released
+        at this boundary, whatever ended the attempt.
         """
         started_at = self.clock.now()
         started_monotonic = self.clock.monotonic()
         self._observer = self.adapter.observer(self.spec)
-        cgroup_start = start_cgroup(self.cgroup)
-        running = typ.cast(
-            "RunningHarness",
-            self.launcher.start(self.spec, self.build, self._on_line),
-        )
         try:
-            result = await self._drive(running, started_at, started_monotonic)
-        except BaseException:
-            # The child has already been stopped and joined by `_drive`. Keep
-            # the evidence it produced so a cancelled or faulted run can report
-            # an interrupted attempt instead of pretending it never started.
-            evidence = self._evidence(
-                self._stopped_result, started_at, started_monotonic, cgroup_start
+            cgroup_start = start_cgroup(self.cgroup)
+            running = typ.cast(
+                "RunningHarness",
+                self.launcher.start(self.spec, self.build, self._on_line),
             )
-            classified = self.adapter.classify(evidence, self._observer)
-            self._interrupted = (evidence, classified)
-            raise
-        evidence = self._evidence(result, started_at, started_monotonic, cgroup_start)
-        return evidence, self.adapter.classify(evidence, self._observer)
+            try:
+                result = await self._drive(running, started_at, started_monotonic)
+            except BaseException:
+                # The child has already been stopped and joined by `_drive`.
+                # Keep the evidence it produced so a cancelled or faulted run
+                # can report an interrupted attempt instead of pretending it
+                # never started.
+                evidence = self._evidence(
+                    self._stopped_result, started_at, started_monotonic, cgroup_start
+                )
+                self._interrupted = (evidence, self._classify(evidence))
+                raise
+            evidence = self._evidence(
+                result, started_at, started_monotonic, cgroup_start
+            )
+            return evidence, self._classify(evidence)
+        finally:
+            # `classify` no longer owns the spool, so the boundary that opened
+            # the observer releases it. A cleanup failure must not replace an
+            # active cancellation or monitor failure.
+            with contextlib.suppress(OSError, ValueError):
+                self._observer.close()
+
+    def _classify(self, evidence: AttemptEvidence) -> HarnessClassification:
+        """Finish the observer and classify the attempt from its observation."""
+        observation = typ.cast("LineObserver[typ.Any]", self._observer).finish()
+        return self.adapter.classify(evidence, observation)
 
     @property
     def interrupted(self) -> tuple[AttemptEvidence, HarnessClassification] | None:

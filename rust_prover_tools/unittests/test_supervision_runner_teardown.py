@@ -563,10 +563,10 @@ class _ObservingAdapter:
     def classify(
         self,
         evidence: AttemptEvidence,
-        observer: LineObserver,
+        observation: object,
     ) -> HarnessClassification:
         """Report the scripted observation alongside a passing status."""
-        del observer
+        del observation
         return HarnessClassification(
             status=ExecutionStatus.PASSED,
             proof_verdict=ProofVerdict.PASSED,

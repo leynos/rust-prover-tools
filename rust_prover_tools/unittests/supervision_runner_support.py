@@ -75,6 +75,12 @@ class NullObserver:
     def observe(self, line: OutputLine) -> None:
         """Discard one line."""
 
+    def finish(self) -> None:
+        """Return a trivial observation; the scripted adapter ignores it."""
+
+    def close(self) -> None:
+        """Release nothing; the null observer owns no resource."""
+
 
 @dc.dataclass(frozen=True, slots=True)
 class _ScriptedAdapter:
@@ -90,10 +96,10 @@ class _ScriptedAdapter:
     def classify(
         self,
         evidence: AttemptEvidence,
-        observer: LineObserver,
+        observation: object,
     ) -> HarnessClassification:
         """Return the status configured for this identity."""
-        del observer
+        del observation
         status = self.statuses.get(evidence.spec.qualified, ExecutionStatus.PASSED)
         return classify(status, detail=evidence.stop_reason.value)
 

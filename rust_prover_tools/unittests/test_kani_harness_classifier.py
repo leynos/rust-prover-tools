@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import typing as typ
 from pathlib import Path
 
 import pytest
 
 from rust_prover_tools.kani_cli_grammar import UnsupportedKaniGrammarError
+from rust_prover_tools.kani_log import parse_kani_log_lines
 from rust_prover_tools.supervision import (
     CgroupObservation,
     ExecutionStatus,
@@ -21,10 +24,19 @@ from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
 from rust_prover_tools.supervision.kani import (
     KaniAdapter,
     KaniLiveFacts,
+    KaniObservation,
     KaniObserver,
 )
 from rust_prover_tools.supervision.kani_outcome import observed_verdict
 from rust_prover_tools.unittests.supervision_doubles import VirtualClock
+
+if typ.TYPE_CHECKING:
+    import collections.abc as cabc
+
+    from rust_prover_tools.supervision.kani_observer import (
+        KaniSpool,
+        TemporaryKaniSpool,
+    )
 
 _CORPUS = (
     Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "kani_logs" / "0.67.0"
@@ -40,6 +52,41 @@ def _log(name: str, pretty: str) -> list[str]:
     if names:
         text = text.replace(names[0], pretty)
     return text.splitlines()
+
+
+def _finish(observer: KaniObserver) -> KaniObservation:
+    """Finish an observer, release its spool, and return its observation."""
+    observation = observer.finish()
+    with contextlib.suppress(OSError, ValueError):
+        observer.close()
+    return observation
+
+
+class _RecordingSpool:
+    """An in-memory spool that records what was written and whether it closed."""
+
+    def __init__(self) -> None:
+        """Start with no lines and nothing released."""
+        self.written: list[str] = []
+        self.closed = False
+
+    def write(self, text: str) -> None:
+        """Record one piece of the log."""
+        self.written.append(text)
+
+    def lines(self) -> cabc.Iterator[str]:
+        """Yield the recorded log, without its line terminators."""
+        yield from "".join(self.written).splitlines()
+
+    def close(self) -> None:
+        """Record that the spool was released."""
+        self.closed = True
+
+
+def _no_spool() -> KaniSpool:
+    """Fail as an unwritable temporary directory would."""
+    msg = "no spool"
+    raise OSError(msg)
 
 
 def _observer(pretty: str, name: str = "verified") -> KaniObserver:
@@ -116,7 +163,7 @@ def _classify(
             cgroup=cgroup,
             detail=detail,
         ),
-        _observer(observed or requested, name),
+        _finish(_observer(observed or requested, name)),
     )
 
 
@@ -291,7 +338,9 @@ def test_an_unregistered_banner_becomes_typed_evidence() -> None:
         )
     )
 
-    classification = KaniAdapter().classify(_evidence("alpha::harness"), observer)
+    classification = KaniAdapter().classify(
+        _evidence("alpha::harness"), _finish(observer)
+    )
 
     assert classification.status is ExecutionStatus.ERROR
     assert "0.68.0" in classification.detail
@@ -308,7 +357,7 @@ def test_a_stopped_harness_does_not_claim_an_unparsed_verdict() -> None:
     evidence = _evidence(identity, stop=StopReason.TIMEOUT, exit_code=None)
     adapter = KaniAdapter(version="0.67.0")
 
-    classification = adapter.classify(evidence, _observer(identity))
+    classification = adapter.classify(evidence, _finish(_observer(identity)))
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
@@ -320,7 +369,7 @@ def test_a_nonzero_exit_with_no_output_is_not_a_selection_diagnosis() -> None:
     identity = "harnesses::x"
     evidence = _evidence(identity, exit_code=2)
 
-    classification = adapter.classify(evidence, KaniObserver())
+    classification = adapter.classify(evidence, _finish(KaniObserver()))
 
     assert classification.status is ExecutionStatus.EXIT_NONZERO
     assert "no output" in classification.detail
@@ -339,7 +388,7 @@ def test_a_banner_only_failure_is_not_a_no_match() -> None:
         )
     )
 
-    classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
+    classification = KaniAdapter(version="0.67.0").classify(evidence, _finish(observer))
 
     assert classification.status is ExecutionStatus.EXIT_NONZERO
 
@@ -361,7 +410,7 @@ def test_kanis_own_no_match_diagnostic_is_a_selection_diagnosis() -> None:
             )
         )
 
-    classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
+    classification = KaniAdapter(version="0.67.0").classify(evidence, _finish(observer))
 
     assert classification.status is ExecutionStatus.NO_MATCH
     assert "no harnesses matched" in classification.detail
@@ -386,8 +435,9 @@ def test_a_log_over_the_retained_budget_is_truncated_evidence() -> None:
         )
 
     assert observer.log_truncated
-    assert observer.finish(0) is None
-    assert "retained budget" in (observer.failure_reason or "")
+    observation = _finish(observer)
+    assert observation.log is None
+    assert "retained budget" in (observation.failure_reason or "")
 
 
 def test_a_log_within_the_budget_is_parsed() -> None:
@@ -404,7 +454,7 @@ def test_a_log_within_the_budget_is_parsed() -> None:
             )
         )
 
-    log = observer.finish(0)
+    log = _finish(observer).log
 
     assert log is not None
     assert log.harnesses == (identity,)
@@ -428,7 +478,7 @@ def test_the_live_fact_budget_fails_closed() -> None:
     assert observer.facts_truncated
     assert len(observer.selection_records) == MAX_LIVE_RECORDS
     evidence = _evidence("harnesses::h0", exit_code=1)
-    classification = KaniAdapter(version="0.67.0").classify(evidence, observer)
+    classification = KaniAdapter(version="0.67.0").classify(evidence, _finish(observer))
     assert classification.status is ExecutionStatus.ERROR
     assert "selection records" in classification.detail
 
@@ -468,7 +518,7 @@ def test_live_facts_continue_after_the_spool_stops() -> None:
     )
 
     assert observer.selection_records == ["harnesses::late"]
-    assert observer.finish(0) is None
+    assert _finish(observer).log is None
 
 
 def test_a_duplicated_pretty_name_is_a_multiple_match() -> None:
@@ -498,7 +548,7 @@ def test_a_duplicated_pretty_name_is_a_multiple_match() -> None:
         )
     adapter = KaniAdapter()
 
-    classification = adapter.classify(_evidence("collision_proof"), observer)
+    classification = adapter.classify(_evidence("collision_proof"), _finish(observer))
 
     assert classification.status is ExecutionStatus.MULTIPLE_MATCH
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
@@ -536,7 +586,9 @@ def test_a_selection_shaped_description_line_is_not_a_selection() -> None:
     assert "fake" not in observer.facts.selection_records
     adapter = KaniAdapter()
 
-    classification = adapter.classify(_evidence("harnesses::verified"), observer)
+    classification = adapter.classify(
+        _evidence("harnesses::verified"), _finish(observer)
+    )
 
     assert classification.status is ExecutionStatus.PASSED
     assert classification.observed == ("alpha::harnesses::verified",)
@@ -563,23 +615,23 @@ def test_a_silent_zero_exit_is_an_error_not_exit_nonzero() -> None:
     """A zero exit with no verifier output is missing evidence."""
     evidence = _evidence("harnesses::x", exit_code=0)
 
-    classification = KaniAdapter().classify(evidence, KaniObserver())
+    classification = KaniAdapter().classify(evidence, _finish(KaniObserver()))
 
     assert classification.status is ExecutionStatus.ERROR
     assert "no verifier output" in classification.detail
 
 
 def test_a_stopped_attempt_releases_its_spool() -> None:
-    """Classification releases the spool on a path that never parses it.
+    """The attempt boundary releases the spool that classification never owns.
 
-    A timed-out attempt returns before the parse, so an unclosed spool would
-    keep its temporary directory alive for as long as the caller retains the
-    observer.
+    A timed-out attempt classifies without parsing, so the close at the attempt
+    boundary is the only cleanup. Classification must not release the spool on
+    its own: the observation it reads is immutable, and the spool belongs to
+    the observer that produced it.
     """
     observer = _observer("harnesses::verified")
-    spool = observer._path
-    assert spool is not None
-    assert spool.exists()
+    spool = typ.cast("TemporaryKaniSpool", observer._spool)
+    assert spool._path.exists()
     evidence = _evidence(
         "harnesses::verified",
         stop=StopReason.TIMEOUT,
@@ -587,10 +639,14 @@ def test_a_stopped_attempt_releases_its_spool() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    observation = observer.finish()
+    classification = KaniAdapter().classify(evidence, observation)
 
     assert classification.status is ExecutionStatus.TIMED_OUT
-    assert not spool.exists()
+    assert spool._path.exists()
+    observer.close()
+    observer.close()
+    assert not spool._path.exists()
     observer.close()
     observer.close()
 
@@ -638,7 +694,9 @@ def test_description_noise_cannot_exhaust_the_live_facts() -> None:
     assert not observer.facts_truncated
     adapter = KaniAdapter()
 
-    classification = adapter.classify(_evidence("harnesses::verified"), observer)
+    classification = adapter.classify(
+        _evidence("harnesses::verified"), _finish(observer)
+    )
 
     assert classification.status is ExecutionStatus.PASSED
     assert classification.observed == ("alpha::harnesses::verified",)
@@ -671,7 +729,9 @@ def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
         )
     )
     for index in range(MAX_LIVE_RECORDS):
-        observer._record(observer.selection_records, f"harnesses::filler{index}")
+        observer._scanner._record(
+            observer.selection_records, f"harnesses::filler{index}"
+        )
     assert observer.facts_truncated
     evidence = _evidence(
         "harnesses::verified",
@@ -680,7 +740,7 @@ def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
@@ -725,7 +785,7 @@ def test_a_stopped_attempt_with_a_dropped_duplicate_is_unknown() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
@@ -794,8 +854,9 @@ def test_one_live_selection_and_verdict_are_attributed() -> None:
 def test_a_spool_close_failure_does_not_replace_a_stop() -> None:
     """A cleanup failure while stopping is suppressed, not substituted.
 
-    A stop returns before the parse, so the `finally` is the only cleanup. The
-    attempt must still report the stop reason and detail it already holds.
+    The observation is finished before the spool is released, so a stop must
+    still report the reason and detail it already holds even when the close at
+    the attempt boundary fails.
     """
 
     class _FailingClose(KaniObserver):
@@ -827,7 +888,7 @@ def test_a_spool_close_failure_does_not_replace_a_stop() -> None:
         detail="timed out after 30s",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.detail == "timed out after 30s"
@@ -861,13 +922,14 @@ def test_a_spool_failure_is_not_replaced_by_cleanup(
         msg = "the spool could not be closed"
         raise OSError(msg)
 
-    monkeypatch.setattr(observer._spool, "flush", fail_flush)
-    stack = observer._stack
-    assert stack is not None
-    monkeypatch.setattr(stack, "close", fail_close)
+    spool = typ.cast("TemporaryKaniSpool", observer._spool)
+    monkeypatch.setattr(spool._handle, "flush", fail_flush)
+    monkeypatch.setattr(spool, "close", fail_close)
 
     with pytest.raises(OSError, match="flushed"):
-        observer.finish(0)
+        observer.finish()
+    with pytest.raises(OSError, match="closed"):
+        observer.close()
 
 
 def test_a_description_verdict_does_not_become_a_live_verdict() -> None:
@@ -897,7 +959,7 @@ def test_a_description_verdict_does_not_become_a_live_verdict() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
@@ -916,7 +978,9 @@ def test_a_description_banner_does_not_replace_the_opening_release() -> None:
     observer = _observed_log(log)
     assert observer.banner_version == "0.67.0"
 
-    classification = KaniAdapter().classify(_evidence("harnesses::verified"), observer)
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::verified"), _finish(observer)
+    )
 
     assert classification.status is ExecutionStatus.PASSED
 
@@ -942,7 +1006,7 @@ def test_a_parsed_mismatch_does_not_keep_a_live_verdict() -> None:
     observer = _observed_log(log)
 
     classification = KaniAdapter().classify(
-        _evidence("harnesses::requested", exit_code=1), observer
+        _evidence("harnesses::requested", exit_code=1), _finish(observer)
     )
 
     assert classification.status is ExecutionStatus.NO_MATCH
@@ -979,7 +1043,7 @@ def test_a_description_ending_in_a_quote_still_hides_its_verdict() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
@@ -1013,7 +1077,7 @@ def test_an_ordinary_continuation_does_not_commit_a_description_verdict() -> Non
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
@@ -1048,7 +1112,7 @@ def test_a_stopped_attempt_does_not_claim_a_verdict_from_prose() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, observer)
+    classification = KaniAdapter().classify(evidence, _finish(observer))
 
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
 
@@ -1057,7 +1121,112 @@ def test_a_complete_log_still_supplies_its_verdict() -> None:
     """The parser, not the live scan, attributes a genuine verdict."""
     observer = _observer("harnesses::verified")
 
-    classification = KaniAdapter().classify(_evidence("harnesses::verified"), observer)
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::verified"), _finish(observer)
+    )
 
     assert classification.status is ExecutionStatus.PASSED
     assert classification.proof_verdict is ProofVerdict.PASSED
+
+
+def _unclosed_observer() -> tuple[KaniObserver, _RecordingSpool]:
+    """Return an observer over a recording spool, plus that spool."""
+    spool = _RecordingSpool()
+    return KaniObserver(spool_factory=lambda: spool), spool
+
+
+def test_classifying_an_observation_does_not_close_the_spool() -> None:
+    """Classification reads the immutable observation and touches nothing else.
+
+    The spool outlives classification so the attempt boundary, not the
+    classifier, decides when to release it. The observer must stay usable and
+    its facts must be exactly what the observation reported.
+    """
+    observer, spool = _unclosed_observer()
+    for text in _log("verified", "harnesses::verified"):
+        observer.observe(
+            OutputLine(
+                stream="stdout",
+                text=text,
+                timestamp_utc=VirtualClock().now(),
+                elapsed_seconds=0.0,
+            )
+        )
+    observation = observer.finish()
+    facts_before = observation.facts
+
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::verified"), observation
+    )
+
+    assert classification.status is ExecutionStatus.PASSED
+    assert spool.closed is False
+    assert observer.facts == facts_before
+    observer.close()
+    assert spool.closed is True
+    observer.close()
+
+
+def test_a_spool_that_cannot_open_is_an_explicit_error() -> None:
+    """A spool the attempt cannot open is named, not silently ignored.
+
+    The verifier's live facts survive the failure, but a classification that
+    cannot retain the log is an error rather than a pass with missing
+    evidence.
+    """
+    adapter = KaniAdapter(spool_factory=_no_spool)
+    observer = adapter.observer(HarnessSpec("alpha", "harnesses::verified"))
+    observer.observe(
+        OutputLine(
+            stream="stdout",
+            text="Kani Rust Verifier 0.67.0 (cargo plugin)",
+            timestamp_utc=VirtualClock().now(),
+            elapsed_seconds=0.0,
+        )
+    )
+    observation = observer.finish()
+    assert observation.spool_error == "OSError: no spool"
+
+    classification = adapter.classify(_evidence("harnesses::verified"), observation)
+
+    assert classification.status is ExecutionStatus.ERROR
+    assert "cannot retain the verifier log" in classification.detail
+    assert "no spool" in classification.detail
+    observer.close()
+
+
+def test_a_synthetic_observation_classifies_without_an_observer() -> None:
+    """The classifier takes the observation value, not a live observer.
+
+    Building the value directly pins the seam: everything classification reads
+    is in the observation, so a caller can classify a corpus log or a refusal
+    without ever constructing an observer.
+    """
+    log = parse_kani_log_lines(_log("verified", "harnesses::verified"))
+    facts = _live_facts(selections=("harnesses::verified",))
+    observation = KaniObservation(facts=facts, log=log)
+
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::verified"), observation
+    )
+
+    assert classification.status is ExecutionStatus.PASSED
+    assert classification.proof_verdict is ProofVerdict.PASSED
+    assert classification.observed == ("alpha::harnesses::verified",)
+
+
+def test_a_synthetic_parse_refusal_classifies_as_malformed_output() -> None:
+    """A refusal carried by the observation is the classifier's only reason."""
+    observation = KaniObservation(
+        facts=_live_facts(selections=("harnesses::verified",)),
+        log=None,
+        failure_reason="the log does not begin with a Kani banner",
+    )
+
+    classification = KaniAdapter().classify(
+        _evidence("harnesses::verified"), observation
+    )
+
+    assert classification.status is ExecutionStatus.ERROR
+    assert classification.detail.startswith("malformed verifier output:")
+    assert "does not begin with a Kani banner" in classification.detail
