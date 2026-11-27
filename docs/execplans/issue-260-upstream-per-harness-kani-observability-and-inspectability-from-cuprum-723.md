@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,351 passed and 6
-skipped at code head `1476458`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,352 passed and 6
+skipped at code head `7767e3e`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the final code head: 2 passed in 218.01 s at `1476458`.
+passed at the docs-only successor `811a1e0`: 2 passed in 37.40 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -165,6 +165,18 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-27 03:45Z) Thirteenth review round, from the R12 follow-up. Each
+  real-process witness now runs as one isolated `python -I` interpreter under a
+  parent deadline longer than its own watchdog, so a settlement that suppresses
+  cancellation can neither hang pytest nor block event-loop shutdown; the
+  parent kills and confirms the recorded process group on timeout, and every
+  successful case re-asserts its child's absence from the parent. The
+  SIGTERM-ignoring child relocated into that boundary. The guide gained one
+  paragraph per remaining supervision module, an explicit Cuprum boundary, and
+  the `CommandTimedOutError` correction. `make check-fmt`, `make all` (3,352
+  passed, 6 skipped), `make markdownlint`, and `make nixie` pass at `7767e3e`;
+  the opt-in live Kani 0.67.0 fixture passes: 2 passed in 37.40 s.
 
 - [x] (2026-11-25 22:00Z) Live fixture at the tenth-round candidate: 2 passed
   in 455.01 s at `16fb35c`. Production code is unchanged since `d9ddcd8`; the
