@@ -169,15 +169,16 @@ class KaniObserver:
     def _spool_line(self, text: str) -> None:
         """Write one line to the open spool while it fits the configured budget.
 
-        Once the budget is spent the spool can never be parsed, so it is
-        released immediately; the live facts continue under their own cap.
+        Once the budget is spent the spool can never be parsed, so writing
+        stops; the live facts continue under their own cap. The spool itself
+        stays open, because closing is the attempt boundary's job: a close
+        failure must not escape the output callback.
         """
         if self._log_truncated or self._spool is None:
             return
         encoded = len(text.encode("utf-8")) + 1
         if self._written + encoded > self.max_log_bytes:
             self._log_truncated = True
-            self.close()
             return
         self._spool.write(text)
         self._spool.write("\n")
@@ -212,6 +213,12 @@ class KaniObserver:
             log = self._parse_spool()
         except KaniLogError as error:
             return self._observed(facts, failure_reason=error.reason)
+        except OSError as error:
+            # A flush or read failure is evidence of its own. Recording it in
+            # the observation keeps `finish` infallible, so it can be called
+            # while an attempt unwinds a cancellation or a monitor fault
+            # without replacing that original failure.
+            return self._observed(facts, spool_error=f"{type(error).__name__}: {error}")
         return self._observed(facts, log=log)
 
     def _observed(
@@ -220,6 +227,7 @@ class KaniObserver:
         *,
         log: KaniLog | None = None,
         failure_reason: str | None = None,
+        spool_error: str | None = None,
     ) -> KaniObservation:
         """Compose the observation from the facts and the spool's outcome."""
         return KaniObservation(
@@ -228,7 +236,7 @@ class KaniObserver:
             failure_reason=failure_reason,
             log_truncated=self._log_truncated,
             facts_truncated=self._scanner.facts_truncated,
-            spool_error=self._spool_error,
+            spool_error=spool_error if spool_error is not None else self._spool_error,
         )
 
     def _parse_spool(self) -> KaniLog:

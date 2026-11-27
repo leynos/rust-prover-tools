@@ -1301,3 +1301,80 @@ def test_the_report_writer_is_injected_without_touching_the_filesystem(
 
     assert recorded == [(report_path, report)]
     assert not report_path.exists()
+
+
+class _UnreadableSpool:
+    """A spool that accepts writes but fails when the log is read back."""
+
+    def write(self, text: str) -> None:
+        """Accept one piece of the log; the failure is on read."""
+
+    def lines(self) -> cabc.Iterator[str]:
+        """Fail as a flush or read failure would."""
+        msg = "the spool could not be read"
+        raise OSError(msg)
+
+    def close(self) -> None:
+        """Release nothing."""
+
+
+def test_an_unreadable_spool_is_classified_as_an_evidence_error(
+    tmp_path: Path,
+) -> None:
+    """A spool read failure is reported, not raised, on ordinary completion."""
+    asyncio.run(_unreadable_spool_scenario(tmp_path, cancel=False))
+
+
+def test_a_cancelled_attempt_survives_an_unreadable_spool(tmp_path: Path) -> None:
+    """Cancellation is preserved when finishing the evidence also fails."""
+    asyncio.run(_unreadable_spool_scenario(tmp_path, cancel=True))
+
+
+async def _unreadable_spool_scenario(tmp_path: Path, *, cancel: bool) -> None:
+    """Run one attempt whose spool cannot be read back."""
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(("stdout", "Checking harness harnesses::a..."),),
+            block=cancel,
+        ),
+        ready=ready,
+    )
+    (identity,) = (spec("harnesses::a"),)
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=600.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(
+            version="0.67.0",
+            spool_factory=_UnreadableSpool,
+        ),
+    )
+
+    if not cancel:
+        report = await run_supervised((identity,), config, environment)
+        (result,) = report.results
+        assert result.status is ExecutionStatus.ERROR
+        assert "cannot retain the verifier log" in result.detail
+        assert "the spool could not be read" in result.detail
+        return
+
+    task = asyncio.create_task(run_supervised((identity,), config, environment))
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"

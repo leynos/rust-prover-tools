@@ -894,13 +894,15 @@ def test_a_spool_close_failure_does_not_replace_a_stop() -> None:
     assert classification.detail == "timed out after 30s"
 
 
-def test_a_spool_failure_is_not_replaced_by_cleanup(
+def test_a_spool_failure_is_recorded_rather_than_raised(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The flush or parse error survives a failing cleanup.
+    """A flush failure becomes a named observation, not an escaping error.
 
-    A full temporary filesystem can fail both the flush and the close. The
-    caller must see the primary failure, not the cleanup's.
+    `finish` runs while an attempt may be unwinding a cancellation or a
+    monitor fault, so it must not raise: a full temporary filesystem names
+    the failure in the observation instead. The cleanup failure from `close`
+    still reaches the attempt boundary that owns the resource.
     """
     observer = KaniObserver()
     observer.observe(
@@ -926,8 +928,10 @@ def test_a_spool_failure_is_not_replaced_by_cleanup(
     monkeypatch.setattr(spool._handle, "flush", fail_flush)
     monkeypatch.setattr(spool, "close", fail_close)
 
-    with pytest.raises(OSError, match="flushed"):
-        observer.finish()
+    observation = observer.finish()
+
+    assert observation.log is None
+    assert observation.spool_error == "OSError: the spool could not be flushed"
     with pytest.raises(OSError, match="closed"):
         observer.close()
 
