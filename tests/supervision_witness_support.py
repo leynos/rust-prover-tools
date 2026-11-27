@@ -14,6 +14,7 @@ import os
 import signal
 import threading
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.supervision import StopReason
 
@@ -21,8 +22,10 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
 __all__ = (
+    "SCENARIO_WATCHDOG_SECONDS",
     "SETTLE_SECONDS",
     "WITNESS_DEADLINE_SECONDS",
+    "is_running",
     "run_bounded",
     "settle_within",
 )
@@ -30,8 +33,28 @@ __all__ = (
 #: Seconds a witness waits for one settle before failing.
 SETTLE_SECONDS = 30.0
 
-#: Seconds a whole witness scenario may run, shutdown included.
+#: Seconds a scenario may run inside its subprocess before the watchdog exits
+#: it. The parent's `WITNESS_DEADLINE_SECONDS` is deliberately longer, so a
+#: stuck scenario normally ends inside its own process rather than being killed.
+SCENARIO_WATCHDOG_SECONDS = 120.0
+
+#: Seconds a parent waits for one witness subprocess before killing its group.
 WITNESS_DEADLINE_SECONDS = 240.0
+
+
+def is_running(pid: int) -> bool:
+    """Whether a process still runs, treating a zombie as finished."""
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+    except OSError:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+    return stat.rsplit(")", 1)[-1].strip()[:1] != "Z"
 
 
 async def settle_within(running: object, *, deadline: float = SETTLE_SECONDS) -> None:
