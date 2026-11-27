@@ -720,6 +720,42 @@ channel, `write_inventory` in `list_harnesses`, and one Cargo metadata seam.
 `make check-fmt`, `make all` (3,512 passed, 20 skipped), `make markdownlint` and
 `make nixie` pass.
 
+## Open full-review programme at handoff
+
+The branch is green, mergeable and pushed at `447f590`. Review `6091178516`
+(2026-11-27T16:48:12Z) is a **full review of the whole 176-commit branch** and
+posts 31 actionable comments across 23 files. It supersedes the incremental
+rounds for planning purposes: the next session should treat it as a work
+programme, not as a single remediation round.
+
+Grouped:
+
+- Plan and docs accuracy: decision-log stopped-verdict entry, the authorised
+  `classify` interface, and the v0.2.0 migration guide's `harnesses run`
+  example.
+- Inventory semantics: raw-identifier attribute segments, inner `cfg`
+  attributes on functions, and bounded recursive traversal in the Rust source
+  walker.
+- Snapshot and launcher correctness: one environment copy in
+  `prepare_snapshot_proof`, settling the owned group after the leader exits,
+  and the `command_for` return type.
+- Evidence bounds and ordering: sample append before heartbeat emission,
+  free-text-only shortening in `formatting`, the sink LF budget, and the
+  cancellation-preserving `_drive` handler.
+- Signal handler validation before installation.
+- Test-suite splitting: `test_kani_harness_classifier.py`,
+  `test_kani_inventory_discover.py`, `test_kani_inventory_scan.py`,
+  `test_supervision_evidence.py`, `test_supervision_resources.py`,
+  `test_supervision_runner_teardown.py`, `test_supervision_runner.py`,
+  `test_supervision_witness_support.py`,
+  `tests/supervision_witness_cases_support.py` and
+  `tests/test_supervision_process_witness.py`, each to stay under 400 logical
+  lines with shared setup in fixtures.
+
+Read the review body for the exact per-line requirements. Work through it in
+gated batches, and request an incremental review after each batch rather than
+another full review until the programme is complete.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
