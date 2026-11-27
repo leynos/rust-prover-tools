@@ -156,14 +156,22 @@ class AttemptSupervisor:
                 result = await self._drive(running, started_at, started_monotonic)
             except BaseException as error:
                 # The child has already been stopped and joined by `_drive`.
-                # Keep the evidence it produced so a cancelled or faulted run
-                # can report an interrupted attempt instead of pretending it
-                # never started.
-                evidence = self._evidence(
-                    self._stopped_result, started_at, started_monotonic, cgroup_start
-                )
-                self._interrupted = (evidence, self._classify(evidence))
+                # Record the original failure first: reporting the interrupted
+                # attempt may itself fail, and that must not replace the
+                # reason the attempt ended.
                 failure = error
+                try:
+                    evidence = self._evidence(
+                        self._stopped_result,
+                        started_at,
+                        started_monotonic,
+                        cgroup_start,
+                    )
+                    self._interrupted = (evidence, self._classify(evidence))
+                except Exception as secondary:  # ruff: ignore[blind-except] - noted
+                    error.add_note(
+                        f"reporting the interrupted attempt also failed: {secondary}"
+                    )
                 raise
             evidence = self._evidence(
                 result, started_at, started_monotonic, cgroup_start

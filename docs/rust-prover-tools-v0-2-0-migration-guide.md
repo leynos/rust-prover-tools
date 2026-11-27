@@ -150,11 +150,13 @@ prover-tools kani harnesses run --repo-root . --package example-package \
 
 `kani harnesses list` prints the resolved, package-qualified inventory as
 strict version-1 JSON. `kani harnesses run` executes one exact invocation per
-selected harness in an owned process group, with live human and JSONL evidence,
-resource sampling, a per-harness timeout, an optional host-memory watchdog, and
-a versioned report. The route accepts a qualified 0.67.0 release or a reviewed
-snapshot; the [users' guide](users-guide.md#supervised-kani-harness-execution)
-documents the options, defaults, outcome vocabulary and exit statuses, and
+selected harness in an owned process group, with live human evidence on
+standard output, resource sampling, a per-harness timeout, an optional
+host-memory watchdog, and a versioned report. JSONL evidence and the report
+file are disabled by default: pass `--jsonl PATH` and `--report PATH` to write
+them. The route accepts a qualified 0.67.0 release or a reviewed snapshot; the
+[users' guide](users-guide.md#supervised-kani-harness-execution) documents the
+options, defaults, outcome vocabulary and exit statuses, and
 [Kani supervised harness execution](kani-supervised-execution.md) gives the
 schemas and measurement limits.
 

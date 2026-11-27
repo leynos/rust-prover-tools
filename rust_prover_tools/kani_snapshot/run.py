@@ -225,10 +225,14 @@ def prepare_snapshot_proof(
     # switch the active generation between the check and the launch, so
     # execution uses the checked identity rather than a second, unvalidated
     # resolution.
+    # Copy the caller's mapping once, so the probe qualifies exactly the
+    # environment the proof will be launched with even if the caller's mapping
+    # is an object that later changes.
+    base = dict(context.environment)
     identity = check_active_snapshot(
         InstallOptions(pin=options.pin, cache_home=options.cache_home),
         hooks,
-        environment=context.environment,
+        environment=base,
     )
     layout = snapshot_layout(
         options.pin,
@@ -241,7 +245,6 @@ def prepare_snapshot_proof(
         backend_version=identity.backend_version,
     )
     working_directory = context.cwd.resolve()
-    base = context.environment
     return QualifiedSnapshotProof(
         runtime=runtime,
         cwd=working_directory,

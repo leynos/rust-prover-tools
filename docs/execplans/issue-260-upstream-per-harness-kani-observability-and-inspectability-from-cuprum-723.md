@@ -999,9 +999,14 @@ another full review until the programme is complete.
   Kani escapes nothing inside a check description, so description content can
   contain a verdict line, a results marker, or a line ending in the closing
   quote, and the parser's own boundary test needs lookahead the live scanner
-  does not have. A stopped attempt therefore reports `UNKNOWN`, which is the
-  safe direction; this supersedes the earlier "a stop keeps the observed
-  verdict" behaviour. Date/Author: 2026-11-25, implementation agent.
+  does not have. A stopped attempt with no parsed log therefore reports
+  `UNKNOWN`, which is the safe direction; this supersedes the earlier "a stop
+  keeps the observed verdict" behaviour. Date/Author: 2026-11-25,
+  implementation agent. Superseded in part by the seventeenth round
+  (2026-11-27): a stopped attempt adopts the verdict a retained log states when
+  that log's block names the requested harness, and only a truncated, refused,
+  or unrelated log reports `UNKNOWN`; `docs/kani-supervised-execution.md`
+  states that supervised-execution contract.
 - D39. Decision: the Coding Plan's shared `feed_line(stream, text)` and
   `finish(exit_code)` parser interface is replaced by
   `parse_kani_log_lines(lines)` over a bounded line source, with live facts
@@ -1019,12 +1024,15 @@ another full review until the programme is complete.
   standing instruction to implement and deliver the approved plan authorized
   the full scope. Date/Author: 2026-11-23, implementation agent.
 - D12. Decision: the supervision layer's adapter seam is an
-  `observer(spec)` factory plus `classify(evidence, observer)`. Rationale:
+  `observer(spec)` factory plus `classify(evidence, observation)`, where
+  `observation` is the finished value `observer.finish()` returns. Rationale:
   classification needs facts accumulated while output streams, but the generic
   runner must not know a prover's grammar. A per-attempt observer keeps the
-  parser state private to the adapter and leaves the runner's timing,
-  measurement, evidence, and accounting untouched. Date/Author: 2026-11-21,
-  implementation agent.
+  parser state private to the adapter, and passing the finished observation
+  rather than the observer keeps classification a pure function of settled
+  evidence; the runner's timing, measurement, evidence, and accounting stay
+  untouched. Date/Author: 2026-11-21, implementation agent; revised 2026-11-27
+  to name the observation value.
 - D10. Decision: no new dependency; JSON, hashing, parsing, and process
   inspection use the standard library. Rationale: the capability needs no
   third-party runtime package, and the repository's gates already cover the
@@ -1734,8 +1742,16 @@ async def run_supervised(
 # rust_prover_tools/supervision/kani.py
 class KaniAdapter:
     def observer(self, spec: HarnessSpec) -> KaniObserver: ...
-    def classify(self, evidence, observer) -> HarnessClassification: ...
+    def classify(
+        self,
+        evidence: AttemptEvidence,
+        observation: KaniObservation,
+    ) -> HarnessClassification: ...
 ```
+
+`observation` is the finished value returned by `observer.finish()`, not the
+observer itself: classification reads settled facts and never parses or owns
+the spool.
 
 Reuse policy: `commands.py` remains the only synchronous command boundary; the
 async launcher builds the same `CommandSpec`-equivalent argv and environment

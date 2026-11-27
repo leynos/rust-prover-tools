@@ -36,6 +36,11 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("SourceProof", "collect_proofs")
 
+#: Deepest module nesting one crate walk follows. This is far below the
+#: interpreter's recursion limit, so a pathological acyclic chain reports a
+#: discovery error instead of leaking `RecursionError` from `collect_proofs`.
+_MAX_MODULE_DEPTH = 128
+
 
 @dc.dataclass(frozen=True, slots=True)
 class SourceProof:
@@ -140,6 +145,7 @@ def collect_proofs(
             directory=lexical_root.parent,
             path_root=lexical_root.parent,
         ),
+        depth=0,
     )
     return tuple(walk.proofs)
 
@@ -152,8 +158,14 @@ def _relative(path: Path, repository_root: Path) -> str:
         return path.as_posix()
 
 
-def _walk_file(walk: _Walk, module: _Module) -> None:
-    """Walk one module file, following its declarations."""
+def _walk_file(walk: _Walk, module: _Module, *, depth: int) -> None:
+    """Walk one module file, following its declarations.
+
+    `depth` counts the modules already entered, so a pathological acyclic
+    chain reports `InventoryDiscoveryError` rather than exhausting the
+    interpreter's stack.
+    """
+    _require_depth(module, depth)
     resolved = module.path.resolve()
     if resolved in walk.active:
         msg = f"module file forms a cycle: {resolved}"
@@ -166,18 +178,42 @@ def _walk_file(walk: _Walk, module: _Module) -> None:
             msg = f"module file cannot be read: {resolved}: {error}"
             raise InventoryDiscoveryError(msg) from error
         source = Source(original=original, masked=mask_source(original))
-        items = parse_level(
-            source,
-            0,
-            len(original),
-            conditional=module.conditional,
-        )
-        _walk_items(walk, module, items)
+        try:
+            items = parse_level(
+                source,
+                0,
+                len(original),
+                conditional=module.conditional,
+            )
+        except RecursionError as error:
+            # Inline modules are parsed eagerly, so an inline chain can also
+            # exhaust the stack. It is still a discovery refusal, never a
+            # leaked interpreter failure.
+            msg = f"module nesting is too deep to parse: {resolved}"
+            raise InventoryDiscoveryError(msg) from error
+        _walk_items(walk, module, items, depth=depth)
     finally:
         walk.active.discard(resolved)
 
 
-def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> None:
+def _require_depth(module: _Module, depth: int) -> None:
+    """Refuse a module nested deeper than `_MAX_MODULE_DEPTH`."""
+    if depth > _MAX_MODULE_DEPTH:
+        location = "::".join(module.module_path) or "<crate root>"
+        msg = (
+            f"module nesting exceeds {_MAX_MODULE_DEPTH} levels at {location} "
+            f"in {module.path}"
+        )
+        raise InventoryDiscoveryError(msg)
+
+
+def _walk_items(
+    walk: _Walk,
+    module: _Module,
+    items: cabc.Iterable[Item],
+    *,
+    depth: int,
+) -> None:
     """Record proofs and follow module declarations in one file."""
     for item in items:
         if isinstance(item, ProofItem):
@@ -200,19 +236,17 @@ def _walk_items(walk: _Walk, module: _Module, items: cabc.Iterable[Item]) -> Non
                 if item.path_attribute is not None
                 else module.directory / item.name
             )
-            _walk_items(
-                walk,
-                dc.replace(
-                    module,
-                    module_path=(*module.module_path, item.name),
-                    conditional=item.conditional,
-                    directory=inline_directory,
-                    path_root=inline_directory,
-                ),
-                item.items,
+            inline = dc.replace(
+                module,
+                module_path=(*module.module_path, item.name),
+                conditional=item.conditional,
+                directory=inline_directory,
+                path_root=inline_directory,
             )
+            _require_depth(inline, depth + 1)
+            _walk_items(walk, inline, item.items, depth=depth + 1)
         else:
-            _walk_file(walk, _child_module(walk, module, item))
+            _walk_file(walk, _child_module(walk, module, item), depth=depth + 1)
 
 
 def _child_module(walk: _Walk, parent: _Module, item: ModItem) -> _Module:

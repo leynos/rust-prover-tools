@@ -18,9 +18,9 @@ from rust_prover_tools.kani_inventory.attribute_values import (
     DEPTH_DELTAS,
     PROOF_ATTRIBUTES,
     attribute_name,
+    attribute_spelling,
     cfg_attr_facts,
     inner_gates,
-    normalise,
     path_value,
 )
 from rust_prover_tools.kani_inventory.masking import Identifier, identifier
@@ -34,15 +34,6 @@ __all__ = (
     "Source",
     "parse_level",
 )
-
-_ESCAPES = {
-    "\\": "\\",
-    '"': '"',
-    "n": "\n",
-    "r": "\r",
-    "t": "\t",
-    "0": "\0",
-}
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -130,7 +121,7 @@ class _AttributeFacts:
                 )
                 raise InventoryDiscoveryError(msg)
             self.path = value
-        if name == "cfg" and normalise(masked) != "cfg(kani)":
+        if name == "cfg" and attribute_spelling(masked) != "cfg(kani)":
             self.conditional = True
         if name == "cfg_attr":
             self._record_cfg_attr(masked, original)
@@ -269,28 +260,44 @@ def _parse_fn(
     word: Identifier,
     attributes: _Attributes,
 ) -> tuple[Item | None, int]:
-    """Parse a function, recording it when a proof attribute selects it."""
-    after = _skip_space(source.masked, word.end)
-    name_match = identifier(source.masked, after)
-    position = _skip_item(
-        source.masked,
-        after if name_match is None else name_match.end,
-    )
+    """Parse a function, recording it when a proof attribute selects it.
+
+    Leading inner attributes are inspected before the body is skipped, because
+    an inner `cfg` can remove the function. Nested items stay inside it.
+    """
+    masked = source.masked
+    after = _skip_space(masked, word.end)
+    name_match = identifier(masked, after)
+    start = after if name_match is None else name_match.end
+    body, terminator = _find_top_level(masked, start)
+    position = _skip_item(masked, start)
     if name_match is None or not attributes.proof:
         return None, position
+    conditional = attributes.conditional
+    if terminator == "{":
+        inner, _ = _attributes(source, _skip_space(masked, body + 1), inner_only=True)
+        conditional = conditional or inner.inner_conditional
     return (
         ProofItem(
             function=name_match.text,
             line=_line_of(source.original, after),
             attributes=attributes.proof,
-            conditional=attributes.conditional,
+            conditional=conditional,
         ),
         position,
     )
 
 
-def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
-    """Parse every attribute group starting at `position`."""
+def _attributes(
+    source: Source,
+    position: int,
+    *,
+    inner_only: bool = False,
+) -> tuple[_Attributes, int]:
+    """Parse attribute groups starting at `position`.
+
+    `inner_only` stops at the first outer attribute.
+    """
     facts = _AttributeFacts()
     masked = source.masked
     while position < len(masked) and masked.startswith("#", position):
@@ -299,6 +306,8 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         if bracket < len(masked) and masked[bracket] == "!":
             inner = True
             bracket = _skip_space(masked, bracket + 1)
+        if inner_only and not inner:
+            break
         if bracket >= len(masked) or masked[bracket] != "[":
             break
         end = _matching(masked, bracket, "[", "]")
@@ -306,10 +315,7 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         if inner:
             facts.record_inner(content)
         else:
-            facts.record(
-                source.original[bracket + 1 : end - 1],
-                content,
-            )
+            facts.record(source.original[bracket + 1 : end - 1], content)
         position = _skip_space(masked, end)
     return (
         _Attributes(
@@ -320,11 +326,6 @@ def _attributes(source: Source, position: int) -> tuple[_Attributes, int]:
         ),
         position,
     )
-
-
-def _starts_string(masked: str, position: int) -> bool:
-    """Whether a string literal starts at `position`."""
-    return position < len(masked) and masked[position] == '"'
 
 
 def _skip_modifiers(masked: str, position: int) -> int:
@@ -340,7 +341,7 @@ def _skip_modifiers(masked: str, position: int) -> int:
                 position = _matching(masked, position, "(", ")")
         elif value in {"unsafe", "async", "const", "default", "extern"}:
             position = word.end
-            if value == "extern" and _starts_string(masked, position):
+            if value == "extern" and masked[position : position + 1] == '"':
                 position += 1
         else:
             return position

@@ -18,6 +18,7 @@ __all__ = (
     "DEPTH_DELTAS",
     "PROOF_ATTRIBUTES",
     "attribute_name",
+    "attribute_spelling",
     "cfg_attr_facts",
     "inner_gates",
     "normalise",
@@ -61,24 +62,47 @@ def normalise(content: str) -> str:
     return re.sub(r"\s+", "", content)
 
 
+def _attribute_path(content: str) -> str:
+    """Return an attribute path without whitespace or raw-identifier prefixes.
+
+    Rust's ``r#`` prefix is a quoting device, not part of an identifier, so
+    ``r#kani::proof`` names the same attribute as ``kani::proof``.
+    """
+    return "::".join(
+        segment.removeprefix("r#") for segment in normalise(content).split("::")
+    )
+
+
 def attribute_name(content: str) -> tuple[str, str]:
     """Return an attribute's path and its argument text.
 
     Rust attributes are token sequences, not fixed spellings: whitespace may
     surround ``::`` and a path may carry arguments. The path is everything
-    before the first top-level ``(`` or ``=``, with all whitespace removed.
+    before the first top-level ``(`` or ``=``, with all whitespace removed and
+    any ``r#`` raw-identifier prefix stripped from every segment.
     """
     depth = 0
     for index, char in enumerate(content):
         if char == "(" and depth == 0:
-            return normalise(content[:index]), content[index:]
+            return _attribute_path(content[:index]), content[index:]
         if char == "=" and depth == 0:
-            return normalise(content[:index]), content[index:]
+            return _attribute_path(content[:index]), content[index:]
         if char == "(":
             depth += 1
         elif char == ")":
             depth = max(0, depth - 1)
-    return normalise(content), ""
+    return _attribute_path(content), ""
+
+
+def attribute_spelling(content: str) -> str:
+    """Return one attribute's whole spelling, normalised and raw-insensitive.
+
+    Comparing this against ``cfg(kani)`` recognises the activation in any
+    equivalent spelling, including ``r#cfg(kani)`` and one that carries a
+    masked comment.
+    """
+    name, arguments = attribute_name(content)
+    return name + normalise(arguments)
 
 
 def _strip_comments(text: str) -> str:
@@ -242,7 +266,7 @@ def inner_gates(masked: str) -> bool:
     """
     name, _ = attribute_name(masked)
     if name == "cfg":
-        return normalise(masked) != "cfg(kani)"
+        return attribute_spelling(masked) != "cfg(kani)"
     if name == "cfg_attr":
         nested = cfg_attr_facts(masked, masked)
         return nested is not None and nested[1]
@@ -286,7 +310,7 @@ def _parse_cfg_attr(
         )
         for left, right in spans
     ]
-    return normalise(pairs[0][0]), pairs[1:]
+    return _attribute_path(pairs[0][0]), pairs[1:]
 
 
 def _fold_cfg_facts(
@@ -338,7 +362,7 @@ def _nested_cfg_attr_facts(
         return [nested_name], False, None
     if nested_name == "path":
         return [], False, path_value(original)
-    if nested_name == "cfg" and normalise(masked) != "cfg(kani)":
+    if nested_name == "cfg" and attribute_spelling(masked) != "cfg(kani)":
         return [], True, None
     return [], False, None
 

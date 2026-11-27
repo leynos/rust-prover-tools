@@ -63,7 +63,11 @@ def test_installation_restores_the_previous_handlers(
 ) -> None:
     """The CLI restores whatever policy the embedding application had."""
     calls: list[tuple[int, object]] = []
-    monkeypatch.setattr("signal.getsignal", lambda sig: f"previous-{sig}")
+
+    def previous(signum: int, frame: object) -> None:
+        """Stand in for the embedding application's handler."""
+
+    monkeypatch.setattr("signal.getsignal", lambda sig: previous)
     monkeypatch.setattr(
         "signal.signal", lambda sig, handler: calls.append((sig, handler))
     )
@@ -73,15 +77,15 @@ def test_installation_restores_the_previous_handlers(
         assert [sig for sig, _ in calls] == [signal.SIGINT, signal.SIGTERM]
 
     assert calls[-2:] == [
-        (signal.SIGINT, f"previous-{signal.SIGINT}"),
-        (signal.SIGTERM, f"previous-{signal.SIGTERM}"),
+        (signal.SIGINT, previous),
+        (signal.SIGTERM, previous),
     ]
 
 
 def test_the_first_signal_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     """A later signal does not replace the reason the run stopped."""
     calls: list[tuple[int, object]] = []
-    monkeypatch.setattr("signal.getsignal", lambda sig: None)
+    monkeypatch.setattr("signal.getsignal", lambda sig: signal.SIG_DFL)
     monkeypatch.setattr(
         "signal.signal", lambda sig, handler: calls.append((sig, handler))
     )

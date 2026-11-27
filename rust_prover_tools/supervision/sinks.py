@@ -196,7 +196,9 @@ class JsonlSink:
             "schema": JSONL_SCHEMA_VERSION,
             **typ.cast("dict[str, object]", normalise(record)),
         }
-        line = fit_record(payload, self._limit)
+        # One byte of the budget belongs to the LF the sink appends, so the
+        # bytes written never exceed `max_line_bytes`.
+        line = fit_record(payload, self._limit - 1)
         try:
             self._handle.write(line + "\n")
             self._handle.flush()
@@ -253,7 +255,8 @@ class HumanSink:
 
     def write(self, record: dict[str, object]) -> None:
         """Render and write one record, flushing it."""
-        line = bounded_text(render_human(record), self._limit)
+        # The appended LF counts against the same bound as the line itself.
+        line = bounded_text(render_human(record), self._limit - 1)
         try:
             self._handle.write(line + "\n")
             self._handle.flush()

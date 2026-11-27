@@ -115,12 +115,37 @@ def install_interrupt_handlers(
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    previous: dict[int, object] = {}
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        previous[signum] = signal.getsignal(signum)
+    signums = (signal.SIGINT, signal.SIGTERM)
+    previous = _validated_dispositions(signums)
+    for signum in signums:
         signal.signal(signum, interrupt._handle)
     try:
         yield
     finally:
         for signum, disposition in previous.items():
             signal.signal(signum, typ.cast("typ.Any", disposition))
+
+
+def _validated_dispositions(signums: tuple[int, ...]) -> dict[int, object]:
+    """Return both previous dispositions, refusing any that cannot be restored.
+
+    `signal.getsignal` reports the native disposition as `None` when a handler
+    was installed outside Python, and `signal.signal` refuses to restore that
+    value. Reading and validating every signal first keeps such a refusal from
+    replacing one application handler and leaving the other untouched.
+    """
+    previous: dict[int, object] = {
+        signum: signal.getsignal(signum) for signum in signums
+    }
+    for signum, disposition in previous.items():
+        if disposition in {signal.SIG_DFL, signal.SIG_IGN}:
+            continue
+        if callable(disposition):
+            continue
+        msg = (
+            f"cannot restore the handler for signal {signum}: "
+            "signal handler must be signal.SIG_IGN, signal.SIG_DFL, "
+            "or a callable object"
+        )
+        raise TypeError(msg)
+    return previous

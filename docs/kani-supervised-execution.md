@@ -306,13 +306,13 @@ Two destinations receive the same records:
 
 Both are bounded. A human line is cut to the configured `max_line_bytes` with
 an explicit truncation marker. A JSONL record that exceeds the budget is not
-cut mid-JSON: its large string values are shortened until the serialized object
-fits, and the shortened values carry the marker, so every emitted line remains
-valid JSON. If even that cannot fit, a minimal `truncated` record states the
-original kind and the marker. Nothing retains the whole proof log. Each harness
-result carries a diagnostic reference to the absolute byte offset where that
-harness's JSONL evidence begins, including when the file is appended to across
-runs.
+cut mid-JSON: its free-text values are shortened until the serialized object
+fits, identifiers, timestamps and measurements are preserved, and the shortened
+values carry the marker, so every emitted line remains valid JSON. If even that
+cannot fit, a minimal `truncated` record states the original kind and the
+marker. Nothing retains the whole proof log. Each harness result carries a
+diagnostic reference to the absolute byte offset where that harness's JSONL
+evidence begins, including when the file is appended to across runs.
 
 Supervision does not echo. It borrows the child's stdout and stderr pipe ends
 through Cuprum's `StdioTarget.fd`, reads them in 64 KiB chunks on the event

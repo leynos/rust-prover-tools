@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import signal
 import typing as typ
 
 import cuprum
@@ -76,6 +77,63 @@ __all__ = (
     "PidSource",
     "RunningHarness",
 )
+
+#: Seconds the group is given to leave after its leader exits.
+_GROUP_GRACE_SECONDS: typ.Final[float] = 5.0
+
+#: Seconds between group-liveness probes during settlement.
+_GROUP_PROBE_SECONDS: typ.Final[float] = 0.05
+
+#: Failures that mean the group has already gone or is not ours to signal.
+#: Held as a tuple so the clause parses on every supported Python.
+_GROUP_GONE_FAILURES: typ.Final[tuple[type[BaseException], ...]] = (
+    ProcessLookupError,
+    PermissionError,
+)
+
+
+def _group_members(group_id: int) -> bool:
+    """Whether the owned group still holds a member this process can signal."""
+    try:
+        os.killpg(group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # This process cannot signal the group, so waiting cannot settle it.
+        return False
+    return True
+
+
+def _signal_group(group_id: int, signum: int) -> None:
+    """Deliver `signum` to the owned group, tolerating one that has gone."""
+    if group_id in {os.getpid(), os.getpgrp()}:
+        return
+    try:
+        os.killpg(group_id, signum)
+    except _GROUP_GONE_FAILURES:
+        return
+
+
+async def _settle_group(group_id: int | None) -> None:
+    """Terminate what an exited leader left behind in its owned process group.
+
+    Cuprum waits only the direct child on a normal exit, so a descendant the
+    leader started survives unless the group is stopped here. The group is
+    asked to leave first and compelled after the grace period; the compulsion
+    is repeated in `finally`, so a cancellation of this coroutine cannot
+    abandon the group.
+    """
+    if group_id is None or not _group_members(group_id):
+        return
+    _signal_group(group_id, signal.SIGTERM)
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _GROUP_GRACE_SECONDS
+        while _group_members(group_id) and loop.time() < deadline:
+            await asyncio.sleep(_GROUP_PROBE_SECONDS)
+    finally:
+        if _group_members(group_id):
+            _signal_group(group_id, signal.SIGKILL)
 
 
 class CuprumHarnessLauncher:
@@ -175,6 +233,11 @@ class CuprumHarnessLauncher:
             with cuprum.observe(recorder):
                 run = asyncio.ensure_future(cmd.run(output=output, context=context))
                 result = await self._await_run(run, recorder)
+            # The leader has exited, but a descendant it started can still be
+            # in the owned group. Settle that group before reporting the
+            # invocation finished; the leader's own status is already held in
+            # `result` and is returned unchanged.
+            await _settle_group(recorder.pid)
             await settle_drains(drains)
         except (OSError, cuprum.UnknownProgramError) as error:
             # A relayed callback failure is the primary failure even though it

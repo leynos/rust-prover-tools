@@ -177,6 +177,9 @@ class AttemptMonitor:
             started_at=started_at,
             started_monotonic=started_monotonic,
         )
+        # Retain the measurement before any diagnostic can fail: a heartbeat
+        # write error must not erase the sample the interrupted report needs.
+        self.samples.append(sample)
         recorded = False
         if elapsed >= self._next_sample:
             self._next_sample += self.config.sample_interval_seconds
@@ -204,7 +207,6 @@ class AttemptMonitor:
                 threshold_bytes=self.config.watchdog_threshold_bytes,
             ),
         )
-        self.samples.append(sample)
         if recorded:
             self.diagnostics.emit(sample_record(run_id=self.run_id, sample=sample))
         if verdict.reason is None:

@@ -50,7 +50,7 @@ class MemorySink:
         """Record one payload and its JSONL rendering."""
         payload = {"schema": JSONL_SCHEMA_VERSION, **record}
         normalised = typ.cast("dict[str, object]", normalise(payload))
-        line = fit_record(normalised, self.max_line_bytes)
+        line = fit_record(normalised, self.max_line_bytes - 1)
         self.records.append(typ.cast("dict[str, object]", json.loads(line)))
         self._fragments.append(line + "\n")
         self._offset += len((line + "\n").encode("utf-8"))

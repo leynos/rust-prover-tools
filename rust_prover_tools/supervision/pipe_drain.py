@@ -31,6 +31,8 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     import datetime as dt
 
+    from cuprum import SafeCmd
+
     from rust_prover_tools.supervision.launcher import LaunchCommand
 
 __all__ = (
@@ -170,7 +172,7 @@ async def settle_drains(drains: cabc.Sequence[PipeDrain]) -> None:
             drain.close()
 
 
-def command_for(command: LaunchCommand) -> tuple[typ.Any, ExecutionContext]:
+def command_for(command: LaunchCommand) -> tuple[SafeCmd, ExecutionContext]:
     """Build the Cuprum command and context for one composed invocation."""
     program = Program(command.argv[0])
     project = ProjectSettings(

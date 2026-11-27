@@ -84,14 +84,34 @@ def bounded_text(text: str, limit: int) -> str:
     return raw[:room].decode("utf-8", errors="ignore") + TRUNCATION_MARKER
 
 
-def _bound_strings(value: object, budget: int) -> object:
-    """Return a copy of `value` with every string bounded to `budget` bytes."""
-    if isinstance(value, str):
-        return bounded_text(value, budget)
+#: Record fields that carry arbitrary prover text. Only these are shortened:
+#: timestamps, selection identities, and package entries must stay usable.
+_FREE_TEXT_FIELDS: typ.Final[frozenset[str]] = frozenset({
+    "text",
+    "last_output",
+    "last_progress",
+    "detail",
+})
+
+
+def _shorten_free_text(value: object, budget: int) -> object:
+    """Return a copy of `value` with only free-text fields bounded.
+
+    Timestamps, identifiers, measurements, and package names are copied
+    unchanged. A record whose typed envelope cannot fit is refused by the
+    caller's fallback rather than by degrading those fields.
+    """
     if isinstance(value, dict):
-        return {str(key): _bound_strings(item, budget) for key, item in value.items()}
+        return {
+            str(key): (
+                bounded_text(item, budget)
+                if key in _FREE_TEXT_FIELDS and isinstance(item, str)
+                else _shorten_free_text(item, budget)
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_bound_strings(item, budget) for item in value]
+        return [_shorten_free_text(item, budget) for item in value]
     return value
 
 
@@ -100,26 +120,17 @@ def fit_record(payload: dict[str, object], limit: int) -> str:
 
     A serialized record can exceed the budget even when every text field is
     inside it, because the JSON envelope and escaping add bytes. Cutting the
-    serialized line would leave invalid JSON, so the large string values are
+    serialized line would leave invalid JSON, so the free-text values are
     reduced instead. The final fallback is a minimal, valid truncation record.
     """
     line = json.dumps(payload, ensure_ascii=False)
     if len(line.encode("utf-8")) <= limit:
         return line
-    structural = {
-        "schema",
-        "record",
-        "marker",
-        "run_id",
-        "package",
-        "harness",
-        "attempt",
-    }
     for budget in (4096, 2048, 1024, 512, 256, 128, 64, 32, 16):
-        candidate = {
-            key: value if key in structural else _bound_strings(value, budget)
-            for key, value in payload.items()
-        }
+        candidate = typ.cast(
+            "dict[str, object]",
+            _shorten_free_text(payload, budget),
+        )
         line = json.dumps(candidate, ensure_ascii=False)
         if len(line.encode("utf-8")) <= limit:
             return line
