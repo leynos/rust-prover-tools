@@ -7,9 +7,9 @@ be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
 is layered on it and main is merged in. The final deterministic gate reports
-3,512 passed and 20 skipped at code head `245d047`; `make all` counts collected
+3,516 passed and 20 skipped at code head `476c809`; `make all` counts collected
 outcomes, so a passing run and its skips are separate. The opt-in live Kani
-0.67.0 fixture passed at the same head: 2 passed in 110.74 s.
+0.67.0 fixture passed at the same head: 2 passed in 4.16 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
