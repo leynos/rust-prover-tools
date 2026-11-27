@@ -42,6 +42,11 @@ from rust_prover_tools.supervision import (  # ruff: ignore[module-import-not-at
     run_supervised_sync,
 )
 from rust_prover_tools.supervision.launcher import LaunchCommand  # ruff: ignore[module-import-not-at-top-of-file]
+from rust_prover_tools.supervision.run_environment import (  # ruff: ignore[module-import-not-at-top-of-file]
+    EvidenceEnvironment,
+    ExecutionEnvironment,
+    RunPolicyEnvironment,
+)
 from rust_prover_tools.unittests.supervision_doubles import spec  # ruff: ignore[module-import-not-at-top-of-file]
 from tests.supervision_witness_support import (  # ruff: ignore[module-import-not-at-top-of-file]
     SCENARIO_WATCHDOG_SECONDS,
@@ -220,15 +225,22 @@ def _case_group_stop(tmp_path: Path) -> None:
     launcher = CuprumHarnessLauncher(clock=clock.now, monotonic=clock.monotonic)
     sink = MemorySink()
     environment = RunEnvironment(
-        clock=clock,
-        launcher=launcher,
-        probe=ProcfsResourceProbe(clock=clock),
-        cgroup=CgroupV2Reader(),
-        diagnostics=Diagnostics(jsonl=sink),
-        build=lambda identity: LaunchCommand((sys.executable, "-I", "-c", child)),
-        adapter=_WitnessAdapter(_classify),
-        sleeper=_RealSleeper(),
-        interrupts=None,
+        execution=ExecutionEnvironment(
+            launcher=launcher,
+            probe=ProcfsResourceProbe(clock=clock),
+            cgroup=CgroupV2Reader(),
+            sleeper=_RealSleeper(),
+            adapter=_WitnessAdapter(_classify),
+            build=lambda identity: LaunchCommand((
+                sys.executable,
+                "-I",
+                "-c",
+                child,
+            )),
+            clock=clock,
+        ),
+        evidence=EvidenceEnvironment(diagnostics=Diagnostics(jsonl=sink)),
+        policy=RunPolicyEnvironment(),
     )
     config = SupervisionConfig(
         timeout_seconds=12.0,
@@ -283,17 +295,27 @@ def _case_sinks(tmp_path: Path) -> None:
         human_path.open("w", encoding="utf-8") as human_handle,
     ):
         environment = RunEnvironment(
-            clock=clock,
-            launcher=launcher,
-            probe=ProcfsResourceProbe(clock=clock),
-            cgroup=CgroupV2Reader(),
-            diagnostics=Diagnostics(
-                jsonl=JsonlSink(jsonl_handle, path=jsonl_path),
-                human=HumanSink(human_handle),
+            execution=ExecutionEnvironment(
+                launcher=launcher,
+                probe=ProcfsResourceProbe(clock=clock),
+                cgroup=CgroupV2Reader(),
+                sleeper=_RealSleeper(),
+                adapter=_WitnessAdapter(_passing),
+                build=lambda identity: LaunchCommand((
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    child,
+                )),
+                clock=clock,
             ),
-            build=lambda identity: LaunchCommand((sys.executable, "-I", "-c", child)),
-            adapter=_WitnessAdapter(_passing),
-            sleeper=_RealSleeper(),
+            evidence=EvidenceEnvironment(
+                diagnostics=Diagnostics(
+                    jsonl=JsonlSink(jsonl_handle, path=jsonl_path),
+                    human=HumanSink(human_handle),
+                )
+            ),
+            policy=RunPolicyEnvironment(),
         )
         run_supervised_sync((spec(),), SupervisionConfig(), environment)
 

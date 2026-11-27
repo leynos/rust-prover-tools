@@ -25,6 +25,13 @@ from rust_prover_tools.supervision import (
     SupervisionConfig,
     new_run_id,
 )
+from rust_prover_tools.supervision.clock import TaskCancellations
+from rust_prover_tools.supervision.report_writer import write_report
+from rust_prover_tools.supervision.run_environment import (
+    EvidenceEnvironment,
+    ExecutionEnvironment,
+    RunPolicyEnvironment,
+)
 from rust_prover_tools.unittests.supervision_doubles import (
     ScriptedCgroup,
     ScriptedLauncher,
@@ -41,9 +48,11 @@ if typ.TYPE_CHECKING:
         LineObserver,
     )
     from rust_prover_tools.supervision.protocols import (
+        CancellationProbe,
         CgroupReader,
         HarnessAdapter,
         InterruptSource,
+        ReportWriter,
         ResourceProbe,
         Sleeper,
     )
@@ -128,6 +137,8 @@ def environment(
     sleeper: Sleeper | None = None,
     adapter: HarnessAdapter | None = None,
     run_id: cabc.Callable[[], str] = new_run_id,
+    report_writer: ReportWriter = write_report,
+    cancellations: CancellationProbe | None = None,
 ) -> RunEnvironment:
     """Build a run environment from doubles."""
 
@@ -136,16 +147,24 @@ def environment(
         return LaunchCommand(("driver", "kani", "--harness", identity.harness))
 
     return RunEnvironment(
-        clock=clock,
-        launcher=launcher,
-        probe=probe or ScriptedProbe(),
-        cgroup=cgroup or ScriptedCgroup(),
-        diagnostics=sinks or Diagnostics(jsonl=MemorySink()),
-        build=build,
-        adapter=adapter or _ScriptedAdapter(statuses or {}),
-        sleeper=sleeper or VirtualSleeper(clock),
-        interrupts=interrupts,
-        run_id=run_id,
+        execution=ExecutionEnvironment(
+            launcher=launcher,
+            probe=probe or ScriptedProbe(),
+            cgroup=cgroup or ScriptedCgroup(),
+            sleeper=sleeper or VirtualSleeper(clock),
+            adapter=adapter or _ScriptedAdapter(statuses or {}),
+            build=build,
+            clock=clock,
+        ),
+        evidence=EvidenceEnvironment(
+            diagnostics=sinks or Diagnostics(jsonl=MemorySink()),
+            report_writer=report_writer,
+        ),
+        policy=RunPolicyEnvironment(
+            run_id=run_id,
+            interrupts=interrupts,
+            cancellations=cancellations or TaskCancellations(),
+        ),
     )
 
 

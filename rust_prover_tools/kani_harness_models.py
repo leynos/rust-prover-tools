@@ -13,9 +13,10 @@ the phase under test and a caller cannot hand an execution seam to
 qualification.
 
 `KaniHarnessRunOptions` carries the request alone: repository, route, and
-selection, plus the seams that resolve them. Per-harness policy is an explicit
-`SupervisionConfig` argument of the functions that run or execute a request,
-because a deadline or a report destination is not part of what to discover.
+selection. Per-harness policy is an explicit `SupervisionConfig` argument of
+the functions that run or execute a request, and each dependency bag is an
+explicit argument of the operation that owns its phase, because neither a
+deadline nor a seam is part of what to discover.
 """
 
 from __future__ import annotations
@@ -136,10 +137,6 @@ class KaniHarnessRunOptions:
         Authoritative inventory, overriding discovery.
     inventory_path : Path | None
         Path to an authoritative version-1 inventory document.
-    dependencies : KaniPreparationDependencies | None
-        Overridden discovery and qualification seams. Execution seams are an
-        explicit argument of `execute_harnesses`, because they are not part
-        of what to resolve.
     """
 
     repo_root: Path
@@ -148,7 +145,6 @@ class KaniHarnessRunOptions:
     harnesses: tuple[str, ...] = ()
     inventory: HarnessInventory | None = None
     inventory_path: Path | None = None
-    dependencies: KaniPreparationDependencies | None = None
 
     def __post_init__(self) -> None:
         """Refuse two authoritative inventories or an unusable route."""

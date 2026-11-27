@@ -15,7 +15,6 @@ Example
 run = run_harnesses(
     KaniHarnessRunOptions(
         repo_root=Path("."),
-        packages=("cuprum-native-io",),
         route=LegacyRoute(
             installation=Path.home() / ".kani" / "kani-0.67.0",
             cwd=Path("."),
@@ -67,13 +66,18 @@ from rust_prover_tools.supervision import (
     Diagnostics,
     LaunchCommand,
     ProcfsResourceProbe,
-    RunEnvironment,
     RunReport,
     SupervisionConfig,
     SystemClock,
     run_supervised_sync,
 )
 from rust_prover_tools.supervision.kani import KaniAdapter
+from rust_prover_tools.supervision.run_environment import (
+    EvidenceEnvironment,
+    ExecutionEnvironment,
+    RunEnvironment,
+    RunPolicyEnvironment,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -141,6 +145,7 @@ def run_harnesses(
     options: KaniHarnessRunOptions,
     config: SupervisionConfig,
     execution_dependencies: KaniExecutionDependencies | None = None,
+    preparation_dependencies: KaniPreparationDependencies | None = None,
 ) -> KaniHarnessRun:
     """Discover or load, select, and supervise Kani harnesses.
 
@@ -157,6 +162,9 @@ def run_harnesses(
         Per-harness policy and report destination.
     execution_dependencies : KaniExecutionDependencies | None
         Overridden supervision seams. `None` uses the defaults.
+    preparation_dependencies : KaniPreparationDependencies | None
+        Overridden discovery and qualification seams. `None` uses the
+        defaults.
 
     Returns
     -------
@@ -165,38 +173,22 @@ def run_harnesses(
 
     Raises
     ------
-    InventoryDiscoveryError
-        Raised when discovery cannot produce a complete inventory.
-    InventoryFormatError
-        Raised when a supplied inventory document is invalid.
-    SelectionError
-        Raised when the harness selection is ambiguous or overridden.
+    ValueError
+        Raised when discovery, selection, or grammar qualification refuses
+        the request; `qualify_harnesses` names each exact failure.
     ProverToolError
-        Raised when the route cannot be qualified.
-    UnsupportedKaniGrammarError
-        Raised when the route's Kani release has no registered grammar.
+        Raised when route qualification or execution cannot complete.
     """
-    return execute_harnesses(qualify_harnesses(options), config, execution_dependencies)
-
-
-def run_kani_harnesses(
-    options: KaniHarnessRunOptions,
-    config: SupervisionConfig,
-    execution_dependencies: KaniExecutionDependencies | None = None,
-) -> KaniHarnessRun:
-    """Discover or load, select, and supervise Kani harnesses.
-
-    This is the name the approved plan prescribes for the one-call entry
-    point, and `run_harnesses` is kept as the shorter alias the package
-    already exported. Both take the same arguments and refer to the same
-    implementation, so a consumer may use either without risking a different
-    code path.
-    """
-    return run_harnesses(options, config, execution_dependencies)
+    return execute_harnesses(
+        qualify_harnesses(options, preparation_dependencies),
+        config,
+        execution_dependencies,
+    )
 
 
 def qualify_harnesses(
     options: KaniHarnessRunOptions,
+    dependencies: KaniPreparationDependencies | None = None,
 ) -> KaniHarnessPreparation:
     """Discover or load, select, and qualify one route without running it.
 
@@ -212,6 +204,9 @@ def qualify_harnesses(
     ----------
     options : KaniHarnessRunOptions
         Repository, selection, and route. The policy is not used.
+    dependencies : KaniPreparationDependencies | None
+        Overridden discovery and qualification seams. `None` uses the
+        defaults.
 
     Returns
     -------
@@ -234,7 +229,7 @@ def qualify_harnesses(
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
-    dependencies = options.dependencies or KaniPreparationDependencies()
+    dependencies = dependencies or KaniPreparationDependencies()
     root = options.repo_root.resolve()
     route_cwd = route_working_directory(
         options.route,
@@ -267,8 +262,10 @@ def qualify_harnesses(
     )
 
 
-#: Public alias documented in the users' guide; the same implementation.
+#: Compatibility aliases the guides name; each is the canonical operation's
+#: own object, owned by `qualify_harnesses` and `run_harnesses`.
 prepare_harnesses = qualify_harnesses
+run_kani_harnesses = run_harnesses
 
 
 def _process_working_directory(process_cwd: Path | None) -> Path:
@@ -386,13 +383,15 @@ def _environment(
         return preparation.commands[spec.qualified]
 
     return RunEnvironment(
-        clock=clock,
-        launcher=launcher,
-        probe=dependencies.probe or ProcfsResourceProbe(clock=clock),
-        cgroup=dependencies.cgroup or CgroupV2Reader(),
-        diagnostics=diagnostics,
-        build=build,
-        adapter=adapter,
-        sleeper=dependencies.sleeper or AsyncSleeper(),
-        interrupts=dependencies.interrupts,
+        execution=ExecutionEnvironment(
+            launcher=launcher,
+            probe=dependencies.probe or ProcfsResourceProbe(clock=clock),
+            cgroup=dependencies.cgroup or CgroupV2Reader(),
+            sleeper=dependencies.sleeper or AsyncSleeper(),
+            adapter=adapter,
+            build=build,
+            clock=clock,
+        ),
+        evidence=EvidenceEnvironment(diagnostics=diagnostics),
+        policy=RunPolicyEnvironment(interrupts=dependencies.interrupts),
     )

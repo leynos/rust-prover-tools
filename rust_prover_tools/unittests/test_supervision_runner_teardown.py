@@ -378,8 +378,9 @@ async def test_an_earlier_cancellation_does_not_interrupt_a_later_attempt() -> N
 
     # The probe reports an inherited count that never increases: the attempt
     # must treat that as no cancellation of its own.
-    environment = dc.replace(
-        _environment(ScriptedLauncher(), VirtualClock()),
+    environment = _environment(
+        ScriptedLauncher(),
+        VirtualClock(),
         cancellations=ScriptedCancellations(counts=[1]),
     )
 
@@ -396,8 +397,9 @@ async def test_a_cancellation_during_settlement_is_re_raised() -> None:
     )
 
     # Baseline 0, then a positive count once the attempt reaches its check.
-    environment = dc.replace(
-        _environment(ScriptedLauncher(), VirtualClock()),
+    environment = _environment(
+        ScriptedLauncher(),
+        VirtualClock(),
         cancellations=ScriptedCancellations(counts=[0, 1]),
     )
 
@@ -1077,11 +1079,9 @@ def test_a_report_writer_failure_does_not_replace_a_cancellation(
         msg = "report writer failed"
         raise OSError(msg)
 
-    environment = dc.replace(
-        _environment(
-            ScriptedLauncher(script=Script(block=True), ready=ready),
-            VirtualClock(),
-        ),
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True), ready=ready),
+        VirtualClock(),
         report_writer=writer,
     )
     config = dc.replace(
@@ -1121,12 +1121,10 @@ def test_a_report_writer_failure_does_not_replace_a_monitor_failure(
         msg = "report writer failed"
         raise OSError(msg)
 
-    environment = dc.replace(
-        _environment(
-            ScriptedLauncher(script=Script(block=True)),
-            VirtualClock(),
-            probe=_ExplodingProbe(),
-        ),
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True)),
+        VirtualClock(),
+        probe=_ExplodingProbe(),
         report_writer=writer,
     )
     config = dc.replace(
@@ -1199,7 +1197,12 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     from rust_prover_tools.supervision.kani import KaniAdapter, KaniObserver
     from rust_prover_tools.supervision.launch_command import LaunchCommand
     from rust_prover_tools.supervision.launcher import CuprumHarnessLauncher
-    from rust_prover_tools.supervision.run_environment import RunEnvironment
+    from rust_prover_tools.supervision.run_environment import (
+        EvidenceEnvironment,
+        ExecutionEnvironment,
+        RunEnvironment,
+        RunPolicyEnvironment,
+    )
     from rust_prover_tools.unittests.supervision_doubles import (
         ScriptedCgroup as _ScriptedCgroup,
     )
@@ -1238,14 +1241,17 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     )
     report_path = tmp_path / "report.json"
     environment = RunEnvironment(
-        clock=clock,
-        launcher=launcher,
-        probe=_ScriptedProbe(),
-        cgroup=_ScriptedCgroup(),
-        diagnostics=Diagnostics(jsonl=MemorySink()),
-        build=build,
-        adapter=_FailingAdapter(version="0.67.0"),
-        sleeper=AsyncSleeper(),
+        execution=ExecutionEnvironment(
+            launcher=launcher,
+            probe=_ScriptedProbe(),
+            cgroup=_ScriptedCgroup(),
+            sleeper=AsyncSleeper(),
+            adapter=_FailingAdapter(version="0.67.0"),
+            build=build,
+            clock=clock,
+        ),
+        evidence=EvidenceEnvironment(diagnostics=Diagnostics(jsonl=MemorySink())),
+        policy=RunPolicyEnvironment(),
     )
     config = dc.replace(
         _config(
@@ -1287,8 +1293,9 @@ def test_the_report_writer_is_injected_without_touching_the_filesystem(
         recorded.append((path, report))
 
     clock = VirtualClock()
-    environment = dc.replace(
-        _environment(ScriptedLauncher(clock=clock), clock),
+    environment = _environment(
+        ScriptedLauncher(clock=clock),
+        clock,
         report_writer=writer,
     )
     report_path = tmp_path / "report.json"

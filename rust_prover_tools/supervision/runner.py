@@ -5,9 +5,9 @@ points. The orchestration that decides what a run means lives in
 ``run_orchestrator``; the two functions here are the asynchronous and
 synchronous ways to start it.
 
-The run identifier comes from ``RunEnvironment.run_id`` unless the caller
-names one, so a consumer that must label its own runs supplies a source on
-the environment instead of patching the supervisor.
+The run identifier comes from ``RunEnvironment.policy.run_id`` unless the
+caller names one, so a consumer that must label its own runs supplies a source
+on the policy value instead of patching the supervisor.
 """
 
 from __future__ import annotations
@@ -52,9 +52,10 @@ async def run_supervised(
     config : SupervisionConfig
         Per-harness policy.
     environment : RunEnvironment
-        Injected dependencies.
+        The execution, evidence, and policy values the run reads.
     run_id : str | None
-        Run identifier, or `None` to take one from `environment.run_id`.
+        Run identifier, or `None` to take one from
+        `environment.policy.run_id`.
 
     Returns
     -------
@@ -65,7 +66,7 @@ async def run_supervised(
         expected=tuple(specs),
         config=config,
         environment=environment,
-        run_id=run_id if run_id is not None else environment.run_id(),
+        run_id=run_id if run_id is not None else environment.policy.run_id(),
     )
     return await run.execute()
 
@@ -86,9 +87,10 @@ def run_supervised_sync(
     config : SupervisionConfig
         Per-harness policy.
     environment : RunEnvironment
-        Injected dependencies.
+        The execution, evidence, and policy values the run reads.
     run_id : str | None
-        Run identifier, or `None` to take one from `environment.run_id`.
+        Run identifier, or `None` to take one from
+        `environment.policy.run_id`.
 
     Returns
     -------

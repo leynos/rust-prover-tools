@@ -81,7 +81,7 @@ class SupervisedRun:
     config : SupervisionConfig
         Per-harness policy.
     environment : RunEnvironment
-        Injected dependencies.
+        The execution, evidence, and policy values the run reads.
     run_id : str
         Unique run identifier.
     """
@@ -100,9 +100,11 @@ class SupervisedRun:
             One result per expected identity, the accounting comparison, and
             the aggregate outcome.
         """
-        started_at = self.environment.clock.now()
-        if self.environment.interrupts is not None:
-            self.environment.interrupts.bind(asyncio.get_running_loop())
+        execution = self.environment.execution
+        interrupts = self.environment.policy.interrupts
+        started_at = execution.clock.now()
+        if interrupts is not None:
+            interrupts.bind(asyncio.get_running_loop())
         ledger = RunLedger(expected=self.expected)
         self._journal_for().emit_start(self.expected, started_at, ledger)
         try:
@@ -149,9 +151,9 @@ class SupervisedRun:
         return RunJournal(
             run_id=self.run_id,
             config=self.config,
-            diagnostics=self.environment.diagnostics,
-            report_writer=self.environment.report_writer,
-            clock=self.environment.clock,
+            diagnostics=self.environment.evidence.diagnostics,
+            report_writer=self.environment.evidence.report_writer,
+            clock=self.environment.execution.clock,
         )
 
     def _emit_finish(self, ledger: RunLedger, result: HarnessResult) -> None:
@@ -171,7 +173,7 @@ class SupervisedRun:
     async def _run_one(self, spec: HarnessSpec, ledger: RunLedger) -> HarnessResult:
         """Run and record one harness invocation."""
         reference = self._journal_for().emit_harness_start(
-            spec, self.environment.clock.now(), ledger
+            spec, self.environment.execution.clock.now(), ledger
         )
         try:
             evidence, classification = await self._supervise(spec, ledger)
@@ -227,20 +229,22 @@ class SupervisedRun:
         self, spec: HarnessSpec, ledger: RunLedger
     ) -> tuple[AttemptEvidence, HarnessClassification]:
         """Run one attempt to completion, however it ends."""
+        execution = self.environment.execution
+        policy = self.environment.policy
         supervisor = AttemptSupervisor(
             spec=spec,
             config=self.config,
-            clock=self.environment.clock,
-            launcher=self.environment.launcher,
-            probe=self.environment.probe,
-            cgroup=self.environment.cgroup,
-            diagnostics=self.environment.diagnostics,
+            clock=execution.clock,
+            launcher=execution.launcher,
+            probe=execution.probe,
+            cgroup=execution.cgroup,
+            diagnostics=self.environment.evidence.diagnostics,
             run_id=self.run_id,
-            build=self.environment.build,
-            adapter=self.environment.adapter,
-            sleeper=self.environment.sleeper,
-            interrupts=self.environment.interrupts,
-            cancellations=self.environment.cancellations,
+            build=execution.build,
+            adapter=execution.adapter,
+            sleeper=execution.sleeper,
+            interrupts=policy.interrupts,
+            cancellations=policy.cancellations,
         )
         try:
             return await supervisor.run()
@@ -254,17 +258,13 @@ class SupervisedRun:
 
     def _interrupted(self) -> bool:
         """Whether a signal has asked the run to stop."""
-        return self.environment.interrupts is not None and (
-            self.environment.interrupts.signum is not None
-        )
+        interrupts = self.environment.policy.interrupts
+        return interrupts is not None and interrupts.signum is not None
 
     def _signum(self) -> int | None:
         """Return the signal that interrupted the run, when one did."""
-        return (
-            None
-            if self.environment.interrupts is None
-            else self.environment.interrupts.signum
-        )
+        interrupts = self.environment.policy.interrupts
+        return None if interrupts is None else interrupts.signum
 
     def _finalize(self, ledger: RunLedger, started_at: dt.datetime) -> RunReport:
         """Build, emit, and optionally write the run's final report."""

@@ -479,10 +479,10 @@ from rust_prover_tools import (
     KaniHarnessRunOptions,
     LegacyRoute,
     SupervisionConfig,
-    run_kani_harnesses,
+    run_harnesses,
 )
 
-run = run_kani_harnesses(
+run = run_harnesses(
     KaniHarnessRunOptions(
         repo_root=Path.cwd(),
         route=LegacyRoute(
@@ -500,17 +500,18 @@ for result in run.report.results:
 raise SystemExit(run.exit_status)
 ```
 
-`run_kani_harnesses` (also exported as `run_harnesses`) loads or discovers the
-inventory, selects exact harnesses, qualifies one route, runs the generic
-supervisor, and returns a `KaniHarnessRun` with the typed `report`, the
-`inventory`, the `selected` harnesses, the `backend_version`, and a `table`.
-Async callers may use `run_supervised` with a `RunEnvironment` instead.
+`run_harnesses` (also exported under the plan's `run_kani_harnesses` name as a
+documented compatibility alias) loads or discovers the inventory, selects exact
+harnesses, qualifies one route, runs the generic supervisor, and returns a
+`KaniHarnessRun` with the typed `report`, the `inventory`, the `selected`
+harnesses, the `backend_version`, and a `table`. Async callers may use
+`run_supervised` with a `RunEnvironment` instead.
 
 An application that owns its signal policy can split the two phases.
-`qualify_harnesses` performs discovery, selection, and route qualification
-without starting a prover or opening an evidence file. `execute_harnesses` runs
-only that prepared selection, so handlers cover exactly the phase whose
-children they can stop:
+`qualify_harnesses(options, dependencies=None)` performs discovery, selection,
+and route qualification without starting a prover or opening an evidence file.
+`execute_harnesses` runs only that prepared selection, so handlers cover
+exactly the phase whose children they can stop:
 
 ```python
 prepared = qualify_harnesses(options)
@@ -531,8 +532,8 @@ Every dependency can be overridden, split by phase. Qualification takes
 the inherited environment, and the process working directory. Execution takes
 `KaniExecutionDependencies`: clock, launcher, resource probe, cgroup reader,
 sleeper, diagnostics, interrupt source, and adapter, with the run identifier
-coming from `RunEnvironment.run_id`. This is how the deterministic tests run
-without a live prover, real sleeps, or a real installation.
+coming from `RunEnvironment.policy.run_id`. This is how the deterministic tests
+run without a live prover, real sleeps, or a real installation.
 
 ## Adapter contract
 
@@ -574,12 +575,16 @@ reports `UNKNOWN`.
 
 ## Injected dependencies and their fallbacks
 
-`RunEnvironment`, `KaniPreparationDependencies`, and
-`KaniExecutionDependencies` are composition bags by design: each field is one
-seam from `supervision/protocols.py`, and a consumer replaces only the seam it
-needs. The two Kani bags are split by phase, so a caller cannot hand an
-execution seam to qualification, while each is still constructed once at the
-composition root and passed through unchanged.
+`RunEnvironment` composes three purpose-shaped values by design:
+`ExecutionEnvironment` holds the launcher, resource probe, cgroup reader,
+sleeper, adapter, command builder, and shared clock; `EvidenceEnvironment`
+holds the live sinks and the report writer; and `RunPolicyEnvironment` holds
+the run-ID source, interrupt source, and cancellation probe. Each field is one
+seam from `supervision/protocols.py`, and a consumer replaces only the value
+that owns the seam it needs. `KaniPreparationDependencies` and
+`KaniExecutionDependencies` are likewise split by phase, so a caller cannot
+hand an execution seam to qualification, and each is passed explicitly to the
+operation that owns its phase, once, at the composition root.
 
 Two convenience fallbacks sit at that boundary:
 

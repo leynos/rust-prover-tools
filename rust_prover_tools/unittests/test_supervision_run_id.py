@@ -1,7 +1,7 @@
 """Hold the run-ID seam to the report and JSONL it names.
 
-The identifier is an injected source on `RunEnvironment`, so a caller that
-must label its own run supplies one instead of patching the supervisor.
+The identifier is an injected source on `RunPolicyEnvironment`, so a caller
+that must label its own run supplies one instead of patching the supervisor.
 """
 
 from __future__ import annotations

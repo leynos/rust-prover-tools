@@ -145,10 +145,14 @@ def _run(
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         harnesses=harnesses,
         inventory=inventory,
-        dependencies=_prepared_dependencies(),
     )
     return (
-        run_harnesses(options, config or _test_config(), dependencies),
+        run_harnesses(
+            options,
+            config or _test_config(),
+            dependencies,
+            _prepared_dependencies(),
+        ),
         launcher,
         jsonl,
     )
@@ -267,10 +271,10 @@ def test_an_interrupted_run_is_not_passed(tmp_path: Path) -> None:
             repo_root=tmp_path,
             route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
             inventory=_inventory("harnesses::a", "harnesses::b"),
-            dependencies=_prepared_dependencies(),
         ),
         _test_config(),
         dependencies,
+        _prepared_dependencies(),
     )
 
     assert run.report.interrupted
@@ -290,9 +294,9 @@ def test_a_missing_inventory_package_is_refused(tmp_path: Path) -> None:
                 route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
                 packages=("beta",),
                 inventory=_inventory("harnesses::a"),
-                dependencies=_prepared_dependencies(),
             ),
             _test_config(),
+            preparation_dependencies=_prepared_dependencies(),
         )
 
 
@@ -331,10 +335,10 @@ def test_the_diagnostics_are_not_closed_by_the_runner(tmp_path: Path) -> None:
             repo_root=tmp_path,
             route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
             inventory=_inventory("harnesses::a"),
-            dependencies=_prepared_dependencies(),
         ),
         _test_config(),
         dependencies,
+        _prepared_dependencies(),
     )
 
     jsonl.write({"record": "run-finish", "run_id": "after"})
@@ -486,10 +490,9 @@ def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        dependencies=_prepared_dependencies(),
     )
 
-    preparation = qualify_harnesses(options)
+    preparation = qualify_harnesses(options, _prepared_dependencies())
 
     assert not human.exists()
     assert not jsonl.exists()
@@ -538,14 +541,14 @@ def test_preparation_consumes_only_injected_values(
         repo_root=tmp_path,
         route=SnapshotRoute(pin=typ.cast("typ.Any", object())),
         inventory=_inventory("harnesses::a"),
-        dependencies=KaniPreparationDependencies(
-            prepare=lambda route: prepared,
-            process_cwd=tmp_path,
-            metadata=lambda root: (),
-        ),
+    )
+    preparation_dependencies = KaniPreparationDependencies(
+        prepare=lambda route: prepared,
+        process_cwd=tmp_path,
+        metadata=lambda root: (),
     )
 
-    preparation = qualify_harnesses(options)
+    preparation = qualify_harnesses(options, preparation_dependencies)
 
     assert preparation.prepared is prepared
     assert preparation.commands["alpha::harnesses::a"].argv[:2] == (
@@ -560,7 +563,7 @@ def test_preparation_consumes_only_injected_values(
         Diagnostics(),
         limits=(config.max_line_bytes, config.max_log_bytes),
     )
-    assert environment.adapter is adapter
+    assert environment.execution.adapter is adapter
 
 
 def test_the_injected_process_directory_is_the_one_checked(
@@ -579,11 +582,10 @@ def test_the_injected_process_directory_is_the_one_checked(
         repo_root=tmp_path,
         route=SnapshotRoute(pin=typ.cast("typ.Any", object())),
         inventory=_inventory("harnesses::a"),
-        dependencies=dependencies,
     )
 
     with pytest.raises(ProverToolError, match="repository root"):
-        qualify_harnesses(options)
+        qualify_harnesses(options, dependencies)
 
 
 def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
@@ -597,20 +599,19 @@ def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
         repo_root=repository,
         route=LegacyRoute(installation=elsewhere, cwd=elsewhere),
         inventory=_inventory("harnesses::a"),
-        dependencies=dependencies,
     )
 
     with pytest.raises(ProverToolError, match="repository root"):
-        qualify_harnesses(options)
+        qualify_harnesses(options, dependencies)
 
 
 def test_the_plan_prescribed_entry_point_is_public() -> None:
-    """The approved plan names `run_kani_harnesses`; it must be importable."""
+    """The plan names `run_kani_harnesses`; it stays an importable alias."""
     import rust_prover_tools
 
     assert callable(rust_prover_tools.run_kani_harnesses)
     assert "run_kani_harnesses" in rust_prover_tools.__all__
-    assert rust_prover_tools.run_kani_harnesses is not rust_prover_tools.run_harnesses
+    assert rust_prover_tools.run_kani_harnesses is rust_prover_tools.run_harnesses
 
 
 def test_importing_the_package_does_not_run_the_grammar_check() -> None:
@@ -654,7 +655,7 @@ def test_the_configured_line_limit_reaches_the_launcher() -> None:
         limits=(64, 1024),
     )
 
-    launcher = typ.cast("typ.Any", environment.launcher)
+    launcher = typ.cast("typ.Any", environment.execution.launcher)
     assert launcher.max_line_bytes == 64
 
 
@@ -763,13 +764,13 @@ def test_a_stale_gated_test_pin_is_refused_before_qualification() -> None:
             cwd=_FIXTURE_WORKSPACE,
         ),
         inventory=inventory,
-        dependencies=KaniPreparationDependencies(
-            metadata=lambda _root: metadata, prepare=prepare
-        ),
+    )
+    dependencies = KaniPreparationDependencies(
+        metadata=lambda _root: metadata, prepare=prepare
     )
 
     with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
-        qualify_harnesses(options)
+        qualify_harnesses(options, dependencies)
     assert qualified == []
 
 
@@ -834,13 +835,13 @@ def test_preparation_keys_required_features_by_target_kind(
             cwd=_FIXTURE_WORKSPACE,
         ),
         inventory=HarnessInventory((PackageInventory("beta", (pinned,)),)),
-        dependencies=KaniPreparationDependencies(
-            metadata=lambda _root: metadata, prepare=prepare
-        ),
+    )
+    dependencies = KaniPreparationDependencies(
+        metadata=lambda _root: metadata, prepare=prepare
     )
 
     with pytest.raises(InventoryDiscoveryError, match="requires features"):
-        qualify_harnesses(options)
+        qualify_harnesses(options, dependencies)
     assert qualified == []
 
 
@@ -857,12 +858,12 @@ def test_preparation_uses_the_injected_metadata_source(tmp_path: Path) -> None:
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        dependencies=KaniPreparationDependencies(
-            metadata=provider, prepare=lambda route: _prepared()
-        ),
+    )
+    dependencies = KaniPreparationDependencies(
+        metadata=provider, prepare=lambda route: _prepared()
     )
 
-    preparation = qualify_harnesses(options)
+    preparation = qualify_harnesses(options, dependencies)
 
     assert provider_calls == []
     assert preparation.selected[0].harness == "harnesses::a"
@@ -895,10 +896,10 @@ def test_a_supplied_environment_reaches_route_qualification(
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        dependencies=KaniPreparationDependencies(environ=supplied),
     )
+    dependencies = KaniPreparationDependencies(environ=supplied)
 
-    qualify_harnesses(options)
+    qualify_harnesses(options, dependencies)
 
     assert seen == [supplied]
 

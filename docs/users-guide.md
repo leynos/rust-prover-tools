@@ -644,8 +644,9 @@ execution phase and restores the previous handlers afterwards. Discovery and
 route qualification run before those handlers exist, so a signal during
 preparation ends the run immediately instead of being recorded for a phase that
 has not started. The library installs no handlers, so an embedding application
-keeps its own signal policy; `prepare_harnesses` and `execute_harnesses` expose
-the same phase boundary to that application.
+keeps its own signal policy; `qualify_harnesses` (also exported as
+`prepare_harnesses`) and `execute_harnesses` expose the same phase boundary to
+that application.
 
 `--extra-arg` is repeatable and passes proof-affecting verifier arguments
 verbatim, such as `--unwind` or `-Z`. An argument that would override selection
