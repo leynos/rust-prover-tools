@@ -35,6 +35,48 @@ import typing as typ
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from rust_prover_tools.kani_cli_grammar import UnsupportedKaniGrammarError
+    from rust_prover_tools.kani_harness_run import (
+        KaniHarnessDependencies,
+        KaniHarnessPreparation,
+        KaniHarnessRun,
+        KaniHarnessRunOptions,
+        execute_harnesses,
+        prepare_harnesses,
+        run_harnesses,
+        run_kani_harnesses,
+    )
+    from rust_prover_tools.kani_inventory import (
+        HarnessInventory,
+        InventoryDiscoveryError,
+        InventoryFormatError,
+        InventoryHarness,
+        PackageInventory,
+        SelectionError,
+        compose_arguments,
+        discover_inventory,
+        inventory_document,
+        load_inventory,
+        restrict_inventory,
+        select_harnesses,
+        write_inventory,
+    )
+    from rust_prover_tools.kani_log import KaniLog, KaniLogError, parse_kani_log
+    from rust_prover_tools.kani_routes import KaniRoute, LegacyRoute, SnapshotRoute
+    from rust_prover_tools.supervision import (
+        Diagnostics,
+        ExecutionStatus,
+        HarnessSpec,
+        Measurement,
+        ProofVerdict,
+        RunReport,
+        StopReason,
+        SupervisionConfig,
+        render_table,
+        run_supervised,
+        run_supervised_sync,
+    )
+
 PACKAGE_NAME = "rust_prover_tools"
 
 try:  # pragma: no cover - Rust optional
@@ -45,8 +87,50 @@ except ModuleNotFoundError:  # pragma: no cover - Python fallback
     # so Ruff cannot see that the name is public.
     from .pure import hello as hello
 
-#: Public names grouped by the module that owns each one. Resolving them on
-#: first access keeps package import free of the Kani grammar check.
+__all__ = [
+    "Diagnostics",
+    "ExecutionStatus",
+    "HarnessInventory",
+    "HarnessSpec",
+    "InventoryDiscoveryError",
+    "InventoryFormatError",
+    "InventoryHarness",
+    "KaniHarnessDependencies",
+    "KaniHarnessPreparation",
+    "KaniHarnessRun",
+    "KaniHarnessRunOptions",
+    "KaniLog",
+    "KaniLogError",
+    "KaniRoute",
+    "LegacyRoute",
+    "Measurement",
+    "PackageInventory",
+    "ProofVerdict",
+    "RunReport",
+    "SelectionError",
+    "SnapshotRoute",
+    "StopReason",
+    "SupervisionConfig",
+    "UnsupportedKaniGrammarError",
+    "compose_arguments",
+    "discover_inventory",
+    "execute_harnesses",
+    "hello",
+    "inventory_document",
+    "load_inventory",
+    "parse_kani_log",
+    "prepare_harnesses",
+    "render_table",
+    "restrict_inventory",
+    "run_harnesses",
+    "run_kani_harnesses",
+    "run_supervised",
+    "run_supervised_sync",
+    "select_harnesses",
+    "write_inventory",
+]
+
+#: Public names and the module that owns each one, for the runtime resolver.
 _LAZY_NAMES: typ.Final[dict[str, tuple[str, ...]]] = {
     "rust_prover_tools.kani_cli_grammar": ("UnsupportedKaniGrammarError",),
     "rust_prover_tools.kani_harness_run": (
@@ -74,16 +158,8 @@ _LAZY_NAMES: typ.Final[dict[str, tuple[str, ...]]] = {
         "select_harnesses",
         "write_inventory",
     ),
-    "rust_prover_tools.kani_log": (
-        "KaniLog",
-        "KaniLogError",
-        "parse_kani_log",
-    ),
-    "rust_prover_tools.kani_routes": (
-        "KaniRoute",
-        "LegacyRoute",
-        "SnapshotRoute",
-    ),
+    "rust_prover_tools.kani_log": ("KaniLog", "KaniLogError", "parse_kani_log"),
+    "rust_prover_tools.kani_routes": ("KaniRoute", "LegacyRoute", "SnapshotRoute"),
     "rust_prover_tools.supervision": (
         "Diagnostics",
         "ExecutionStatus",
@@ -102,8 +178,6 @@ _LAZY_NAMES: typ.Final[dict[str, tuple[str, ...]]] = {
 _OWNERS: typ.Final[dict[str, str]] = {
     name: module for module, names in _LAZY_NAMES.items() for name in names
 }
-
-__all__ = sorted(("hello", *_OWNERS))
 
 
 def __getattr__(name: str) -> object:
