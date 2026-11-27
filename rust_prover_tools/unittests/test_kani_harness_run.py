@@ -560,6 +560,55 @@ def test_the_log_budget_reaches_the_policy() -> None:
     assert config.max_log_bytes == 2 * 1024 * 1024
 
 
+def test_the_watchdog_floor_reaches_the_policy_in_bytes() -> None:
+    """An enabled watchdog maps its MiB floor to a byte threshold."""
+    from rust_prover_tools.kani_destinations import supervision_policy
+    from rust_prover_tools.kani_harness_cli_options import (
+        DestinationFlags,
+        PolicyFlags,
+    )
+
+    config = supervision_policy(
+        PolicyFlags(watchdog=True, watchdog_mib=512),
+        DestinationFlags(),
+    )
+
+    assert config.watchdog_threshold_bytes == 512 * 1024 * 1024
+
+
+def test_a_disabled_watchdog_has_no_threshold() -> None:
+    """A disabled watchdog clears the floor even when a MiB value is set."""
+    from rust_prover_tools.kani_destinations import supervision_policy
+    from rust_prover_tools.kani_harness_cli_options import (
+        DestinationFlags,
+        PolicyFlags,
+    )
+
+    config = supervision_policy(
+        PolicyFlags(watchdog=False, watchdog_mib=512),
+        DestinationFlags(),
+    )
+
+    assert config.watchdog_threshold_bytes is None
+
+
+def test_the_default_watchdog_floor_reaches_the_policy() -> None:
+    """The default floor is 1024 MiB and is mapped by the same rule.
+
+    The literal is deliberate: this pins the documented default, so a change
+    to it fails here rather than silently moving every run's watchdog floor.
+    """
+    from rust_prover_tools.kani_destinations import supervision_policy
+    from rust_prover_tools.kani_harness_cli_options import (
+        DestinationFlags,
+        PolicyFlags,
+    )
+
+    config = supervision_policy(PolicyFlags(), DestinationFlags())
+
+    assert config.watchdog_threshold_bytes == 1024 * 1024 * 1024
+
+
 _FIXTURE_WORKSPACE = (
     Path(__file__).resolve().parents[2]
     / "tests"
