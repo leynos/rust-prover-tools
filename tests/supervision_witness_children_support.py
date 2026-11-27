@@ -121,9 +121,12 @@ async def _case_sigterm_reap(tmp_path: Path) -> None:
     pid_file = tmp_path / "child.pid"
     script = tmp_path / "stubborn.py"
     script.write_text(
-        "import os, signal, sys, time\n"
+        "import os, pathlib, signal, sys, time\n"
         "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        f"p = pathlib.Path({str(pid_file)!r})\n"
+        "t = p.with_name(p.name + '.tmp')\n"
+        "t.write_text(str(os.getpid()))\n"
+        "os.replace(t, p)\n"
         "sys.stdout.write('ready\\n')\n"
         "sys.stdout.flush()\n"
         "time.sleep(120)\n",
@@ -138,10 +141,7 @@ async def _case_sigterm_reap(tmp_path: Path) -> None:
     clock = SystemClock()
     launcher = CuprumHarnessLauncher(clock=clock.now, monotonic=clock.monotonic)
     handle = launcher.start(spec(), build, lambda line: None)
-    deadline = time.monotonic() + 10
-    while not pid_file.exists() and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    assert pid_file.exists(), "the stubborn child never started"
+    await record_group(tmp_path, pid_file)
     handle.stop(StopReason.TIMEOUT)
     await settle_within(handle, deadline=0.5)
     pid = int(pid_file.read_text(encoding="utf-8"))

@@ -83,6 +83,17 @@ def _abandon(process: subprocess.Popen[str], tmp_path: Path) -> None:
     _reap_recorded_group(tmp_path)
 
 
+def _abandon_if_running(process: subprocess.Popen[str], tmp_path: Path) -> None:
+    """Stop and reap a runner that is still alive after a test's assertions.
+
+    A setup failure or a failed expectation leaves the runner and possibly its
+    child running, so every deadline test owns this cleanup exactly as the
+    timeout path does.
+    """
+    if process.returncode is None:
+        _abandon(process, tmp_path)
+
+
 def _reap_recorded_group(tmp_path: Path) -> None:
     """Kill and confirm the process group a failed case recorded."""
     pgid_file = tmp_path / "pgid"
@@ -210,6 +221,15 @@ def test_a_cancelled_run_does_not_lose_a_callback_failure(
     _assert_gone(_recorded_pid(tmp_path, "child.pid"), "the child was not joined")
 
 
+def test_a_sigterm_ignoring_child_is_stopped_and_reaped(tmp_path: Path) -> None:
+    """A child that ignores SIGTERM is still stopped and then reaped."""
+    result = _run_case("sigterm_reap", tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    pid = _recorded_pid(tmp_path, "child.pid")
+    _assert_gone(pid, "the SIGTERM-ignoring child was not reaped")
+
+
 def test_a_stuck_settlement_cannot_outlive_the_parent_deadline(
     tmp_path: Path,
 ) -> None:
@@ -221,9 +241,12 @@ def test_a_stuck_settlement_cannot_outlive_the_parent_deadline(
     proved separately below.
     """
     process = _start_case("stuck_settlement", tmp_path)
-    _wait_for_path(tmp_path / "settled.marker")
-    with pytest.raises(subprocess.TimeoutExpired):
-        _collect(process, tmp_path, timeout=5.0)
+    try:
+        _wait_for_path(tmp_path / "settled.marker")
+        with pytest.raises(subprocess.TimeoutExpired):
+            _collect(process, tmp_path, timeout=5.0)
+    finally:
+        _abandon_if_running(process, tmp_path)
 
     assert process.returncode is not None, "the parent did not reap the runner"
 
@@ -241,10 +264,13 @@ def test_a_child_left_running_by_a_hung_witness_is_stopped_and_reaped(
     status proves the parent reaped the interpreter it started.
     """
     process = _start_case("deadline_reap", tmp_path)
-    pid = _wait_for_pid(tmp_path / "pgid")
-    assert is_running(pid), "the child exited before the parent acted"
-    with pytest.raises(subprocess.TimeoutExpired):
-        _collect(process, tmp_path, timeout=5.0)
+    try:
+        pid = _wait_for_pid(tmp_path / "pgid")
+        assert is_running(pid), "the child exited before the parent acted"
+        with pytest.raises(subprocess.TimeoutExpired):
+            _collect(process, tmp_path, timeout=5.0)
+    finally:
+        _abandon_if_running(process, tmp_path)
 
     assert process.returncode is not None, "the parent did not reap the runner"
     assert not is_running(pid), "the parent did not stop the child"

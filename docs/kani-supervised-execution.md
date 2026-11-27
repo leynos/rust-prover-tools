@@ -599,9 +599,20 @@ The deterministic suite uses:
 - a scripted cgroup reader with selected paths and values;
 - an in-memory JSONL sink and an interrupt source a test can fire.
 
-One real-process witness proves that a stop reaches the owned group and that a
-silent child still produces heartbeats. The live 0.67.0 fixture test is opt-in
-through `RPT_LIVE_KANI=1`.
+The real-process witnesses run one case per `python -I` interpreter under an
+independent parent deadline, because a settlement that suppresses cancellation
+can otherwise block interpreter shutdown. They prove that a stop reaches the
+owned group, that a silent child still produces heartbeats, that a newline-free
+line is bounded end to end, that a lost evidence write stops and joins the
+child even when a supervisor stop follows, and that a settlement which ignores
+cancellation cannot outlive the deadline. Two further cases prove the parent's
+own cleanup: a child left running by a hung witness is stopped and its process
+entry disappears, and a SIGTERM-ignoring child is joined before the case
+returns. Each case records the process group its child leads; the parent kills
+that group on a timeout or a non-zero exit, and a zombie that outlives the
+deadline is reported as a reaping defect, so the host must provide an init or
+subreaper that reaps orphans. The live 0.67.0 fixture test is opt-in through
+`RPT_LIVE_KANI=1`.
 
 ## Grammar qualification and qualify-once
 

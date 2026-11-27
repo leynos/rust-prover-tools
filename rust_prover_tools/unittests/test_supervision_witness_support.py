@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import os
-import signal
 import subprocess
 import sys
 import time
@@ -13,17 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.supervision_witness_support import (
-    WITNESS_DEADLINE_SECONDS,
-    is_running,
-    settle_within,
-)
+from tests.supervision_witness_support import settle_within
 
 #: Repository root, so the isolated subprocess can import the test helpers.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-
-#: The script that runs one witness case in its own interpreter.
-_RUNNER = _REPO_ROOT / "tests" / "supervision_witness_runner.py"
 
 
 class _StuckHandle:
@@ -130,45 +120,3 @@ def test_a_never_released_settlement_is_bounded_at_process_shutdown(
 
     assert result.returncode == 2, result.stderr
     assert time.monotonic() - started < 15
-
-
-def test_a_sigterm_ignoring_child_is_reaped(tmp_path: Path) -> None:
-    """A child that ignores SIGTERM is killed and joined within the deadline.
-
-    The scenario runs in its own interpreter, under the witness watchdog and
-    inside the parent's longer deadline. A blocked event-loop shutdown can
-    therefore never hang pytest, and a failed case still has its real child
-    killed and reaped through the PID file the case records.
-    """
-    pid_file = tmp_path / "child.pid"
-    try:
-        result = subprocess.run(
-            [sys.executable, "-I", str(_RUNNER), "sigterm_reap", str(tmp_path)],
-            cwd=str(tmp_path),
-            capture_output=True,
-            text=True,
-            timeout=WITNESS_DEADLINE_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        _kill_recorded_child(pid_file)
-        raise
-    if result.returncode != 0:
-        _kill_recorded_child(pid_file)
-    assert result.returncode == 0, result.stderr
-    pid = int(pid_file.read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
-
-
-def _kill_recorded_child(pid_file: Path) -> None:
-    """Kill a child a failed case recorded, then require its absence."""
-    if not pid_file.exists():
-        return
-    pid = int(pid_file.read_text(encoding="utf-8"))
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGKILL)
-    limit = time.monotonic() + 10
-    while time.monotonic() < limit and is_running(pid):
-        time.sleep(0.02)
-    assert not is_running(pid), "the SIGTERM-ignoring child was not reaped"
