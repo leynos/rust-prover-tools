@@ -626,11 +626,11 @@ finalizes the available report, and returns the signal status.
 The CLI contract tests inject the composition root, so they cover route
 exclusivity, selection conflicts, drift, interruption, exit mapping, and a
 closed standard output without a live prover. Help output is snapshotted. An
-opt-in live fixture test exercises the real 0.67.0 driver.
-The command surface is unchanged by the producer work.
-`make kani-snapshot-verify` is an operator-facing verification of a produced
-release, not a CLI command: it installs the wheel into a temporary environment
-and runs the public commands against the downloaded assets. The
+opt-in live fixture test exercises the real 0.67.0 driver. The command surface
+is unchanged by the producer work. `make kani-snapshot-verify` is an
+operator-facing verification of a produced release, not a CLI command: it
+installs the wheel into a temporary environment and runs the public commands
+against the downloaded assets. The
 [operations runbook](kani-snapshot-operations.md) owns that procedure and the
 evidence it requires.
 
