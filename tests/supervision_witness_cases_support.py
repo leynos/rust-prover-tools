@@ -7,24 +7,18 @@ in its own interpreter. It holds the shared helpers and the first three cases;
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import dataclasses as dc
+import inspect
+import json
+import os
+import signal
 import sys
-from pathlib import Path
+import time
+import typing as typ
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
-import asyncio  # ruff: ignore[module-import-not-at-top-of-file]
-import contextlib  # ruff: ignore[module-import-not-at-top-of-file]
-import dataclasses as dc  # ruff: ignore[module-import-not-at-top-of-file]
-import inspect  # ruff: ignore[module-import-not-at-top-of-file]
-import json  # ruff: ignore[module-import-not-at-top-of-file]
-import os  # ruff: ignore[module-import-not-at-top-of-file]
-import signal  # ruff: ignore[module-import-not-at-top-of-file]
-import time  # ruff: ignore[module-import-not-at-top-of-file]
-import typing as typ  # ruff: ignore[module-import-not-at-top-of-file]
-
-from rust_prover_tools.supervision import (  # ruff: ignore[module-import-not-at-top-of-file]
+from rust_prover_tools.supervision import (
     CgroupV2Reader,
     CuprumHarnessLauncher,
     Diagnostics,
@@ -41,14 +35,14 @@ from rust_prover_tools.supervision import (  # ruff: ignore[module-import-not-at
     SystemClock,
     run_supervised_sync,
 )
-from rust_prover_tools.supervision.launcher import LaunchCommand  # ruff: ignore[module-import-not-at-top-of-file]
-from rust_prover_tools.supervision.run_environment import (  # ruff: ignore[module-import-not-at-top-of-file]
+from rust_prover_tools.supervision.launcher import LaunchCommand
+from rust_prover_tools.supervision.run_environment import (
     EvidenceEnvironment,
     ExecutionEnvironment,
     RunPolicyEnvironment,
 )
-from rust_prover_tools.unittests.supervision_doubles import spec  # ruff: ignore[module-import-not-at-top-of-file]
-from tests.supervision_witness_support import (  # ruff: ignore[module-import-not-at-top-of-file]
+from rust_prover_tools.unittests.supervision_doubles import spec
+from tests.supervision_witness_support import (
     SCENARIO_WATCHDOG_SECONDS,
     is_running,
     run_bounded,
@@ -56,6 +50,7 @@ from tests.supervision_witness_support import (  # ruff: ignore[module-import-no
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.supervision.attempt_evidence import AttemptEvidence
 

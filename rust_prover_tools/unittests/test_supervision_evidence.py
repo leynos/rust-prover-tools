@@ -1,12 +1,10 @@
-"""Hold the evidence sinks and the versioned schemas to their contract."""
+"""Hold the evidence sinks and their record formatting to their contract."""
 
 from __future__ import annotations
 
-import dataclasses as dc
 import io
 import json
 import typing as typ
-from pathlib import Path
 
 import pytest
 from hypothesis import given, settings
@@ -14,34 +12,18 @@ from hypothesis import strategies as st
 
 from rust_prover_tools.supervision import (
     MIN_LINE_BYTES,
-    REPORT_NOTES,
     Diagnostics,
-    DiagnosticSinks,
-    EvidenceFormatError,
-    ExecutionStatus,
-    HarnessResult,
-    HarnessSpec,
     HumanSink,
-    InventoryDrift,
     JsonlSink,
     Measurement,
     MemorySink,
     OutputLine,
-    ProofVerdict,
     ResourceSample,
-    RunOutcome,
-    RunReport,
-    StopReason,
     SupervisionConfig,
     bounded_text,
     decode_jsonl,
-    decode_measurement,
     fit_record,
-    render_table,
-    report_document,
     utc_text,
-    validate_report_document,
-    write_report,
 )
 from rust_prover_tools.supervision.events import (
     RunStart,
@@ -54,23 +36,37 @@ from rust_prover_tools.supervision.events import (
     sample_record,
 )
 from rust_prover_tools.unittests.supervision_doubles import VirtualClock, spec
+from rust_prover_tools.unittests.supervision_evidence_support import (
+    _record,
+    _report,
+    _result,
+)
+
+if typ.TYPE_CHECKING:
+    from pathlib import Path
 
 
-def _record(**fields: object) -> dict[str, object]:
-    """Return a minimal run-start record with the given overrides."""
-    base: dict[str, object] = {
-        "record": "run-start",
-        "run_id": "run-1",
-        "timestamp": "2026-11-21T12:00:00.000Z",
-        "packages": ["example"],
-        "harness_count": 1,
-        "timeout_seconds": 1.0,
-        "sample_interval_seconds": 1.0,
-        "heartbeat_interval_seconds": 1.0,
-        "watchdog_mib": 1024,
-    }
-    base.update(fields)
-    return base
+class _FlushRecorder(io.StringIO):
+    """A text stream that counts flushes."""
+
+    def __init__(self) -> None:
+        """Create a recorder that has flushed nothing yet."""
+        super().__init__()
+        self.flushes = 0
+
+    def flush(self) -> None:
+        """Count the flush and defer to the base implementation."""
+        self.flushes += 1
+        super().flush()
+
+
+class _FlushFails(io.StringIO):
+    """A stream whose flush always fails, as a full disk would."""
+
+    def flush(self) -> None:
+        """Refuse the flush."""
+        msg = "flush failed"
+        raise OSError(msg)
 
 
 def test_utc_text_is_explicit_and_stable() -> None:
@@ -91,20 +87,6 @@ def test_bounded_text_marks_a_truncated_line() -> None:
 def test_bounded_text_leaves_a_short_line_alone() -> None:
     """A line inside its budget is unchanged."""
     assert bounded_text("short", 20) == "short"
-
-
-class _FlushRecorder(io.StringIO):
-    """A text stream that counts flushes."""
-
-    def __init__(self) -> None:
-        """Create a recorder that has flushed nothing yet."""
-        super().__init__()
-        self.flushes = 0
-
-    def flush(self) -> None:
-        """Count the flush and defer to the base implementation."""
-        self.flushes += 1
-        super().flush()
 
 
 def test_the_jsonl_sink_writes_a_versioned_flushed_record() -> None:
@@ -149,16 +131,6 @@ def test_the_fallback_record_fits_the_minimum_budget() -> None:
     assert len(decode_jsonl(handle.getvalue())) == 1
 
 
-def test_a_diagnostic_reference_needs_an_offset() -> None:
-    """A nested diagnostic reference obeys the same strict key set."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["diagnostic"] = {"sink": "jsonl"}
-
-    with pytest.raises(EvidenceFormatError, match="missing"):
-        validate_report_document(document)
-
-
 def test_an_appended_sink_keeps_absolute_offsets() -> None:
     """A diagnostic reference names the file offset, not the run offset."""
     handle = io.StringIO()
@@ -186,17 +158,6 @@ def test_u2028_inside_a_record_does_not_split_it() -> None:
     sink.write(output)
 
     assert len(decode_jsonl(sink.text)) == 1
-
-
-def test_a_finish_record_with_an_empty_measurement_is_refused() -> None:
-    """The finish-record measurements are validated like every other record."""
-    sink = MemorySink()
-    record = harness_finish_record(run_id="run-1", result=_result())
-    record["peak_group_rss"] = {}
-    sink.write(record)
-
-    with pytest.raises(EvidenceFormatError, match="neither"):
-        decode_jsonl(sink.text)
 
 
 def test_the_human_sink_renders_a_readable_line() -> None:
@@ -254,91 +215,93 @@ def test_diagnostics_returns_the_jsonl_offset() -> None:
     assert len(jsonl.records) == 2
 
 
-def _result() -> HarnessResult:
-    """Return one complete passing result."""
-    return HarnessResult(
-        spec=HarnessSpec("example", "harnesses::verified"),
-        status=ExecutionStatus.PASSED,
-        stop_reason=StopReason.EXITED,
-        exit_code=0,
-        signal_number=None,
-        proof_verdict=ProofVerdict.PASSED,
-        started_at=VirtualClock().now(),
-        finished_at=VirtualClock().now(),
-        duration_seconds=1.25,
-        peak_group_rss=Measurement.available(128 * 1024 * 1024),
-        min_host_available=Measurement.available(8 * 1024 * 1024 * 1024),
-        host_total=Measurement.available(16 * 1024 * 1024 * 1024),
-        cgroup=None,
-        last_output="VERIFICATION:- SUCCESSFUL",
-        last_progress="Verification Time: 1.2s",
-        diagnostic=None,
-        detail="",
+def test_a_human_budget_below_the_marker_is_refused() -> None:
+    """A human line cannot be bounded below its truncation marker."""
+    with pytest.raises(ValueError, match="at least"):
+        HumanSink(io.StringIO(), max_line_bytes=1)
+
+
+def test_a_non_utf8_jsonl_stream_is_refused() -> None:
+    """Offsets are byte offsets only for the documented UTF-8 contract."""
+    handle = io.TextIOWrapper(io.BytesIO(), encoding="utf-16")
+
+    with pytest.raises(ValueError, match="UTF-8"):
+        JsonlSink(handle)
+
+
+def test_the_offset_query_does_not_repair_the_destination(
+    tmp_path: Path,
+) -> None:
+    """The query names the next offset; only the repair writes a boundary."""
+    from rust_prover_tools.supervision import (
+        jsonl_next_offset,
+        repair_jsonl_boundary,
     )
 
+    path = tmp_path / "evidence.jsonl"
+    path.write_text("x", encoding="utf-8")
 
-def _report() -> RunReport:
-    """Return one complete passing report."""
-    clock = VirtualClock()
-    return RunReport(
-        schema_version=1,
-        run_id="run-1",
-        started_at=clock.now(),
-        finished_at=clock.now(),
-        expected=(HarnessSpec("example", "harnesses::verified"),),
-        results=(_result(),),
-        accounting=InventoryDrift(),
-        outcome=RunOutcome.PASSED,
-    )
+    assert jsonl_next_offset(path) == 2
+    assert path.read_bytes() == b"x", "the query wrote to the destination"
+    assert repair_jsonl_boundary(path) == 2
+    assert path.read_bytes() == b"x\n"
+    assert repair_jsonl_boundary(path) == 2
+    assert path.read_bytes() == b"x\n"
 
 
-def test_the_report_document_carries_the_schema_and_notes() -> None:
-    """The final report is versioned and states its measurement limits."""
-    document = report_document(_report())
+def test_a_failed_jsonl_sink_stops_issuing_offsets() -> None:
+    """A stale offset is worse than no reference after a failed flush."""
+    human = MemorySink()
+    jsonl = JsonlSink(_FlushFails())
+    diagnostics = Diagnostics(human=human, jsonl=jsonl)
 
-    assert document["schema"] == 1
-    assert document["passed"] is True
-    assert document["notes"] == list(REPORT_NOTES)
-    validate_report_document(document)
+    first = diagnostics.emit(_record())
 
-
-def test_an_unknown_report_key_is_refused() -> None:
-    """A schema that is not enforced drifts."""
-    document = report_document(_report())
-    document["surprise"] = 1
-
-    with pytest.raises(EvidenceFormatError, match="unknown"):
-        validate_report_document(document)
+    assert first is None
+    assert jsonl.failed
+    assert diagnostics.emit(_record()) is None
+    assert human.records
 
 
-def test_a_missing_report_key_is_refused() -> None:
-    """A report that omits a documented field is refused."""
-    document = report_document(_report())
-    del document["outcome"]
-
-    with pytest.raises(EvidenceFormatError, match="missing"):
-        validate_report_document(document)
+def test_a_budget_below_the_truncation_marker_is_refused() -> None:
+    """A caller cannot request a line bound that cannot carry its marker."""
+    with pytest.raises(ValueError, match="at least"):
+        bounded_text("x" * 100, 8)
 
 
-def test_a_measurement_that_is_neither_form_is_refused() -> None:
-    """An empty measurement object is not evidence."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["peak_group_rss"] = {}
+@given(st.text(max_size=200), st.integers(min_value=64, max_value=512))
+@settings(max_examples=50, deadline=None)
+def test_bounded_text_stays_within_its_encoded_limit(
+    text: str,
+    limit: int,
+) -> None:
+    """Arbitrary text is bounded by encoded bytes, and short text is kept."""
+    bounded = bounded_text(text, limit)
 
-    with pytest.raises(EvidenceFormatError, match="neither"):
-        validate_report_document(document)
+    assert len(bounded.encode("utf-8")) <= limit
+    if len(text.encode("utf-8")) <= limit:
+        assert bounded == text
 
 
-def test_a_report_is_written_atomically(tmp_path: Path) -> None:
-    """The destination holds a complete JSON document after the call."""
-    destination = tmp_path / "report.json"
+@given(st.text(max_size=300), st.integers(min_value=MIN_LINE_BYTES, max_value=1024))
+@settings(max_examples=50, deadline=None)
+def test_fit_record_output_is_valid_json_within_its_limit(
+    text: str,
+    limit: int,
+) -> None:
+    """A record that does not fit is still serialized as valid bounded JSON."""
+    payload: dict[str, object] = {
+        "schema": 1,
+        "record": "output",
+        "run_id": "run-1",
+        "text": text,
+        "nested": {"description": text},
+    }
 
-    write_report(destination, _report())
+    line = fit_record(payload, limit)
 
-    document = json.loads(destination.read_text(encoding="utf-8"))
-    validate_report_document(document)
-    assert not list(tmp_path.glob("*.tmp"))
+    assert len(line.encode("utf-8")) <= limit
+    json.loads(line)
 
 
 def test_every_record_kind_can_be_decoded() -> None:
@@ -399,630 +362,3 @@ def test_every_record_kind_can_be_decoded() -> None:
         "harness-finish",
         "run-finish",
     ]
-
-
-def test_an_unknown_record_kind_is_refused() -> None:
-    """A reader refuses a record it does not understand."""
-    sink = MemorySink()
-    sink.write({"record": "surprise", "run_id": "run-1"})
-
-    with pytest.raises(EvidenceFormatError, match="unknown kind"):
-        decode_jsonl(sink.text)
-
-
-def test_the_table_names_every_result_and_the_limits() -> None:
-    """The human summary carries the identity, status, and measurement notes."""
-    lines = render_table(_report())
-
-    assert "PACKAGE" in lines[0]
-    assert "HARNESS" in lines[0]
-    assert any("harnesses::verified" in line for line in lines)
-    assert any(line.startswith("note:") for line in lines)
-    assert any("outcome=passed" in line for line in lines)
-
-
-def test_the_named_opener_starts_at_a_line_boundary(tmp_path: Path) -> None:
-    """A file without a final newline gains one before the next record."""
-    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
-
-    path = tmp_path / "evidence.jsonl"
-    path.write_text("x" * 100, encoding="utf-8")
-    config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
-
-    with prepare_and_open_diagnostics(config, None) as diagnostics:
-        reference = diagnostics.emit(_record())
-
-    assert reference is not None
-    assert reference.offset == 101
-    assert path.read_text(encoding="utf-8").splitlines()[0] == "x" * 100
-
-
-def test_a_symlink_alias_is_refused_before_a_handle_is_opened(
-    tmp_path: Path,
-) -> None:
-    """Resolved paths, not spellings, decide whether two roles collide.
-
-    A library caller reaches this rule through the adapter that opens the
-    destinations, which must refuse the alias before appending anything.
-    """
-    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
-
-    target = tmp_path / "evidence"
-    target.touch()
-    alias = tmp_path / "alias"
-    alias.symlink_to(target)
-    config = SupervisionConfig(
-        sinks=DiagnosticSinks(jsonl_path=target, report_path=alias)
-    )
-
-    with (
-        pytest.raises(ValueError, match="distinct"),
-        prepare_and_open_diagnostics(config, None),
-    ):
-        pass
-    assert target.read_text(encoding="utf-8") == ""
-
-
-def test_a_hard_link_alias_is_refused_before_a_handle_is_opened(
-    tmp_path: Path,
-) -> None:
-    """Resolved paths differ, but one inode under two names is still shared."""
-    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
-
-    first = tmp_path / "first.log"
-    first.touch()
-    second = tmp_path / "second.log"
-    second.hardlink_to(first)
-    config = SupervisionConfig(
-        sinks=DiagnosticSinks(human_path=first, jsonl_path=second)
-    )
-
-    with (
-        pytest.raises(ValueError, match="distinct"),
-        prepare_and_open_diagnostics(config, None),
-    ):
-        pass
-    assert first.read_text(encoding="utf-8") == ""
-
-
-def test_an_unstatable_destination_is_not_reported_as_an_alias(
-    tmp_path: Path,
-) -> None:
-    """A stat failure is not a collision; the open that follows reports it."""
-    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
-    from rust_prover_tools.supervision.destinations import (
-        require_distinct_destinations,
-    )
-
-    blocker = tmp_path / "blocker"
-    blocker.write_text("not a directory", encoding="utf-8")
-    broken = blocker / "evidence.jsonl"
-    report = tmp_path / "report.json"
-
-    # The identity check cannot stat through a file, so it reports no alias.
-    require_distinct_destinations(jsonl_path=broken, report_path=report)
-
-    config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=broken))
-    with (
-        pytest.raises(OSError, match="File exists"),
-        prepare_and_open_diagnostics(config, None),
-    ):
-        pass
-
-
-def test_a_run_finish_record_with_malformed_accounting_is_refused() -> None:
-    """The nested accounting object obeys its documented key set."""
-    sink = MemorySink()
-    record = run_finish_record(
-        run_id="run-1", timestamp=VirtualClock().now(), report=_report()
-    )
-    record["accounting"] = {}
-    sink.write(record)
-
-    with pytest.raises(EvidenceFormatError, match="missing"):
-        decode_jsonl(sink.text)
-
-
-def test_a_negative_measurement_is_refused() -> None:
-    """A byte measurement cannot be negative."""
-    with pytest.raises(EvidenceFormatError, match="negative"):
-        decode_measurement({"value": -1})
-
-
-def test_the_fallback_keeps_the_original_kind_when_it_fits() -> None:
-    """A bounded fallback keeps the lost record's kind when the budget allows."""
-    handle = io.StringIO()
-    sink = JsonlSink(handle, max_line_bytes=100)
-
-    sink.write(_record(run_id="x" * 10_000))
-
-    record = decode_jsonl(handle.getvalue())[0]
-    assert len(handle.getvalue().encode("utf-8")) <= 100
-    if record["record"] == "truncated":
-        assert record.get("original_kind") == "run-start"
-
-
-def test_truncation_preserves_the_record_kind() -> None:
-    """A shortened record keeps the field the reader dispatches on."""
-    payload: dict[str, object] = {
-        "schema": 1,
-        "record": "run-start",
-        "run_id": "r" * 16,
-        "packages": [f"package-{index:04d}" for index in range(100)],
-    }
-
-    line = fit_record(payload, 2200)
-
-    decoded = json.loads(line)
-    assert decoded["record"] == "run-start"
-    assert len(line.encode("utf-8")) <= 2200
-
-
-@pytest.mark.parametrize("schema", [True, 1.0, "1", None])
-def test_a_jsonl_schema_must_be_an_exact_integer(schema: object) -> None:
-    """A bool or float comparing equal to 1 is not the versioned schema."""
-    sink = MemorySink()
-    sink.write(_record(schema=schema))
-
-    with pytest.raises(EvidenceFormatError):
-        decode_jsonl(sink.text)
-
-
-def test_a_report_schema_must_be_an_exact_integer() -> None:
-    """The report reader applies the same strict version check."""
-    document = report_document(_report())
-    document["schema"] = True
-
-    with pytest.raises(EvidenceFormatError):
-        validate_report_document(document)
-
-
-def test_a_human_budget_below_the_marker_is_refused() -> None:
-    """A human line cannot be bounded below its truncation marker."""
-    with pytest.raises(ValueError, match="at least"):
-        HumanSink(io.StringIO(), max_line_bytes=1)
-
-
-def test_a_non_utf8_jsonl_stream_is_refused() -> None:
-    """Offsets are byte offsets only for the documented UTF-8 contract."""
-    handle = io.TextIOWrapper(io.BytesIO(), encoding="utf-16")
-
-    with pytest.raises(ValueError, match="UTF-8"):
-        JsonlSink(handle)
-
-
-def test_the_offset_query_does_not_repair_the_destination(
-    tmp_path: Path,
-) -> None:
-    """The query names the next offset; only the repair writes a boundary."""
-    from rust_prover_tools.supervision import (
-        jsonl_next_offset,
-        repair_jsonl_boundary,
-    )
-
-    path = tmp_path / "evidence.jsonl"
-    path.write_text("x", encoding="utf-8")
-
-    assert jsonl_next_offset(path) == 2
-    assert path.read_bytes() == b"x", "the query wrote to the destination"
-    assert repair_jsonl_boundary(path) == 2
-    assert path.read_bytes() == b"x\n"
-    assert repair_jsonl_boundary(path) == 2
-    assert path.read_bytes() == b"x\n"
-
-
-def test_truncation_preserves_the_invocation_identity() -> None:
-    """A shortened record still joins to its harness by the documented keys."""
-    payload: dict[str, object] = {
-        "schema": 1,
-        "record": "output",
-        "run_id": "r" * 16,
-        "package": "alpha",
-        "harness": "h" * 80,
-        "attempt": 1,
-        "text": "x" * 4000,
-    }
-
-    decoded = json.loads(fit_record(payload, 256))
-
-    assert decoded["record"] == "output"
-    assert decoded["run_id"] == "r" * 16
-    assert decoded["package"] == "alpha"
-    assert decoded["harness"] == "h" * 80
-
-
-def test_accounting_fields_must_be_arrays() -> None:
-    """A scalar in place of a drift list is not a valid report."""
-    document = report_document(_report())
-    document["accounting"] = {
-        "missing": None,
-        "duplicate": 0,
-        "unexpected": "none",
-    }
-
-    with pytest.raises(EvidenceFormatError, match="array"):
-        validate_report_document(document)
-
-
-class _FlushFails(io.StringIO):
-    """A stream whose flush always fails, as a full disk would."""
-
-    def flush(self) -> None:
-        """Refuse the flush."""
-        msg = "flush failed"
-        raise OSError(msg)
-
-
-def test_a_failed_jsonl_sink_stops_issuing_offsets() -> None:
-    """A stale offset is worse than no reference after a failed flush."""
-    human = MemorySink()
-    jsonl = JsonlSink(_FlushFails())
-    diagnostics = Diagnostics(human=human, jsonl=jsonl)
-
-    first = diagnostics.emit(_record())
-
-    assert first is None
-    assert jsonl.failed
-    assert diagnostics.emit(_record()) is None
-    assert human.records
-
-
-def test_a_failed_report_publication_keeps_the_previous_report(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The atomic rename cannot destroy a good report when it fails."""
-    path = tmp_path / "report.json"
-    path.write_text("previous report", encoding="utf-8")
-
-    def fail(self: Path, target: Path) -> None:
-        """Refuse the publication rename."""
-        del self, target
-        msg = "rename failed"
-        raise OSError(msg)
-
-    monkeypatch.setattr(Path, "replace", fail)
-
-    with pytest.raises(OSError, match="rename failed"):
-        write_report(path, _report())
-
-    assert path.read_text(encoding="utf-8") == "previous report"
-    assert not list(tmp_path.glob(".report.json.*.tmp"))
-
-
-def test_a_budget_below_the_truncation_marker_is_refused() -> None:
-    """A caller cannot request a line bound that cannot carry its marker."""
-    with pytest.raises(ValueError, match="at least"):
-        bounded_text("x" * 100, 8)
-
-
-def test_a_multiline_detail_stays_on_one_table_row() -> None:
-    """A detail cannot split its row into unrelated log lines."""
-    report = _report()
-    result = report.results[0]
-    report = dc.replace(
-        report,
-        results=(dc.replace(result, detail="first\nsecond"),),
-    )
-
-    lines = render_table(report)
-
-    assert all("\n" not in line for line in lines)
-    assert any("first second" in line for line in lines)
-
-
-@pytest.mark.parametrize("status", ["passing", "PASSED", "", 7])
-def test_an_unknown_result_status_is_refused(status: object) -> None:
-    """A status outside the documented set is not a report this reader accepts."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["status"] = status
-
-    with pytest.raises(EvidenceFormatError, match="status"):
-        validate_report_document(document)
-
-
-@pytest.mark.parametrize("duration", ["1.5", True, -1.0, float("nan"), None])
-def test_a_non_numeric_duration_is_refused(duration: object) -> None:
-    """A duration is a finite non-negative number of seconds."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["duration_seconds"] = duration
-
-    with pytest.raises(EvidenceFormatError, match="duration_seconds"):
-        validate_report_document(document)
-
-
-def test_an_unknown_outcome_is_refused() -> None:
-    """The aggregate outcome is one of the documented values."""
-    document = report_document(_report())
-    document["outcome"] = "nearly-passed"
-
-    with pytest.raises(EvidenceFormatError, match="outcome"):
-        validate_report_document(document)
-
-
-def test_an_unknown_proof_verdict_is_refused() -> None:
-    """The proof verdict is one of the documented values."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["proof_verdict"] = "probably"
-
-    with pytest.raises(EvidenceFormatError, match="proof_verdict"):
-        validate_report_document(document)
-
-
-def test_an_unknown_stop_reason_is_refused() -> None:
-    """A stop reason outside the documented set is refused."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["stop_reason"] = "killed-somehow"
-
-    with pytest.raises(EvidenceFormatError, match="stop_reason"):
-        validate_report_document(document)
-
-
-@pytest.mark.parametrize("field", ["complete", "passed", "interrupted"])
-def test_a_non_boolean_report_flag_is_refused(field: str) -> None:
-    """A Boolean flag is not an integer or a string."""
-    document = report_document(_report())
-    document[field] = 1
-
-    with pytest.raises(EvidenceFormatError, match=field):
-        validate_report_document(document)
-
-
-def test_a_boolean_attempt_is_refused() -> None:
-    """`True` is an `int` in Python, but it is not an attempt ordinal."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["attempt"] = True
-
-    with pytest.raises(EvidenceFormatError, match="attempt"):
-        validate_report_document(document)
-
-
-def test_a_string_exit_code_is_refused() -> None:
-    """An exit code is an integer or absent, never a string."""
-    document = report_document(_report())
-    results = typ.cast("list[dict[str, object]]", document["results"])
-    results[0]["exit_code"] = "0"
-
-    with pytest.raises(EvidenceFormatError, match="exit_code"):
-        validate_report_document(document)
-
-
-def test_the_shipped_report_still_validates() -> None:
-    """The stricter reader accepts what the producer writes."""
-    validate_report_document(report_document(_report()))
-
-
-@pytest.mark.parametrize("field", ["missing", "duplicate", "unexpected"])
-@pytest.mark.parametrize("entry", [7, "", None, ["p::x"]])
-def test_a_non_string_accounting_entry_is_refused(field: str, entry: object) -> None:
-    """Every drift entry is a package-qualified identity string."""
-    document = report_document(_report())
-    accounting = typ.cast("dict[str, object]", document["accounting"])
-    accounting[field] = [entry]
-
-    with pytest.raises(EvidenceFormatError, match=field):
-        validate_report_document(document)
-
-
-_UNAVAILABLE = {"unavailable_reason": "not sampled"}
-
-
-def _valid_record(kind: str) -> dict[str, object]:
-    """Return one minimal valid record of `kind`."""
-    base: dict[str, object] = {
-        "schema": 1,
-        "record": kind,
-        "run_id": "run-1",
-        "timestamp": "2026-11-21T12:00:00.000Z",
-        "package": "alpha",
-        "harness": "a",
-        "attempt": 1,
-    }
-    if kind != "harness-finish":
-        base["elapsed_seconds"] = 0.5
-    if kind == "output":
-        base.update({"stream": "stdout", "text": "line"})
-    elif kind == "heartbeat":
-        base.update({
-            "idle_seconds": 0.5,
-            "group_rss": _UNAVAILABLE,
-            "host_available": _UNAVAILABLE,
-            "last_progress": None,
-        })
-    elif kind == "harness-finish":
-        base.update({
-            "status": "passed",
-            "stop_reason": "exited",
-            "exit_code": 0,
-            "signal_number": None,
-            "proof_verdict": "passed",
-            "duration_seconds": 1.0,
-            "peak_group_rss": _UNAVAILABLE,
-            "min_host_available": _UNAVAILABLE,
-            "host_total": _UNAVAILABLE,
-            "cgroup": {
-                "path": None,
-                "start": None,
-                "finish": None,
-                "oom_kill_delta": None,
-                "unavailable_reason": "not mounted",
-            },
-            "last_output": None,
-            "last_progress": None,
-            "detail": "",
-        })
-    else:
-        raise ValueError(kind)
-    return base
-
-
-@pytest.mark.parametrize(
-    ("kind", "field", "value"),
-    [
-        ("output", "stream", 17),
-        ("output", "text", 17),
-        ("output", "elapsed_seconds", -1.0),
-        ("output", "attempt", 0),
-        ("output", "run_id", 17),
-        ("heartbeat", "idle_seconds", -1.0),
-        ("heartbeat", "last_progress", 17),
-        ("harness-finish", "status", "invented"),
-        ("harness-finish", "stop_reason", "perhaps"),
-        ("harness-finish", "proof_verdict", "probably"),
-        ("harness-finish", "duration_seconds", -1.0),
-        ("harness-finish", "exit_code", "zero"),
-        ("harness-finish", "last_output", 17),
-    ],
-)
-def test_a_correctly_keyed_record_with_a_bad_value_is_refused(
-    kind: str,
-    field: str,
-    value: object,
-) -> None:
-    """The key set alone must not admit an invented or negative value."""
-    record = _valid_record(kind)
-    record[field] = value
-
-    with pytest.raises(EvidenceFormatError, match=field.split("_")[0]):
-        decode_jsonl(json.dumps(record))
-
-
-def test_a_run_finish_record_with_an_invented_outcome_is_refused() -> None:
-    """A run outcome must be one the report model documents."""
-    record: dict[str, object] = {
-        "schema": 1,
-        "record": "run-finish",
-        "run_id": "run-1",
-        "timestamp": "2026-11-21T12:00:00.000Z",
-        "outcome": "invented",
-        "complete": True,
-        "interrupted": False,
-        "interrupt_signal": None,
-        "accounting": {"missing": [], "duplicate": [], "unexpected": []},
-    }
-
-    with pytest.raises(EvidenceFormatError, match="outcome"):
-        decode_jsonl(json.dumps(record))
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("path", 17),
-        ("oom_kill_delta", "two"),
-        ("unavailable_reason", 17),
-    ],
-)
-def test_a_cgroup_field_with_a_bad_value_is_refused(
-    field: str,
-    value: object,
-) -> None:
-    """An available-looking cgroup object still validates its own fields."""
-    cgroup: dict[str, object] = {
-        "path": "/sys/fs/cgroup/job",
-        "start": None,
-        "finish": None,
-        "oom_kill_delta": 1,
-        "unavailable_reason": None,
-    }
-    cgroup[field] = value
-
-    with pytest.raises(EvidenceFormatError, match=field.split("_")[0]):
-        decode_jsonl(
-            json.dumps({
-                **_valid_record("harness-finish"),
-                "cgroup": cgroup,
-            })
-        )
-
-
-def test_an_output_stream_of_the_wrong_shape_is_refused() -> None:
-    """A list or object in `stream` is a schema error, not a TypeError."""
-    for stream in ([], {}):
-        record = _valid_record("output")
-        record["stream"] = stream
-
-        with pytest.raises(EvidenceFormatError, match="stream"):
-            decode_jsonl(json.dumps(record))
-
-
-def test_a_harness_finish_record_without_a_finish_time_is_accepted() -> None:
-    """The producer emits a null timestamp for a harness that never ran."""
-    record = _valid_record("harness-finish")
-    record["timestamp"] = None
-
-    (decoded,) = decode_jsonl(json.dumps(record))
-
-    assert decoded["timestamp"] is None
-
-
-def test_a_not_run_result_round_trips_through_its_finish_record() -> None:
-    """The producer and reader agree on a harness that never ran."""
-    from rust_prover_tools.supervision.events import harness_finish_record
-    from rust_prover_tools.supervision.run_finalize import not_run_result
-
-    record = {
-        "schema": 1,
-        **harness_finish_record(
-            run_id="run-1", result=not_run_result(spec(), "skipped")
-        ),
-    }
-
-    (decoded,) = decode_jsonl(json.dumps(record))
-
-    assert decoded["status"] == "not-run"
-    assert decoded["stop_reason"] is None
-    assert decoded["timestamp"] is None
-
-
-def test_null_output_text_is_refused_and_empty_text_is_kept() -> None:
-    """The producer always writes the decoded line, possibly empty."""
-    null_record = _valid_record("output")
-    null_record["text"] = None
-    with pytest.raises(EvidenceFormatError, match="text"):
-        decode_jsonl(json.dumps(null_record))
-
-    empty_record = _valid_record("output")
-    empty_record["text"] = ""
-    (decoded,) = decode_jsonl(json.dumps(empty_record))
-    assert decoded["text"] == ""
-
-
-@given(st.text(max_size=200), st.integers(min_value=64, max_value=512))
-@settings(max_examples=50, deadline=None)
-def test_bounded_text_stays_within_its_encoded_limit(
-    text: str,
-    limit: int,
-) -> None:
-    """Arbitrary text is bounded by encoded bytes, and short text is kept."""
-    bounded = bounded_text(text, limit)
-
-    assert len(bounded.encode("utf-8")) <= limit
-    if len(text.encode("utf-8")) <= limit:
-        assert bounded == text
-
-
-@given(st.text(max_size=300), st.integers(min_value=MIN_LINE_BYTES, max_value=1024))
-@settings(max_examples=50, deadline=None)
-def test_fit_record_output_is_valid_json_within_its_limit(
-    text: str,
-    limit: int,
-) -> None:
-    """A record that does not fit is still serialized as valid bounded JSON."""
-    payload: dict[str, object] = {
-        "schema": 1,
-        "record": "output",
-        "run_id": "run-1",
-        "text": text,
-        "nested": {"description": text},
-    }
-
-    line = fit_record(payload, limit)
-
-    assert len(line.encode("utf-8")) <= limit
-    json.loads(line)
