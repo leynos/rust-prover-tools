@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,352 passed and 6
-skipped at code head `7767e3e`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,353 passed and 6
+skipped at code head `461ee0e`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the docs-only successor `811a1e0`: 2 passed in 37.40 s.
+passed at the same head: 2 passed in 64.27 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -165,6 +165,22 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-27 05:10Z) Fourteenth review round, from the R13 follow-up.
+  `RunningHarness.group_id` is unset until Cuprum announces the spawn, so each
+  case now records the child's own pid, which is the group the launcher
+  created, and the parent reaps that group on a timeout and on any non-zero
+  exit. The parent closes the runner's pipes rather than draining them, because
+  a child in its own session holds the write end after the runner dies. A new
+  `deadline_reap` case leaves a real SIGTERM-ignoring child running and never
+  touches it, so the parent's cleanup is the only thing that can stop it; its
+  test asserts termination and reaping separately and confirms the runner was
+  reaped. The stuck-settlement case no longer starts a child, so it proves only
+  the settlement deadline. The guide now separates `kani_destinations` from
+  `kani_diagnostics` and states that neither opens the report destination.
+  `make check-fmt`, `make all` (3,353 passed, 6 skipped), `make markdownlint`,
+  and `make nixie` pass at `461ee0e`; the opt-in live Kani 0.67.0 fixture
+  passes at the same head: 2 passed in 64.27 s.
 
 - [x] (2026-11-27 03:45Z) Thirteenth review round, from the R12 follow-up. Each
   real-process witness now runs as one isolated `python -I` interpreter under a
