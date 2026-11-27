@@ -3,7 +3,9 @@
 The option models in ``kani_harness_cli_options`` describe what the user
 asked for; this adapter is where those values meet the filesystem. It owns the
 alias checks, the standard-output comparison, and the handles a run appends to,
-so the models stay free of filesystem access.
+so the models stay free of filesystem access. Opening itself never repairs a
+JSONL boundary: `open_run_diagnostics` prepares the destination explicitly
+through `prepare_jsonl_destination` before the sink is opened.
 """
 
 from __future__ import annotations
@@ -12,7 +14,10 @@ import os
 import sys
 import typing as typ
 
-from rust_prover_tools.kani_diagnostics import open_destinations
+from rust_prover_tools.kani_diagnostics import (
+    open_destinations,
+    prepare_jsonl_destination,
+)
 from rust_prover_tools.supervision import (
     Diagnostics,
     DiagnosticSinks,
@@ -98,6 +103,11 @@ def open_run_diagnostics(
     Diagnostics
         The sinks for this run.
     """
+    jsonl_start_offset = (
+        0
+        if destinations.jsonl is None
+        else prepare_jsonl_destination(destinations.jsonl)
+    )
     return open_destinations(
         stack,
         DiagnosticSinks(
@@ -106,6 +116,7 @@ def open_run_diagnostics(
         ),
         human_stream=sys.stdout,
         max_line_bytes=config.max_line_bytes,
+        jsonl_start_offset=jsonl_start_offset,
     )
 
 

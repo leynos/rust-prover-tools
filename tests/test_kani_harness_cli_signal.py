@@ -7,7 +7,10 @@ import contextlib
 import signal
 import typing as typ
 
-from rust_prover_tools.kani_harness_cli import SignalInterrupt
+from rust_prover_tools.kani_harness_cli import (
+    SignalInterrupt,
+    install_interrupt_handlers,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -66,7 +69,7 @@ def test_installation_restores_the_previous_handlers(
     )
     interrupt = SignalInterrupt()
 
-    with interrupt.installed():
+    with install_interrupt_handlers(interrupt):
         assert [sig for sig, _ in calls] == [signal.SIGINT, signal.SIGTERM]
 
     assert calls[-2:] == [
@@ -84,7 +87,7 @@ def test_the_first_signal_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     interrupt = SignalInterrupt()
 
-    with interrupt.installed():
+    with install_interrupt_handlers(interrupt):
         interrupt._handle(signal.SIGINT, None)
         interrupt._handle(signal.SIGTERM, None)
 
@@ -102,19 +105,15 @@ def test_the_cli_installs_handlers_only_for_execution(
 
     state: list[str] = []
 
-    class _FakeInterrupt:
-        """Record when the CLI believes a handler is installed."""
-
-        signum: int | None = None
-
-        @contextlib.contextmanager
-        def installed(self) -> cabc.Generator[None]:
-            """Mark the execution phase as guarded."""
-            state.append("installed")
-            try:
-                yield
-            finally:
-                state.append("restored")
+    @contextlib.contextmanager
+    def fake_handlers(interrupt: object) -> cabc.Generator[None]:
+        """Mark the execution phase as guarded."""
+        del interrupt
+        state.append("installed")
+        try:
+            yield
+        finally:
+            state.append("restored")
 
     def fake_prepare(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         """Refuse to be called with handlers already installed."""
@@ -135,7 +134,8 @@ def test_the_cli_installs_handlers_only_for_execution(
         return make_run()
 
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.SignalInterrupt", _FakeInterrupt
+        "rust_prover_tools.kani_harness_cli.install_interrupt_handlers",
+        fake_handlers,
     )
     monkeypatch.setattr(
         "rust_prover_tools.kani_harness_cli.prepare_harnesses", fake_prepare

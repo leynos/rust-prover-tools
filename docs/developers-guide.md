@@ -1118,11 +1118,14 @@ responsibility rather than by prover:
   that is standard output, and opens the run's human and JSONL sinks on the
   caller's `ExitStack`. It opens no report destination.
 - `rust_prover_tools.kani_diagnostics` is the library opener the CLI adapter
-  builds on. `open_destinations` creates the human and JSONL sinks and repairs
-  a partial JSONL boundary first; `open_diagnostics` applies the alias rule and
-  yields a caller-supplied `Diagnostics` untouched, closing only what it
-  opened. Neither opens the report destination: `RunJournal` writes that
-  through the injected `ReportWriter` when `sinks.report_path` is set.
+  builds on. `prepare_jsonl_destination` is the one step that writes before a
+  run: it completes a partial trailing record and returns the offset the sink
+  starts at. `open_destinations` only opens, taking that offset; it never
+  repairs. `open_diagnostics` applies the alias rule, prepares the JSONL
+  destination explicitly, and yields a caller-supplied `Diagnostics` untouched,
+  closing only what it opened. Neither opener opens the report destination:
+  `RunJournal` writes that through the injected `ReportWriter` when
+  `sinks.report_path` is set.
 - `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
   `kani harnesses list` and `kani harnesses run`.
 

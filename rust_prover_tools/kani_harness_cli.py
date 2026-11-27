@@ -7,9 +7,11 @@ versioned JSONL, and writes the final JSON report when asked. Errors go to
 standard error.
 
 Signal handling lives here and nowhere else. The library installs no handlers,
-so an embedding application keeps control; this adapter installs SIGINT and
-SIGTERM for the duration of the supervised execution phase, finalizes the
-report on interruption, and returns ``128 + signal``. Discovery and route
+so an embedding application keeps control; `install_interrupt_handlers`
+installs SIGINT and SIGTERM for the duration of the supervised execution
+phase, finalizes the report on interruption, and returns ``128 + signal``.
+Handler installation takes no suspension point, and `SignalInterrupt.wait`
+installs nothing, so neither can block the other. Discovery and route
 qualification run before those handlers exist, so a signal there ends the
 process under its normal disposition instead of being recorded for a phase
 that has not started.
@@ -56,12 +58,16 @@ from rust_prover_tools.kani_inventory import (
     load_inventory,
     restrict_inventory,
 )
+from rust_prover_tools.supervision import render_table
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
+    from rust_prover_tools.kani_harness_run import KaniHarnessPreparation
+    from rust_prover_tools.supervision import SupervisionConfig
 
-__all__ = ("SignalInterrupt", "harnesses_app")
+
+__all__ = ("SignalInterrupt", "harnesses_app", "install_interrupt_handlers")
 
 #: Errors this adapter reports as an ordinary nonzero exit. A destination the
 #: process cannot open is a usage or environment error, not a crash.
@@ -92,7 +98,6 @@ class SignalInterrupt:
         self._signum: int | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._event: asyncio.Event | None = None
-        self._previous: dict[int, object] = {}
 
     @property
     def signum(self) -> int | None:
@@ -108,19 +113,19 @@ class SignalInterrupt:
 
     @contextlib.contextmanager
     def installed(self) -> cabc.Generator[None]:
-        """Install SIGINT and SIGTERM handlers for the duration of the block."""
-        if threading.current_thread() is not threading.main_thread():
+        """Install the handlers until the block exits.
+
+        Installation itself belongs to `install_interrupt_handlers`; this
+        method only names the conventional block form for a caller that
+        already holds the source.
+
+        Yields
+        ------
+        None
+            The block during which the handlers are installed.
+        """
+        with install_interrupt_handlers(self):
             yield
-            return
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            self._previous[signum] = signal.getsignal(signum)
-            signal.signal(signum, self._handle)
-        try:
-            yield
-        finally:
-            for signum, previous in self._previous.items():
-                signal.signal(signum, typ.cast("typ.Any", previous))
-            self._previous.clear()
 
     def _handle(self, signum: int, frame: object) -> None:
         """Record the first signal and release the monitor."""
@@ -145,6 +150,40 @@ class SignalInterrupt:
         if self._event is None:
             self._event = asyncio.Event()
         await self._event.wait()
+
+
+@contextlib.contextmanager
+def install_interrupt_handlers(
+    interrupt: SignalInterrupt,
+) -> cabc.Generator[None]:
+    """Install SIGINT and SIGTERM handlers for the duration of the block.
+
+    Installation is synchronous and has no suspension point, so a caller
+    cannot be interrupted while the previous dispositions are being recorded
+    and replaced. Restoring them is the block's only exit action.
+
+    Parameters
+    ----------
+    interrupt : SignalInterrupt
+        Source that receives each delivered signal.
+
+    Yields
+    ------
+    None
+        The block during which the handlers are installed.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous: dict[int, object] = {}
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous[signum] = signal.getsignal(signum)
+        signal.signal(signum, interrupt._handle)
+    try:
+        yield
+    finally:
+        for signum, disposition in previous.items():
+            signal.signal(signum, typ.cast("typ.Any", disposition))
 
 
 @harnesses_app.command(name="list")
@@ -226,30 +265,13 @@ def run_command_harnesses(
         Zero only for a complete passing run, one otherwise, and
         ``128 + signal`` when a signal interrupted the run.
     """
+    interrupt = SignalInterrupt()
     executing = False
-    interrupt: SignalInterrupt | None = None
     try:
-        root = resolve_repo_root(selection.repo_root)
-        route = resolve_route(routing, root=root)
-        config = supervision_policy(policy, destinations)
-        preparation = prepare_harnesses(
-            KaniHarnessRunOptions(
-                repo_root=root,
-                route=route,
-                packages=tuple(selection.package or ()),
-                harnesses=tuple(selection.harness or ()),
-                inventory_path=selection.inventory,
-                config=config,
-            )
-        )
-        interrupt = SignalInterrupt()
-        with interrupt.installed(), contextlib.ExitStack() as stack:
-            dependencies = KaniHarnessDependencies(
-                diagnostics=open_run_diagnostics(stack, config, destinations),
-                interrupts=interrupt,
-            )
-            executing = True
-            run = execute_harnesses(preparation, config, dependencies)
+        options = _resolve_run(selection, routing, policy, destinations)
+        preparation = _prepare_run(options)
+        executing = True
+        run = _execute_run(preparation, options.config, destinations, interrupt)
     except KeyboardInterrupt:
         # Preparation runs under the application's normal signal disposition,
         # so SIGINT arrives here as KeyboardInterrupt and ends it immediately.
@@ -258,15 +280,53 @@ def run_command_harnesses(
         return 128 + signal.SIGINT
     except _EXPECTED_ERRORS as exc:
         print_lines((str(exc),), stream=sys.stderr)
-        if interrupt is not None and interrupt.signum is not None:
+        if interrupt.signum is not None:
             return 128 + interrupt.signum
         return 1
     return _present_run(run, interrupt)
 
 
+def _resolve_run(
+    selection: SelectionFlags,
+    routing: RouteFlags,
+    policy: PolicyFlags,
+    destinations: DestinationFlags,
+) -> KaniHarnessRunOptions:
+    """Resolve the requested root and route into one validated run request."""
+    root = resolve_repo_root(selection.repo_root)
+    return KaniHarnessRunOptions(
+        repo_root=root,
+        route=resolve_route(routing, root=root),
+        packages=tuple(selection.package or ()),
+        harnesses=tuple(selection.harness or ()),
+        inventory_path=selection.inventory,
+        config=supervision_policy(policy, destinations),
+    )
+
+
+def _prepare_run(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+    """Discover, select, and qualify the request without running it."""
+    return prepare_harnesses(options)
+
+
+def _execute_run(
+    preparation: KaniHarnessPreparation,
+    config: SupervisionConfig,
+    destinations: DestinationFlags,
+    interrupt: SignalInterrupt,
+) -> KaniHarnessRun:
+    """Supervise the preparation while owning handlers and open handles."""
+    with install_interrupt_handlers(interrupt), contextlib.ExitStack() as stack:
+        dependencies = KaniHarnessDependencies(
+            diagnostics=open_run_diagnostics(stack, config, destinations),
+            interrupts=interrupt,
+        )
+        return execute_harnesses(preparation, config, dependencies)
+
+
 def _present_run(run: KaniHarnessRun, interrupt: SignalInterrupt) -> int:
     """Print one completed run and return its process exit status."""
-    print_lines(run.table)
+    print_lines(render_table(run.report))
     if interrupt.signum is not None:
         return 128 + interrupt.signum
     return run.exit_status

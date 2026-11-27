@@ -34,6 +34,7 @@ from rust_prover_tools.supervision import (
     LaunchCommand,
     MemorySink,
     SupervisionConfig,
+    render_table,
     validate_report_document,
 )
 from rust_prover_tools.supervision.config import DiagnosticSinks
@@ -44,6 +45,7 @@ from rust_prover_tools.unittests.supervision_doubles import (
     ScriptedProbe,
     VirtualClock,
     VirtualSleeper,
+    unwritten,
 )
 
 _CORPUS = (
@@ -153,7 +155,7 @@ def test_a_successful_harness_is_passed_and_exits_zero(tmp_path: Path) -> None:
     assert run.report.passed
     assert run.report.results[0].status is ExecutionStatus.PASSED
     assert run.exit_status == 0
-    assert "harnesses::a" in "\n".join(run.table)
+    assert "harnesses::a" in "\n".join(render_table(run.report))
 
 
 def test_a_counterexample_fails_the_run(tmp_path: Path) -> None:
@@ -493,6 +495,86 @@ def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
     assert run.report.passed
     assert human.exists()
     assert jsonl.exists()
+
+
+def test_preparation_consumes_only_injected_values(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Injected values reach preparation without a process-directory read."""
+    from rust_prover_tools.kani_harness_run import _environment
+    from rust_prover_tools.kani_routes import SnapshotRoute
+
+    def refuse() -> Path:
+        """Fail if preparation consults the process directory."""
+        msg = "preparation read the process directory"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(Path, "cwd", refuse)
+    prepared = _prepared()
+    adapter = typ.cast("typ.Any", object())
+    clock = VirtualClock()
+    human = tmp_path / "human.log"
+    jsonl = tmp_path / "evidence.jsonl"
+    dependencies = KaniHarnessDependencies(
+        clock=clock,
+        launcher=ScriptedLauncher(clock=clock),
+        probe=ScriptedProbe(),
+        cgroup=ScriptedCgroup(),
+        sleeper=VirtualSleeper(clock),
+        prepare=lambda route: prepared,
+        adapter=adapter,
+        process_cwd=tmp_path,
+        metadata=lambda root: (),
+    )
+    config = _test_config(sinks=DiagnosticSinks(human_path=human, jsonl_path=jsonl))
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=SnapshotRoute(pin=typ.cast("typ.Any", object())),
+        inventory=_inventory("harnesses::a"),
+        config=config,
+        dependencies=dependencies,
+    )
+
+    preparation = prepare_harnesses(options)
+
+    assert preparation.prepared is prepared
+    assert preparation.commands["alpha::harnesses::a"].argv[:2] == (
+        "driver",
+        "kani",
+    )
+    assert unwritten(human), "preparation wrote the human log"
+    assert unwritten(jsonl), "preparation wrote the JSONL evidence"
+    environment = _environment(
+        preparation,
+        dependencies,
+        Diagnostics(),
+        limits=(config.max_line_bytes, config.max_log_bytes),
+    )
+    assert environment.adapter is adapter
+
+
+def test_the_injected_process_directory_is_the_one_checked(
+    tmp_path: Path,
+) -> None:
+    """A snapshot route naming none uses the supplied cwd, not the process one."""
+    from rust_prover_tools.kani_routes import SnapshotRoute
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    dependencies = KaniHarnessDependencies(
+        prepare=lambda route: _prepared(),
+        process_cwd=elsewhere,
+    )
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=SnapshotRoute(pin=typ.cast("typ.Any", object())),
+        inventory=_inventory("harnesses::a"),
+        dependencies=dependencies,
+    )
+
+    with pytest.raises(ProverToolError, match="repository root"):
+        prepare_harnesses(options)
 
 
 def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:

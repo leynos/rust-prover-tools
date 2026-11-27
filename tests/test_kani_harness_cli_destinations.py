@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import typing as typ
@@ -11,6 +12,7 @@ import pytest
 
 from rust_prover_tools.cli import app
 from rust_prover_tools.kani_destinations import (
+    open_run_diagnostics,
     require_stdout_free,
     supervision_policy,
 )
@@ -102,6 +104,23 @@ def test_standard_output_cannot_alias_a_jsonl_destination(
         monkeypatch.setattr(sys, "stdout", handle)
         with pytest.raises(ValueError, match="standard output"):
             supervision_policy(PolicyFlags(), DestinationFlags(jsonl=path))
+
+
+def test_the_cli_opener_prepares_the_jsonl_boundary(tmp_path: Path) -> None:
+    """The CLI path performs the explicit preparation before opening."""
+    path = tmp_path / "evidence.jsonl"
+    path.write_bytes(b"partial")
+    config = supervision_policy(PolicyFlags(), DestinationFlags())
+
+    with contextlib.ExitStack() as stack:
+        diagnostics = open_run_diagnostics(
+            stack,
+            config,
+            DestinationFlags(jsonl=path),
+        )
+        assert diagnostics.jsonl.offset == len(b"partial") + 1
+
+    assert path.read_bytes() == b"partial\n"
 
 
 def test_a_symlink_alias_is_refused_by_the_cli_adapter(tmp_path: Path) -> None:

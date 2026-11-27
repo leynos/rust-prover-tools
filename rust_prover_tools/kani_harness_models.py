@@ -11,18 +11,23 @@ same production environment, resolved in one place; splitting the bag would
 duplicate that defaulting, and every test that needs two overrides would
 thread two values. The class is the composition point, not a capability
 boundary, and the module's inertness is what keeps one bag honest.
+
+`process_working_directory` is the one explicit resolver for the bag's
+documented "`None` means the process directory" default. Keeping it here means
+`prepare_harnesses` never reads the process directory itself and a caller can
+replace the value without touching qualification.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.supervision import SupervisionConfig
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     from rust_prover_tools.kani_inventory import (
         CargoPackage,
@@ -30,7 +35,11 @@ if typ.TYPE_CHECKING:
         InventoryHarness,
     )
     from rust_prover_tools.kani_routes import KaniRoute, PreparedRoute
-    from rust_prover_tools.supervision import Diagnostics, LaunchCommand
+    from rust_prover_tools.supervision import (
+        Diagnostics,
+        HarnessAdapter,
+        LaunchCommand,
+    )
     from rust_prover_tools.supervision.protocols import (
         CgroupReader,
         Clock,
@@ -44,6 +53,7 @@ __all__ = (
     "KaniHarnessDependencies",
     "KaniHarnessPreparation",
     "KaniHarnessRunOptions",
+    "process_working_directory",
 )
 
 
@@ -77,6 +87,13 @@ class KaniHarnessDependencies:
         Inherited environment for route qualification. `None` reads the
         process environment once in `prepare_harnesses`, so the default is
         resolved at the outermost caller rather than inside a probe.
+    adapter : HarnessAdapter | None
+        Prover adapter override. `None` builds the default `KaniAdapter` for
+        the prepared route.
+    process_cwd : Path | None
+        The caller's checked working directory, used when a snapshot route
+        names none. `None` means the process directory, resolved by
+        `process_working_directory` at the composition root.
     """
 
     clock: Clock | None = None
@@ -89,6 +106,8 @@ class KaniHarnessDependencies:
     prepare: cabc.Callable[[KaniRoute], PreparedRoute] | None = None
     metadata: cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None = None
     environ: cabc.Mapping[str, str] | None = None
+    adapter: HarnessAdapter | None = None
+    process_cwd: Path | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -159,3 +178,20 @@ class KaniHarnessPreparation:
     selected: tuple[InventoryHarness, ...]
     prepared: PreparedRoute
     commands: cabc.Mapping[str, LaunchCommand]
+
+
+def process_working_directory(process_cwd: Path | None) -> Path:
+    """Return the caller's checked directory, or the process directory.
+
+    Parameters
+    ----------
+    process_cwd : Path | None
+        The caller's checked working directory, or `None` for the process
+        directory.
+
+    Returns
+    -------
+    Path
+        The directory a snapshot route naming none will use.
+    """
+    return Path.cwd() if process_cwd is None else process_cwd

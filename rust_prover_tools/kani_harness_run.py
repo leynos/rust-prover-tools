@@ -14,7 +14,7 @@ Example
 ```python
 run = run_harnesses(
     KaniHarnessRunOptions(
-        repo_root=Path.cwd(),
+        repo_root=Path("."),
         packages=("cuprum-native-io",),
         route=LegacyRoute(installation=Path.home() / ".kani" / "kani-0.67.0"),
     )
@@ -29,7 +29,6 @@ import dataclasses as dc
 import functools
 import os
 import typing as typ
-from pathlib import Path
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_diagnostics import open_diagnostics
@@ -37,6 +36,7 @@ from rust_prover_tools.kani_harness_models import (
     KaniHarnessDependencies,
     KaniHarnessPreparation,
     KaniHarnessRunOptions,
+    process_working_directory,
 )
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
@@ -66,13 +66,13 @@ from rust_prover_tools.supervision import (
     RunReport,
     SupervisionConfig,
     SystemClock,
-    render_table,
     run_supervised_sync,
 )
 from rust_prover_tools.supervision.kani import KaniAdapter
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.kani_inventory import CargoPackage
     from rust_prover_tools.supervision import HarnessSpec
@@ -129,11 +129,6 @@ class KaniHarnessRun:
         if self.report.interrupt_signal is not None:
             return 128 + self.report.interrupt_signal
         return 0 if self.report.passed else 1
-
-    @property
-    def table(self) -> tuple[str, ...]:
-        """The deterministic human summary for this run."""
-        return render_table(self.report)
 
 
 def run_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
@@ -244,15 +239,18 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
+    dependencies = options.dependencies or KaniHarnessDependencies()
     root = options.repo_root.resolve()
-    route_cwd = route_working_directory(options.route, process_cwd=Path.cwd()).resolve()
+    route_cwd = route_working_directory(
+        options.route,
+        process_cwd=process_working_directory(dependencies.process_cwd),
+    ).resolve()
     if route_cwd != root:
         msg = (
             "the route working directory must be the repository root: "
             f"{route_cwd} is not {root}"
         )
         raise ProverToolError(msg)
-    dependencies = options.dependencies or KaniHarnessDependencies()
     metadata = _metadata_for(options, dependencies.metadata or cargo_metadata, root)
     inventory = _inventory(options, metadata)
     selected = select_harnesses(inventory, options.harnesses)
@@ -379,6 +377,10 @@ def _environment(
         monotonic=clock.monotonic,
         max_line_bytes=limits[0],
     )
+    adapter = dependencies.adapter or KaniAdapter(
+        version=preparation.prepared.grammar.version,
+        max_log_bytes=limits[1],
+    )
 
     def build(spec: HarnessSpec) -> LaunchCommand:
         """Return the command composed for this exact identity."""
@@ -391,10 +393,7 @@ def _environment(
         cgroup=dependencies.cgroup or CgroupV2Reader(),
         diagnostics=diagnostics,
         build=build,
-        adapter=KaniAdapter(
-            version=preparation.prepared.grammar.version,
-            max_log_bytes=limits[1],
-        ),
+        adapter=adapter,
         sleeper=dependencies.sleeper or AsyncSleeper(),
         interrupts=dependencies.interrupts,
     )
