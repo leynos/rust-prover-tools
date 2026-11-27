@@ -46,7 +46,20 @@ def _start_case(name: str, tmp_path: Path) -> subprocess.Popen[str]:
         text=True,
         start_new_session=True,
     )
-    _write_atomically(tmp_path / "runner.pgid", process.pid)
+    try:
+        _write_atomically(tmp_path / "runner.pgid", process.pid)
+    except OSError:
+        # The runner exists but its group record does not, so cleanup cannot
+        # rely on that file. Kill the group directly by the runner's own pid,
+        # reap it, release the pipes, and let the publication error surface.
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=10)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+        raise
     return process
 
 
