@@ -16,7 +16,6 @@ recorded for a phase that has not started.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import signal
 import sys
@@ -30,9 +29,10 @@ from rust_prover_tools.cli_support import repo_root as resolve_repo_root
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.kani_destinations import (
-    prepare_and_open_run_diagnostics,
+    require_stdout_free,
     supervision_policy,
 )
+from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 from rust_prover_tools.kani_harness_cli_options import (
     DestinationFlags,
     PolicyFlags,
@@ -56,7 +56,9 @@ from rust_prover_tools.kani_inventory import (
     inventory_document,
     load_inventory,
     restrict_inventory,
+    write_inventory,
 )
+from rust_prover_tools.kani_snapshot.pins import load_pin
 from rust_prover_tools.supervision import render_table
 
 if typ.TYPE_CHECKING:
@@ -118,12 +120,10 @@ def list_harnesses(
             if inventory is not None
             else discover_inventory(root, packages)
         )
-        text = json.dumps(inventory_document(resolved), indent=2)
         if output is None:
-            print_lines((text,))
+            print_lines((json.dumps(inventory_document(resolved), indent=2),))
         else:
-            output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(text + "\n", encoding="utf-8")
+            write_inventory(output, resolved)
     except _EXPECTED_ERRORS as exc:
         print_lines((str(exc),), stream=sys.stderr)
         return 1
@@ -190,9 +190,13 @@ def _resolve_run(
 ) -> KaniHarnessRunOptions:
     """Resolve the requested root and route into one validated run request."""
     root = resolve_repo_root(selection.repo_root)
+    selected_snapshot = (
+        routing.snapshot_pin is not None and routing.installation is None
+    )
+    pin = load_pin(routing.snapshot_pin) if selected_snapshot else None
     return KaniHarnessRunOptions(
         repo_root=root,
-        route=resolve_route(routing, root=root),
+        route=resolve_route(routing, root=root, pin=pin),
         packages=tuple(selection.package or ()),
         harnesses=tuple(selection.harness or ()),
         inventory_path=selection.inventory,
@@ -212,9 +216,14 @@ def _execute_run(
     interrupt: SignalInterrupt,
 ) -> KaniHarnessRun:
     """Supervise the preparation while owning handlers and open handles."""
-    with install_interrupt_handlers(interrupt), contextlib.ExitStack() as stack:
+    require_stdout_free(destinations.jsonl, "--jsonl")
+    require_stdout_free(destinations.report, "--report")
+    with (
+        install_interrupt_handlers(interrupt),
+        prepare_and_open_diagnostics(config, None, human_stream=sys.stdout) as opened,
+    ):
         dependencies = KaniHarnessDependencies(
-            diagnostics=prepare_and_open_run_diagnostics(stack, config, destinations),
+            diagnostics=opened,
             interrupts=interrupt,
         )
         return execute_harnesses(preparation, config, dependencies)

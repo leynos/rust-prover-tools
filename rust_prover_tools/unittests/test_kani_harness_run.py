@@ -756,8 +756,10 @@ def test_a_stale_gated_test_pin_is_refused_before_qualification() -> None:
             cwd=_FIXTURE_WORKSPACE,
         ),
         inventory=inventory,
-        metadata=metadata,
-        dependencies=KaniHarnessDependencies(prepare=prepare),
+        dependencies=KaniHarnessDependencies(
+            metadata=lambda _root: metadata,
+            prepare=prepare,
+        ),
     )
 
     with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
@@ -826,8 +828,10 @@ def test_preparation_keys_required_features_by_target_kind(
             cwd=_FIXTURE_WORKSPACE,
         ),
         inventory=HarnessInventory((PackageInventory("beta", (pinned,)),)),
-        metadata=metadata,
-        dependencies=KaniHarnessDependencies(prepare=prepare),
+        dependencies=KaniHarnessDependencies(
+            metadata=lambda _root: metadata,
+            prepare=prepare,
+        ),
     )
 
     with pytest.raises(InventoryDiscoveryError, match="requires features"):

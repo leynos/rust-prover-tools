@@ -133,9 +133,7 @@ def test_run_snapshot_route_is_selected(
         manifest_sha256="c" * 64,
     )
     captured = capture_run(monkeypatch, run())
-    monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli_options.load_pin", lambda path: pin
-    )
+    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.load_pin", lambda path: pin)
 
     status = app([
         "kani",

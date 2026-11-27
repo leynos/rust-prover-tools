@@ -16,12 +16,14 @@ from cyclopts import Parameter
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_harness_run import LegacyRoute, SnapshotRoute
-from rust_prover_tools.kani_snapshot.pins import load_pin
 from rust_prover_tools.supervision import (
     DEFAULT_HEARTBEAT_SECONDS,
     DEFAULT_SAMPLE_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
 )
+
+if typ.TYPE_CHECKING:
+    from rust_prover_tools.kani_snapshot.models import SnapshotPin
 
 __all__ = (
     "DEFAULT_MAX_LOG_MIB",
@@ -139,7 +141,12 @@ class DestinationFlags:
     report: typ.Annotated[Path | None, Parameter(name="--report")] = None
 
 
-def resolve_route(flags: RouteFlags, *, root: Path) -> LegacyRoute | SnapshotRoute:
+def resolve_route(
+    flags: RouteFlags,
+    *,
+    root: Path,
+    pin: SnapshotPin | None = None,
+) -> LegacyRoute | SnapshotRoute:
     """Resolve exactly one execution route from the CLI options.
 
     Parameters
@@ -149,6 +156,10 @@ def resolve_route(flags: RouteFlags, *, root: Path) -> LegacyRoute | SnapshotRou
     root : Path
         Repository root used as the snapshot route's default working
         directory.
+    pin : SnapshotPin | None
+        Pin already loaded by the caller. Required with `--snapshot-pin`; the
+        loader is kept out of route resolution so this function stays a pure
+        mapping from validated flags to a route.
 
     Returns
     -------
@@ -158,8 +169,8 @@ def resolve_route(flags: RouteFlags, *, root: Path) -> LegacyRoute | SnapshotRou
     Raises
     ------
     ProverToolError
-        Neither or both routes were selected, or a route-specific option is
-        missing or misplaced.
+        Neither or both routes were selected, a route-specific option is
+        missing or misplaced, or a snapshot pin was not loaded first.
     """
     if (flags.installation is None) == (flags.snapshot_pin is None):
         msg = "select exactly one of --installation or --snapshot-pin"
@@ -177,9 +188,11 @@ def resolve_route(flags: RouteFlags, *, root: Path) -> LegacyRoute | SnapshotRou
             cwd=flags.cwd,
             arguments=arguments,
         )
-    pin_path = typ.cast("Path", flags.snapshot_pin)
+    if pin is None:
+        msg = "the snapshot pin must be loaded before the route is resolved"
+        raise ProverToolError(msg)
     return SnapshotRoute(
-        pin=load_pin(pin_path),
+        pin=pin,
         cache_home=flags.cache_dir,
         cwd=flags.cwd or root,
         arguments=arguments,

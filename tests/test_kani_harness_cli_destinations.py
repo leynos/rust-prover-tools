@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 import typing as typ
@@ -12,10 +11,10 @@ import pytest
 
 from rust_prover_tools.cli import app
 from rust_prover_tools.kani_destinations import (
-    prepare_and_open_run_diagnostics,
     require_stdout_free,
     supervision_policy,
 )
+from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 from rust_prover_tools.kani_harness_cli_options import (
     DestinationFlags,
     PolicyFlags,
@@ -103,21 +102,48 @@ def test_standard_output_cannot_alias_a_jsonl_destination(
     with path.open("a", encoding="utf-8") as handle:
         monkeypatch.setattr(sys, "stdout", handle)
         with pytest.raises(ValueError, match="standard output"):
-            supervision_policy(PolicyFlags(), DestinationFlags(jsonl=path))
+            require_stdout_free(path, "--jsonl")
 
 
-def test_the_cli_opener_prepares_the_jsonl_boundary(tmp_path: Path) -> None:
-    """The CLI path performs the explicit preparation before opening."""
+def test_a_descriptor_that_cannot_be_inspected_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real descriptor that cannot be stat'd makes the check impossible.
+
+    Allowing the destination would silently accept a possible alias, so the
+    check refuses instead. An in-memory capture object, which has no
+    descriptor at all, is a documented no-op by contrast.
+    """
+    from rust_prover_tools.errors import StdoutIdentityError
+
+    class _BrokenStdout:
+        """A stream whose descriptor exists but cannot be inspected."""
+
+        def fileno(self) -> int:
+            """Return a descriptor that is not open."""
+            return 987654
+
+    path = tmp_path / "evidence.jsonl"
+    path.touch()
+    monkeypatch.setattr(sys, "stdout", typ.cast("typ.Any", _BrokenStdout()))
+
+    with pytest.raises(StdoutIdentityError, match="cannot be inspected"):
+        require_stdout_free(path, "--jsonl")
+
+
+def test_an_absent_destination_needs_no_identity(tmp_path: Path) -> None:
+    """A destination that does not exist yet cannot be standard output."""
+    require_stdout_free(tmp_path / "absent.jsonl", "--jsonl")
+
+
+def test_the_shared_opener_prepares_the_jsonl_boundary(tmp_path: Path) -> None:
+    """The one opener performs the explicit preparation before opening."""
     path = tmp_path / "evidence.jsonl"
     path.write_bytes(b"partial")
-    config = supervision_policy(PolicyFlags(), DestinationFlags())
+    config = supervision_policy(PolicyFlags(), DestinationFlags(jsonl=path))
 
-    with contextlib.ExitStack() as stack:
-        diagnostics = prepare_and_open_run_diagnostics(
-            stack,
-            config,
-            DestinationFlags(jsonl=path),
-        )
+    with prepare_and_open_diagnostics(config, None, human_stream=None) as diagnostics:
         assert diagnostics.jsonl.offset == len(b"partial") + 1
 
     assert path.read_bytes() == b"partial\n"
@@ -161,13 +187,7 @@ def test_stdout_is_checked_even_when_human_has_a_path(
     with path.open("a", encoding="utf-8") as handle:
         monkeypatch.setattr(sys, "stdout", handle)
         with pytest.raises(ValueError, match="standard output"):
-            supervision_policy(
-                PolicyFlags(),
-                DestinationFlags(
-                    human=tmp_path / "human.log",
-                    jsonl=path,
-                ),
-            )
+            require_stdout_free(path, "--jsonl")
 
 
 class _PipedStdout:
@@ -207,3 +227,35 @@ def test_a_jsonl_alias_of_a_piped_stdout_is_refused() -> None:
         sys.stdout = original
         os.close(read_fd)
         os.close(write_fd)
+
+
+def test_listing_without_an_output_path_writes_nothing(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`kani harnesses list` prints JSON and takes no write path when unaided."""
+    source = inventory_file(tmp_path)
+    before = {path.name for path in tmp_path.iterdir()}
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        """Fail if the listing reaches the inventory writer."""
+        del args, kwargs
+        msg = "listing must not write"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.write_inventory", refuse)
+
+    status = app([
+        "kani",
+        "harnesses",
+        "list",
+        "--repo-root",
+        str(tmp_path),
+        "--inventory",
+        str(source),
+    ])
+
+    assert status == 0
+    assert {path.name for path in tmp_path.iterdir()} == before
+    assert capsys.readouterr().out.strip().startswith("{")

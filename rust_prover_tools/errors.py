@@ -22,6 +22,7 @@ __all__ = (
     "CommandTimedOutError",
     "CommandTimeoutError",
     "ProverToolError",
+    "StdoutIdentityError",
     "TransientDownloadError",
 )
 
@@ -35,6 +36,16 @@ class TransientDownloadError(ProverToolError):
 
     Integrity, policy and local filesystem failures deliberately use the base
     class so a retry can never mask them as a flaky connection.
+    """
+
+
+class StdoutIdentityError(ProverToolError):
+    """Raised when standard output cannot be identified for an alias check.
+
+    The check refuses a JSONL or report destination that is also standard
+    output. It needs a file identity for both ends; when either cannot be
+    inspected the check cannot be made, and a destination that might silently
+    interleave with the human log must be refused rather than allowed.
     """
 
 

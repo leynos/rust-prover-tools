@@ -3,10 +3,10 @@
 The option models in ``kani_harness_cli_options`` describe what the user
 asked for; this adapter is where those values meet the filesystem. It owns the
 alias checks, the standard-output comparison, and the handles a run appends to,
-so the models stay free of filesystem access. `prepare_and_open_run_diagnostics`
-names its own write: it repairs a partial trailing JSONL record through
-`prepare_jsonl_destination` before opening the sink. `open_destinations` and
-the sink constructors never write.
+so the models stay free of filesystem access. Opening is the library's
+`prepare_and_open_diagnostics`, which names its own write and repairs a partial
+trailing JSONL record through `prepare_jsonl_destination` before opening the
+sink. `open_destinations` and the sink constructors never write.
 """
 
 from __future__ import annotations
@@ -15,19 +15,14 @@ import os
 import sys
 import typing as typ
 
-from rust_prover_tools.kani_diagnostics import (
-    open_destinations,
-    prepare_jsonl_destination,
-)
+from rust_prover_tools.errors import StdoutIdentityError
 from rust_prover_tools.supervision import (
-    Diagnostics,
     DiagnosticSinks,
     SupervisionConfig,
     require_distinct_destinations,
 )
 
 if typ.TYPE_CHECKING:
-    import contextlib
     from pathlib import Path
 
     from rust_prover_tools.kani_harness_cli_options import (
@@ -35,11 +30,7 @@ if typ.TYPE_CHECKING:
         PolicyFlags,
     )
 
-__all__ = (
-    "prepare_and_open_run_diagnostics",
-    "require_stdout_free",
-    "supervision_policy",
-)
+__all__ = ("require_stdout_free", "supervision_policy")
 
 
 def supervision_policy(
@@ -70,8 +61,6 @@ def supervision_policy(
         jsonl_path=destinations.jsonl,
         report_path=destinations.report,
     )
-    require_stdout_free(destinations.jsonl, "--jsonl")
-    require_stdout_free(destinations.report, "--report")
     threshold = policy.watchdog_mib * 1024 * 1024 if policy.watchdog else None
     return SupervisionConfig(
         timeout_seconds=policy.timeout_seconds,
@@ -79,67 +68,67 @@ def supervision_policy(
         heartbeat_interval_seconds=policy.heartbeat_seconds,
         watchdog_threshold_bytes=threshold,
         max_log_bytes=policy.max_log_mib * 1024 * 1024,
-        sinks=DiagnosticSinks(report_path=destinations.report),
-    )
-
-
-def prepare_and_open_run_diagnostics(
-    stack: contextlib.ExitStack,
-    config: SupervisionConfig,
-    destinations: DestinationFlags,
-) -> Diagnostics:
-    """Prepare the JSONL boundary, then open the live destinations.
-
-    This function writes: a JSONL destination whose final record is partial
-    gains its boundary byte before the sink is opened, so the returned sink
-    starts at the repaired offset. The write is named here rather than hidden
-    inside an opener.
-
-    Parameters
-    ----------
-    stack : contextlib.ExitStack
-        Stack that owns every handle opened here.
-    config : SupervisionConfig
-        Validated policy supplying the line bound.
-    destinations : DestinationFlags
-        Human and JSONL destinations, or `None` for standard output and off.
-
-    Returns
-    -------
-    Diagnostics
-        The sinks for this run.
-
-    Raises
-    ------
-    OSError
-        The JSONL destination cannot be read or repaired.
-    """
-    jsonl_start_offset = (
-        0
-        if destinations.jsonl is None
-        else prepare_jsonl_destination(destinations.jsonl)
-    )
-    return open_destinations(
-        stack,
-        DiagnosticSinks(
+        sinks=DiagnosticSinks(
             human_path=destinations.human,
             jsonl_path=destinations.jsonl,
+            report_path=destinations.report,
         ),
-        human_stream=sys.stdout,
-        max_line_bytes=config.max_line_bytes,
-        jsonl_start_offset=jsonl_start_offset,
     )
+
+
+#: `fileno` failures that mean the stream has no descriptor at all. Named
+#: apart from the `try` so the formatter cannot rewrite it to PEP 758 syntax,
+#: which the pinned pylint interpreter cannot parse.
+_NO_STDOUT_IDENTITY: typ.Final[tuple[type[BaseException], ...]] = (
+    AttributeError,
+    ValueError,
+)
 
 
 def require_stdout_free(path: Path | None, option: str) -> None:
-    """Refuse a destination that is also the standard-output file."""
+    """Refuse a destination that is also the standard-output file.
+
+    An in-memory or captured standard output has no descriptor, so it has no
+    file identity and cannot alias a path destination; that case is a
+    documented no-op rather than an error, because a test harness replaces
+    standard output with exactly such an object. A real descriptor that cannot
+    be inspected is different: the check then cannot be made, and the
+    destination is refused instead of allowed.
+
+    Parameters
+    ----------
+    path : Path | None
+        Destination to compare, or `None` when the role is unset.
+    option : str
+        Option name, used in the refusal message.
+
+    Raises
+    ------
+    ValueError
+        The destination resolves to the same file as standard output.
+    StdoutIdentityError
+        Standard output or an existing destination cannot be inspected.
+    """
     if path is None:
         return
     try:
-        stream = os.fstat(sys.stdout.fileno())
-        target = path.stat()
-    except (AttributeError, OSError, ValueError):  # fmt: skip
+        fileno = sys.stdout.fileno()
+    except _NO_STDOUT_IDENTITY:
+        # A capture object or an in-memory stream: no descriptor, no identity,
+        # and therefore nothing a path could alias.
         return
+    try:
+        stream = os.fstat(fileno)
+    except OSError as error:
+        msg = f"standard output cannot be inspected: {error}"
+        raise StdoutIdentityError(msg) from error
+    try:
+        target = path.stat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        msg = f"the {option} destination cannot be inspected: {error}"
+        raise StdoutIdentityError(msg) from error
     # The device-and-inode comparison covers a pipe as well as a regular
     # file: `--jsonl /dev/stdout` on a pipeline aliases the very stream the
     # human log and final table are written to.

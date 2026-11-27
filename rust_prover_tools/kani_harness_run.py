@@ -276,8 +276,6 @@ def execute_harnesses(
     preparation: KaniHarnessPreparation,
     config: SupervisionConfig,
     dependencies: KaniHarnessDependencies | None = None,
-    *,
-    diagnostics: Diagnostics | None = None,
 ) -> KaniHarnessRun:
     """Supervise the harnesses selected by `prepare_harnesses`.
 
@@ -289,9 +287,6 @@ def execute_harnesses(
         Per-harness policy and configured evidence destinations.
     dependencies : KaniHarnessDependencies | None
         Overridden production dependencies. `None` uses the defaults.
-    diagnostics : Diagnostics | None
-        Caller-owned sinks, which override the configured destinations. The
-        caller retains ownership and must flush and close them.
 
     Returns
     -------
@@ -301,7 +296,7 @@ def execute_harnesses(
     dependencies = dependencies or KaniHarnessDependencies()
     with prepare_and_open_diagnostics(
         config,
-        diagnostics or dependencies.diagnostics,
+        dependencies.diagnostics,
     ) as opened:
         environment = _environment(
             preparation,
@@ -328,9 +323,12 @@ def _metadata_for(
     provider: cabc.Callable[[Path], cabc.Sequence[CargoPackage]],
     root: Path,
 ) -> tuple[CargoPackage, ...] | None:
-    """Resolve the metadata discovery needs, or `None` when it needs none."""
-    if options.metadata is not None:
-        return tuple(options.metadata)
+    """Resolve the metadata discovery needs, or `None` when it needs none.
+
+    `KaniHarnessDependencies.metadata` is the only metadata seam: a caller with
+    pre-read metadata supplies a provider that returns it, so discovery and
+    test-target revalidation always read one source.
+    """
     discovering = not any((options.inventory, options.inventory_path))
     return tuple(provider(root)) if discovering else None
 

@@ -130,8 +130,6 @@ class KaniHarnessRunOptions:
         Path to an authoritative version-1 inventory document.
     config : SupervisionConfig
         Per-harness policy and report destination.
-    metadata : cabc.Sequence[CargoPackage] | None
-        Pre-read Cargo metadata, for tests.
     dependencies : KaniHarnessDependencies | None
         Overridden production dependencies.
     """
@@ -143,7 +141,6 @@ class KaniHarnessRunOptions:
     inventory: HarnessInventory | None = None
     inventory_path: Path | None = None
     config: SupervisionConfig = dc.field(default_factory=SupervisionConfig)
-    metadata: cabc.Sequence[CargoPackage] | None = None
     dependencies: KaniHarnessDependencies | None = None
 
     def __post_init__(self) -> None:

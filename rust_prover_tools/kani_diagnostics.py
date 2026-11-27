@@ -43,6 +43,8 @@ __all__ = (
 def prepare_and_open_diagnostics(
     config: SupervisionConfig,
     provided: Diagnostics | None,
+    *,
+    human_stream: typ.TextIO | None = None,
 ) -> cabc.Generator[Diagnostics]:
     """Prepare the JSONL boundary, then yield the opened diagnostics.
 
@@ -59,6 +61,9 @@ def prepare_and_open_diagnostics(
         Caller-owned diagnostics. When supplied, they override the configured
         destinations and remain owned by the caller; this manager neither
         closes nor flushes streams it did not open, and nothing is prepared.
+    human_stream : typing.TextIO | None
+        Stream a human sink falls back to when no path is configured. `None`
+        disables the human sink; the CLI passes standard output.
 
     Yields
     ------
@@ -89,7 +94,7 @@ def prepare_and_open_diagnostics(
         yield open_destinations(
             stack,
             config.sinks,
-            human_stream=None,
+            human_stream=human_stream,
             max_line_bytes=config.max_line_bytes,
             jsonl_start_offset=jsonl_start_offset,
         )
