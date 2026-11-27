@@ -5,12 +5,15 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: IN PROGRESS (deviation D6a approved 2026-11-23 and implemented;
-corrected hosted evidence remains outstanding)
+Status: COMPLETE (2026-11-27). Deviation D6a was approved and implemented; the
+corrected hosted evidence is run `45954080278` attempt 1, and all 14
+consumer-smoke tests passed against it. The follow-up branch
+`ep-m5d-hosted-evidence` records this evidence.
 
-Branch: `1-1-5-validate-clean-proofs-and-document-operational-handoff`
+Merged branch: `1-1-5-validate-clean-proofs-and-document-operational-handoff`,
+squash-merged as `85421417`.
 
-Draft pull request: <https://github.com/leynos/rust-prover-tools/pull/267>.
+Pull request: <https://github.com/leynos/rust-prover-tools/pull/267> (merged).
 
 Roadmap item: `1.1.5` in `docs/roadmap.md`. Parent milestone EP-M5 in
 `docs/execplans/kani-monthly-snapshot-distribution.md`.
@@ -320,14 +323,45 @@ only entries in scope.
         `check` proof in `src/lib.rs` that asserts it.
       All eight gates pass: 2,915 passed, 19 skipped, 20 snapshots; Pylint
       10.00/10; interrogate 100 %.
-- [ ] `EP-M5-D` (remaining) Corrected hosted evidence from trusted `main`,
-      after this branch merges.
-- [ ] Re-run the consumer smoke against a corrected hosted release from trusted
-      `main` and close EP-M5 and roadmap 1.1.5 only if it passes.
-- [ ] Run every gate and create the draft PR.
+- [x] (2026-11-27) `EP-M5-D` Corrected hosted evidence from trusted `main`.
+      PR #267 squash-merged as `85421417`, so the builder, the D6a canonical
+      digest and the consumer-profile measurement are all on `main`. The
+      non-publishing dispatch `make kani-snapshot-smoke` with
+      `KANI_SNAPSHOT_UPSTREAM_COMMIT=0d2328a9…` and
+      `KANI_SNAPSHOT_PUBLICATION_ID=kani-snapshot-2026-11-0d2328a93f0e-r2`
+      produced run `45954080278` attempt 1. Every job passed — trust check,
+      resolve, build, manifest/attestation assembly and the clean-runner
+      release validation — and the publish job was skipped, so no tag or
+      release exists. Manifest
+      `c5e2fa595232f0a25e92f4f5ff9ab11f72a374600d713201c3a9e8a41b1b8a8f`
+      names builder `85421417` and the canonical component digest.
+- [x] (2026-11-27) Re-ran the consumer smoke against that release.
+      `make kani-snapshot-verify` with the downloaded release, the freshly
+      built wheel and Rust 1.93.0 installed it through the public commands in a
+      throwaway environment; all 14 tests passed in 110 s. They cover the
+      pinned identity, clean setup, the compiler floor, the named positive
+      harnesses, the deliberately false harness, the 1.93 `E0658` control,
+      upstream's three bundle fixtures, the warm repeat, and the
+      corrupted-payload and changed-identity refusals. EP-M5 and roadmap 1.1.5
+      are therefore complete.
+- [x] (2026-11-27) Ran every gate before the merge and again on the merged
+      `main` (`CI` and `Coverage (main)` both green at `85421417`), and the
+      draft PR #267 was created, reviewed to approval and merged.
+      Two hosted-build runs were spent: `45067145476` (pre-D6a, unusable) and
+      `45954080278` (the corrected evidence), as D10 records.
 
 ## Surprises & discoveries
 
+- Observation: `make build-release` could not produce the wheel in this
+  worktree, while the runbook's own `uv build --wheel --out-dir …` did. The
+  target runs `python -m build`, but `build` is not in the `dev` dependency
+  group, so the module is absent from the project venv; and once
+  `make kani-snapshot-verify` has created the gitignored `build/` scratch
+  directory, that directory shadows the package name as well. The runbook
+  already names the working command, so no operator instruction changed, but a
+  maintainer running the Makefile target first should use `uv build` or install
+  the `build` package. Evidence: `make build-release` in this worktree failed
+  with "No module named build"; `uv build --wheel --out-dir dist` succeeded.
 - Observation: rustup's `lib/rustlib/components` file has a nondeterministic
   byte order. Three default-profile installs of `nightly-2026-08-21` produced
   three different digests (`528aa02a…`, `b3c04168…`, and, from the consumer
