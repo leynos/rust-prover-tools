@@ -709,6 +709,36 @@ Plain-language terms used in this plan:
   skipped), `make markdownlint`, and `make nixie` pass at `1476458`; the opt-in
   live Kani 0.67.0 fixture passes at the same head: 2 passed in 218.01 s.
 
+## Open review round at handoff
+
+The branch is green and pushed at `40aa1c5`. The latest CodeRabbit review
+(2026-11-27T09:33:13Z, review `6086091313`) requests one inline typing change
+and six further Unit Architecture items, none of which is implemented yet:
+
+1. `rust_prover_tools/__init__.py`: add type-only declarations for the names
+   resolved by `__getattr__`, preserving runtime laziness.
+2. `kani_destinations.py`: move `require_stdout_free` out of
+   `supervision_policy`, stop swallowing its errors silently, and document the
+   behaviour in `Raises`.
+3. `kani_harness_cli_options.py`: move `load_pin` out of `resolve_route` and
+   update the `kani_destinations.py` docstring only if the boundary changes.
+4. Keep one destination-opening function across `kani_diagnostics.py` and
+   `kani_destinations.py`, with one name that states its write.
+5. `kani_harness_run.py`: keep one injection channel for caller-owned
+   diagnostics (`execute_harnesses(diagnostics=...)` or
+   `KaniHarnessDependencies.diagnostics`).
+6. `kani_harness_cli.py`: use `write_inventory` from
+   `kani_inventory/document.py` in `list_harnesses`, and test that `list`
+   without `--output` writes nothing.
+7. Keep one Cargo metadata seam (`KaniHarnessRunOptions.metadata` or
+   `KaniHarnessDependencies.metadata`), and test the stdout-alias and pin-load
+   failures at their new seams.
+
+Resume by applying those seven items, then run the four gates, commit, push,
+post the reconciliation, and request a review. The reconciliation comment for
+the previous round is `RPT-266-REVIEW-R19` (issue comment 7214620749); the
+review request that produced this round is issue comment 7215036397.
+
 ## Surprises & discoveries
 
 - Observation: Kani 0.67.0 is installed on this host at
