@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,360 passed and 6
-skipped at code head `154ffd2`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,362 passed and 6
+skipped at code head `47fab8d`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the same head: 2 passed in 19.34 s.
+passed at the same head: 2 passed in 10.48 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -180,7 +180,15 @@ Plain-language terms used in this plan:
   a real untouched child, with termination and reaping asserted separately.
   `make check-fmt`, `make all` (3,360 passed, 6 skipped), `make markdownlint`,
   and `make nixie` pass at `154ffd2`; the opt-in live Kani 0.67.0 fixture
-  passes at the same head: 2 passed in 19.34 s.
+  passes at the same head: 2 passed in 19.34 s. A follow-up made `finish()`
+  infallible by recording spool read and flush failures in the observation,
+  stopped the overflow path from closing the spool inside the output callback,
+  added attempt-level regressions for an unreadable spool on both ordinary
+  completion and cancellation, moved the SIGTERM witness onto the shared runner
+  with an atomic PID record and group cleanup, and gave both deadline tests a
+  bounded `finally`. `make check-fmt`, `make all` (3,362 passed, 6 skipped),
+  `make markdownlint`, and `make nixie` pass at `47fab8d`; the opt-in live Kani
+  0.67.0 fixture passes at the same head: 2 passed in 10.48 s.
 
 - [x] (2026-11-27 05:10Z) Fourteenth review round, from the R13 follow-up.
   `RunningHarness.group_id` is unset until Cuprum announces the spawn, so each
