@@ -960,10 +960,10 @@ name verified provenance rather than the verifier command.
   - New tests cover the sender contract, fingerprint sensitivity, published
     no-op recovery, draft binding, the adapter's draft-visible observation and
     the workflow hand-offs. Full suite: see the gate record below.
-- [ ] EP-M5: non-publishing smoke evidence and operations documentation.
+- [x] EP-M5: non-publishing smoke evidence and operations documentation.
   Implementation, runbook and offline gates are complete; the component-record
-  deviation was approved as D6a and implemented. Corrected hosted evidence from
-  trusted `main` remains.
+  deviation was approved as D6a and implemented, and the corrected hosted
+  evidence from trusted `main` has now passed.
   - [x] (2026-11-22) Added the pure proof-transcript and setup-trace
     validators, the four named proof fixtures, the transcript and trace
     controls, and their unit, property and Syrupy tests.
@@ -991,9 +991,33 @@ name verified provenance rather than the verifier command.
     canonical sorted component names, produced and checked by one shared pure
     helper. Order independence is proved by a permutation property; added,
     removed and renamed components still fail.
-  - [ ] Corrected hosted non-publishing run and consumer smoke from trusted
-    `main`, after this branch merges. Until then EP-M5 and roadmap 1.1.5 stay
-    open.
+  - [x] (2026-11-27) Corrected hosted non-publishing run and consumer smoke
+    from trusted `main`. Run `45954080278` attempt 1
+    (<https://github.com/leynos/rust-prover-tools/actions/runs/45954080278>)
+    was dispatched from `main@85421417cefd5eb642d671f71f4a6b17a9abb0e4` with
+    upstream commit `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, identity
+    `kani-snapshot-2026-11-0d2328a93f0e-r2` and `publish=false`. Every job
+    passed: trust check, resolve, build, assembly and attestation, and the
+    clean-runner release validation; the publish job was skipped, so no tag or
+    release exists. The manifest is
+    `c5e2fa595232f0a25e92f4f5ff9ab11f72a374600d713201c3a9e8a41b1b8a8f` and
+    records the merged builder. `make kani-snapshot-verify` installed that
+    release through the public consumer commands in a throwaway environment and
+    all 14 tests passed (110.59 s cold, 71.87 s on the repeat). The cold install
+    named the pin's tag and the effective `rustc 1.100.0-nightly`, which the
+    floor check accepted as `>= 1.94`; the setup trace showed the packaged
+    `cargo-kani setup` record and no `cargo`, code-generating `rustc`,
+    compiler backend, linker or build driver. `bounded_push_contents_are_exact`
+    and `raii_release_runs_once` verified, `deliberately_false_assertion`
+    failed for its own assertion rather than a compile error,
+    `bounded_adjacent_pairs_are_exact` verified, and upstream's `simple-lib`
+    (`kani_tests::test_sum`, `pair::kani_tests::test_one_plus_two`),
+    `build-rs-works` (`check`) and `simple-kissat` (`check_concat`) all
+    verified. Rust 1.93.0 rejected the 1.94 `array_windows` API with `E0658`.
+    The warm repeat reused the generation with no setup, a corrupted payload
+    was refused before execution with no generation published, and a pin naming
+    another revision was refused before setup. EP-M5 and roadmap 1.1.5 are
+    complete; the first publication remains EP-O1/1.2.1.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
 
 ## Surprises & discoveries
@@ -1148,8 +1172,8 @@ minimal-plus-`rustc-dev` toolchain, while upstream setup installs rustup's
 default profile, so the component digest and `rustc-dev` libraries it named
 could not exist on any consumer; the build now installs that default profile
 under a private rustup home and measures it. Neither repair changes the schema,
-the pin grammar or a verification check. A corrected hosted run must follow
-this branch's merge, so EP-M5 and roadmap 1.1.5 remain open until then.
+the pin grammar or a verification check. The corrected hosted run followed the
+merge on 2026-11-27 and passed, as Progress records.
 
 2026-09-27, proposed D1: use a separate `kani snapshot` command group plus
 `kani run --snapshot-pin`, avoiding overloaded legacy semantic-version flags.
@@ -1755,27 +1779,28 @@ bundle identity that a matching command accepts and a wrong one is refused
 before launcher extraction and setup. All are repaired with tests recorded in
 Progress. EP-M1 completed on 2026-11-15; EP-M4 is implemented and merged in
 pull request
-258. EP-M5's implementation, runbook and offline gates are complete, and a
-hosted non-publishing run succeeded through validation, but its consumer smoke
-found two real defects that required a corrected builder. Corrected hosted
-evidence remains outstanding, so EP-M5 and roadmap 1.1.5 stay open. EP-O1 and
-all publication have not started. The consumer `install` command now downloads
-the release its pin names, using `--asset-dir` only as an offline override.
-Independent reviews covered all five requested specialities, with amendments
-recorded in the design and checked by a final testing/consistency review.
-Planning validation passed `make fmt`, `make markdownlint` (including spelling
-and three spelling-helper tests), `make nixie`, and both working/staged
-`git diff --check`. Earlier dependency-network and document spelling/line-wrap
-failures were resolved without weakening gates. Only four Markdown files
-changed during initial planning. The later requested rebase validation ran the
-full gate stack, as recorded below; implementation gates still apply to each
-future milestone. The associated draft PR records the commit, branch, upstream
-tracking and delivery link. Add red/green, smoke and conformance evidence only
-after approval. Only mark implementation roadmap entries complete when their
-actual acceptance criteria are met. Leave EP-O1 and roadmap 1.2.1 open for
-operational work. Before status `COMPLETE`, reconcile discoveries with the
-approved design, requirements and every evidence link; do not conceal an
-unresolved deviation.
+258. EP-M5's implementation, runbook and offline gates are complete. Its first
+hosted non-publishing run succeeded through validation but its consumer smoke
+found two real defects that required a corrected builder; after D6a and those
+repairs merged, run 45954080278 produced the corrected release and
+`make kani-snapshot-verify` passed all 14 consumer tests on 2026-11-27, so
+EP-M5 and roadmap 1.1.5 are complete. EP-O1 and all publication have not
+started. The consumer `install` command now downloads the release its pin
+names, using `--asset-dir` only as an offline override. Independent reviews
+covered all five requested specialities, with amendments recorded in the design
+and checked by a final testing/consistency review. Planning validation passed
+`make fmt`, `make markdownlint` (including spelling and three spelling-helper
+tests), `make nixie`, and both working/staged `git diff --check`. Earlier
+dependency-network and document spelling/line-wrap failures were resolved
+without weakening gates. Only four Markdown files changed during initial
+planning. The later requested rebase validation ran the full gate stack, as
+recorded below; implementation gates still apply to each future milestone. The
+associated draft PR records the commit, branch, upstream tracking and delivery
+link. Add red/green, smoke and conformance evidence only after approval. Only
+mark implementation roadmap entries complete when their actual acceptance
+criteria are met. Leave EP-O1 and roadmap 1.2.1 open for operational work.
+Before status `COMPLETE`, reconcile discoveries with the approved design,
+requirements and every evidence link; do not conceal an unresolved deviation.
 
 The 2026-11-09 candidate-bound re-assessment at `352b53f` raised six findings
 and two evidence gaps against the same EP-M3 boundary. All eight are repaired
@@ -2651,8 +2676,9 @@ installed it against the pinned toolchain, and the floor harness verified. The
 runtime floors above are measured rather than inferred. The notice inventory is
 not complete upstream: Kissat ships in the bundle but is absent from
 `license-notes.txt`, so the producer's notices bundle adds its MIT licence.
-Safe setup re-extraction and clean-host validation remain EP-M5 work, and build
-cost beyond this prototype run is still unrecorded.
+Safe setup re-extraction and clean-host validation were left to EP-M5, which
+has since completed them; build cost beyond this prototype run is still
+unrecorded.
 
 [^1]: Successful runs at the pinned SHA:
        [bundle, bundle-test and local-toolchain jobs](https://github.com/model-checking/kani/actions/runs/35043356377)

@@ -49,11 +49,20 @@ preserving the legacy release path. See the
   publication recovery tests, and the necessary Python release lifecycle fix.
   Implementation and tests are in #258. The schedule stays disabled until EP-M5
   records real smoke evidence and EP-O1 grants operational bootstrap.
-- [ ] 1.1.5. Validate clean proofs and document operational handoff. Requires
+- [x] 1.1.5. Validate clean proofs and document operational handoff. Requires
   1.1.4. Complete EP-M5 with a non-publishing smoke build, public consumer-path
   installation, named positive/negative harnesses, compiler-floor evidence,
   warm-cache repeat, integrity failures, and passing gates. Mark only completed
   implementation entries done after explicit approval and implementation.
+  Implementation is in #267. EP-M5-D's corrected hosted evidence is run
+  `45954080278` attempt 1 from `main@85421417`
+  (<https://github.com/leynos/rust-prover-tools/actions/runs/45954080278>):
+  snapshot identity `kani-snapshot-2026-11-0d2328a93f0e-r2` for upstream
+  `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, manifest
+  `c5e2fa595232f0a25e92f4f5ff9ab11f72a374600d713201c3a9e8a41b1b8a8f`, and all
+  14 consumer-smoke tests passed through `make kani-snapshot-verify` on 27
+  November. Publication stayed off, so that identity names no published tag or
+  release; the scheduled run and the first publication remain 1.2.1's work.
 
 ### 1.2. Bootstrap live operation separately
 

@@ -1020,8 +1020,10 @@ setup toolchain downloads are separate evidence. Only proof execution may
 compile fixtures.
 
 Real attested EP-M5 validation requires approved builder code merged to trusted
-`main`, with scheduling still disabled. Keep EP-M5 open until that hosted
-non-publishing evidence exists; merging code alone does not satisfy it.
+`main`, with scheduling still disabled. Merging code alone does not satisfy it:
+the hosted non-publishing evidence must exist too. That evidence is run
+`45954080278` attempt 1 from `main@85421417`, and the consumer smoke passed all
+14 of its tests against it, so EP-M5 is complete.
 
 Implementation note (2026-11-22). Two pure producer modules own the evidence
 policy. `proof_report` requires an exact named harness set, one verdict per
@@ -1056,9 +1058,10 @@ that contract stood. The approved D6a amendment keeps the field and schema but
 digests the canonical sorted component names, so order is irrelevant while an
 added, removed or renamed component is still refused. `toolchain_model` defines
 that canonical form once for both measurement and verification. The schema, pin
-grammar and every other verification check are unchanged. Corrected hosted
-evidence requires a new non-publishing dispatch from trusted `main` after this
-branch merges, so EP-M5 and roadmap 1.1.5 stay open until that evidence exists.
+grammar and every other verification check are unchanged. The corrected hosted
+evidence came from non-publishing run `45954080278` attempt 1, dispatched from
+`main@85421417` after the merge; its consumer smoke passed, so EP-M5 and
+roadmap 1.1.5 are complete.
 
 After implementation, write `docs/kani-snapshot-operations.md` with exact
 settings, permission checks, default-disabled schedule, dispatch examples,
@@ -1119,8 +1122,9 @@ Revision 4 integration note (2026-11-08): the execution plan records main's new
 prebuilt release installer, `kani exec`, Cuprum 0.2 and shared validation
 boundaries. Future Python and test helpers require complete interrogate
 docstrings; use the vendored uv gate and current Makefile targets. The design
-work covered by EP-M1, EP-M4 and EP-M5 remains proposed pending explicit
-implementation approval.
+work covered by EP-M1, EP-M4 and EP-M5 was proposed at that revision pending
+explicit implementation approval; all three have since been approved and
+implemented, and EP-M5's hosted evidence passed on 2026-11-27.
 
 Cuprum 0.2 exposes `EnvMode.REPLACE`, `UNSET` and run-level timeouts. Extend
 the typed command adapter using those supported primitives, not custom
