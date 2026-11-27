@@ -412,6 +412,8 @@ def test_preparation_qualifies_at_the_checked_directory_for_both_routes(
         record(typ.cast("typ.Any", context).cwd)
         return object()
 
+    repo_root = tmp_path / "nested" / "project"
+    repo_root.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "rust_prover_tools.kani_routes.qualify_kani_installation",
@@ -422,12 +424,18 @@ def test_preparation_qualifies_at_the_checked_directory_for_both_routes(
         snapshot_qualification,
     )
     route = (
-        SnapshotRoute(pin=typ.cast("typ.Any", object()), cwd=Path())
+        SnapshotRoute(
+            pin=typ.cast("typ.Any", object()),
+            cwd=Path("nested", "project"),
+        )
         if snapshot
-        else LegacyRoute(installation=tmp_path, cwd=Path())
+        else LegacyRoute(
+            installation=repo_root,
+            cwd=Path("nested", "project"),
+        )
     )
     options = KaniHarnessRunOptions(
-        repo_root=tmp_path,
+        repo_root=repo_root,
         route=route,
         inventory=_inventory("harnesses::a"),
         config=_test_config(),
@@ -436,7 +444,7 @@ def test_preparation_qualifies_at_the_checked_directory_for_both_routes(
     with pytest.raises(_PathSeenError):
         prepare_harnesses(options)
 
-    assert seen == [tmp_path.resolve()]
+    assert seen == [repo_root.resolve()]
 
 
 def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:

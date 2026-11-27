@@ -7,7 +7,7 @@ import os
 import subprocess
 import sys
 import time
-import typing as typ
+from pathlib import Path
 
 import pytest
 
@@ -19,8 +19,8 @@ from rust_prover_tools.supervision.launch_command import LaunchCommand
 from rust_prover_tools.supervision.models import HarnessSpec, StopReason
 from tests.supervision_witness_support import settle_within
 
-if typ.TYPE_CHECKING:
-    from pathlib import Path
+#: Repository root, so the isolated subprocess can import the test helpers.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _StuckHandle:
@@ -96,7 +96,7 @@ def test_a_never_released_settlement_is_bounded_at_process_shutdown(
     """
     script = (
         "import asyncio, sys\n"
-        f"sys.path.insert(0, {str(tmp_path.parent.parent)!r})\n"
+        f"sys.path.insert(0, {str(_REPO_ROOT)!r})\n"
         "from tests.supervision_witness_support import (\n"
         "    run_bounded, settle_within,\n"
         ")\n"

@@ -20,10 +20,18 @@ from rust_prover_tools.supervision import StopReason
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
 
-__all__ = ("SETTLE_SECONDS", "run_bounded", "settle_within")
+__all__ = (
+    "SETTLE_SECONDS",
+    "WITNESS_DEADLINE_SECONDS",
+    "run_bounded",
+    "settle_within",
+)
 
 #: Seconds a witness waits for one settle before failing.
 SETTLE_SECONDS = 30.0
+
+#: Seconds a whole witness scenario may run, shutdown included.
+WITNESS_DEADLINE_SECONDS = 240.0
 
 
 async def settle_within(running: object, *, deadline: float = SETTLE_SECONDS) -> None:
@@ -72,11 +80,11 @@ async def _finished(task: asyncio.Task[object], deadline: float) -> bool:
     return task.done()
 
 
-def run_bounded(
-    scenario: cabc.Coroutine[typ.Any, typ.Any, None],
+def run_bounded[T](
+    scenario: cabc.Coroutine[typ.Any, typ.Any, T],
     *,
     deadline: float = SETTLE_SECONDS,
-) -> None:
+) -> T:
     """Run an async scenario, bounded including event-loop shutdown.
 
     `asyncio.run` cancels and gathers pending tasks when the scenario returns
@@ -97,7 +105,7 @@ def run_bounded(
     watchdog.daemon = True
     watchdog.start()
     try:
-        asyncio.run(scenario)
+        return asyncio.run(scenario)
     finally:
         watchdog.cancel()
         watchdog.join()

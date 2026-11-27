@@ -15,6 +15,7 @@ real process groups. Every other supervision test avoids sleeping.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses as dc
 import json
@@ -46,7 +47,12 @@ from rust_prover_tools.supervision import (
 )
 from rust_prover_tools.supervision.launcher import LaunchCommand
 from rust_prover_tools.unittests.supervision_doubles import spec
-from tests.supervision_witness_support import SETTLE_SECONDS, settle_within
+from tests.supervision_witness_support import (
+    SETTLE_SECONDS,
+    WITNESS_DEADLINE_SECONDS,
+    run_bounded,
+    settle_within,
+)
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
@@ -237,8 +243,6 @@ def _passing(evidence: AttemptEvidence) -> HarnessClassification:
 @pytest.mark.timeout(120)
 def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
     """A real 8 MiB newline-free line cannot size the supervisor's buffer."""
-    import asyncio
-
     line = tmp_path / "line.py"
     line.write_text(
         "import sys\n"
@@ -269,7 +273,9 @@ def test_a_newline_free_line_is_bounded_end_to_end(tmp_path: Path) -> None:
         running = launcher.start(spec(), build, on_line)
         return await running.wait()
 
-    result = typ.cast("typ.Any", asyncio.run(scenario()))
+    result = typ.cast(
+        "typ.Any", run_bounded(scenario(), deadline=WITNESS_DEADLINE_SECONDS)
+    )
 
     assert result.exit_code == 0
     assert len(forwarded) == 2, f"unexpected forwarded lines: {len(forwarded)}"
@@ -302,8 +308,6 @@ def test_an_output_callback_failure_stops_and_joins_the_child(
     tmp_path: Path,
 ) -> None:
     """A lost evidence write stops the child and is raised to the caller."""
-    import asyncio
-
     script = _failing_callback_script(tmp_path)
     delivered: list[str] = []
 
@@ -340,7 +344,7 @@ def test_an_output_callback_failure_stops_and_joins_the_child(
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
 
-    asyncio.run(scenario())
+    run_bounded(scenario(), deadline=WITNESS_DEADLINE_SECONDS)
 
     assert delivered == ["first"]
 
@@ -349,8 +353,6 @@ def test_a_cancelled_run_does_not_lose_a_callback_failure(
     tmp_path: Path,
 ) -> None:
     """A supervisor stop after a callback failure still reports the failure."""
-    import asyncio
-
     script = _failing_callback_script(tmp_path)
     failure_seen = asyncio.Event()
     ready = asyncio.Event()
@@ -389,4 +391,4 @@ def test_a_cancelled_run_does_not_lose_a_callback_failure(
             with contextlib.suppress(OSError, asyncio.CancelledError):
                 await settle_within(running)
 
-    asyncio.run(scenario())
+    run_bounded(scenario(), deadline=WITNESS_DEADLINE_SECONDS)
