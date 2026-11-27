@@ -1033,13 +1033,14 @@ responsibility rather than by prover:
   names every injectable seam: clocks, launchers, resource probes, cgroup
   readers, interrupt sources, sleepers, and evidence sinks. `RunEnvironment`
   binds them for one run, and `rust_prover_tools.kani_harness_models.py` holds
-  the options and dependency overrides a consumer sets. The tests substitute
-  each through those protocols rather than patching the runner.
+  the request plus the per-phase overrides a consumer sets
+  (`KaniPreparationDependencies` and `KaniExecutionDependencies`). The tests
+  substitute each through those protocols rather than patching the runner.
 - `rust_prover_tools.supervision.run_environment` names the injected
   dependencies of one run: clock, launcher, resource probe, cgroup reader,
-  evidence sinks, command builder, adapter, sleeper, and an optional interrupt
-  source. The composition root supplies one, and a test replaces any single
-  member without reaching into the loop.
+  evidence sinks, command builder, adapter, sleeper, an optional interrupt
+  source, and the run-ID source. The composition root supplies one, and a test
+  replaces any single member without reaching into the loop.
 - `rust_prover_tools.supervision.run_orchestrator` runs the expected inventory
   in selection order through `SupervisedRun.execute`. It continues past a
   prover failure, reports the attempt a signal or cancellation interrupted, and

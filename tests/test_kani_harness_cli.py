@@ -111,7 +111,7 @@ def test_run_passing_returns_zero_and_prints_the_table(
     assert options.route.arguments == ("--unwind", "2")
     assert options.packages == ("alpha",)
     assert options.harnesses == ("harnesses::verified",)
-    assert options.config.sinks.report_path == tmp_path / "report.json"
+    assert captured[0].config.sinks.report_path == tmp_path / "report.json"
     assert captured[0].dependencies.interrupts is not None
 
 
@@ -212,7 +212,7 @@ def test_run_expected_error_returns_one(
         del options
         raise SelectionError("conflict")
 
-    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.prepare_harnesses", fail)
+    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.qualify_harnesses", fail)
 
     status = app([
         "kani",

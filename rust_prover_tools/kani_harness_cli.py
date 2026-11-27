@@ -41,17 +41,19 @@ from rust_prover_tools.kani_harness_cli_options import (
     resolve_route,
 )
 from rust_prover_tools.kani_harness_run import (
-    KaniHarnessDependencies,
+    KaniExecutionDependencies,
     KaniHarnessRun,
     KaniHarnessRunOptions,
     execute_harnesses,
-    prepare_harnesses,
+    qualify_harnesses,
 )
 from rust_prover_tools.kani_harness_signal import (
     SignalInterrupt,
     install_interrupt_handlers,
 )
 from rust_prover_tools.kani_inventory import (
+    HarnessInventory,
+    cargo_metadata,
     discover_inventory,
     inventory_document,
     load_inventory,
@@ -96,6 +98,9 @@ def list_harnesses(
 ) -> int:
     """Print the resolved, package-qualified harness inventory as JSON.
 
+    Discovery runs ``cargo metadata --no-deps --format-version 1`` once at
+    this CLI edge; an authoritative document is read without a subprocess.
+
     Parameters
     ----------
     repo_root : Path | None
@@ -115,10 +120,10 @@ def list_harnesses(
     try:
         root = resolve_repo_root(repo_root)
         packages = tuple(package or ())
-        resolved = (
-            restrict_inventory(load_inventory(inventory), packages)
-            if inventory is not None
-            else discover_inventory(root, packages)
+        resolved = _inventory_from_cargo_metadata_or_document(
+            root,
+            packages,
+            inventory,
         )
         if output is None:
             print_lines((json.dumps(inventory_document(resolved), indent=2),))
@@ -128,6 +133,37 @@ def list_harnesses(
         print_lines((str(exc),), stream=sys.stderr)
         return 1
     return 0
+
+
+def _inventory_from_cargo_metadata_or_document(
+    root: Path,
+    packages: tuple[str, ...],
+    document: Path | None,
+) -> HarnessInventory:
+    """Resolve the list inventory, running Cargo metadata only when needed.
+
+    An authoritative document is read as-is. Otherwise this function runs
+    ``cargo metadata --no-deps --format-version 1`` once and passes the
+    result to discovery explicitly, so the query path never triggers Cargo
+    from inside a discovery default.
+
+    Parameters
+    ----------
+    root : Path
+        Repository or workspace root.
+    packages : tuple[str, ...]
+        Packages to keep; an empty tuple selects every package.
+    document : Path | None
+        Authoritative version-1 inventory document, or `None` to discover.
+
+    Returns
+    -------
+    HarnessInventory
+        The resolved, package-qualified inventory.
+    """
+    if document is not None:
+        return restrict_inventory(load_inventory(document), packages)
+    return discover_inventory(root, packages, metadata=cargo_metadata(root))
 
 
 @harnesses_app.command(name="run")
@@ -164,10 +200,11 @@ def run_command_harnesses(
     interrupt = SignalInterrupt()
     executing = False
     try:
-        options = _resolve_run(selection, routing, policy, destinations)
-        preparation = _prepare_run(options)
+        options = _resolve_run(selection, routing)
+        config = supervision_policy(policy, destinations)
+        preparation = _qualify_run(options)
         executing = True
-        run = _execute_run(preparation, options.config, destinations, interrupt)
+        run = _execute_run(preparation, config, destinations, interrupt)
     except KeyboardInterrupt:
         # Preparation runs under the application's normal signal disposition,
         # so SIGINT arrives here as KeyboardInterrupt and ends it immediately.
@@ -185,8 +222,6 @@ def run_command_harnesses(
 def _resolve_run(
     selection: SelectionFlags,
     routing: RouteFlags,
-    policy: PolicyFlags,
-    destinations: DestinationFlags,
 ) -> KaniHarnessRunOptions:
     """Resolve the requested root and route into one validated run request."""
     root = resolve_repo_root(selection.repo_root)
@@ -200,13 +235,12 @@ def _resolve_run(
         packages=tuple(selection.package or ()),
         harnesses=tuple(selection.harness or ()),
         inventory_path=selection.inventory,
-        config=supervision_policy(policy, destinations),
     )
 
 
-def _prepare_run(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+def _qualify_run(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     """Discover, select, and qualify the request without running it."""
-    return prepare_harnesses(options)
+    return qualify_harnesses(options)
 
 
 def _execute_run(
@@ -222,7 +256,7 @@ def _execute_run(
         install_interrupt_handlers(interrupt),
         prepare_and_open_diagnostics(config, None, human_stream=sys.stdout) as opened,
     ):
-        dependencies = KaniHarnessDependencies(
+        dependencies = KaniExecutionDependencies(
             diagnostics=opened,
             interrupts=interrupt,
         )

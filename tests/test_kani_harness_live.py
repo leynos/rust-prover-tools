@@ -46,13 +46,13 @@ def test_a_live_run_classifies_passing_path_and_failing_proofs() -> None:
                 "path_proofs::via_path",
                 "harnesses::failing",
             ),
-            config=SupervisionConfig(
-                timeout_seconds=900.0,
-                sample_interval_seconds=1.0,
-                heartbeat_interval_seconds=5.0,
-                watchdog_threshold_bytes=None,
-            ),
-        )
+        ),
+        SupervisionConfig(
+            timeout_seconds=900.0,
+            sample_interval_seconds=1.0,
+            heartbeat_interval_seconds=5.0,
+            watchdog_threshold_bytes=None,
+        ),
     )
 
     statuses = {result.spec.harness: result.status for result in run.report.results}

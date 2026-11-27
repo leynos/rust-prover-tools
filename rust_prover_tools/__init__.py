@@ -11,7 +11,7 @@ The package exposes five public surfaces:
   evidence, samples resources, applies deadlines and a host-memory
   watchdog, and publishes typed outcomes with a versioned report.
 - ``kani_harness_run`` composes those pieces behind one library entry
-  point; ``prepare_harnesses`` and ``execute_harnesses`` split discovery
+  point; ``qualify_harnesses`` and ``execute_harnesses`` split discovery
   from execution so a caller's handlers cover exactly the phase whose
   children they can stop.
 - ``kani_routes`` and ``kani_snapshot`` pin, install, and qualify the Kani
@@ -37,12 +37,14 @@ if typ.TYPE_CHECKING:
 
     from rust_prover_tools.kani_cli_grammar import UnsupportedKaniGrammarError
     from rust_prover_tools.kani_harness_run import (
-        KaniHarnessDependencies,
+        KaniExecutionDependencies,
         KaniHarnessPreparation,
         KaniHarnessRun,
         KaniHarnessRunOptions,
+        KaniPreparationDependencies,
         execute_harnesses,
         prepare_harnesses,
+        qualify_harnesses,
         run_harnesses,
         run_kani_harnesses,
     )
@@ -95,12 +97,13 @@ __all__ = [
     "InventoryDiscoveryError",
     "InventoryFormatError",
     "InventoryHarness",
-    "KaniHarnessDependencies",
+    "KaniExecutionDependencies",
     "KaniHarnessPreparation",
     "KaniHarnessRun",
     "KaniHarnessRunOptions",
     "KaniLog",
     "KaniLogError",
+    "KaniPreparationDependencies",
     "KaniRoute",
     "LegacyRoute",
     "Measurement",
@@ -120,6 +123,7 @@ __all__ = [
     "load_inventory",
     "parse_kani_log",
     "prepare_harnesses",
+    "qualify_harnesses",
     "render_table",
     "restrict_inventory",
     "run_harnesses",
@@ -134,12 +138,14 @@ __all__ = [
 _LAZY_NAMES: typ.Final[dict[str, tuple[str, ...]]] = {
     "rust_prover_tools.kani_cli_grammar": ("UnsupportedKaniGrammarError",),
     "rust_prover_tools.kani_harness_run": (
-        "KaniHarnessDependencies",
+        "KaniExecutionDependencies",
         "KaniHarnessPreparation",
         "KaniHarnessRun",
         "KaniHarnessRunOptions",
+        "KaniPreparationDependencies",
         "execute_harnesses",
         "prepare_harnesses",
+        "qualify_harnesses",
         "run_harnesses",
         "run_kani_harnesses",
     ),

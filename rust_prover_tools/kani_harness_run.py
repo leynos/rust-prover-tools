@@ -20,7 +20,8 @@ run = run_harnesses(
             installation=Path.home() / ".kani" / "kani-0.67.0",
             cwd=Path("."),
         ),
-    )
+    ),
+    SupervisionConfig(),
 )
 print(run.report.passed)
 ```
@@ -32,14 +33,15 @@ import dataclasses as dc
 import functools
 import os
 import typing as typ
+from pathlib import Path
 
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 from rust_prover_tools.kani_harness_models import (
-    KaniHarnessDependencies,
+    KaniExecutionDependencies,
     KaniHarnessPreparation,
     KaniHarnessRunOptions,
-    process_working_directory,
+    KaniPreparationDependencies,
 )
 from rust_prover_tools.kani_inventory import (
     HarnessInventory,
@@ -75,21 +77,22 @@ from rust_prover_tools.supervision.kani import KaniAdapter
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
-    from pathlib import Path
 
     from rust_prover_tools.kani_inventory import CargoPackage
     from rust_prover_tools.supervision import HarnessSpec
 
 __all__ = (
-    "KaniHarnessDependencies",
+    "KaniExecutionDependencies",
     "KaniHarnessPreparation",
     "KaniHarnessRun",
     "KaniHarnessRunOptions",
+    "KaniPreparationDependencies",
     "KaniRoute",
     "LegacyRoute",
     "SnapshotRoute",
     "execute_harnesses",
     "prepare_harnesses",
+    "qualify_harnesses",
     "run_harnesses",
     "run_kani_harnesses",
 )
@@ -134,18 +137,26 @@ class KaniHarnessRun:
         return 0 if self.report.passed else 1
 
 
-def run_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
+def run_harnesses(
+    options: KaniHarnessRunOptions,
+    config: SupervisionConfig,
+    execution_dependencies: KaniExecutionDependencies | None = None,
+) -> KaniHarnessRun:
     """Discover or load, select, and supervise Kani harnesses.
 
-    This is preparation followed by execution, with no suspension point in
+    This is qualification followed by execution, with no suspension point in
     between. An application that installs its own signal handlers should call
-    `prepare_harnesses` and `execute_harnesses` separately, so the handlers
+    `qualify_harnesses` and `execute_harnesses` separately, so the handlers
     cover only the phase whose in-flight children they can stop.
 
     Parameters
     ----------
     options : KaniHarnessRunOptions
-        Repository, selection, route, and policy.
+        Repository, selection, and route.
+    config : SupervisionConfig
+        Per-harness policy and report destination.
+    execution_dependencies : KaniExecutionDependencies | None
+        Overridden supervision seams. `None` uses the defaults.
 
     Returns
     -------
@@ -165,56 +176,37 @@ def run_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
-    return execute_harnesses(
-        prepare_harnesses(options),
-        options.config,
-        options.dependencies,
-    )
+    return execute_harnesses(qualify_harnesses(options), config, execution_dependencies)
 
 
-def run_kani_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
+def run_kani_harnesses(
+    options: KaniHarnessRunOptions,
+    config: SupervisionConfig,
+    execution_dependencies: KaniExecutionDependencies | None = None,
+) -> KaniHarnessRun:
     """Discover or load, select, and supervise Kani harnesses.
 
-    This is the name the approved plan prescribes for the one-call entry point,
-    and `run_harnesses` is kept as the shorter alias the package already
-    exported. Both refer to the same implementation, so a consumer may use
-    either without risking a different code path.
-
-    Parameters
-    ----------
-    options : KaniHarnessRunOptions
-        Repository, selection, route, and policy.
-
-    Returns
-    -------
-    KaniHarnessRun
-        The typed report and the inventory it was selected from.
-
-    Raises
-    ------
-    InventoryDiscoveryError
-        Raised when discovery cannot produce a complete inventory.
-    InventoryFormatError
-        Raised when a supplied inventory document is invalid.
-    SelectionError
-        Raised when the harness selection is ambiguous or overridden.
-    ProverToolError
-        Raised when the route cannot be qualified.
-    UnsupportedKaniGrammarError
-        Raised when the route's Kani release has no registered grammar.
+    This is the name the approved plan prescribes for the one-call entry
+    point, and `run_harnesses` is kept as the shorter alias the package
+    already exported. Both take the same arguments and refer to the same
+    implementation, so a consumer may use either without risking a different
+    code path.
     """
-    return run_harnesses(options)
+    return run_harnesses(options, config, execution_dependencies)
 
 
-def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+def qualify_harnesses(
+    options: KaniHarnessRunOptions,
+) -> KaniHarnessPreparation:
     """Discover or load, select, and qualify one route without running it.
 
-    Two steps run subprocesses: `KaniHarnessDependencies.metadata` (by default
-    `cargo_metadata`) reads Cargo metadata, and route qualification probes the
-    release or snapshot identities once. Supplying `metadata` or `prepare`
-    replaces those process boundaries. The inherited environment is resolved
-    here, at the outermost caller, and passed explicitly to `prepare_route`;
-    `dependencies.environ` replaces the process environment when supplied.
+    Two steps run subprocesses: `KaniPreparationDependencies.metadata` (by
+    default `cargo_metadata`) reads Cargo metadata, and route qualification
+    probes the release or snapshot identities once. Supplying `metadata` or
+    `prepare` replaces those process boundaries. The inherited environment and
+    the process working directory are resolved here, at the composition root,
+    and passed explicitly to `prepare_route`; `dependencies.environ` and
+    `dependencies.process_cwd` replace them when supplied.
 
     Parameters
     ----------
@@ -242,11 +234,11 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     UnsupportedKaniGrammarError
         Raised when the route's Kani release has no registered grammar.
     """
-    dependencies = options.dependencies or KaniHarnessDependencies()
+    dependencies = options.dependencies or KaniPreparationDependencies()
     root = options.repo_root.resolve()
     route_cwd = route_working_directory(
         options.route,
-        process_cwd=process_working_directory(dependencies.process_cwd),
+        process_cwd=_process_working_directory(dependencies.process_cwd),
     ).resolve()
     if route_cwd != root:
         msg = (
@@ -275,12 +267,21 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     )
 
 
+#: Public alias documented in the users' guide; the same implementation.
+prepare_harnesses = qualify_harnesses
+
+
+def _process_working_directory(process_cwd: Path | None) -> Path:
+    """Return the caller's checked directory, or the process directory."""
+    return Path.cwd() if process_cwd is None else process_cwd
+
+
 def execute_harnesses(
     preparation: KaniHarnessPreparation,
     config: SupervisionConfig,
-    dependencies: KaniHarnessDependencies | None = None,
+    dependencies: KaniExecutionDependencies | None = None,
 ) -> KaniHarnessRun:
-    """Supervise the harnesses selected by `prepare_harnesses`.
+    """Supervise the harnesses selected by `qualify_harnesses`.
 
     Parameters
     ----------
@@ -288,19 +289,16 @@ def execute_harnesses(
         Completed discovery, selection, and route qualification.
     config : SupervisionConfig
         Per-harness policy and configured evidence destinations.
-    dependencies : KaniHarnessDependencies | None
-        Overridden production dependencies. `None` uses the defaults.
+    dependencies : KaniExecutionDependencies | None
+        Overridden supervision seams. `None` uses the defaults.
 
     Returns
     -------
     KaniHarnessRun
         The typed report and the inventory it was selected from.
     """
-    dependencies = dependencies or KaniHarnessDependencies()
-    with prepare_and_open_diagnostics(
-        config,
-        dependencies.diagnostics,
-    ) as opened:
+    dependencies = dependencies or KaniExecutionDependencies()
+    with prepare_and_open_diagnostics(config, dependencies.diagnostics) as opened:
         environment = _environment(
             preparation,
             dependencies,
@@ -328,9 +326,9 @@ def _metadata_for(
 ) -> tuple[CargoPackage, ...] | None:
     """Resolve the metadata discovery needs, or `None` when it needs none.
 
-    `KaniHarnessDependencies.metadata` is the only metadata seam: a caller with
-    pre-read metadata supplies a provider that returns it, so discovery and
-    test-target revalidation always read one source.
+    `KaniPreparationDependencies.metadata` is the only metadata seam: a caller
+    with pre-read metadata supplies a provider that returns it, so discovery
+    and test-target revalidation always read one source.
     """
     discovering = not any((options.inventory, options.inventory_path))
     return tuple(provider(root)) if discovering else None
@@ -366,7 +364,7 @@ def _command_map(
 
 def _environment(
     preparation: KaniHarnessPreparation,
-    dependencies: KaniHarnessDependencies,
+    dependencies: KaniExecutionDependencies,
     diagnostics: Diagnostics,
     *,
     limits: tuple[int, int],

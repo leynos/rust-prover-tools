@@ -13,12 +13,13 @@ import pytest
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.kani_cli_grammar import KANI_067
 from rust_prover_tools.kani_harness_run import (
-    KaniHarnessDependencies,
+    KaniExecutionDependencies,
     KaniHarnessRun,
     KaniHarnessRunOptions,
+    KaniPreparationDependencies,
     LegacyRoute,
     execute_harnesses,
-    prepare_harnesses,
+    qualify_harnesses,
     run_harnesses,
 )
 from rust_prover_tools.kani_inventory import (
@@ -105,6 +106,11 @@ def _prepared() -> PreparedRoute:
     return PreparedRoute(grammar=KANI_067, kind="test", build=build)
 
 
+def _prepared_dependencies() -> KaniPreparationDependencies:
+    """Return preparation seams that qualify without a real installation."""
+    return KaniPreparationDependencies(prepare=lambda route: _prepared())
+
+
 def _test_config(*, sinks: DiagnosticSinks | None = None) -> SupervisionConfig:
     """Return the documented default policy for a scripted child."""
     return SupervisionConfig(
@@ -126,24 +132,26 @@ def _run(
     clock = VirtualClock()
     launcher = ScriptedLauncher(per_harness=scripts, clock=clock)
     jsonl = MemorySink()
-    dependencies = KaniHarnessDependencies(
+    dependencies = KaniExecutionDependencies(
         clock=clock,
         launcher=launcher,
         probe=ScriptedProbe(),
         cgroup=ScriptedCgroup(),
         sleeper=VirtualSleeper(clock),
         diagnostics=Diagnostics(jsonl=jsonl),
-        prepare=lambda route: _prepared(),
     )
     options = KaniHarnessRunOptions(
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         harnesses=harnesses,
         inventory=inventory,
-        config=config or _test_config(),
-        dependencies=dependencies,
+        dependencies=_prepared_dependencies(),
     )
-    return run_harnesses(options), launcher, jsonl
+    return (
+        run_harnesses(options, config or _test_config(), dependencies),
+        launcher,
+        jsonl,
+    )
 
 
 def test_a_successful_harness_is_passed_and_exits_zero(tmp_path: Path) -> None:
@@ -245,7 +253,7 @@ def test_an_interrupted_run_is_not_passed(tmp_path: Path) -> None:
     )
     interrupts = StepInterrupts()
     interrupts.fire(15)
-    dependencies = KaniHarnessDependencies(
+    dependencies = KaniExecutionDependencies(
         clock=clock,
         launcher=launcher,
         probe=ScriptedProbe(),
@@ -253,15 +261,16 @@ def test_an_interrupted_run_is_not_passed(tmp_path: Path) -> None:
         sleeper=VirtualSleeper(clock),
         diagnostics=Diagnostics(jsonl=MemorySink()),
         interrupts=interrupts,
-        prepare=lambda route: _prepared(),
     )
     run = run_harnesses(
         KaniHarnessRunOptions(
             repo_root=tmp_path,
             route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
             inventory=_inventory("harnesses::a", "harnesses::b"),
-            dependencies=dependencies,
-        )
+            dependencies=_prepared_dependencies(),
+        ),
+        _test_config(),
+        dependencies,
     )
 
     assert run.report.interrupted
@@ -281,8 +290,9 @@ def test_a_missing_inventory_package_is_refused(tmp_path: Path) -> None:
                 route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
                 packages=("beta",),
                 inventory=_inventory("harnesses::a"),
-                dependencies=KaniHarnessDependencies(prepare=lambda route: _prepared()),
-            )
+                dependencies=_prepared_dependencies(),
+            ),
+            _test_config(),
         )
 
 
@@ -305,7 +315,7 @@ def test_the_diagnostics_are_not_closed_by_the_runner(tmp_path: Path) -> None:
     """A caller-supplied sink remains usable after the run."""
     jsonl = MemorySink()
     clock = VirtualClock()
-    dependencies = KaniHarnessDependencies(
+    dependencies = KaniExecutionDependencies(
         clock=clock,
         launcher=ScriptedLauncher(
             per_harness={"alpha::harnesses::a": _script("verified", "harnesses::a")},
@@ -315,15 +325,16 @@ def test_the_diagnostics_are_not_closed_by_the_runner(tmp_path: Path) -> None:
         cgroup=ScriptedCgroup(),
         sleeper=VirtualSleeper(clock),
         diagnostics=Diagnostics(jsonl=jsonl),
-        prepare=lambda route: _prepared(),
     )
     run_harnesses(
         KaniHarnessRunOptions(
             repo_root=tmp_path,
             route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
             inventory=_inventory("harnesses::a"),
-            dependencies=dependencies,
-        )
+            dependencies=_prepared_dependencies(),
+        ),
+        _test_config(),
+        dependencies,
     )
 
     jsonl.write({"record": "run-finish", "run_id": "after"})
@@ -356,8 +367,8 @@ def test_preparation_qualifies_with_the_checked_working_directory(
     def recording(
         route: object,
         *,
-        environ: object = None,
-        cwd: Path | None = None,
+        environ: object,
+        cwd: Path,
     ) -> PreparedRoute:
         """Record the working directory qualification was given."""
         del route, environ
@@ -369,10 +380,9 @@ def test_preparation_qualifies_with_the_checked_working_directory(
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        config=_test_config(),
     )
 
-    prepare_harnesses(options)
+    qualify_harnesses(options)
 
     assert seen == [tmp_path.resolve()]
 
@@ -442,11 +452,10 @@ def test_preparation_qualifies_at_the_checked_directory_for_both_routes(
         repo_root=repo_root,
         route=route,
         inventory=_inventory("harnesses::a"),
-        config=_test_config(),
     )
 
     with pytest.raises(_PathSeenError):
-        prepare_harnesses(options)
+        qualify_harnesses(options)
 
     assert seen == [repo_root.resolve()]
 
@@ -462,13 +471,12 @@ def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
         },
         clock=clock,
     )
-    dependencies = KaniHarnessDependencies(
+    dependencies = KaniExecutionDependencies(
         clock=clock,
         launcher=launcher,
         probe=ScriptedProbe(),
         cgroup=ScriptedCgroup(),
         sleeper=VirtualSleeper(clock),
-        prepare=lambda route: _prepared(),
     )
     config = SupervisionConfig(
         watchdog_threshold_bytes=None,
@@ -478,11 +486,10 @@ def test_preparation_opens_no_evidence_file(tmp_path: Path) -> None:
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        config=config,
-        dependencies=dependencies,
+        dependencies=_prepared_dependencies(),
     )
 
-    preparation = prepare_harnesses(options)
+    preparation = qualify_harnesses(options)
 
     assert not human.exists()
     assert not jsonl.exists()
@@ -518,27 +525,27 @@ def test_preparation_consumes_only_injected_values(
     clock = VirtualClock()
     human = tmp_path / "human.log"
     jsonl = tmp_path / "evidence.jsonl"
-    dependencies = KaniHarnessDependencies(
+    dependencies = KaniExecutionDependencies(
         clock=clock,
         launcher=ScriptedLauncher(clock=clock),
         probe=ScriptedProbe(),
         cgroup=ScriptedCgroup(),
         sleeper=VirtualSleeper(clock),
-        prepare=lambda route: prepared,
         adapter=adapter,
-        process_cwd=tmp_path,
-        metadata=lambda root: (),
     )
     config = _test_config(sinks=DiagnosticSinks(human_path=human, jsonl_path=jsonl))
     options = KaniHarnessRunOptions(
         repo_root=tmp_path,
         route=SnapshotRoute(pin=typ.cast("typ.Any", object())),
         inventory=_inventory("harnesses::a"),
-        config=config,
-        dependencies=dependencies,
+        dependencies=KaniPreparationDependencies(
+            prepare=lambda route: prepared,
+            process_cwd=tmp_path,
+            metadata=lambda root: (),
+        ),
     )
 
-    preparation = prepare_harnesses(options)
+    preparation = qualify_harnesses(options)
 
     assert preparation.prepared is prepared
     assert preparation.commands["alpha::harnesses::a"].argv[:2] == (
@@ -564,7 +571,7 @@ def test_the_injected_process_directory_is_the_one_checked(
 
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    dependencies = KaniHarnessDependencies(
+    dependencies = KaniPreparationDependencies(
         prepare=lambda route: _prepared(),
         process_cwd=elsewhere,
     )
@@ -576,7 +583,7 @@ def test_the_injected_process_directory_is_the_one_checked(
     )
 
     with pytest.raises(ProverToolError, match="repository root"):
-        prepare_harnesses(options)
+        qualify_harnesses(options)
 
 
 def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
@@ -585,7 +592,7 @@ def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
     repository.mkdir()
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    dependencies = KaniHarnessDependencies(prepare=lambda route: _prepared())
+    dependencies = KaniPreparationDependencies(prepare=lambda route: _prepared())
     options = KaniHarnessRunOptions(
         repo_root=repository,
         route=LegacyRoute(installation=elsewhere, cwd=elsewhere),
@@ -594,7 +601,7 @@ def test_a_route_outside_the_repository_root_is_refused(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ProverToolError, match="repository root"):
-        prepare_harnesses(options)
+        qualify_harnesses(options)
 
 
 def test_the_plan_prescribed_entry_point_is_public() -> None:
@@ -642,7 +649,7 @@ def test_the_configured_line_limit_reaches_the_launcher() -> None:
     )
     environment = _environment(
         preparation,
-        KaniHarnessDependencies(),
+        KaniExecutionDependencies(),
         Diagnostics(jsonl=MemorySink()),
         limits=(64, 1024),
     )
@@ -756,14 +763,13 @@ def test_a_stale_gated_test_pin_is_refused_before_qualification() -> None:
             cwd=_FIXTURE_WORKSPACE,
         ),
         inventory=inventory,
-        dependencies=KaniHarnessDependencies(
-            metadata=lambda _root: metadata,
-            prepare=prepare,
+        dependencies=KaniPreparationDependencies(
+            metadata=lambda _root: metadata, prepare=prepare
         ),
     )
 
     with pytest.raises(InventoryDiscoveryError, match="cfg gate"):
-        prepare_harnesses(options)
+        qualify_harnesses(options)
     assert qualified == []
 
 
@@ -828,14 +834,13 @@ def test_preparation_keys_required_features_by_target_kind(
             cwd=_FIXTURE_WORKSPACE,
         ),
         inventory=HarnessInventory((PackageInventory("beta", (pinned,)),)),
-        dependencies=KaniHarnessDependencies(
-            metadata=lambda _root: metadata,
-            prepare=prepare,
+        dependencies=KaniPreparationDependencies(
+            metadata=lambda _root: metadata, prepare=prepare
         ),
     )
 
     with pytest.raises(InventoryDiscoveryError, match="requires features"):
-        prepare_harnesses(options)
+        qualify_harnesses(options)
     assert qualified == []
 
 
@@ -852,13 +857,12 @@ def test_preparation_uses_the_injected_metadata_source(tmp_path: Path) -> None:
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        dependencies=KaniHarnessDependencies(
-            metadata=provider,
-            prepare=lambda route: _prepared(),
+        dependencies=KaniPreparationDependencies(
+            metadata=provider, prepare=lambda route: _prepared()
         ),
     )
 
-    preparation = prepare_harnesses(options)
+    preparation = qualify_harnesses(options)
 
     assert provider_calls == []
     assert preparation.selected[0].harness == "harnesses::a"
@@ -891,10 +895,10 @@ def test_a_supplied_environment_reaches_route_qualification(
         repo_root=tmp_path,
         route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
         inventory=_inventory("harnesses::a"),
-        dependencies=KaniHarnessDependencies(environ=supplied),
+        dependencies=KaniPreparationDependencies(environ=supplied),
     )
 
-    prepare_harnesses(options)
+    qualify_harnesses(options)
 
     assert seen == [supplied]
 
@@ -922,6 +926,6 @@ def test_the_process_environment_is_read_once_at_the_composition_root(
         inventory=_inventory("harnesses::a"),
     )
 
-    prepare_harnesses(options)
+    qualify_harnesses(options)
 
     assert seen[0]["RPT_PROBE"] == "from-the-process"

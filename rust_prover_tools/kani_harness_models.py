@@ -1,33 +1,31 @@
-"""Requests and preparation values for one supervised Kani run.
+"""Requests and phase dependencies for one supervised Kani run.
 
 The dataclasses live apart from the orchestration that consumes them so a
 caller can construct a request, capture a preparation, and type a run without
 importing the supervisor. Every type here is inert: no method starts a process
 or opens a file.
 
-`KaniHarnessDependencies` deliberately stays one bag rather than splitting into
-process, resource, and sink groups. Every field is an optional override of the
-same production environment, resolved in one place; splitting the bag would
-duplicate that defaulting, and every test that needs two overrides would
-thread two values. The class is the composition point, not a capability
-boundary, and the module's inertness is what keeps one bag honest.
+The dependency overrides are split by phase. `KaniPreparationDependencies`
+holds the seams discovery and route qualification touch, while
+`KaniExecutionDependencies` holds the supervision seams. Each bag is resolved
+once by the function that owns its phase, so a test replaces only the seams of
+the phase under test and a caller cannot hand an execution seam to
+qualification.
 
-`process_working_directory` is the one explicit resolver for the bag's
-documented "`None` means the process directory" default. Keeping it here means
-`prepare_harnesses` never reads the process directory itself and a caller can
-replace the value without touching qualification.
+`KaniHarnessRunOptions` carries the request alone: repository, route, and
+selection, plus the seams that resolve them. Per-harness policy is an explicit
+`SupervisionConfig` argument of the functions that run or execute a request,
+because a deadline or a report destination is not part of what to discover.
 """
 
 from __future__ import annotations
 
 import dataclasses as dc
 import typing as typ
-from pathlib import Path
-
-from rust_prover_tools.supervision import SupervisionConfig
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.kani_inventory import (
         CargoPackage,
@@ -50,16 +48,44 @@ if typ.TYPE_CHECKING:
     )
 
 __all__ = (
-    "KaniHarnessDependencies",
+    "KaniExecutionDependencies",
     "KaniHarnessPreparation",
     "KaniHarnessRunOptions",
-    "process_working_directory",
+    "KaniPreparationDependencies",
 )
 
 
 @dc.dataclass(frozen=True, slots=True)
-class KaniHarnessDependencies:
-    """Production dependencies a caller may override.
+class KaniPreparationDependencies:
+    """Overrides for discovery and route qualification.
+
+    Attributes
+    ----------
+    metadata : cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None
+        Cargo metadata source. `None` runs `cargo metadata`; a caller that has
+        already read it, or a test double, can supply another source.
+    prepare : cabc.Callable[[KaniRoute], PreparedRoute] | None
+        Route qualifier. `None` uses the production qualifier; a test can
+        supply a prepared base without a real installation.
+    environ : cabc.Mapping[str, str] | None
+        Inherited environment for route qualification. `None` reads the
+        process environment once in `qualify_harnesses`, so the default is
+        resolved at the outermost caller rather than inside a probe.
+    process_cwd : Path | None
+        The caller's checked working directory, used when a snapshot route
+        names none. `None` means the process directory, resolved once at the
+        composition root before `prepare_route` is called.
+    """
+
+    metadata: cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None = None
+    prepare: cabc.Callable[[KaniRoute], PreparedRoute] | None = None
+    environ: cabc.Mapping[str, str] | None = None
+    process_cwd: Path | None = None
+
+
+@dc.dataclass(frozen=True, slots=True)
+class KaniExecutionDependencies:
+    """Overrides for supervising the harnesses a preparation selected.
 
     Attributes
     ----------
@@ -77,23 +103,9 @@ class KaniHarnessDependencies:
         Live evidence sinks; defaults to the configured paths.
     interrupts : InterruptSource | None
         Signal source. The library installs none of its own.
-    prepare : cabc.Callable[[KaniRoute], PreparedRoute] | None
-        Route qualifier. `None` uses the production qualifier; a test can
-        supply a prepared base without a real installation.
-    metadata : cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None
-        Cargo metadata source. `None` runs `cargo metadata`; a caller that has
-        already read it, or a test double, can supply another source.
-    environ : cabc.Mapping[str, str] | None
-        Inherited environment for route qualification. `None` reads the
-        process environment once in `prepare_harnesses`, so the default is
-        resolved at the outermost caller rather than inside a probe.
     adapter : HarnessAdapter | None
         Prover adapter override. `None` builds the default `KaniAdapter` for
         the prepared route.
-    process_cwd : Path | None
-        The caller's checked working directory, used when a snapshot route
-        names none. `None` means the process directory, resolved by
-        `process_working_directory` at the composition root.
     """
 
     clock: Clock | None = None
@@ -103,11 +115,7 @@ class KaniHarnessDependencies:
     sleeper: Sleeper | None = None
     diagnostics: Diagnostics | None = None
     interrupts: InterruptSource | None = None
-    prepare: cabc.Callable[[KaniRoute], PreparedRoute] | None = None
-    metadata: cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None = None
-    environ: cabc.Mapping[str, str] | None = None
     adapter: HarnessAdapter | None = None
-    process_cwd: Path | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)
@@ -128,10 +136,10 @@ class KaniHarnessRunOptions:
         Authoritative inventory, overriding discovery.
     inventory_path : Path | None
         Path to an authoritative version-1 inventory document.
-    config : SupervisionConfig
-        Per-harness policy and report destination.
-    dependencies : KaniHarnessDependencies | None
-        Overridden production dependencies.
+    dependencies : KaniPreparationDependencies | None
+        Overridden discovery and qualification seams. Execution seams are an
+        explicit argument of `execute_harnesses`, because they are not part
+        of what to resolve.
     """
 
     repo_root: Path
@@ -140,8 +148,7 @@ class KaniHarnessRunOptions:
     harnesses: tuple[str, ...] = ()
     inventory: HarnessInventory | None = None
     inventory_path: Path | None = None
-    config: SupervisionConfig = dc.field(default_factory=SupervisionConfig)
-    dependencies: KaniHarnessDependencies | None = None
+    dependencies: KaniPreparationDependencies | None = None
 
     def __post_init__(self) -> None:
         """Refuse two authoritative inventories or an unusable route."""
@@ -175,20 +182,3 @@ class KaniHarnessPreparation:
     selected: tuple[InventoryHarness, ...]
     prepared: PreparedRoute
     commands: cabc.Mapping[str, LaunchCommand]
-
-
-def process_working_directory(process_cwd: Path | None) -> Path:
-    """Return the caller's checked directory, or the process directory.
-
-    Parameters
-    ----------
-    process_cwd : Path | None
-        The caller's checked working directory, or `None` for the process
-        directory.
-
-    Returns
-    -------
-    Path
-        The directory a snapshot route naming none will use.
-    """
-    return Path.cwd() if process_cwd is None else process_cwd

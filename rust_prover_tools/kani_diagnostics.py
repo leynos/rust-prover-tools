@@ -104,6 +104,15 @@ def prepare_and_open_diagnostics(
         )
 
 
+#: `fileno` failures that mean a stream has no descriptor at all. Named apart
+#: from the `try` so the formatter cannot rewrite it to PEP 758 syntax, which
+#: the pinned pylint interpreter cannot parse.
+_NO_STREAM_IDENTITY: typ.Final[tuple[type[BaseException], ...]] = (
+    AttributeError,
+    ValueError,
+)
+
+
 def _refuse_stream_alias(stream: typ.TextIO, path: Path) -> None:
     """Refuse a JSONL destination that is also the human fallback stream.
 
@@ -114,7 +123,7 @@ def _refuse_stream_alias(stream: typ.TextIO, path: Path) -> None:
     """
     try:
         fileno = stream.fileno()
-    except (AttributeError, ValueError):
+    except _NO_STREAM_IDENTITY:
         return
     try:
         stream_stat = os.fstat(fileno)

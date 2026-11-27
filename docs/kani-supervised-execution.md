@@ -490,8 +490,8 @@ run = run_kani_harnesses(
             cwd=Path.cwd(),
         ),
         packages=("cuprum-native-io",),
-        config=SupervisionConfig(timeout_seconds=1200.0),
-    )
+    ),
+    SupervisionConfig(timeout_seconds=1200.0),
 )
 
 for result in run.report.results:
@@ -507,15 +507,15 @@ supervisor, and returns a `KaniHarnessRun` with the typed `report`, the
 Async callers may use `run_supervised` with a `RunEnvironment` instead.
 
 An application that owns its signal policy can split the two phases.
-`prepare_harnesses` performs discovery, selection, and route qualification
+`qualify_harnesses` performs discovery, selection, and route qualification
 without starting a prover or opening an evidence file. `execute_harnesses` runs
 only that prepared selection, so handlers cover exactly the phase whose
 children they can stop:
 
 ```python
-prepared = prepare_harnesses(options)
+prepared = qualify_harnesses(options)
 with application_signal_policy():
-    run = execute_harnesses(prepared, options.config)
+    run = execute_harnesses(prepared, SupervisionConfig())
 ```
 
 `DiagnosticSinks` records the configured destinations without touching the
@@ -526,10 +526,13 @@ applies the rule for library callers, prepares the JSONL boundary, and only
 then opens a handle; every CLI destination is checked under the same rule
 before either file is opened.
 
-Every dependency can be overridden through `KaniHarnessDependencies`: clock,
-launcher, resource probe, cgroup reader, sleeper, diagnostics, interrupt
-source, and route qualifier. This is how the deterministic tests run without a
-live prover, real sleeps, or a real installation.
+Every dependency can be overridden, split by phase. Qualification takes
+`KaniPreparationDependencies`: the Cargo metadata source, the route qualifier,
+the inherited environment, and the process working directory. Execution takes
+`KaniExecutionDependencies`: clock, launcher, resource probe, cgroup reader,
+sleeper, diagnostics, interrupt source, and adapter, with the run identifier
+coming from `RunEnvironment.run_id`. This is how the deterministic tests run
+without a live prover, real sleeps, or a real installation.
 
 ## Adapter contract
 
@@ -571,23 +574,24 @@ reports `UNKNOWN`.
 
 ## Injected dependencies and their fallbacks
 
-`RunEnvironment` and `KaniHarnessDependencies` are composition bags by design:
-each field is one seam from `supervision/protocols.py`, and a consumer replaces
-only the seam it needs. They deliberately mix process, time, inspection, and
-evidence concerns because they are constructed once at the composition root and
-passed through unchanged; splitting them would make every constructor call
-repeat unrelated wiring.
+`RunEnvironment`, `KaniPreparationDependencies`, and
+`KaniExecutionDependencies` are composition bags by design: each field is one
+seam from `supervision/protocols.py`, and a consumer replaces only the seam it
+needs. The two Kani bags are split by phase, so a caller cannot hand an
+execution seam to qualification, while each is still constructed once at the
+composition root and passed through unchanged.
 
 Two convenience fallbacks sit at that boundary:
 
-- `KaniHarnessDependencies.metadata` defaults to `cargo_metadata`, which runs
-  `cargo metadata --no-deps --format-version 1` in the repository root. A
+- `KaniPreparationDependencies.metadata` defaults to `cargo_metadata`, which
+  runs `cargo metadata --no-deps --format-version 1` in the repository root. A
   caller that has already read the metadata, or a test, supplies another
-  callable; preparation itself never calls Cargo directly.
+  callable; the route qualifier itself never calls Cargo directly.
 - `LegacyRoute.environment` and `SnapshotRoute.environment` default to the
-  process environment, read as `os.environ` when qualification runs. A
-  `SnapshotRoute` whose `cwd` is `None` uses `Path.cwd()` for its proof working
-  directory. Both defaults are read once at qualification, which is why the
+  process environment, read as `os.environ` at the composition root and passed
+  explicitly to `prepare_route`. A `SnapshotRoute` whose `cwd` is `None` uses
+  the caller's checked directory, which the root resolves from `Path.cwd()`
+  once. Both defaults are read once at qualification, which is why the
   supervise path freezes the resulting environment with `EnvMode.REPLACE`. The
   CLI leaves them at their defaults; a library caller that needs an explicit
   environment passes it on the route.

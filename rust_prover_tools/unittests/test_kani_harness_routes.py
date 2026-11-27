@@ -541,6 +541,7 @@ def test_the_legacy_route_uses_only_the_supplied_environment(
     prepared = prepare_route(
         LegacyRoute(installation=installed_release, cwd=tmp_path),
         environ={"HOME": supplied, "PATH": "/usr/bin"},
+        cwd=tmp_path,
     )
     harness = InventoryHarness(
         package="alpha",
@@ -572,7 +573,11 @@ def test_the_supervised_legacy_build_freezes_replacement_environment(
         "rust_prover_tools.kani_release.run_command",
         _identity_runner([]),
     )
-    prepared = prepare_route(LegacyRoute(installation=installed_release, cwd=tmp_path))
+    prepared = prepare_route(
+        LegacyRoute(installation=installed_release, cwd=tmp_path),
+        environ=dict(os.environ),
+        cwd=tmp_path,
+    )
     harness = InventoryHarness(
         package="alpha",
         target="alpha",

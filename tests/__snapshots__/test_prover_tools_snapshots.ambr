@@ -100,6 +100,9 @@
   
   Print the resolved, package-qualified harness inventory as JSON.
   
+  Discovery runs ``cargo metadata --no-deps --format-version 1`` once at
+  this CLI edge; an authoritative document is read without a subprocess.
+  
   ╭─ Parameters ─────────────────────────────────────────────────────────────────╮
   │ --repo-root PATH   Repository or workspace root. Defaults to the current     │
   │                    directory.                                                │

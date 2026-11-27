@@ -11,9 +11,7 @@ check are unchanged from their single-invocation forms.
 from __future__ import annotations
 
 import dataclasses as dc
-import os
 import typing as typ
-from pathlib import Path
 
 from cuprum.context import EnvMode
 
@@ -38,6 +36,7 @@ from rust_prover_tools.supervision import LaunchCommand, LaunchEnvironment
 
 if typ.TYPE_CHECKING:
     import collections.abc as cabc
+    from pathlib import Path
 
     from rust_prover_tools.commands import CommandSpec
     from rust_prover_tools.kani_snapshot.install_model import InstallHooks
@@ -152,8 +151,8 @@ def _launch_environment(command: CommandSpec) -> LaunchEnvironment:
 def prepare_route(
     route: KaniRoute,
     *,
-    environ: cabc.Mapping[str, str] | None = None,
-    cwd: Path | None = None,
+    environ: cabc.Mapping[str, str],
+    cwd: Path,
 ) -> PreparedRoute:
     """Qualify the selected route once and return its per-harness builder.
 
@@ -161,36 +160,18 @@ def prepare_route(
     ----------
     route : KaniRoute
         Route to qualify.
-    environ : cabc.Mapping[str, str] | None
-        Inherited environment. `None` reads the process environment at this
-        call, which is the explicit provider a caller can replace in a test.
-    cwd : Path | None
-        The caller's already-checked working directory. It takes precedence
-        over a route's own directory and is resolved here, once. `None`
-        resolves the same way for both route kinds, to the route's own
-        directory, or to the process directory when the route names none;
-        neither kind resolves a directory of its own afterwards.
+    environ : cabc.Mapping[str, str]
+        Inherited environment, required so this function never reads the
+        process environment itself. The composition root resolves it once.
+    cwd : Path
+        The caller's already-checked working directory, required so this
+        function never reads the process directory itself. It takes
+        precedence over a route's own directory and is resolved here, once.
     """
-    provider = os.environ if environ is None else environ
-    directory = _working_directory(route, cwd)
+    directory = cwd.resolve()
     if isinstance(route, LegacyRoute):
-        return _prepare_legacy(route, provider, directory)
-    return _prepare_snapshot(route, provider, directory)
-
-
-def _working_directory(route: KaniRoute, checked: Path | None) -> Path:
-    """Resolve the one directory both route kinds are qualified against.
-
-    `prepare_route` calls this once, before it dispatches on the route kind,
-    so the legacy and snapshot routes cannot disagree about which directory
-    was checked. A supplied directory is resolved here, once; only a snapshot
-    route may name none, and then the process directory is the fallback.
-    """
-    if checked is not None:
-        return checked.resolve()
-    if route.cwd is not None:
-        return route.cwd.resolve()
-    return Path.cwd().resolve()
+        return _prepare_legacy(route, environ, directory)
+    return _prepare_snapshot(route, environ, directory)
 
 
 def _prepare_legacy(

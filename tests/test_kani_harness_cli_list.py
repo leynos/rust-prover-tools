@@ -104,13 +104,33 @@ def test_list_ignores_the_generic_input_environment(
 ) -> None:
     """The harnesses subtree disables INPUT_* binding."""
     inventory = make_inventory()
+    metadata_calls: list[Path] = []
+
+    def metadata(root: Path) -> tuple[object, ...]:
+        """Record the explicit Cargo metadata read and supply nothing."""
+        metadata_calls.append(root)
+        return ()
+
+    def discovery(
+        root: Path,
+        packages: tuple[str, ...],
+        *,
+        metadata: object = None,
+    ) -> object:
+        """Require the list path to pass its Cargo metadata explicitly."""
+        del root, packages
+        assert metadata == ()
+        return inventory
+
     monkeypatch.setenv("INPUT_INVENTORY", str(tmp_path / "wrong.json"))
+    monkeypatch.setattr("rust_prover_tools.kani_harness_cli.cargo_metadata", metadata)
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.discover_inventory",
-        lambda root, packages: inventory,
+        "rust_prover_tools.kani_harness_cli.discover_inventory", discovery
     )
 
     status = app(["kani", "harnesses", "list", "--repo-root", str(tmp_path)])
+
+    assert metadata_calls == [tmp_path.resolve()]
 
     assert status == 0
     document = json.loads(capsys.readouterr().out)

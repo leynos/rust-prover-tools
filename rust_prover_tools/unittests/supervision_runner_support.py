@@ -23,6 +23,7 @@ from rust_prover_tools.supervision import (
     ProofVerdict,
     RunEnvironment,
     SupervisionConfig,
+    new_run_id,
 )
 from rust_prover_tools.unittests.supervision_doubles import (
     ScriptedCgroup,
@@ -126,6 +127,7 @@ def environment(
     sinks: Diagnostics | None = None,
     sleeper: Sleeper | None = None,
     adapter: HarnessAdapter | None = None,
+    run_id: cabc.Callable[[], str] = new_run_id,
 ) -> RunEnvironment:
     """Build a run environment from doubles."""
 
@@ -143,6 +145,7 @@ def environment(
         adapter=adapter or _ScriptedAdapter(statuses or {}),
         sleeper=sleeper or VirtualSleeper(clock),
         interrupts=interrupts,
+        run_id=run_id,
     )
 
 

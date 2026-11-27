@@ -71,7 +71,7 @@ def test_an_unopenable_destination_is_a_clean_error(
         return typ.cast("KaniHarnessPreparation", object())
 
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.prepare_harnesses", prepared
+        "rust_prover_tools.kani_harness_cli.qualify_harnesses", prepared
     )
 
     status = app([

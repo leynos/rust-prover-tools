@@ -19,12 +19,12 @@ if typ.TYPE_CHECKING:
     import pytest
 
     from rust_prover_tools.kani_harness_run import (
-        KaniHarnessDependencies,
+        KaniExecutionDependencies,
         KaniHarnessPreparation,
         KaniHarnessRun,
         KaniHarnessRunOptions,
     )
-    from rust_prover_tools.supervision import Diagnostics, SupervisionConfig
+    from rust_prover_tools.supervision import SupervisionConfig
 
 
 def test_a_signal_before_binding_is_already_recorded() -> None:
@@ -124,12 +124,10 @@ def test_the_cli_installs_handlers_only_for_execution(
     def fake_execute(
         preparation: KaniHarnessPreparation,
         config: SupervisionConfig,
-        dependencies: KaniHarnessDependencies | None = None,
-        *,
-        diagnostics: Diagnostics | None = None,
+        dependencies: KaniExecutionDependencies | None = None,
     ) -> KaniHarnessRun:
         """Require the execution phase to be guarded."""
-        del preparation, config, dependencies, diagnostics
+        del preparation, config, dependencies
         assert state == ["installed"]
         return make_run()
 
@@ -138,7 +136,7 @@ def test_the_cli_installs_handlers_only_for_execution(
         fake_handlers,
     )
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.prepare_harnesses", fake_prepare
+        "rust_prover_tools.kani_harness_cli.qualify_harnesses", fake_prepare
     )
     monkeypatch.setattr(
         "rust_prover_tools.kani_harness_cli.execute_harnesses", fake_execute
@@ -202,8 +200,8 @@ def test_a_signal_during_route_qualification_ends_the_cli(
     def interrupted(
         route: object,
         *,
-        environ: object = None,
-        cwd: object = None,
+        environ: object,
+        cwd: object,
     ) -> object:
         """Stand in for qualification interrupted by SIGINT."""
         del route, environ, cwd
@@ -279,16 +277,14 @@ def test_an_execution_keyboard_interrupt_is_named(
     def interrupted(
         preparation: KaniHarnessPreparation,
         config: SupervisionConfig,
-        dependencies: KaniHarnessDependencies | None = None,
-        *,
-        diagnostics: Diagnostics | None = None,
+        dependencies: KaniExecutionDependencies | None = None,
     ) -> KaniHarnessRun:
         """Raise the interrupt the handler would normally replace."""
-        del preparation, config, dependencies, diagnostics
+        del preparation, config, dependencies
         raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.prepare_harnesses", prepared
+        "rust_prover_tools.kani_harness_cli.qualify_harnesses", prepared
     )
     monkeypatch.setattr(
         "rust_prover_tools.kani_harness_cli.execute_harnesses", interrupted
@@ -327,19 +323,17 @@ def test_a_signal_recorded_after_the_report_wins(
     def execute(
         preparation: KaniHarnessPreparation,
         config: SupervisionConfig,
-        dependencies: KaniHarnessDependencies | None = None,
-        *,
-        diagnostics: Diagnostics | None = None,
+        dependencies: KaniExecutionDependencies | None = None,
     ) -> KaniHarnessRun:
         """Record a signal after producing the completed report."""
-        del preparation, config, diagnostics
+        del preparation, config
         assert dependencies is not None
         interrupt = typ.cast("SignalInterrupt", dependencies.interrupts)
         interrupt._handle(signal.SIGTERM, None)
         return make_run()
 
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.prepare_harnesses", prepared
+        "rust_prover_tools.kani_harness_cli.qualify_harnesses", prepared
     )
     monkeypatch.setattr("rust_prover_tools.kani_harness_cli.execute_harnesses", execute)
 

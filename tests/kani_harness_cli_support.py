@@ -7,7 +7,7 @@ import datetime as dt
 import typing as typ
 
 from rust_prover_tools.kani_harness_run import (
-    KaniHarnessDependencies,
+    KaniExecutionDependencies,
     KaniHarnessPreparation,
     KaniHarnessRun,
     KaniHarnessRunOptions,
@@ -19,7 +19,6 @@ from rust_prover_tools.kani_inventory import (
     write_inventory,
 )
 from rust_prover_tools.supervision import (
-    Diagnostics,
     ExecutionStatus,
     HarnessResult,
     HarnessSpec,
@@ -161,24 +160,27 @@ class CapturedRun:
     Attributes
     ----------
     options : KaniHarnessRunOptions
-        Repository, selection, route, and policy the CLI resolved.
-    dependencies : KaniHarnessDependencies
+        Repository, selection, and route the CLI resolved.
+    config : SupervisionConfig
+        Policy and evidence destinations the CLI resolved.
+    dependencies : KaniExecutionDependencies
         Sinks and interrupt source the CLI supplied to execution.
     """
 
     options: KaniHarnessRunOptions
-    dependencies: KaniHarnessDependencies
+    config: SupervisionConfig
+    dependencies: KaniExecutionDependencies
 
 
 def capture_run(
     monkeypatch: pytest.MonkeyPatch,
     run: KaniHarnessRun,
 ) -> list[CapturedRun]:
-    """Patch preparation and execution, returning what execution received."""
+    """Patch qualification and execution, returning what execution received."""
     captured: list[CapturedRun] = []
     pending: list[KaniHarnessRunOptions] = []
 
-    def fake_prepare(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
+    def fake_qualify(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         """Capture the options and hand execution an opaque preparation."""
         pending.append(options)
         return typ.cast("KaniHarnessPreparation", object())
@@ -186,22 +188,21 @@ def capture_run(
     def fake_execute(
         preparation: KaniHarnessPreparation,
         config: SupervisionConfig,
-        dependencies: KaniHarnessDependencies | None = None,
-        *,
-        diagnostics: Diagnostics | None = None,
+        dependencies: KaniExecutionDependencies | None = None,
     ) -> KaniHarnessRun:
         """Capture the execution inputs and return the configured run."""
-        del preparation, config, diagnostics
+        del preparation
         captured.append(
             CapturedRun(
                 pending.pop(),
-                dependencies or KaniHarnessDependencies(),
+                config,
+                dependencies or KaniExecutionDependencies(),
             )
         )
         return run
 
     monkeypatch.setattr(
-        "rust_prover_tools.kani_harness_cli.prepare_harnesses", fake_prepare
+        "rust_prover_tools.kani_harness_cli.qualify_harnesses", fake_qualify
     )
     monkeypatch.setattr(
         "rust_prover_tools.kani_harness_cli.execute_harnesses", fake_execute
