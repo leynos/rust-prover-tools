@@ -730,7 +730,7 @@ programme, not as a single remediation round.
 
 Grouped:
 
-- Plan and docs accuracy: decision-log stopped-verdict entry, the authorised
+- Plan and docs accuracy: decision-log stopped-verdict entry, the authorized
   `classify` interface, and the v0.2.0 migration guide's `harnesses run`
   example.
 - Inventory semantics: raw-identifier attribute segments, inner `cfg`
