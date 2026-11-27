@@ -9,7 +9,8 @@ Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
 is layered on it. The final deterministic gate reports 3,353 passed and 6
 skipped at code head `461ee0e`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the same head: 2 passed in 64.27 s.
+passed on that tree in 64.27 s and again at the pushed head `4adee26` in 3.80
+s, the second run reusing cached Kani artefacts.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -180,7 +181,8 @@ Plain-language terms used in this plan:
   `kani_diagnostics` and states that neither opens the report destination.
   `make check-fmt`, `make all` (3,353 passed, 6 skipped), `make markdownlint`,
   and `make nixie` pass at `461ee0e`; the opt-in live Kani 0.67.0 fixture
-  passes at the same head: 2 passed in 64.27 s.
+  passes on that tree in 64.27 s and again at the pushed head `4adee26` in 3.80
+  s.
 
 - [x] (2026-11-27 03:45Z) Thirteenth review round, from the R12 follow-up. Each
   real-process witness now runs as one isolated `python -I` interpreter under a
