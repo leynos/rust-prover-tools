@@ -24,6 +24,11 @@ if typ.TYPE_CHECKING:
 
 __all__ = ("SignalInterrupt", "install_interrupt_handlers")
 
+#: Native dispositions `signal.signal` can restore. The tuple is compared
+#: without hashing, so an unhashable non-callable still reaches the typed
+#: refusal below.
+_SENTINEL_DISPOSITIONS = (signal.SIG_DFL, signal.SIG_IGN)
+
 
 class SignalInterrupt:
     """A SIGINT/SIGTERM source the supervision layer can await.
@@ -138,9 +143,11 @@ def _validated_dispositions(signums: tuple[int, ...]) -> dict[int, object]:
         signum: signal.getsignal(signum) for signum in signums
     }
     for signum, disposition in previous.items():
-        if disposition in {signal.SIG_DFL, signal.SIG_IGN}:
-            continue
+        # A callable handler may be unhashable, so it is accepted before any
+        # sentinel-set membership test can raise `TypeError`.
         if callable(disposition):
+            continue
+        if disposition in _SENTINEL_DISPOSITIONS:
             continue
         msg = (
             f"cannot restore the handler for signal {signum}: "

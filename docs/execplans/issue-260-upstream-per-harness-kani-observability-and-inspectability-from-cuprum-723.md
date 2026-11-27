@@ -5,11 +5,18 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 `Outcomes & retrospective`, `Conformance basis`, and `Verification plan` must
 be kept up to date as work proceeds.
 
-Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it and main is merged in. The final deterministic gate reports
-3,518 passed and 20 skipped at code head `9b02a83`; `make all` counts collected
-outcomes, so a passing run and its skips are separate. The opt-in live Kani
-0.67.0 fixture passed at the same head: 2 passed in 4.16 s.
+Status: DELIVERED, with the final incremental full-review applied in this
+candidate. main's #264 parser is adopted and this branch's supervision is
+layered on it and main is merged in. The branch head is `fd01bfd`; the last
+full deterministic gate reports 3,518 passed and 20 skipped at code head
+`242d5e0`, and `make all` counts collected outcomes, so a passing run and its
+skips are separate. The last recorded opt-in live Kani 0.67.0 fixture passed at
+`9b02a83`: 2 passed in 4.16 s; it has not been re-run for this candidate. This
+candidate's focused validation on top of `fd01bfd` ran 261 tests in 11.15 s
+across the supervision and inventory set and 92 tests in 2.33 s on the directly
+touched modules, with no failures, and `ruff format --check`, `ruff check`,
+`ty check rust_prover_tools tests` and `pylint --rcfile=pyproject.toml` are
+clean; the planner re-gates `make all` at the eventual commit.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -165,6 +172,47 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-27 20:05Z) Incremental full-review candidate on `fd01bfd`. The
+  review `6092727650` findings are applied: the migration guide's snapshot
+  route now requires Kani 0.67.0, signal disposition validation tests
+  `callable` before the sentinel set, a simple `cfg` predicate loses its raw
+  prefix, `_drive` catches a cancelled waiter while a saved monitor failure
+  still wins, the overflow attribution test uses a synthetic `KaniObservation`,
+  both cancellation teardowns always release their held waiter, and the
+  real-process witness asserts its child is gone. The ExecPlan and roadmap name
+  the same head. Focused evidence: 261 passed in 11.15 s across the supervision
+  runner, Kani classifier, inventory, signal and attribution modules, and 92
+  passed in 2.33 s on the directly touched modules; `ruff format --check`,
+  `ruff check`, `ty check rust_prover_tools tests` and `pylint` are clean. Not
+  committed; the planner re-gates and commits.
+
+- [x] (2026-11-27 19:07Z) Full-review record batch `fd01bfd`. The roadmap now
+  records the full-review head; no code or test changed, so the 3,518-passed,
+  20-skipped gate at `242d5e0` still describes the tree. Closed: the batch
+  record request. Open at this head: the incremental review `6092727650` and
+  the full-review test-strength findings listed under "Full-review programme
+  status".
+
+- [x] (2026-11-27 19:07Z) Full-review test-split batch `3f9de87`. Ten modules
+  above the 400-line limit split along their existing behavioural groups into
+  the classifier, inventory, evidence, resources, runner and teardown modules,
+  with shared setup in support modules. Every resulting module is under 400
+  logical lines; the split commit records the same 346 focused tests with
+  identical node identities. Closed six findings: the five split requests and
+  the witness helper's `sys.path` bootstrap. No behaviour changed, so the
+  full-gate figures stand.
+
+- [x] (2026-11-27 18:15Z) Full-review production batch `242d5e0`. Closed the
+  two ExecPlan accuracy findings (the D40 stopped-verdict supersession and the
+  observation-valued `classify` contract), the migration guide's
+  disabled-by-default evidence outputs, signal-disposition validation before
+  installation, raw-identifier attribute-path segments, inner `cfg` on
+  functions, bounded module traversal, the snapshot environment copy,
+  sample-before-heartbeat ordering, the `_drive` interruption note,
+  free-text-only shortening, the sink LF budget, owned-group settlement after
+  the leader, and the `command_for` return type. The full deterministic gate at
+  this head reports 3,518 passed and 20 skipped, as `docs/roadmap.md` records.
 
 - [x] (2026-11-27 14:00Z) Seventeenth review round. A stopped attempt adopts a
   retained log's verdict only when its block names the requested harness.
@@ -755,6 +803,47 @@ Grouped:
 Read the review body for the exact per-line requirements. Work through it in
 gated batches, and request an incremental review after each batch rather than
 another full review until the programme is complete.
+
+## Full-review programme status
+
+Batches one to three are complete at `fd01bfd`. Together they closed twenty of
+the review's 31 actionable comments; the process-witness publication-cleanup
+comment was already satisfied at the reviewed head, and ten test-strength
+comments remained open.
+
+- Production batch `242d5e0` — complete, 3,518 passed and 20 skipped. Closed
+  the ExecPlan stopped-verdict and `classify` findings, the migration guide's
+  evidence-output note, signal-handler validation before installation,
+  raw-identifier attribute segments, inner `cfg` on functions, bounded module
+  traversal, the snapshot environment copy, sample-before-heartbeat ordering,
+  the `_drive` interruption note, free-text-only shortening, the sink LF
+  budget, owned-group settlement after the leader, and the `command_for` return
+  type.
+- Test-split batch `3f9de87` — complete, test-only. Closed the five split
+  findings for the classifier, inventory discovery and scan, evidence, and
+  teardown modules, and moved the witness helper's `sys.path` bootstrap into
+  the isolated runner. Every resulting module is under 400 logical lines.
+- Record batch `fd01bfd` — complete, documentation only. The roadmap records
+  the full-review head.
+
+Open at the current candidate:
+
+- Incremental review `6092727650`: the seven inline findings and the Developer
+  Documentation check. This candidate applies all eight: the snapshot-route
+  version note, unhashable callable signal handlers, raw simple `cfg`
+  predicates, the cancelled-waiter guard in `_drive`, the synthetic
+  truncated-observation test, the two teardown releases, the real-process PID
+  assertion, and the Status/Progress reconciliation.
+- The ten full-review test-strength comments the batches did not close: the
+  disappearing-process setup in `test_supervision_resources.py`; the
+  sampling-time sequence in `test_supervision_runner.py`; the `settle_within`
+  release in `test_supervision_witness_support.py`; recorded spool-read and
+  `run-finish` write attempts in the split teardown modules; the zero-exit
+  `PASSED` recovery for `_UnclosableAdapter` and the supervised timeout-close
+  case in the classifier tests; and `_abandon` for exceptional collection exits
+  in `tests/test_supervision_process_witness.py`. Two of the ten, the
+  cancellation-test release and the callback child's PID absence, are closed by
+  this candidate.
 
 ## Surprises & discoveries
 

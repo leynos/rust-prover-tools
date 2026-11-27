@@ -25,36 +25,17 @@ from rust_prover_tools.unittests.supervision_doubles import VirtualClock
 
 
 def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
-    """A dropped live record makes the retained verdict unattributable.
+    """A truncated fact set makes a retained verdict unattributable.
 
-    The observer's budget is filled directly, because description content can
-    no longer spend it; the guarded property is that a truncated fact set
-    yields no attributed verdict on a stop.
+    The observation is synthetic so the guard is isolated: one matching
+    selection and one matching successful verdict would otherwise attribute
+    `PASSED`, and only the truncated flag keeps the verdict unknown.
     """
-    from rust_prover_tools.supervision.kani_observer import MAX_LIVE_RECORDS
-
-    observer = KaniObserver()
-    observer.observe(
-        OutputLine(
-            stream="stdout",
-            text="Checking harness harnesses::verified...",
-            timestamp_utc=VirtualClock().now(),
-            elapsed_seconds=0.0,
-        )
+    facts = _live_facts(
+        selections=("harnesses::verified",),
+        verdicts=(("harnesses::verified", "SUCCESSFUL"),),
     )
-    observer.observe(
-        OutputLine(
-            stream="stdout",
-            text="VERIFICATION:- SUCCESSFUL",
-            timestamp_utc=VirtualClock().now(),
-            elapsed_seconds=0.0,
-        )
-    )
-    for index in range(MAX_LIVE_RECORDS):
-        observer._scanner._record(
-            observer.selection_records, f"harnesses::filler{index}"
-        )
-    assert observer.facts_truncated
+    observation = KaniObservation(facts=facts, log=None, facts_truncated=True)
     evidence = _evidence(
         "harnesses::verified",
         stop=StopReason.TIMEOUT,
@@ -62,7 +43,7 @@ def test_live_fact_overflow_leaves_a_stopped_verdict_unknown() -> None:
         detail="timed out",
     )
 
-    classification = KaniAdapter().classify(evidence, _finish(observer))
+    classification = KaniAdapter().classify(evidence, observation)
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN

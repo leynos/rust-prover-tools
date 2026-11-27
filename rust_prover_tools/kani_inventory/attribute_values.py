@@ -41,6 +41,7 @@ PROOF_ATTRIBUTES = frozenset({
     "::kani::proof_for_contract",
 })
 _RAW_STRING = re.compile(r'r(?P<hashes>#*)"(?P<body>.*?)"(?P=hashes)', re.DOTALL)
+_CFG_RAW_PREDICATE = re.compile(r"\(r#(?P<identifier>[^\W\d]\w*)\)")
 _HEX_DIGITS = 2
 _MIN_CFG_ATTR_PARTS = 2
 _QUOTE_PAIR = 2
@@ -98,11 +99,18 @@ def attribute_spelling(content: str) -> str:
     """Return one attribute's whole spelling, normalised and raw-insensitive.
 
     Comparing this against ``cfg(kani)`` recognises the activation in any
-    equivalent spelling, including ``r#cfg(kani)`` and one that carries a
-    masked comment.
+    equivalent spelling, including ``r#cfg(kani)``, ``cfg(r#kani)`` and one
+    that carries a masked comment. A raw prefix is stripped only from a simple
+    ``cfg`` predicate, so a feature predicate or string value keeps its exact
+    spelling.
     """
     name, arguments = attribute_name(content)
-    return name + normalise(arguments)
+    spelling = normalise(arguments)
+    if name == "cfg":
+        predicate = _CFG_RAW_PREDICATE.fullmatch(spelling)
+        if predicate is not None:
+            spelling = f"({predicate['identifier']})"
+    return name + spelling
 
 
 def _strip_comments(text: str) -> str:

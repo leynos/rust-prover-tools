@@ -243,7 +243,7 @@ class AttemptSupervisor:
         """The result the stopped child settled with."""
         return self._settled or LaunchResult()
 
-    async def _drive(
+    async def _drive(  # ruff: ignore[complex-structure] - the waiter guard is one branch
         self,
         running: RunningHarnessHandle,
         started_at: dt.datetime,
@@ -268,7 +268,13 @@ class AttemptSupervisor:
                 failure = monitor.exception()
                 if failure is not None:
                     self._request_stop(running, "the supervisor monitor failed")
-            result = await waiter
+            try:
+                result = await waiter
+            except asyncio.CancelledError:
+                # A waiter cancelled on its own is still this attempt's
+                # interruption. Record it so the child is stopped and joined
+                # below, then re-raise it after any saved monitor failure.
+                cancelled = True
         finally:
             monitor.cancel()
             # Await the retained failure without re-raising it here: it is

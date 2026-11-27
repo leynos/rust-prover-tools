@@ -12,7 +12,10 @@ from rust_prover_tools.kani_inventory import (
     InventoryDiscoveryError,
     collect_proofs,
 )
-from rust_prover_tools.kani_inventory.attribute_values import cfg_attr_facts
+from rust_prover_tools.kani_inventory.attribute_values import (
+    attribute_spelling,
+    cfg_attr_facts,
+)
 from rust_prover_tools.unittests.kani_inventory_scan_support import (
     scan as _scan,
 )
@@ -120,6 +123,29 @@ def test_a_comment_inside_cfg_kani_stays_unconditional(tmp_path: Path) -> None:
     (proof,) = collect_proofs(root, tmp_path)
 
     assert not proof.conditional
+
+
+def test_a_raw_cfg_predicate_is_the_kani_activation(tmp_path: Path) -> None:
+    """A raw `r#kani` predicate is the activation in every attribute position."""
+    root = write_lib(
+        tmp_path,
+        "#![cfg(r#kani)]\n"
+        "#[cfg(r#kani)]\n"
+        "#[kani::proof]\n"
+        "fn h() {}\n"
+        "#[cfg_attr(kani, cfg(r#kani))]\n"
+        "#[kani::proof]\n"
+        "fn nested() {}\n",
+    )
+
+    proofs = collect_proofs(root, tmp_path)
+
+    assert [proof.pretty_name for proof in proofs] == ["h", "nested"]
+    assert all(not proof.conditional for proof in proofs)
+    assert attribute_spelling("cfg ( r#kani )") == "cfg(kani)"
+    assert attribute_spelling('cfg(r#feature = "proofs")') == (
+        'cfg(r#feature="proofs")'
+    )
 
 
 def test_a_hashed_raw_path_value_is_accepted(tmp_path: Path) -> None:

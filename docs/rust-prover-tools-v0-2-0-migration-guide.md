@@ -154,7 +154,9 @@ selected harness in an owned process group, with live human evidence on
 standard output, resource sampling, a per-harness timeout, an optional
 host-memory watchdog, and a versioned report. JSONL evidence and the report
 file are disabled by default: pass `--jsonl PATH` and `--report PATH` to write
-them. The route accepts a qualified 0.67.0 release or a reviewed snapshot; the
+them. The route accepts a qualified 0.67.0 release or a reviewed snapshot that
+is also Kani 0.67.0; 0.68.0 snapshots are unsupported because their grammar is
+not registered. The
 [users' guide](users-guide.md#supervised-kani-harness-execution) documents the
 options, defaults, outcome vocabulary and exit statuses, and
 [Kani supervised harness execution](kani-supervised-execution.md) gives the

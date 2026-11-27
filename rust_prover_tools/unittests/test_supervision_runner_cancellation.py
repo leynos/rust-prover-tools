@@ -194,11 +194,13 @@ async def test_a_monitor_failure_stops_and_joins_the_child() -> None:
             environment,
         )
     )
-    await asyncio.wait_for(teardown_started.wait(), timeout=1)
-    await asyncio.sleep(0)
-    assert not run.done(), "the run returned before its child finished teardown"
-
-    release.set()
+    try:
+        await asyncio.wait_for(teardown_started.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert not run.done(), "the run returned before its child finished teardown"
+    finally:
+        # A failed wait or assertion must still let the child finish teardown.
+        release.set()
     with pytest.raises(RuntimeError, match="probe failed"):
         await run
 
@@ -278,6 +280,38 @@ async def test_a_cancellation_during_settlement_is_re_raised() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await run_supervised((spec(),), _config(), environment)
+
+
+@_async_test
+async def test_a_cancelled_waiter_does_not_hide_a_monitor_failure() -> None:
+    """A waiter's cancellation is recorded but a saved monitor fault wins."""
+    from unittest import mock
+
+    from rust_prover_tools.supervision import attempt as attempt_module
+
+    async def cancel_wait(*args: object) -> LaunchResult:
+        """Raise as the waiter's own cancellation would."""
+        del args
+        await asyncio.sleep(0)
+        raise asyncio.CancelledError
+
+    async def fail_monitor(*args: object) -> None:
+        """Fail as the monitor does before its waiter is joined."""
+        del args
+        await asyncio.sleep(0)
+        msg = "the monitor failed"
+        raise RuntimeError(msg)
+
+    environment = _environment(
+        ScriptedLauncher(script=Script(block=True)), VirtualClock()
+    )
+
+    with (
+        mock.patch.object(RunningHarness, "wait", cancel_wait),
+        mock.patch.object(attempt_module.AttemptSupervisor, "_monitor", fail_monitor),
+        pytest.raises(RuntimeError, match="the monitor failed"),
+    ):
+        await run_supervised((spec(),), _config(timeout_seconds=60.0), environment)
 
 
 @_async_test

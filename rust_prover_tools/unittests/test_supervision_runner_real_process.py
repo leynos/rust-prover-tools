@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses as dc
 import json
 import os
+import signal
 import typing as typ
 
 import pytest
@@ -73,6 +75,25 @@ class _FailsOnFirstStdoutLine:
             self.alive_at_failure.append(True)
         msg = "the spool is full"
         raise OSError(msg)
+
+
+def _process_exists(pid: int) -> bool:
+    """Whether `pid` still names a running process."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def _stop_and_reap(pid: int) -> None:
+    """Stop and reap a child that outlived its run."""
+    if not _process_exists(pid):
+        return
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+    with contextlib.suppress(ChildProcessError):
+        os.waitpid(pid, 0)
 
 
 def test_a_live_callback_failure_is_raised_and_the_report_validates(
@@ -163,6 +184,13 @@ def test_a_live_callback_failure_is_raised_and_the_report_validates(
     # rather than losing a write from one that had already exited.
     assert fail.delivered == ["first"]
     assert fail.alive_at_failure == [True]
+    # The launcher owned the child's group, so the PID it recorded must be
+    # gone after the run unwinds; the cleanup still stops an escaped child.
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    try:
+        assert not _process_exists(pid), "the supervisor left the child running"
+    finally:
+        _stop_and_reap(pid)
     document = json.loads(report_path.read_text(encoding="utf-8"))
     validate_report_document(document)
     results = typ.cast("list[dict[str, object]]", document["results"])

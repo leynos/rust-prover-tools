@@ -7,6 +7,8 @@ import contextlib
 import signal
 import typing as typ
 
+import pytest
+
 from rust_prover_tools.kani_harness_signal import (
     SignalInterrupt,
     install_interrupt_handlers,
@@ -16,8 +18,6 @@ if typ.TYPE_CHECKING:
     import collections.abc as cabc
     from pathlib import Path
 
-    import pytest
-
     from rust_prover_tools.kani_harness_run import (
         KaniExecutionDependencies,
         KaniHarnessPreparation,
@@ -25,6 +25,43 @@ if typ.TYPE_CHECKING:
         KaniHarnessRunOptions,
     )
     from rust_prover_tools.supervision import SupervisionConfig
+
+
+class _UnhashableHandler:
+    """A callable signal handler that cannot be hashed."""
+
+    __hash__ = None
+
+    def __call__(self, signum: int, frame: object) -> None:
+        """Stand in for the embedding application's handler."""
+        del signum, frame
+
+
+def test_a_callable_handler_need_not_be_hashable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unhashable callable is restorable, while `None` is still refused."""
+    handler = _UnhashableHandler()
+    calls: list[tuple[int, object]] = []
+    monkeypatch.setattr("signal.getsignal", lambda sig: handler)
+    monkeypatch.setattr(
+        "signal.signal", lambda sig, installed: calls.append((sig, installed))
+    )
+
+    with install_interrupt_handlers(SignalInterrupt()):
+        pass
+
+    assert calls[-2:] == [
+        (signal.SIGINT, handler),
+        (signal.SIGTERM, handler),
+    ]
+
+    monkeypatch.setattr("signal.getsignal", lambda sig: None)
+    with (
+        pytest.raises(TypeError, match="cannot restore the handler"),
+        install_interrupt_handlers(SignalInterrupt()),
+    ):
+        pass
 
 
 def test_a_signal_before_binding_is_already_recorded() -> None:

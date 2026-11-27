@@ -304,9 +304,12 @@ async def test_a_cancelled_run_keeps_the_samples_it_took() -> None:
     task = asyncio.create_task(
         run_supervised((spec(),), _config(timeout_seconds=600.0), environment)
     )
-    await asyncio.wait_for(entered.wait(), timeout=1)
-    task.cancel()
-    release.set()
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        task.cancel()
+    finally:
+        # A failed setup must not leave the held sleeper blocking shutdown.
+        release.set()
     with pytest.raises(asyncio.CancelledError):
         await task
 
