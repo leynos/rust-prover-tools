@@ -6,11 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,353 passed and 6
-skipped at code head `461ee0e`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,360 passed and 6
+skipped at code head `154ffd2`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed on that tree in 64.27 s and again at the pushed head `4adee26` in 3.80
-s, the second run reusing cached Kani artefacts.
+passed at the same head: 2 passed in 19.34 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
@@ -166,6 +165,22 @@ Plain-language terms used in this plan:
   before each review request; wait with `vsleep` as instructed on rate limits.
 
 ## Progress
+
+- [x] (2026-11-27 08:30Z) Fifteenth review round, from the formal review at
+  03:39Z. The Kani observation seam is split: `kani_facts` holds the pure
+  `KaniFactScanner`, `kani_spool` holds the `KaniSpool` protocol and its
+  temporary-file implementation, and `KaniObserver.finish()` returns an
+  immutable `KaniObservation`. `KaniAdapter.classify` takes only that value, so
+  it neither parses nor closes, and `LineObserver`/`HarnessAdapter` are generic
+  over the observation type. `AttemptSupervisor` closes the spool in a
+  `finally`, and a spool that cannot open is an explicit `ERROR`. The watchdog
+  policy mapping is pinned by three tests. Every witness PID record is now
+  published atomically; the stuck-settlement case proves only the settlement
+  deadline, and a new `deadline_reap` case proves the parent's cleanup against
+  a real untouched child, with termination and reaping asserted separately.
+  `make check-fmt`, `make all` (3,360 passed, 6 skipped), `make markdownlint`,
+  and `make nixie` pass at `154ffd2`; the opt-in live Kani 0.67.0 fixture
+  passes at the same head: 2 passed in 19.34 s.
 
 - [x] (2026-11-27 05:10Z) Fourteenth review round, from the R13 follow-up.
   `RunningHarness.group_id` is unset until Cuprum announces the spawn, so each
