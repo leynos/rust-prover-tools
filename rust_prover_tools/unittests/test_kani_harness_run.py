@@ -751,3 +751,66 @@ def test_preparation_uses_the_injected_metadata_source(tmp_path: Path) -> None:
 
     assert provider_calls == []
     assert preparation.selected[0].harness == "harnesses::a"
+
+
+def test_a_supplied_environment_reaches_route_qualification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composition root passes the injected environment to the qualifier.
+
+    The qualifier is replaced by a recorder, so the assertion is about the
+    plumbing rather than about Kani: the supplied mapping must arrive intact,
+    and the process environment must not be consulted for it.
+    """
+    import rust_prover_tools.kani_harness_run as run_module
+
+    supplied = {"RPT_PROBE": "from-the-caller"}
+    seen: list[dict[str, str]] = []
+
+    def recording(route: object, *, environ: object, cwd: object) -> object:
+        """Record the qualifier's inputs and return a prepared route."""
+        del route, cwd
+        seen.append(typ.cast("dict[str, str]", environ).copy())
+        return _prepared()
+
+    monkeypatch.setenv("RPT_PROBE", "from-the-process")
+    monkeypatch.setattr(run_module, "prepare_route", recording)
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+        inventory=_inventory("harnesses::a"),
+        dependencies=KaniHarnessDependencies(environ=supplied),
+    )
+
+    prepare_harnesses(options)
+
+    assert seen == [supplied]
+
+
+def test_the_process_environment_is_read_once_at_the_composition_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without an override, the qualifier receives the process environment."""
+    import rust_prover_tools.kani_harness_run as run_module
+
+    seen: list[dict[str, str]] = []
+
+    def recording(route: object, *, environ: object, cwd: object) -> object:
+        """Record the qualifier's inputs and return a prepared route."""
+        del route, cwd
+        seen.append(typ.cast("dict[str, str]", environ).copy())
+        return _prepared()
+
+    monkeypatch.setenv("RPT_PROBE", "from-the-process")
+    monkeypatch.setattr(run_module, "prepare_route", recording)
+    options = KaniHarnessRunOptions(
+        repo_root=tmp_path,
+        route=LegacyRoute(installation=tmp_path, cwd=tmp_path),
+        inventory=_inventory("harnesses::a"),
+    )
+
+    prepare_harnesses(options)
+
+    assert seen[0]["RPT_PROBE"] == "from-the-process"

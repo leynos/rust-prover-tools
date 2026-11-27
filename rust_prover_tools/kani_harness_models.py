@@ -4,6 +4,13 @@ The dataclasses live apart from the orchestration that consumes them so a
 caller can construct a request, capture a preparation, and type a run without
 importing the supervisor. Every type here is inert: no method starts a process
 or opens a file.
+
+`KaniHarnessDependencies` deliberately stays one bag rather than splitting into
+process, resource, and sink groups. Every field is an optional override of the
+same production environment, resolved in one place; splitting the bag would
+duplicate that defaulting, and every test that needs two overrides would
+thread two values. The class is the composition point, not a capability
+boundary, and the module's inertness is what keeps one bag honest.
 """
 
 from __future__ import annotations
@@ -66,6 +73,10 @@ class KaniHarnessDependencies:
     metadata : cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None
         Cargo metadata source. `None` runs `cargo metadata`; a caller that has
         already read it, or a test double, can supply another source.
+    environ : cabc.Mapping[str, str] | None
+        Inherited environment for route qualification. `None` reads the
+        process environment once in `prepare_harnesses`, so the default is
+        resolved at the outermost caller rather than inside a probe.
     """
 
     clock: Clock | None = None
@@ -77,6 +88,7 @@ class KaniHarnessDependencies:
     interrupts: InterruptSource | None = None
     prepare: cabc.Callable[[KaniRoute], PreparedRoute] | None = None
     metadata: cabc.Callable[[Path], cabc.Sequence[CargoPackage]] | None = None
+    environ: cabc.Mapping[str, str] | None = None
 
 
 @dc.dataclass(frozen=True, slots=True)

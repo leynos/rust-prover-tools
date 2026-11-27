@@ -1,15 +1,13 @@
 """Run a Kani harness inventory under supervision, through one qualified route.
 
-This module is the composition root for the shared capability. It joins the
-inventory, the exact selector, one qualified Kani route, the Kani log adapter,
-and the generic supervision layer, and returns a typed report. It deliberately
-does not own timing, measurement, evidence, or classification; each of those
-belongs to the layer it composes.
+This module is the composition root: it joins the inventory, the exact
+selector, one qualified Kani route, the Kani log adapter, and the generic
+supervision layer into a typed report. Timing, measurement, evidence, and
+classification belong to the layer it composes.
 
-The route is qualified once. Every harness invocation is derived from that one
-validated installation, generation, environment, and grammar, so a run cannot
-observe one compiler identity while launching another, and a concurrent
-snapshot repair cannot swap the generation between harnesses.
+The route is qualified once, and every harness invocation is derived from that
+one validated installation, generation, environment, and grammar, so a run
+cannot observe one identity while launching another.
 
 Example
 -------
@@ -18,10 +16,7 @@ run = run_harnesses(
     KaniHarnessRunOptions(
         repo_root=Path.cwd(),
         packages=("cuprum-native-io",),
-        route=LegacyRoute(
-            installation=Path.home() / ".kani" / "kani-0.67.0",
-            cwd=Path.cwd(),
-        ),
+        route=LegacyRoute(installation=Path.home() / ".kani" / "kani-0.67.0"),
     )
 )
 print(run.report.passed)
@@ -32,6 +27,7 @@ from __future__ import annotations
 
 import dataclasses as dc
 import functools
+import os
 import typing as typ
 from pathlib import Path
 
@@ -215,11 +211,12 @@ def run_kani_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessRun:
 def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
     """Discover or load, select, and qualify one route without running it.
 
-    Cargo metadata is read through `KaniHarnessDependencies.metadata` (default
-    `cargo_metadata`) when the inventory must be discovered, and again when a
-    selected harness belongs to a test target, because those entries are
-    revalidated against the live tree. Route qualification probes the release
-    or snapshot identities once.
+    Two steps run subprocesses: `KaniHarnessDependencies.metadata` (by default
+    `cargo_metadata`) reads Cargo metadata, and route qualification probes the
+    release or snapshot identities once. Supplying `metadata` or `prepare`
+    replaces those process boundaries. The inherited environment is resolved
+    here, at the outermost caller, and passed explicitly to `prepare_route`;
+    `dependencies.environ` replaces the process environment when supplied.
 
     Parameters
     ----------
@@ -256,15 +253,18 @@ def prepare_harnesses(options: KaniHarnessRunOptions) -> KaniHarnessPreparation:
         )
         raise ProverToolError(msg)
     dependencies = options.dependencies or KaniHarnessDependencies()
-    provider = dependencies.metadata or cargo_metadata
-    metadata = _metadata_for(options, provider, root)
+    metadata = _metadata_for(options, dependencies.metadata or cargo_metadata, root)
     inventory = _inventory(options, metadata)
     selected = select_harnesses(inventory, options.harnesses)
     if any(harness.target_kind == "test" for harness in selected):
         if metadata is None:
-            metadata = tuple(provider(root))
+            metadata = tuple((dependencies.metadata or cargo_metadata)(root))
         verify_selected_test_targets(root, selected, metadata)
-    qualifier = dependencies.prepare or functools.partial(prepare_route, cwd=route_cwd)
+    qualifier = dependencies.prepare or functools.partial(
+        prepare_route,
+        environ=os.environ if dependencies.environ is None else dependencies.environ,
+        cwd=route_cwd,
+    )
     prepared = qualifier(options.route)
     return KaniHarnessPreparation(
         inventory=inventory,
