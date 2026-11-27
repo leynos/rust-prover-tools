@@ -1317,3 +1317,16 @@ def test_a_truncated_stopped_attempt_reports_no_verdict() -> None:
 
     assert classification.status is ExecutionStatus.TIMED_OUT
     assert classification.proof_verdict is ProofVerdict.UNKNOWN
+
+
+def test_a_stopped_attempt_does_not_adopt_another_harness_verdict() -> None:
+    """A retained log for a different harness supplies no verdict for this one."""
+    result = _classify(
+        "harnesses::a",
+        observed="harnesses::other",
+        stop=StopReason.TIMEOUT,
+        exit_code=None,
+    )
+
+    assert result.status is ExecutionStatus.TIMED_OUT
+    assert result.proof_verdict is ProofVerdict.UNKNOWN

@@ -119,19 +119,7 @@ class KaniAdapter:
         this method only reads it, so it never parses the log or owns the
         spool.
         """
-        observed = observe(evidence, observation.facts)
-        if observation.facts_truncated or observation.log_truncated:
-            # A dropped live record or a shortened log makes the retained
-            # verdict ambiguous. This precedes the stop so a truncated stop
-            # reports UNKNOWN as well.
-            observed = dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
-        elif observation.log is not None and len(observation.log.blocks) == 1:
-            # A stop outranks the status but not a verdict the retained log
-            # states. `finish` parses before classification, so a stopped
-            # attempt can carry one.
-            observed = dc.replace(
-                observed, verdict=proof_verdict(observation.log.blocks[0])
-            )
+        observed = _observed_with_verdict(evidence, observation)
         stopped = _stop_status(evidence, observed)
         if stopped is not None:
             return stopped
@@ -160,6 +148,30 @@ class KaniAdapter:
         if selection is not None:
             return selection
         return classify_log(evidence, log, observed, observation.failure_reason)
+
+
+def _observed_with_verdict(
+    evidence: AttemptEvidence,
+    observation: KaniObservation,
+) -> Observed:
+    """Return the observed facts with the verdict the retained log supports.
+
+    A truncated or dropped record makes the verdict ambiguous, so it is
+    `UNKNOWN`. Otherwise a single parsed block supplies the verdict only when
+    it names the harness this attempt requested; a block for anything else is
+    not this attempt's evidence. This runs before the stop check, because a
+    stop outranks the status but not a verdict the verifier already stated.
+    """
+    observed = observe(evidence, observation.facts)
+    if observation.facts_truncated or observation.log_truncated:
+        return dc.replace(observed, verdict=ProofVerdict.UNKNOWN)
+    log = observation.log
+    if log is None or len(log.blocks) != 1:
+        return observed
+    (block,) = log.blocks
+    if block.name != evidence.spec.harness:
+        return observed
+    return dc.replace(observed, verdict=proof_verdict(block))
 
 
 def _refusal_status(
