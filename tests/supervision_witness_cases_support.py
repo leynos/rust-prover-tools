@@ -111,15 +111,19 @@ class _RealSleeper:
 
 
 def _script(tmp_path: Path) -> str:
-    """Return a child script that spawns a grandchild and then sleeps."""
+    """Return a child script that records its group, spawns a grandchild, sleeps."""
     pid_path = tmp_path / "grandchild.pid"
+    group_path = tmp_path / "pgid"
     grandchild = (
         "import os, pathlib, time; "
         f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); "
         "time.sleep(60)"
     )
     return (
-        "import pathlib, subprocess, sys, time\n"
+        "import os, pathlib, subprocess, sys, time\n"
+        # The launcher spawns this child as its group leader, so its pid is
+        # the group the parent must kill if this case ever hangs.
+        f"pathlib.Path({str(group_path)!r}).write_text(str(os.getpid()))\n"
         f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}])\n"
         "limit = time.monotonic() + 10\n"
         f"while not pathlib.Path({str(pid_path)!r}).exists()"
@@ -164,6 +168,23 @@ def _failing_callback_script(tmp_path: Path) -> Path:
 def _write_pgid(path: Path, pid: int) -> None:
     """Record a child's process-group identifier for the parent to reap."""
     path.write_text(str(pid), encoding="utf-8")
+
+
+async def record_group(tmp_path: Path, pid_file: Path) -> int:
+    """Wait for a launched child's pid and record it as the group to reap.
+
+    The launcher spawns the child as its own group leader, so the child's pid
+    is the group identifier. Waiting for the child's own file avoids reading
+    `RunningHarness.group_id` before Cuprum has announced the spawn, when it
+    is still `None` and would record a group the parent cannot kill.
+    """
+    deadline = time.monotonic() + 10
+    while not pid_file.exists() and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    assert pid_file.exists(), "the child never started"
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    _write_pgid(tmp_path / "pgid", pid)
+    return pid
 
 
 @_case("group_stop")
@@ -220,7 +241,12 @@ def _case_group_stop(tmp_path: Path) -> None:
 @_case("sinks")
 def _case_sinks(tmp_path: Path) -> None:
     """Write the same records to a file and to the human log."""
-    child = "print('hello from the child', flush=True)\n"
+    group_path = tmp_path / "pgid"
+    child = (
+        "import os, pathlib\n"
+        f"pathlib.Path({str(group_path)!r}).write_text(str(os.getpid()))\n"
+        "print('hello from the child', flush=True)\n"
+    )
     clock = SystemClock()
     jsonl_path = tmp_path / "evidence.jsonl"
     human_path = tmp_path / "human.log"
@@ -259,8 +285,10 @@ def _case_sinks(tmp_path: Path) -> None:
 async def _case_newline(tmp_path: Path) -> None:
     """Bound a real 8 MiB newline-free line to the supervisor's buffer."""
     line = tmp_path / "line.py"
+    group_path = tmp_path / "pgid"
     line.write_text(
-        "import sys\n"
+        "import os, pathlib, sys\n"
+        f"pathlib.Path({str(group_path)!r}).write_text(str(os.getpid()))\n"
         "sys.stdout.write('x' * (8 * 1024 * 1024))\n"
         "sys.stdout.write('\\n')\n"
         "sys.stdout.write('after\\n')\n",

@@ -27,6 +27,7 @@ from tests.supervision_witness_cases_support import (
     _case,
     _failing_callback_script,
     _write_pgid,
+    record_group,
 )
 from tests.supervision_witness_support import SETTLE_SECONDS, settle_within
 
@@ -58,7 +59,7 @@ async def _case_callback_failure(tmp_path: Path) -> None:
         max_line_bytes=8 * 1024,
     )
     running = launcher.start(spec(), build, refuse)
-    _write_pgid(tmp_path / "pgid", typ.cast("int", running.group_id or 0))
+    await record_group(tmp_path, tmp_path / "child.pid")
     try:
         with pytest.raises(OSError, match="the spool is full"):
             await asyncio.wait_for(running.wait(), timeout=SETTLE_SECONDS)
@@ -100,7 +101,7 @@ async def _case_cancelled_failure(tmp_path: Path) -> None:
         max_line_bytes=8 * 1024,
     )
     running = launcher.start(spec(), build, refuse)
-    _write_pgid(tmp_path / "pgid", typ.cast("int", running.group_id or 0))
+    await record_group(tmp_path, tmp_path / "child.pid")
     try:
         await asyncio.wait_for(failure_seen.wait(), timeout=SETTLE_SECONDS)
         running.stop(StopReason.INTERRUPTED)
@@ -148,16 +149,8 @@ async def _case_sigterm_reap(tmp_path: Path) -> None:
         os.kill(pid, 0)
 
 
-@_case("stuck_settlement")
-async def _case_stuck_settlement(tmp_path: Path) -> None:
-    """Run a real child beside a settlement that can never finish.
-
-    The child ignores SIGTERM and runs in its own session, so it survives
-    until something kills the group. A synthetic handle's settlement
-    suppresses cancellation forever, which is the condition the helper must
-    bound. The case records the real child's group and then waits without end,
-    so the parent's independent deadline is what ends it.
-    """
+def _start_stubborn_child(tmp_path: Path) -> subprocess.Popen[bytes]:
+    """Start a SIGTERM-ignoring child in its own session and record its group."""
     pid_file = tmp_path / "stuck.pid"
     script = tmp_path / "stubborn.py"
     script.write_text(
@@ -168,21 +161,38 @@ async def _case_stuck_settlement(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     # The child must outlive this call so the parent's deadline has something
-    # real to reap, so the handle is deliberately not closed here.
+    # real to stop, so the handle is deliberately not closed here. It gets no
+    # inherited stdout or stderr: holding the runner's pipe would keep the
+    # parent's read waiting for EOF after the runner itself is gone.
     # pylint: disable-next=consider-using-with
     child = subprocess.Popen(
         [sys.executable, "-I", str(script)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
     deadline = time.monotonic() + 10
     while not pid_file.exists() and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
+        time.sleep(0.01)
+    assert pid_file.exists(), "the stubborn child never started"
     _write_pgid(tmp_path / "pgid", child.pid)
+    return child
+
+
+@_case("stuck_settlement")
+async def _case_stuck_settlement(tmp_path: Path) -> None:
+    """Hang a settlement that suppresses cancellation forever.
+
+    A synthetic handle's settlement ignores every cancellation, which is the
+    condition the helper must bound. This case proves the helper's own
+    deadline; the parent's cleanup is proved separately by `deadline_reap`.
+    """
+    del tmp_path
 
     class _StuckHandle:
         """A handle whose settlement suppresses cancellation forever."""
 
-        group_id = child.pid
+        group_id: int | None = None
 
         def stop(self, reason: object) -> None:
             """Record the stop without settling."""
@@ -198,6 +208,17 @@ async def _case_stuck_settlement(tmp_path: Path) -> None:
 
     with contextlib.suppress(AssertionError):
         await settle_within(_StuckHandle(), deadline=0.5)
-    # The helper gave up; keep the interpreter alive so the parent's own
-    # deadline must reap the real child.
+    # Keep the interpreter alive so the runner's own watchdog must end it.
+    await asyncio.Event().wait()
+
+
+@_case("deadline_reap")
+async def _case_deadline_reap(tmp_path: Path) -> None:
+    """Leave a real child running and never clean it up.
+
+    The child ignores SIGTERM and lives in its own session, so only the
+    parent's deadline cleanup can end it. The case records the group and then
+    blocks, giving the parent the whole cleanup path to prove.
+    """
+    _start_stubborn_child(tmp_path)
     await asyncio.Event().wait()

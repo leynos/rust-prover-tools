@@ -1100,10 +1100,17 @@ responsibility rather than by prover:
   and refuses two roles that name one file, including symlink and hard-link
   aliases. The rule needs filesystem identity, so it lives beside the adapters
   and never inside the policy value object.
-- `rust_prover_tools.kani_diagnostics` opens the configured human, JSONL, and
-  report destinations for a library run, applying that rule before the first
-  handle exists. It closes only the handles it opened; a caller-supplied
-  `Diagnostics` stays caller-owned.
+- `rust_prover_tools.kani_destinations` is the CLI adapter between the
+  destination and policy flags and the filesystem: it validates the policy,
+  refuses two roles that name one file, refuses a JSONL or report destination
+  that is standard output, and opens the run's human and JSONL sinks on the
+  caller's `ExitStack`. It opens no report destination.
+- `rust_prover_tools.kani_diagnostics` is the library opener the CLI adapter
+  builds on. `open_destinations` creates the human and JSONL sinks and repairs
+  a partial JSONL boundary first; `open_diagnostics` applies the alias rule and
+  yields a caller-supplied `Diagnostics` untouched, closing only what it
+  opened. Neither opens the report destination: `RunJournal` writes that
+  through the injected `ReportWriter` when `sinks.report_path` is set.
 - `rust_prover_tools.kani_harness_cli` is the thin CLI adapter for
   `kani harnesses list` and `kani harnesses run`.
 
