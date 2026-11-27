@@ -421,15 +421,15 @@ def test_the_table_names_every_result_and_the_limits() -> None:
     assert any("outcome=passed" in line for line in lines)
 
 
-def test_open_diagnostics_starts_at_a_line_boundary(tmp_path: Path) -> None:
+def test_the_named_opener_starts_at_a_line_boundary(tmp_path: Path) -> None:
     """A file without a final newline gains one before the next record."""
-    from rust_prover_tools.kani_diagnostics import open_diagnostics
+    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 
     path = tmp_path / "evidence.jsonl"
     path.write_text("x" * 100, encoding="utf-8")
     config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
 
-    with open_diagnostics(config, None) as diagnostics:
+    with prepare_and_open_diagnostics(config, None) as diagnostics:
         reference = diagnostics.emit(_record())
 
     assert reference is not None
@@ -445,7 +445,7 @@ def test_a_symlink_alias_is_refused_before_a_handle_is_opened(
     A library caller reaches this rule through the adapter that opens the
     destinations, which must refuse the alias before appending anything.
     """
-    from rust_prover_tools.kani_diagnostics import open_diagnostics
+    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 
     target = tmp_path / "evidence"
     target.touch()
@@ -455,7 +455,10 @@ def test_a_symlink_alias_is_refused_before_a_handle_is_opened(
         sinks=DiagnosticSinks(jsonl_path=target, report_path=alias)
     )
 
-    with pytest.raises(ValueError, match="distinct"), open_diagnostics(config, None):
+    with (
+        pytest.raises(ValueError, match="distinct"),
+        prepare_and_open_diagnostics(config, None),
+    ):
         pass
     assert target.read_text(encoding="utf-8") == ""
 
@@ -464,7 +467,7 @@ def test_a_hard_link_alias_is_refused_before_a_handle_is_opened(
     tmp_path: Path,
 ) -> None:
     """Resolved paths differ, but one inode under two names is still shared."""
-    from rust_prover_tools.kani_diagnostics import open_diagnostics
+    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 
     first = tmp_path / "first.log"
     first.touch()
@@ -474,7 +477,10 @@ def test_a_hard_link_alias_is_refused_before_a_handle_is_opened(
         sinks=DiagnosticSinks(human_path=first, jsonl_path=second)
     )
 
-    with pytest.raises(ValueError, match="distinct"), open_diagnostics(config, None):
+    with (
+        pytest.raises(ValueError, match="distinct"),
+        prepare_and_open_diagnostics(config, None),
+    ):
         pass
     assert first.read_text(encoding="utf-8") == ""
 
@@ -483,7 +489,7 @@ def test_an_unstatable_destination_is_not_reported_as_an_alias(
     tmp_path: Path,
 ) -> None:
     """A stat failure is not a collision; the open that follows reports it."""
-    from rust_prover_tools.kani_diagnostics import open_diagnostics
+    from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
     from rust_prover_tools.supervision.destinations import (
         require_distinct_destinations,
     )
@@ -499,7 +505,7 @@ def test_an_unstatable_destination_is_not_reported_as_an_alias(
     config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=broken))
     with (
         pytest.raises(OSError, match="File exists"),
-        open_diagnostics(config, None),
+        prepare_and_open_diagnostics(config, None),
     ):
         pass
 

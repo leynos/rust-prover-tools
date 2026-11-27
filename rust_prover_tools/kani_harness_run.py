@@ -31,7 +31,7 @@ import os
 import typing as typ
 
 from rust_prover_tools.errors import ProverToolError
-from rust_prover_tools.kani_diagnostics import open_diagnostics
+from rust_prover_tools.kani_diagnostics import prepare_and_open_diagnostics
 from rust_prover_tools.kani_harness_models import (
     KaniHarnessDependencies,
     KaniHarnessPreparation,
@@ -299,7 +299,7 @@ def execute_harnesses(
         The typed report and the inventory it was selected from.
     """
     dependencies = dependencies or KaniHarnessDependencies()
-    with open_diagnostics(
+    with prepare_and_open_diagnostics(
         config,
         diagnostics or dependencies.diagnostics,
     ) as opened:

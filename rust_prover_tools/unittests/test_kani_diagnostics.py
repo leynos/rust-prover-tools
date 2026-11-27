@@ -7,7 +7,7 @@ import typing as typ
 
 from rust_prover_tools.kani_diagnostics import (
     open_destinations,
-    open_diagnostics,
+    prepare_and_open_diagnostics,
     prepare_jsonl_destination,
 )
 from rust_prover_tools.supervision import (
@@ -61,17 +61,37 @@ def test_opening_never_prepares_the_jsonl_boundary(tmp_path: Path) -> None:
     assert path.read_bytes() == _PARTIAL
 
 
-def test_the_library_entry_point_prepares_before_opening(
-    tmp_path: Path,
-) -> None:
-    """`open_diagnostics` performs the explicit preparation itself."""
+def test_the_opener_names_the_preparation_it_performs(tmp_path: Path) -> None:
+    """The named opener repairs once, and its sinks start at that offset.
+
+    The repaired offset is where the first record lands, so a run that follows
+    an unterminated record writes into a file with exactly one new boundary
+    byte and no duplicated record.
+    """
     path = _partial(tmp_path / "evidence.jsonl")
     config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
+    repaired = len(_PARTIAL) + 1
 
-    with open_diagnostics(config, None) as diagnostics:
-        assert diagnostics.jsonl.offset == len(_PARTIAL) + 1
+    with prepare_and_open_diagnostics(config, None) as diagnostics:
+        assert isinstance(diagnostics.jsonl, JsonlSink)
+        assert diagnostics.jsonl.offset == repaired
 
-    assert path.read_bytes() == _PARTIAL + b"\n"
+    assert path.read_bytes() == _PARTIAL + b"\n", "the boundary was written twice"
+    assert jsonl_next_offset(path) == repaired
+
+
+def test_a_provided_diagnostics_skips_preparation(tmp_path: Path) -> None:
+    """A caller-owned object is yielded unchanged and nothing is written."""
+    from rust_prover_tools.supervision import Diagnostics, MemorySink
+
+    path = _partial(tmp_path / "evidence.jsonl")
+    config = SupervisionConfig(sinks=DiagnosticSinks(jsonl_path=path))
+    provided = Diagnostics(jsonl=MemorySink())
+
+    with prepare_and_open_diagnostics(config, provided) as diagnostics:
+        assert diagnostics is provided
+
+    assert path.read_bytes() == _PARTIAL
 
 
 def test_the_offset_query_never_writes(tmp_path: Path) -> None:

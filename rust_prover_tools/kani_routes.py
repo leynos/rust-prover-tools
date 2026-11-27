@@ -166,30 +166,28 @@ def prepare_route(
         call, which is the explicit provider a caller can replace in a test.
     cwd : Path | None
         The caller's already-checked working directory. It takes precedence
-        over a route's own directory; `None` resolves the route's directory
-        once here, or the process directory when the route names none.
+        over a route's own directory and is resolved here, once. `None`
+        resolves the same way for both route kinds, to the route's own
+        directory, or to the process directory when the route names none;
+        neither kind resolves a directory of its own afterwards.
     """
     provider = os.environ if environ is None else environ
-    checked = None if cwd is None else cwd.resolve()
+    directory = _working_directory(route, cwd)
     if isinstance(route, LegacyRoute):
-        return _prepare_legacy(route, provider, checked)
-    return _prepare_snapshot(route, provider, checked)
+        return _prepare_legacy(route, provider, directory)
+    return _prepare_snapshot(route, provider, directory)
 
 
-def _legacy_working_directory(route: LegacyRoute, checked: Path | None) -> Path:
-    """Return the checked directory, or resolve the route's own once."""
+def _working_directory(route: KaniRoute, checked: Path | None) -> Path:
+    """Resolve the one directory both route kinds are qualified against.
+
+    `prepare_route` calls this once, before it dispatches on the route kind,
+    so the legacy and snapshot routes cannot disagree about which directory
+    was checked. A supplied directory is resolved here, once; only a snapshot
+    route may name none, and then the process directory is the fallback.
+    """
     if checked is not None:
-        return checked
-    return route.cwd.resolve()
-
-
-def _snapshot_working_directory(
-    route: SnapshotRoute,
-    checked: Path | None,
-) -> Path:
-    """Return the checked directory, or resolve the route's own once."""
-    if checked is not None:
-        return checked
+        return checked.resolve()
     if route.cwd is not None:
         return route.cwd.resolve()
     return Path.cwd().resolve()
@@ -198,7 +196,7 @@ def _snapshot_working_directory(
 def _prepare_legacy(
     route: LegacyRoute,
     environ: cabc.Mapping[str, str],
-    checked: Path | None,
+    directory: Path,
 ) -> PreparedRoute:
     """Qualify the legacy release, its identities, and its environment.
 
@@ -209,11 +207,7 @@ def _prepare_legacy(
     inherited = route.environment if route.environment is not None else environ
     environment = dict(inherited)
     qualified = qualify_kani_installation(
-        KaniExecOptions(
-            route.installation,
-            _legacy_working_directory(route, checked),
-            (),
-        ),
+        KaniExecOptions(route.installation, directory, ()),
         environment,
     )
     grammar = grammar_for(KANI_RELEASE_VERSION)
@@ -235,17 +229,16 @@ def _prepare_legacy(
 def _prepare_snapshot(
     route: SnapshotRoute,
     environ: cabc.Mapping[str, str],
-    checked: Path | None,
+    directory: Path,
 ) -> PreparedRoute:
     """Qualify the snapshot generation, environment, and grammar once.
 
     The route's own environment wins when it has one, exactly as the legacy
     route's does; otherwise the caller's provider is used. Preparation never
     inspects the process itself, so a route can be qualified against exactly
-    one mapping.
+    one mapping and the one directory `prepare_route` resolved.
     """
     inherited = route.environment if route.environment is not None else environ
-    working_directory = _snapshot_working_directory(route, checked)
     qualified = prepare_snapshot_proof(
         SnapshotRunOptions(
             pin=route.pin,
@@ -254,7 +247,7 @@ def _prepare_snapshot(
         ),
         route.hooks,
         context=ProofContext(
-            cwd=working_directory,
+            cwd=directory,
             environment=inherited,
         ),
         validate_arguments=False,

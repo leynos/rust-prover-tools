@@ -3,9 +3,10 @@
 The option models in ``kani_harness_cli_options`` describe what the user
 asked for; this adapter is where those values meet the filesystem. It owns the
 alias checks, the standard-output comparison, and the handles a run appends to,
-so the models stay free of filesystem access. Opening itself never repairs a
-JSONL boundary: `open_run_diagnostics` prepares the destination explicitly
-through `prepare_jsonl_destination` before the sink is opened.
+so the models stay free of filesystem access. `prepare_and_open_run_diagnostics`
+names its own write: it repairs a partial trailing JSONL record through
+`prepare_jsonl_destination` before opening the sink. `open_destinations` and
+the sink constructors never write.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ if typ.TYPE_CHECKING:
     )
 
 __all__ = (
-    "open_run_diagnostics",
+    "prepare_and_open_run_diagnostics",
     "require_stdout_free",
     "supervision_policy",
 )
@@ -82,12 +83,17 @@ def supervision_policy(
     )
 
 
-def open_run_diagnostics(
+def prepare_and_open_run_diagnostics(
     stack: contextlib.ExitStack,
     config: SupervisionConfig,
     destinations: DestinationFlags,
 ) -> Diagnostics:
-    """Open the live diagnostic destinations for one run.
+    """Prepare the JSONL boundary, then open the live destinations.
+
+    This function writes: a JSONL destination whose final record is partial
+    gains its boundary byte before the sink is opened, so the returned sink
+    starts at the repaired offset. The write is named here rather than hidden
+    inside an opener.
 
     Parameters
     ----------
@@ -102,6 +108,11 @@ def open_run_diagnostics(
     -------
     Diagnostics
         The sinks for this run.
+
+    Raises
+    ------
+    OSError
+        The JSONL destination cannot be read or repaired.
     """
     jsonl_start_offset = (
         0

@@ -6,25 +6,20 @@ live human evidence and the final table to standard output, optionally writes
 versioned JSONL, and writes the final JSON report when asked. Errors go to
 standard error.
 
-Signal handling lives here and nowhere else. The library installs no handlers,
-so an embedding application keeps control; `install_interrupt_handlers`
-installs SIGINT and SIGTERM for the duration of the supervised execution
-phase, finalizes the report on interruption, and returns ``128 + signal``.
-Handler installation takes no suspension point, and `SignalInterrupt.wait`
-installs nothing, so neither can block the other. Discovery and route
-qualification run before those handlers exist, so a signal there ends the
-process under its normal disposition instead of being recorded for a phase
-that has not started.
+This module only registers the commands and runs their flow. Signal handling
+lives in `kani_harness_signal`, which installs SIGINT and SIGTERM for the
+duration of the supervised execution phase so an embedding application keeps
+control. Discovery and route qualification run before those handlers exist, so
+a signal there ends the process under its normal disposition instead of being
+recorded for a phase that has not started.
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import json
 import signal
 import sys
-import threading
 import typing as typ
 from pathlib import Path  # ruff: ignore[typing-only-standard-library-import] - Cyclopts evaluates annotations
 
@@ -35,7 +30,7 @@ from rust_prover_tools.cli_support import repo_root as resolve_repo_root
 from rust_prover_tools.errors import ProverToolError
 from rust_prover_tools.exit_status import print_lines
 from rust_prover_tools.kani_destinations import (
-    open_run_diagnostics,
+    prepare_and_open_run_diagnostics,
     supervision_policy,
 )
 from rust_prover_tools.kani_harness_cli_options import (
@@ -52,6 +47,10 @@ from rust_prover_tools.kani_harness_run import (
     execute_harnesses,
     prepare_harnesses,
 )
+from rust_prover_tools.kani_harness_signal import (
+    SignalInterrupt,
+    install_interrupt_handlers,
+)
 from rust_prover_tools.kani_inventory import (
     discover_inventory,
     inventory_document,
@@ -61,13 +60,11 @@ from rust_prover_tools.kani_inventory import (
 from rust_prover_tools.supervision import render_table
 
 if typ.TYPE_CHECKING:
-    import collections.abc as cabc
-
     from rust_prover_tools.kani_harness_run import KaniHarnessPreparation
     from rust_prover_tools.supervision import SupervisionConfig
 
 
-__all__ = ("SignalInterrupt", "harnesses_app", "install_interrupt_handlers")
+__all__ = ("harnesses_app",)
 
 #: Errors this adapter reports as an ordinary nonzero exit. A destination the
 #: process cannot open is a usage or environment error, not a crash.
@@ -83,107 +80,6 @@ harnesses_app: cyclopts.App = cyclopts.App(
     help="Inspect and run Kani harnesses under supervision",
     config=(),
 )
-
-
-class SignalInterrupt:
-    """A SIGINT/SIGTERM source the supervision layer can await.
-
-    The library never installs a handler. This adapter owns the installation,
-    restoration, and translation of a signal into an awaitable stop, so an
-    embedding application's own signal policy is untouched.
-    """
-
-    def __init__(self) -> None:
-        """Create a source that has received no signal."""
-        self._signum: int | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._event: asyncio.Event | None = None
-
-    @property
-    def signum(self) -> int | None:
-        """The interrupting signal, or `None` while the run may continue."""
-        return self._signum
-
-    def bind(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Bind the source to the run's event loop."""
-        self._loop = loop
-        self._event = asyncio.Event()
-        if self._signum is not None:
-            self._event.set()
-
-    @contextlib.contextmanager
-    def installed(self) -> cabc.Generator[None]:
-        """Install the handlers until the block exits.
-
-        Installation itself belongs to `install_interrupt_handlers`; this
-        method only names the conventional block form for a caller that
-        already holds the source.
-
-        Yields
-        ------
-        None
-            The block during which the handlers are installed.
-        """
-        with install_interrupt_handlers(self):
-            yield
-
-    def _handle(self, signum: int, frame: object) -> None:
-        """Record the first signal and release the monitor."""
-        del frame
-        if self._signum is None:
-            self._signum = signum
-        self._notify()
-
-    def _notify(self) -> None:
-        """Release the monitor when its loop is still usable."""
-        loop = self._loop
-        event = self._event
-        if loop is None or event is None:
-            return
-        if not loop.is_closed():
-            loop.call_soon_threadsafe(event.set)
-
-    async def wait(self) -> None:
-        """Wait until a signal asks the run to stop."""
-        if self._signum is not None:
-            return
-        if self._event is None:
-            self._event = asyncio.Event()
-        await self._event.wait()
-
-
-@contextlib.contextmanager
-def install_interrupt_handlers(
-    interrupt: SignalInterrupt,
-) -> cabc.Generator[None]:
-    """Install SIGINT and SIGTERM handlers for the duration of the block.
-
-    Installation is synchronous and has no suspension point, so a caller
-    cannot be interrupted while the previous dispositions are being recorded
-    and replaced. Restoring them is the block's only exit action.
-
-    Parameters
-    ----------
-    interrupt : SignalInterrupt
-        Source that receives each delivered signal.
-
-    Yields
-    ------
-    None
-        The block during which the handlers are installed.
-    """
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-    previous: dict[int, object] = {}
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        previous[signum] = signal.getsignal(signum)
-        signal.signal(signum, interrupt._handle)
-    try:
-        yield
-    finally:
-        for signum, disposition in previous.items():
-            signal.signal(signum, typ.cast("typ.Any", disposition))
 
 
 @harnesses_app.command(name="list")
@@ -318,7 +214,7 @@ def _execute_run(
     """Supervise the preparation while owning handlers and open handles."""
     with install_interrupt_handlers(interrupt), contextlib.ExitStack() as stack:
         dependencies = KaniHarnessDependencies(
-            diagnostics=open_run_diagnostics(stack, config, destinations),
+            diagnostics=prepare_and_open_run_diagnostics(stack, config, destinations),
             interrupts=interrupt,
         )
         return execute_harnesses(preparation, config, dependencies)

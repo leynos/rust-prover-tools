@@ -12,7 +12,7 @@ import pytest
 
 from rust_prover_tools.cli import app
 from rust_prover_tools.kani_destinations import (
-    open_run_diagnostics,
+    prepare_and_open_run_diagnostics,
     require_stdout_free,
     supervision_policy,
 )
@@ -113,7 +113,7 @@ def test_the_cli_opener_prepares_the_jsonl_boundary(tmp_path: Path) -> None:
     config = supervision_policy(PolicyFlags(), DestinationFlags())
 
     with contextlib.ExitStack() as stack:
-        diagnostics = open_run_diagnostics(
+        diagnostics = prepare_and_open_run_diagnostics(
             stack,
             config,
             DestinationFlags(jsonl=path),

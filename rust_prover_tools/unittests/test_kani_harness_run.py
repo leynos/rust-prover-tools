@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import typing as typ
 from pathlib import Path
 
@@ -602,6 +604,29 @@ def test_the_plan_prescribed_entry_point_is_public() -> None:
     assert callable(rust_prover_tools.run_kani_harnesses)
     assert "run_kani_harnesses" in rust_prover_tools.__all__
     assert rust_prover_tools.run_kani_harnesses is not rust_prover_tools.run_harnesses
+
+
+def test_importing_the_package_does_not_run_the_grammar_check() -> None:
+    """Package import must stay light: the Kani names are lazy.
+
+    The grammar registry runs an import-time alignment check, so importing it
+    eagerly would make a plain ``import rust_prover_tools`` execute work the
+    caller did not ask for. A fresh interpreter keeps this assertion
+    independent of whatever the test session already imported.
+    """
+    script = (
+        "import sys, rust_prover_tools;"
+        "print('rust_prover_tools.kani_cli_grammar' in sys.modules)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "False", done.stdout
 
 
 def test_the_configured_line_limit_reaches_the_launcher() -> None:

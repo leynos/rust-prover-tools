@@ -2,12 +2,14 @@
 
 This is the one place the library and the CLI turn configured paths into open
 sinks, so a destination is opened the same way whichever entry point a caller
-used. Opening never writes: a JSONL destination whose final record is partial
-is completed by `prepare_jsonl_destination`, an explicit, named step each
-entry point runs before it opens anything. The library owns a file only while
-the run that writes it is active: a caller that supplies its own `Diagnostics`
-keeps ownership of every stream and file, and this module neither closes nor
-flushes what it did not open.
+used. The write contract is stated by the names: `prepare_jsonl_destination`
+and `prepare_and_open_diagnostics` write, because a partial trailing JSONL
+record must be completed before the next record can start on its own line;
+`open_destinations` and the sink constructors do not write. A caller that
+opens sinks directly prepares the boundary itself and passes the resulting
+offset. The library owns a file only while the run that writes it is active: a
+caller that supplies its own `Diagnostics` keeps ownership of every stream and
+file, and this module neither closes nor flushes what it did not open.
 """
 
 from __future__ import annotations
@@ -32,17 +34,22 @@ if typ.TYPE_CHECKING:
 
 __all__ = (
     "open_destinations",
-    "open_diagnostics",
+    "prepare_and_open_diagnostics",
     "prepare_jsonl_destination",
 )
 
 
 @contextlib.contextmanager
-def open_diagnostics(
+def prepare_and_open_diagnostics(
     config: SupervisionConfig,
     provided: Diagnostics | None,
 ) -> cabc.Generator[Diagnostics]:
-    """Yield the configured diagnostics, closing any files this call opened.
+    """Prepare the JSONL boundary, then yield the opened diagnostics.
+
+    This function writes: a partial trailing JSONL record is completed by
+    `prepare_jsonl_destination` before the sink is opened, so the returned
+    JSONL sink starts at the repaired offset. The write is named here rather
+    than hidden inside an opener.
 
     Parameters
     ----------
@@ -51,13 +58,20 @@ def open_diagnostics(
     provided : Diagnostics | None
         Caller-owned diagnostics. When supplied, they override the configured
         destinations and remain owned by the caller; this manager neither
-        closes nor flushes streams it did not open.
+        closes nor flushes streams it did not open, and nothing is prepared.
 
     Yields
     ------
     Diagnostics
         The provided object unchanged, or sinks opened for the configured
         destinations for the duration of the context.
+
+    Raises
+    ------
+    ValueError
+        Two configured destinations name one file.
+    OSError
+        The JSONL destination cannot be read or repaired.
     """
     if provided is not None:
         yield provided
@@ -87,8 +101,8 @@ def prepare_jsonl_destination(path: Path) -> int:
     This step writes to `path`: when the destination does not end with a
     newline, one is appended so the first record this run writes starts on its
     own line instead of sharing an unterminated record with the previous run.
-    It is deliberately separate from opening, so a reader of the opening code
-    can see that opening has no write side effect.
+    It is deliberately separate from opening, so a reader of `open_destinations`
+    can see that opening itself has no write side effect.
 
     Parameters
     ----------
@@ -122,11 +136,11 @@ def open_destinations(  # ruff: ignore[too-many-arguments] - one flat policy
     """Open the configured human and JSONL sinks for one run.
 
     The caller is responsible for the alias rule when it has not gone through
-    `open_diagnostics`; this function only opens. `human_stream` is the stream
-    a human sink falls back to when no path is configured, or `None` to
-    disable the human sink. A JSONL destination must already have been
-    prepared with `prepare_jsonl_destination`, whose result the caller passes
-    as `jsonl_start_offset`; opening never repairs the boundary.
+    `prepare_and_open_diagnostics`; this function only opens. `human_stream`
+    is the stream a human sink falls back to when no path is configured, or
+    `None` to disable the human sink. A JSONL destination must already have
+    been prepared with `prepare_jsonl_destination`, whose result the caller
+    passes as `jsonl_start_offset`; opening never repairs the boundary.
 
     Parameters
     ----------

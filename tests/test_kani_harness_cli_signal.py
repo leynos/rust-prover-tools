@@ -7,7 +7,7 @@ import contextlib
 import signal
 import typing as typ
 
-from rust_prover_tools.kani_harness_cli import (
+from rust_prover_tools.kani_harness_signal import (
     SignalInterrupt,
     install_interrupt_handlers,
 )
