@@ -6,10 +6,10 @@ This ExecPlan (execution plan) is a living document. The sections `Constraints`,
 be kept up to date as work proceeds.
 
 Status: DELIVERED. main's #264 parser is adopted and this branch's supervision
-is layered on it. The final deterministic gate reports 3,362 passed and 6
-skipped at code head `47fab8d`; `make all` counts collected outcomes, so a
+is layered on it. The final deterministic gate reports 3,370 passed and 6
+skipped at code head `00042b1`; `make all` counts collected outcomes, so a
 passing run and its skips are separate. The opt-in live Kani 0.67.0 fixture
-passed at the same head: 2 passed in 10.48 s.
+passed at the same head: 2 passed in 15.74 s.
 
 Branch:
 `issue-260-upstream-per-harness-kani-observability-and-inspectability-from-cuprum-723`
