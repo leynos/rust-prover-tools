@@ -1378,3 +1378,141 @@ async def _unreadable_spool_scenario(tmp_path: Path, *, cancel: bool) -> None:
         record for record in jsonl.records if record["record"] == "harness-finish"
     )
     assert finish["status"] == "interrupted"
+
+
+class _UnclosableObserver(NullObserver):
+    """An observer whose cleanup always fails."""
+
+    def close(self) -> None:
+        """Fail as a released handle or a broken spool would."""
+        msg = "the spool could not be closed"
+        raise RuntimeError(msg)
+
+
+class _UnclosableAdapter:
+    """An adapter that always supplies the failing observer."""
+
+    def observer(self, spec: HarnessSpec) -> _UnclosableObserver:
+        """Return the observer whose close raises."""
+        del spec
+        return _UnclosableObserver()
+
+    def classify(
+        self,
+        evidence: object,
+        observation: object,
+    ) -> HarnessClassification:
+        """Report the attempt as interrupted; the test is about its close."""
+        del evidence, observation
+        return HarnessClassification(status=ExecutionStatus.INTERRUPTED)
+
+
+def test_a_cancellation_survives_a_failing_close(tmp_path: Path) -> None:
+    """A cleanup failure must not replace the cancellation that is unwinding."""
+    asyncio.run(_cancellation_with_failing_close_scenario(tmp_path))
+
+
+async def _cancellation_with_failing_close_scenario(tmp_path: Path) -> None:
+    """Cancel an attempt whose observer cannot be closed."""
+    clock = VirtualClock()
+    ready = asyncio.Event()
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(("stdout", "Checking harness harnesses::a..."),),
+            block=True,
+        ),
+        ready=ready,
+    )
+    (identity,) = (spec("harnesses::a"),)
+    config = dc.replace(_config(timeout_seconds=600.0), sinks=DiagnosticSinks())
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=MemorySink()),
+        adapter=_UnclosableAdapter(),
+    )
+
+    task = asyncio.create_task(run_supervised((identity,), config, environment))
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+def test_an_orphaned_close_failure_is_not_swallowed(tmp_path: Path) -> None:
+    """On an otherwise successful attempt, a close failure is reported."""
+    asyncio.run(_orphaned_close_failure_scenario())
+
+
+async def _orphaned_close_failure_scenario() -> None:
+    """Run an attempt that settles cleanly but cannot close its observer."""
+    clock = VirtualClock()
+    launcher = ScriptedLauncher(
+        script=Script(
+            lines=(("stdout", "Checking harness harnesses::a..."),),
+            exit_code=0,
+        )
+    )
+    (identity,) = (spec("harnesses::a"),)
+    config = dc.replace(_config(timeout_seconds=60.0), sinks=DiagnosticSinks())
+    environment = _environment(
+        launcher,
+        clock,
+        sinks=Diagnostics(jsonl=MemorySink()),
+        adapter=_UnclosableAdapter(),
+    )
+
+    with pytest.raises(RuntimeError, match="could not be closed"):
+        await run_supervised((identity,), config, environment)
+
+
+def test_a_monitor_fault_survives_an_unreadable_spool(tmp_path: Path) -> None:
+    """A monitor failure stays primary when finishing the evidence also fails."""
+    asyncio.run(_monitor_fault_with_unreadable_spool_scenario(tmp_path))
+
+
+async def _monitor_fault_with_unreadable_spool_scenario(tmp_path: Path) -> None:
+    """Fail the probe while the spool cannot be read back."""
+    from rust_prover_tools.supervision.kani import KaniAdapter
+
+    class _FailingProbe(ScriptedProbe):
+        """A probe that fails on every sample."""
+
+        def sample(self, spec: HarnessSpec, **kwargs: object) -> ResourceSample:
+            """Raise the fault the monitor must survive."""
+            del spec, kwargs
+            msg = "probe failed"
+            raise RuntimeError(msg)
+
+    clock = VirtualClock()
+    jsonl = MemorySink()
+    report_path = tmp_path / "report.json"
+    config = dc.replace(
+        _config(timeout_seconds=60.0, sample_interval_seconds=1.0),
+        sinks=DiagnosticSinks(report_path=report_path),
+    )
+    environment = _environment(
+        ScriptedLauncher(
+            script=Script(
+                lines=(("stdout", "Checking harness harnesses::verified..."),),
+                block=True,
+            )
+        ),
+        clock,
+        probe=_FailingProbe(),
+        sinks=Diagnostics(jsonl=jsonl),
+        adapter=KaniAdapter(version="0.67.0", spool_factory=_UnreadableSpool),
+    )
+
+    with pytest.raises(RuntimeError, match="probe failed"):
+        await run_supervised((spec(),), config, environment)
+
+    finish = next(
+        record for record in jsonl.records if record["record"] == "harness-finish"
+    )
+    assert finish["status"] == "interrupted"
+    assert finish["stop_reason"] == "interrupted"
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    validate_report_document(document)
+    results = typ.cast("list[dict[str, object]]", document["results"])
+    assert results[0]["status"] == "interrupted"

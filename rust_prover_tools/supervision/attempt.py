@@ -17,8 +17,8 @@ and resource evidence, and the adapter classifies it.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import dataclasses as dc
+import sys
 import typing as typ
 
 from rust_prover_tools.supervision.attempt_cgroup import (
@@ -169,15 +169,32 @@ class AttemptSupervisor:
             return evidence, self._classify(evidence)
         finally:
             # `classify` no longer owns the spool, so the boundary that opened
-            # the observer releases it. A cleanup failure must not replace an
-            # active cancellation or monitor failure.
-            with contextlib.suppress(OSError, ValueError):
-                self._observer.close()
+            # the observer releases it.
+            self._release_observer()
 
     def _classify(self, evidence: AttemptEvidence) -> HarnessClassification:
         """Finish the observer and classify the attempt from its observation."""
         observation = typ.cast("LineObserver[typ.Any]", self._observer).finish()
         return self.adapter.classify(evidence, observation)
+
+    def _release_observer(self) -> None:
+        """Close the observer, preserving any failure already unwinding.
+
+        A close failure while a cancellation or monitor fault is propagating
+        is attached to that exception as a note rather than raised, so the
+        original failure remains the one the caller sees. On an otherwise
+        successful attempt the same failure propagates: losing the evidence
+        file is a real error, not a benign cleanup detail.
+        """
+        if self._observer is None:
+            return
+        active = sys.exc_info()[1]
+        try:
+            self._observer.close()
+        except Exception as error:
+            if active is None:
+                raise
+            active.add_note(f"closing the verifier log spool also failed: {error}")
 
     @property
     def interrupted(self) -> tuple[AttemptEvidence, HarnessClassification] | None:
