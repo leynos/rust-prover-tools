@@ -1381,9 +1381,10 @@ The publisher's own release observation does run that policy. When a published
 release is re-verified from its downloaded bytes, the structural attestation
 checks are followed by `verify_attestation` with the consumer's
 `AttestationPolicy`, so a bundle signed by another workflow, or for another run
-or attempt, leaves the release unverified instead of reaching a no-op. The
-ledger still rests on EP-M5: a real clean-runner signature has not yet been
-exercised end to end.
+or attempt, leaves the release unverified instead of reaching a no-op. EP-M5
+exercised that path end to end on 2026-11-27: the non-publishing run's
+clean-runner validation verified the real signature, and the consumer smoke
+then installed the same release through the public commands.
 
 The producer and the consumer share `shared_libraries`:
 `orchestrator.measure_build` hashes every shared object under `<toolchain>/lib`

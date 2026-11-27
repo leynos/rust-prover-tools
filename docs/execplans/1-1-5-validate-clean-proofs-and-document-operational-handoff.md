@@ -335,15 +335,39 @@ only entries in scope.
       release exists. Manifest
       `c5e2fa595232f0a25e92f4f5ff9ab11f72a374600d713201c3a9e8a41b1b8a8f`
       names builder `85421417` and the canonical component digest.
-- [x] (2026-11-27) Re-ran the consumer smoke against that release.
-      `make kani-snapshot-verify` with the downloaded release, the freshly
-      built wheel and Rust 1.93.0 installed it through the public commands in a
-      throwaway environment; all 14 tests passed in 110 s. They cover the
-      pinned identity, clean setup, the compiler floor, the named positive
-      harnesses, the deliberately false harness, the 1.93 `E0658` control,
-      upstream's three bundle fixtures, the warm repeat, and the
-      corrupted-payload and changed-identity refusals. EP-M5 and roadmap 1.1.5
-      are therefore complete.
+- [x] (2026-11-27) Re-ran the consumer smoke against that release and
+      recorded its evidence. `make kani-snapshot-verify` with the downloaded
+      release, the freshly built wheel and Rust 1.93.0 installed it through the
+      public commands in a throwaway environment; all 14 tests passed
+      (110.59 s cold, 71.87 s on the repeat). The auditable fields are:
+      - **Run URL**:
+        <https://github.com/leynos/rust-prover-tools/actions/runs/45954080278>
+      - **Upstream commit**:
+        `0d2328a93f0e0ff66132d6bfa1a7d884877cf862` (full 40-hex).
+      - **Effective compiler**: `rustc 1.100.0-nightly`, which the smoke's
+        floor check accepted as `>= 1.94`.
+      - **Cold install**: the public `kani snapshot install` reported the pin's
+        tag and the observed compiler, and named the installed generation.
+      - **Setup trace**: `require_prebuilt_setup` accepted the traced cold
+        install. It showed the packaged `cargo-kani setup` record and no
+        `cargo`, code-generating `rustc`, compiler backend, linker or build
+        driver.
+      - **Harness statuses**: `bounded_push_contents_are_exact` verified;
+        `raii_release_runs_once` verified; `deliberately_false_assertion`
+        failed verification for its own assertion, not a compile error;
+        `bounded_adjacent_pairs_are_exact` verified; upstream's
+        `simple-lib` reported `kani_tests::test_sum` and
+        `pair::kani_tests::test_one_plus_two` verified, `build-rs-works`
+        reported `check` verified, and `simple-kissat` reported `check_concat`
+        verified.
+      - **Below-floor control**: Rust 1.93.0 rejected the 1.94 `array_windows`
+        API with `E0658`.
+      - **Warm repeat**: repeating the install reused the same generation and
+        the trace showed no setup.
+      - **Refusals**: a corrupted payload was refused before execution and
+        published no generation; a pin naming another revision was refused
+        before setup.
+      EP-M5 and roadmap 1.1.5 are therefore complete.
 - [x] (2026-11-27) Ran every gate before the merge and again on the merged
       `main` (`CI` and `Coverage (main)` both green at `85421417`), and the
       draft PR #267 was created, reviewed to approval and merged.

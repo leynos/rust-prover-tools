@@ -992,8 +992,10 @@ name verified provenance rather than the verifier command.
     helper. Order independence is proved by a permutation property; added,
     removed and renamed components still fail.
   - [x] (2026-11-27) Corrected hosted non-publishing run and consumer smoke
-    from trusted `main`. Run `45954080278` attempt 1 was dispatched from
-    `main@85421417cefd5eb642d671f71f4a6b17a9abb0e4` with identity
+    from trusted `main`. Run `45954080278` attempt 1
+    (<https://github.com/leynos/rust-prover-tools/actions/runs/45954080278>)
+    was dispatched from `main@85421417cefd5eb642d671f71f4a6b17a9abb0e4` with
+    upstream commit `0d2328a93f0e0ff66132d6bfa1a7d884877cf862`, identity
     `kani-snapshot-2026-11-0d2328a93f0e-r2` and `publish=false`. Every job
     passed: trust check, resolve, build, assembly and attestation, and the
     clean-runner release validation; the publish job was skipped, so no tag or
@@ -1001,11 +1003,21 @@ name verified provenance rather than the verifier command.
     `c5e2fa595232f0a25e92f4f5ff9ab11f72a374600d713201c3a9e8a41b1b8a8f` and
     records the merged builder. `make kani-snapshot-verify` installed that
     release through the public consumer commands in a throwaway environment and
-    all 14 tests passed, covering the pinned identity, clean setup, the
-    compiler floor, the named positive harnesses, the deliberately false
-    harness, the 1.93 control, upstream's three bundle fixtures, the warm
-    repeat, and the corrupted-payload and changed-identity refusals. EP-M5 and
-    roadmap 1.1.5 are complete; the first publication remains EP-O1/1.2.1.
+    all 14 tests passed (110.59 s cold, 71.87 s on the repeat). The cold install
+    named the pin's tag and the effective `rustc 1.100.0-nightly`, which the
+    floor check accepted as `>= 1.94`; the setup trace showed the packaged
+    `cargo-kani setup` record and no `cargo`, code-generating `rustc`,
+    compiler backend, linker or build driver. `bounded_push_contents_are_exact`
+    and `raii_release_runs_once` verified, `deliberately_false_assertion`
+    failed for its own assertion rather than a compile error,
+    `bounded_adjacent_pairs_are_exact` verified, and upstream's `simple-lib`
+    (`kani_tests::test_sum`, `pair::kani_tests::test_one_plus_two`),
+    `build-rs-works` (`check`) and `simple-kissat` (`check_concat`) all
+    verified. Rust 1.93.0 rejected the 1.94 `array_windows` API with `E0658`.
+    The warm repeat reused the generation with no setup, a corrupted payload
+    was refused before execution with no generation published, and a pin naming
+    another revision was refused before setup. EP-M5 and roadmap 1.1.5 are
+    complete; the first publication remains EP-O1/1.2.1.
 - [ ] EP-O1: separately authorized live bootstrap and first publication.
 
 ## Surprises & discoveries
@@ -2664,8 +2676,9 @@ installed it against the pinned toolchain, and the floor harness verified. The
 runtime floors above are measured rather than inferred. The notice inventory is
 not complete upstream: Kissat ships in the bundle but is absent from
 `license-notes.txt`, so the producer's notices bundle adds its MIT licence.
-Safe setup re-extraction and clean-host validation remain EP-M5 work, and build
-cost beyond this prototype run is still unrecorded.
+Safe setup re-extraction and clean-host validation were left to EP-M5, which
+has since completed them; build cost beyond this prototype run is still
+unrecorded.
 
 [^1]: Successful runs at the pinned SHA:
        [bundle, bundle-test and local-toolchain jobs](https://github.com/model-checking/kani/actions/runs/35043356377)
